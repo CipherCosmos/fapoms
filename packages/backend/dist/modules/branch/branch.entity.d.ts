@@ -14,4 +14,8 @@ export declare class BranchEntity extends BaseEntity {
     location: any | null;
     clientId: string | null;
     client: ClientEntity | null;
+    riskScore: number;
+    complexity: string;
+    estimatedDurationHours: number;
+    requiredCompetencies: string[] | null;
 }

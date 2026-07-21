@@ -149,6 +149,17 @@ export class UserController {
     };
   }
 
+  @Get('roles')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @ApiOperation({ summary: 'List all available roles' })
+  async findAllRoles() {
+    const roles = await this.userService.findAllRoles();
+    return {
+      success: true,
+      data: roles,
+    };
+  }
+
   /** Remove sensitive fields before sending to client */
   private sanitizeUser(user: any) {
     const { passwordHash, failedLoginAttempts, lockedUntil, ...safe } = user;

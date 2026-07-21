@@ -8,4 +8,9 @@ export declare class ClientEntity extends BaseEntity {
     contactPhone: string | null;
     address: string | null;
     configuration: any;
+    priority: string;
+    budget: number | null;
+    preferredAssayers: string[] | null;
+    restrictedAssayers: string[] | null;
+    planningPreferences: Record<string, any> | null;
 }

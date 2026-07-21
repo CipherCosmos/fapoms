@@ -34,6 +34,18 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     bankAccountNumber;
     ifscCode;
     notes;
+    employmentType;
+    skills;
+    certifications;
+    languages;
+    preferredRegions;
+    specializations;
+    experienceYears;
+    performanceRating;
+    leaves;
+    workingHours;
+    maxDailyWorkload;
+    maxWeeklyWorkload;
 };
 exports.AssayerEntity = AssayerEntity;
 __decorate([
@@ -127,6 +139,54 @@ __decorate([
     (0, typeorm_1.Column)({ type: 'text', nullable: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "notes", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'employment_type', type: 'varchar', length: 50, default: 'INTERNAL' }),
+    __metadata("design:type", String)
+], AssayerEntity.prototype, "employmentType", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "skills", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "certifications", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "languages", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'preferred_regions', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "preferredRegions", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "specializations", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'experience_years', type: 'int', default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "experienceYears", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'performance_rating', type: 'decimal', precision: 3, scale: 2, default: 5.00 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "performanceRating", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "leaves", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'working_hours', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "workingHours", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'max_daily_workload', type: 'int', default: 3 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "maxDailyWorkload", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'max_weekly_workload', type: 'int', default: 15 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "maxWeeklyWorkload", void 0);
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),

@@ -85,4 +85,40 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  @Column({ name: 'employment_type', type: 'varchar', length: 50, default: 'INTERNAL' })
+  employmentType: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  skills: string[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  certifications: { name: string; expiryDate: string }[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  languages: string[] | null;
+
+  @Column({ name: 'preferred_regions', type: 'jsonb', nullable: true })
+  preferredRegions: string[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  specializations: string[] | null;
+
+  @Column({ name: 'experience_years', type: 'int', default: 0 })
+  experienceYears: number;
+
+  @Column({ name: 'performance_rating', type: 'decimal', precision: 3, scale: 2, default: 5.00 })
+  performanceRating: number;
+
+  @Column({ type: 'jsonb', nullable: true })
+  leaves: { startDate: string; endDate: string }[] | null;
+
+  @Column({ name: 'working_hours', type: 'jsonb', nullable: true })
+  workingHours: { start: string; end: string } | null;
+
+  @Column({ name: 'max_daily_workload', type: 'int', default: 3 })
+  maxDailyWorkload: number;
+
+  @Column({ name: 'max_weekly_workload', type: 'int', default: 15 })
+  maxWeeklyWorkload: number;
 }

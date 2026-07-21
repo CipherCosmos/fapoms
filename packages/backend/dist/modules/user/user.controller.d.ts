@@ -49,6 +49,10 @@ export declare class UserController {
         success: boolean;
         data: any;
     }>;
+    findAllRoles(): Promise<{
+        success: boolean;
+        data: import("./role.entity").RoleEntity[];
+    }>;
     private sanitizeUser;
 }
 export {};

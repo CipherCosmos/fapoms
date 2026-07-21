@@ -33,4 +33,5 @@ export declare class UserService {
     }>;
     updateUser(id: string, dto: UpdateUserDto, updatedById: string): Promise<UserEntity>;
     assignRoles(userId: string, roleIds: string[], assignedById: string): Promise<UserEntity>;
+    findAllRoles(): Promise<RoleEntity[]>;
 }

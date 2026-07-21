@@ -21,6 +21,11 @@ let ClientEntity = class ClientEntity extends base_entity_1.BaseEntity {
     contactPhone;
     address;
     configuration;
+    priority;
+    budget;
+    preferredAssayers;
+    restrictedAssayers;
+    planningPreferences;
 };
 exports.ClientEntity = ClientEntity;
 __decorate([
@@ -55,6 +60,26 @@ __decorate([
     (0, typeorm_1.OneToOne)('ClientConfigurationEntity', 'client', { cascade: true, eager: true }),
     __metadata("design:type", Object)
 ], ClientEntity.prototype, "configuration", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 50, default: 'MEDIUM' }),
+    __metadata("design:type", String)
+], ClientEntity.prototype, "priority", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'decimal', precision: 12, scale: 2, nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "budget", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'preferred_assayers', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "preferredAssayers", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'restricted_assayers', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "restrictedAssayers", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'planning_preferences', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "planningPreferences", void 0);
 exports.ClientEntity = ClientEntity = __decorate([
     (0, typeorm_1.Entity)('clients')
 ], ClientEntity);

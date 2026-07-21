@@ -32,6 +32,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { DocumentModule } from './modules/document/document.module';
 import { ValidationModule } from './modules/validation/validation.module';
 import { OcrModule } from './infrastructure/ocr/ocr.module';
+import { GeoModule } from './modules/geo/geo.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { OcrModule } from './infrastructure/ocr/ocr.module';
     DocumentModule,
     ValidationModule,
     OcrModule,
+    GeoModule,
   ],
 })
 export class AppModule {}

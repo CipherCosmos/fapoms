@@ -17,13 +17,19 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const branch_entity_1 = require("../branch/branch.entity");
-const assayer_entity_1 = require("../assayer/assayer.entity");
+const business_rule_entity_1 = require("./business-rule.entity");
+const recommendation_engine_1 = require("./recommendation.engine");
+const routing_provider_1 = require("../geo/routing.provider");
 let PlanningService = class PlanningService {
     branchRepository;
-    assayerRepository;
-    constructor(branchRepository, assayerRepository) {
+    ruleRepository;
+    recommendationEngine;
+    routingService;
+    constructor(branchRepository, ruleRepository, recommendationEngine, routingService) {
         this.branchRepository = branchRepository;
-        this.assayerRepository = assayerRepository;
+        this.ruleRepository = ruleRepository;
+        this.recommendationEngine = recommendationEngine;
+        this.routingService = routingService;
     }
     async getRecommendedCandidates(branchId) {
         const branch = await this.branchRepository.findOne({
@@ -32,60 +38,79 @@ let PlanningService = class PlanningService {
         if (!branch) {
             throw new common_1.NotFoundException(`Branch ${branchId} not found.`);
         }
-        if (branch.latitude && branch.longitude) {
-            const rawResults = await this.assayerRepository.createQueryBuilder('assayer')
-                .select([
-                'assayer.id AS id',
-                'assayer.assayer_code AS "assayerCode"',
-                'assayer.display_name AS "displayName"',
-                'assayer.phone AS phone',
-                'assayer.email AS email',
-                'assayer.status AS status',
-                'assayer.state AS state',
-                'assayer.district AS district',
-                'assayer.city AS city',
-                `ST_DistanceSphere(assayer.location, ST_SetSRID(ST_MakePoint(:longitude, :latitude), 4326)) / 1000 AS "distanceKm"`
-            ])
-                .where('assayer.is_active = :isActive', { isActive: true })
-                .andWhere('assayer.status = :status', { status: 'ACTIVE' })
-                .setParameter('longitude', branch.longitude)
-                .setParameter('latitude', branch.latitude)
-                .orderBy('"distanceKm"', 'ASC')
-                .getRawMany();
-            return rawResults.map(r => ({
-                ...r,
-                distanceKm: r.distanceKm ? parseFloat(parseFloat(r.distanceKm).toFixed(2)) : null
-            }));
+        const results = await this.recommendationEngine.recommend(branch, new Date());
+        const recommendations = [];
+        for (const r of results) {
+            let distanceKm = null;
+            if (branch.latitude && branch.longitude && r.assayer.latitude && r.assayer.longitude) {
+                const route = await this.routingService.calculateRoute({ latitude: branch.latitude, longitude: branch.longitude }, { latitude: r.assayer.latitude, longitude: r.assayer.longitude });
+                distanceKm = route.distanceKm;
+            }
+            recommendations.push({
+                id: r.assayer.id,
+                assayerCode: r.assayer.assayerCode,
+                displayName: r.assayer.displayName,
+                phone: r.assayer.phone,
+                email: r.assayer.email,
+                status: r.assayer.status,
+                state: r.assayer.state,
+                district: r.assayer.district,
+                city: r.assayer.city,
+                distanceKm,
+                score: r.score,
+            });
         }
-        const fallbackResults = await this.assayerRepository.find({
-            where: {
-                state: branch.state,
-                district: branch.district,
-                status: 'ACTIVE',
-                isActive: true,
-            },
-            order: { displayName: 'ASC' },
+        return recommendations;
+    }
+    async createRule(dto, userId) {
+        const rule = this.ruleRepository.create({
+            ...dto,
+            createdBy: userId,
+            updatedBy: userId,
         });
-        return fallbackResults.map(a => ({
-            id: a.id,
-            assayerCode: a.assayerCode,
-            displayName: a.displayName,
-            phone: a.phone,
-            email: a.email,
-            status: a.status,
-            state: a.state,
-            district: a.district,
-            city: a.city,
-            distanceKm: null,
-        }));
+        return this.ruleRepository.save(rule);
+    }
+    async updateRule(id, dto, userId) {
+        const rule = await this.ruleRepository.findOne({ where: { id, isActive: true } });
+        if (!rule) {
+            throw new common_1.NotFoundException(`Business rule ${id} not found.`);
+        }
+        Object.assign(rule, dto);
+        rule.updatedBy = userId;
+        return this.ruleRepository.save(rule);
+    }
+    async deleteRule(id, userId) {
+        const rule = await this.ruleRepository.findOne({ where: { id, isActive: true } });
+        if (!rule) {
+            throw new common_1.NotFoundException(`Business rule ${id} not found.`);
+        }
+        rule.isActive = false;
+        rule.updatedBy = userId;
+        await this.ruleRepository.save(rule);
+    }
+    async getRules(scope) {
+        const where = { isActive: true };
+        if (scope) {
+            where.scope = scope;
+        }
+        return this.ruleRepository.find({ where, order: { createdAt: 'DESC' } });
+    }
+    async getRule(id) {
+        const rule = await this.ruleRepository.findOne({ where: { id, isActive: true } });
+        if (!rule) {
+            throw new common_1.NotFoundException(`Business rule ${id} not found.`);
+        }
+        return rule;
     }
 };
 exports.PlanningService = PlanningService;
 exports.PlanningService = PlanningService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(branch_entity_1.BranchEntity)),
-    __param(1, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(1, (0, typeorm_1.InjectRepository)(business_rule_entity_1.BusinessRuleEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        typeorm_2.Repository])
+        typeorm_2.Repository,
+        recommendation_engine_1.RecommendationEngine,
+        routing_provider_1.RoutingService])
 ], PlanningService);
 //# sourceMappingURL=planning.service.js.map

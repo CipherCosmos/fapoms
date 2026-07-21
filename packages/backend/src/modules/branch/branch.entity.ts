@@ -60,4 +60,16 @@ export class BranchEntity extends BaseEntity {
   @ManyToOne(() => ClientEntity, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'client_id' })
   client: ClientEntity | null;
+
+  @Column({ name: 'risk_score', type: 'decimal', precision: 5, scale: 2, default: 0.00 })
+  riskScore: number;
+
+  @Column({ type: 'varchar', length: 50, default: 'STANDARD' })
+  complexity: string;
+
+  @Column({ name: 'estimated_duration_hours', type: 'decimal', precision: 5, scale: 2, default: 8.00 })
+  estimatedDurationHours: number;
+
+  @Column({ name: 'required_competencies', type: 'jsonb', nullable: true })
+  requiredCompetencies: string[] | null;
 }

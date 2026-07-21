@@ -20,4 +20,25 @@ export declare class AssayerEntity extends BaseEntity {
     bankAccountNumber: string | null;
     ifscCode: string | null;
     notes: string | null;
+    employmentType: string;
+    skills: string[] | null;
+    certifications: {
+        name: string;
+        expiryDate: string;
+    }[] | null;
+    languages: string[] | null;
+    preferredRegions: string[] | null;
+    specializations: string[] | null;
+    experienceYears: number;
+    performanceRating: number;
+    leaves: {
+        startDate: string;
+        endDate: string;
+    }[] | null;
+    workingHours: {
+        start: string;
+        end: string;
+    } | null;
+    maxDailyWorkload: number;
+    maxWeeklyWorkload: number;
 }

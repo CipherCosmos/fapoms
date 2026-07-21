@@ -27,6 +27,10 @@ let BranchEntity = class BranchEntity extends base_entity_1.BaseEntity {
     location;
     clientId;
     client;
+    riskScore;
+    complexity;
+    estimatedDurationHours;
+    requiredCompetencies;
 };
 exports.BranchEntity = BranchEntity;
 __decorate([
@@ -88,6 +92,22 @@ __decorate([
     (0, typeorm_1.JoinColumn)({ name: 'client_id' }),
     __metadata("design:type", Object)
 ], BranchEntity.prototype, "client", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'risk_score', type: 'decimal', precision: 5, scale: 2, default: 0.00 }),
+    __metadata("design:type", Number)
+], BranchEntity.prototype, "riskScore", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 50, default: 'STANDARD' }),
+    __metadata("design:type", String)
+], BranchEntity.prototype, "complexity", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'estimated_duration_hours', type: 'decimal', precision: 5, scale: 2, default: 8.00 }),
+    __metadata("design:type", Number)
+], BranchEntity.prototype, "estimatedDurationHours", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'required_competencies', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], BranchEntity.prototype, "requiredCompetencies", void 0);
 exports.BranchEntity = BranchEntity = __decorate([
     (0, typeorm_1.Entity)('branches'),
     (0, typeorm_1.Index)(['branchCode']),

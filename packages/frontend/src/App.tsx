@@ -10,6 +10,9 @@ import { Assignments } from './pages/Assignments';
 import { Scheduling } from './pages/Scheduling';
 import { Documents } from './pages/Documents';
 import { Validation } from './pages/Validation';
+import { Users } from './pages/Users';
+import { Assayers } from './pages/Assayers';
+import { Rules } from './pages/Rules';
 import { api } from './services/api';
 
 interface UserProfile {
@@ -66,6 +69,9 @@ export const App: React.FC = () => {
         <Route path="/scheduling" element={<Scheduling />} />
         <Route path="/documents" element={<Documents />} />
         <Route path="/validation" element={<Validation />} />
+        <Route path="/users" element={<Users />} />
+        <Route path="/assayers" element={<Assayers />} />
+        <Route path="/rules" element={<Rules />} />
         
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

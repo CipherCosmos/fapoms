@@ -3,8 +3,8 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 
 // Load environment variables
-dotenv.config({ path: path.join(__dirname, '../../../.env') });
-dotenv.config({ path: path.join(__dirname, '../../../.env.local') });
+dotenv.config({ path: path.join(process.cwd(), '.env') });
+dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -15,7 +15,7 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_DATABASE || 'fapoms',
   synchronize: process.env.DB_SYNCHRONIZE === 'true',
   logging: process.env.DB_LOGGING === 'true',
-  entities: [path.join(__dirname, '../../**/*.entity.{ts,js}'), path.join(__dirname, '../../modules/**/*.entities.{ts,js}')],
-  migrations: [path.join(__dirname, './migrations/*.{ts,js}')],
+  entities: [path.join(process.cwd(), 'dist/**/*.entity.js'), path.join(process.cwd(), 'dist/modules/**/*.entities.js')],
+  migrations: [path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js')],
   subscribers: [],
 });

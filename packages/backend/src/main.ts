@@ -8,6 +8,12 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  const nodeEnv = process.env.NODE_ENV;
+  const jwtSecret = process.env.JWT_SECRET;
+  if (nodeEnv === 'production' && (!jwtSecret || jwtSecret === 'dev-secret')) {
+    throw new Error('CRITICAL: JWT_SECRET must be set to a secure key in production environments!');
+  }
+
   const app = await NestFactory.create(AppModule);
 
   // Global prefix for all API routes

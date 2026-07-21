@@ -28,6 +28,7 @@ const notifications_module_1 = require("./modules/notifications/notifications.mo
 const document_module_1 = require("./modules/document/document.module");
 const validation_module_1 = require("./modules/validation/validation.module");
 const ocr_module_1 = require("./infrastructure/ocr/ocr.module");
+const geo_module_1 = require("./modules/geo/geo.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -60,6 +61,7 @@ exports.AppModule = AppModule = __decorate([
             document_module_1.DocumentModule,
             validation_module_1.ValidationModule,
             ocr_module_1.OcrModule,
+            geo_module_1.GeoModule,
         ],
     })
 ], AppModule);

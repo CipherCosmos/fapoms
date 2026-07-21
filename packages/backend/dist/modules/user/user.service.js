@@ -102,8 +102,10 @@ let UserService = class UserService {
             user.phone = dto.phone ?? null;
         if (dto.departmentId !== undefined)
             user.departmentId = dto.departmentId ?? null;
-        if (dto.status !== undefined)
+        if (dto.status !== undefined) {
             user.status = dto.status;
+            user.isActive = dto.status === shared_1.UserStatus.ACTIVE;
+        }
         user.updatedBy = updatedById;
         const saved = await this.userRepository.save(user);
         await this.auditService.recordEvent({
@@ -134,6 +136,9 @@ let UserService = class UserService {
             metadata: { roleIds },
         });
         return saved;
+    }
+    async findAllRoles() {
+        return this.roleRepository.find();
     }
 };
 exports.UserService = UserService;

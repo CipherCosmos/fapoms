@@ -5,6 +5,11 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const app_module_1 = require("./app.module");
 async function bootstrap() {
+    const nodeEnv = process.env.NODE_ENV;
+    const jwtSecret = process.env.JWT_SECRET;
+    if (nodeEnv === 'production' && (!jwtSecret || jwtSecret === 'dev-secret')) {
+        throw new Error('CRITICAL: JWT_SECRET must be set to a secure key in production environments!');
+    }
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
     app.setGlobalPrefix('api/v1');
     app.useGlobalPipes(new common_1.ValidationPipe({

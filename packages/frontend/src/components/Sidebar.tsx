@@ -8,7 +8,9 @@ import {
   CalendarDays, 
   Files, 
   ShieldAlert, 
-  ClipboardList
+  ClipboardList,
+  Users,
+  Sliders
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -25,6 +27,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user }) => {
     { name: 'Scheduling', path: '/scheduling', icon: CalendarDays },
     { name: 'Documents', path: '/documents', icon: Files },
     { name: 'Validation', path: '/validation', icon: ShieldAlert },
+    { name: 'Assayers Workforce', path: '/assayers', icon: Users },
+    { name: 'Rule Engine', path: '/rules', icon: Sliders },
+    { name: 'User Management', path: '/users', icon: Users },
   ];
 
   return (

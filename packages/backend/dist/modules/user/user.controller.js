@@ -131,6 +131,13 @@ let UserController = class UserController {
             data: this.sanitizeUser(user),
         };
     }
+    async findAllRoles() {
+        const roles = await this.userService.findAllRoles();
+        return {
+            success: true,
+            data: roles,
+        };
+    }
     sanitizeUser(user) {
         const { passwordHash, failedLoginAttempts, lockedUntil, ...safe } = user;
         return safe;
@@ -195,6 +202,14 @@ __decorate([
     __metadata("design:paramtypes", [String, AssignRolesDto, Object]),
     __metadata("design:returntype", Promise)
 ], UserController.prototype, "assignRoles", null);
+__decorate([
+    (0, common_1.Get)('roles'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'List all available roles' }),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], UserController.prototype, "findAllRoles", null);
 exports.UserController = UserController = __decorate([
     (0, swagger_1.ApiTags)('Users'),
     (0, swagger_1.ApiBearerAuth)(),

@@ -137,7 +137,10 @@ export class UserService {
     }
     if (dto.phone !== undefined) user.phone = dto.phone ?? null;
     if (dto.departmentId !== undefined) user.departmentId = dto.departmentId ?? null;
-    if (dto.status !== undefined) user.status = dto.status;
+    if (dto.status !== undefined) {
+      user.status = dto.status;
+      user.isActive = dto.status === UserStatus.ACTIVE;
+    }
 
     user.updatedBy = updatedById;
 
@@ -179,5 +182,9 @@ export class UserService {
     });
 
     return saved;
+  }
+
+  async findAllRoles(): Promise<RoleEntity[]> {
+    return this.roleRepository.find();
   }
 }

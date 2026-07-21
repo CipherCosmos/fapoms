@@ -35,4 +35,19 @@ export class ClientEntity extends BaseEntity {
   // Use a string resolver for the target entity to avoid runtime circular import reference errors
   @OneToOne('ClientConfigurationEntity', 'client', { cascade: true, eager: true })
   configuration: any;
+
+  @Column({ type: 'varchar', length: 50, default: 'MEDIUM' })
+  priority: string;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  budget: number | null;
+
+  @Column({ name: 'preferred_assayers', type: 'jsonb', nullable: true })
+  preferredAssayers: string[] | null;
+
+  @Column({ name: 'restricted_assayers', type: 'jsonb', nullable: true })
+  restrictedAssayers: string[] | null;
+
+  @Column({ name: 'planning_preferences', type: 'jsonb', nullable: true })
+  planningPreferences: Record<string, any> | null;
 }

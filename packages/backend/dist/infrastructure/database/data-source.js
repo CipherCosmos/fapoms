@@ -4,8 +4,8 @@ exports.AppDataSource = void 0;
 const typeorm_1 = require("typeorm");
 const dotenv = require("dotenv");
 const path = require("path");
-dotenv.config({ path: path.join(__dirname, '../../../.env') });
-dotenv.config({ path: path.join(__dirname, '../../../.env.local') });
+dotenv.config({ path: path.join(process.cwd(), '.env') });
+dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 exports.AppDataSource = new typeorm_1.DataSource({
     type: 'postgres',
     host: process.env.DB_HOST || 'localhost',
@@ -15,8 +15,8 @@ exports.AppDataSource = new typeorm_1.DataSource({
     database: process.env.DB_DATABASE || 'fapoms',
     synchronize: process.env.DB_SYNCHRONIZE === 'true',
     logging: process.env.DB_LOGGING === 'true',
-    entities: [path.join(__dirname, '../../**/*.entity.{ts,js}'), path.join(__dirname, '../../modules/**/*.entities.{ts,js}')],
-    migrations: [path.join(__dirname, './migrations/*.{ts,js}')],
+    entities: [path.join(process.cwd(), 'dist/**/*.entity.js'), path.join(process.cwd(), 'dist/modules/**/*.entities.js')],
+    migrations: [path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js')],
     subscribers: [],
 });
 //# sourceMappingURL=data-source.js.map

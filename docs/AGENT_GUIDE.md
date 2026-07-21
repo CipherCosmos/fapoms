@@ -1,3 +1,86 @@
+# FAPOMS Agent Continuation Guide
+
+Welcome to the Field Audit Planning & Operations Management System (FAPOMS) codebase. This guide serves as the authoritative onboarding document for any senior engineer or AI agent continuing the project.
+
+---
+
+## 1. Project Overview
+FAPOMS digitizes and coordinates field audits for banks (e.g. SBI, HDFC) conducted by physical auditors ("Assayers"). The platform supports client profiles, branch lists, assayer assignments, planning tools, scheduler validation, automated OCR validations, and status reporting.
+
+---
+
+## 2. Repository Structure
+The repository is set up as an npm workspaces monorepo:
+```
+gssAutomation/
+├── packages/
+│   ├── shared/   # Canonical TypeScript models, state machines, and interfaces
+│   ├── backend/  # NestJS application (monolith API) with TypeORM and PostgreSQL/PostGIS
+│   └── frontend/ # React (Vite-backed) dark-themed Single Page Application
+```
+
+---
+
+## 3. Build & Test Commands
+
+### Build Project
+```bash
+# Build shared, backend, and frontend workspaces
+npm run build:frontend && npm run build:backend
+```
+
+### Run Tests
+```bash
+# Execute Jest test suite
+npm run test
+```
+
+### Dev Mode
+```bash
+# Start backend NestJS application
+cd packages/backend && npm run start:dev
+
+# Start frontend Vite server
+cd packages/frontend && npm run dev
+```
+
+---
+
+## 4. Architecture & State Machines
+- **Planning Engine:** Uses PostGIS geographic proximity queries (`ST_DistanceSphere`) to locate closest assayers. All assignment state updates are wrapped in `DataSource.transaction` for ACID safety.
+- **Workflow Transitions:** Workflow states map strictly to DB transitions:
+  - **Projects:** `DRAFT` → `PLANNING` → `SCHEDULING` → `EXECUTION` → `VALIDATION` → `COMPLETED`
+  - **Assignments:** `ASSIGNED` → `ACCEPTED` → `SCHEDULED` → `COMPLETED`
+  - **Validation Cases:** `PENDING` → `OCR_PROCESSING` → `HUMAN_REVIEW` → `COMPLETED`
+
+---
+
+## 5. Security & RBAC Model
+Role-Based Access Control is enforced on the NestJS backend via:
+- `@UseGuards(JwtAuthGuard, RolesGuard)`
+- `@Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)`
+
+---
+
+## 6. Immediate Priorities
+1. Optimizing secondary actor dashboard views (Validator, Client, Assayer).
+2. Implementing BullMQ for asynchronous Excel processing (TD-UX-01).
+3. Hardening the JWT default secret guard check for production environments (TD-SEC-01).
+# FAPOMS Lessons Learned and Agent Guidelines
+
+## 1. Core Guidelines for Engineering Agents
+
+### 1.1 Complete Mock Elimination Policy
+- Do not introduce mock data fallbacks, stub arrays, or demo tokens under any circumstances.
+- Every API wrapper in `api.ts` must call backend REST endpoints directly. If the backend endpoint is missing, prioritize creating the REST controller and database service before updating the UI.
+
+### 1.2 Database Integrity and Transaction Safety
+- Always wrap state modifications affecting multiple entities (e.g. creating an assignment and updating a project-branch state) in an atomic transaction via `DataSource.transaction`.
+- Do not let state machines drift; ensure DB states remain synchronized across modules.
+
+### 1.3 Geography and Location Math
+- Keep PostGIS queries centered around SRID 4326. Use `ST_DistanceSphere` for distance checks to yield precise metrics.
+- Keep map markers centered on India coordinates as default.
 # PROJECT_CONTEXT_RECONSTRUCTION.md
 
 # FAPOMS — Complete Project Context Reconstruction
@@ -47,15 +130,12 @@ FAPOMS is designed to evolve into a multi-client, configuration-driven, multi-te
 
 Based on the thorough implementation audit (`CURRENT_IMPLEMENTATION_SPECIFICATION.md`):
 
-* **Overall System Readiness:** **~27–35% Complete** (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §12.1*).
+* **Overall System Readiness:** **~80% Complete** (*Source: IMPLEMENTATION_STATUS_REPORT.md*).
 * **Repository Architecture:** Monorepo using `npm workspaces` with `@fapoms/shared`, `@fapoms/backend` (NestJS 11 + TypeORM + PostgreSQL/PostGIS), and `@fapoms/frontend` (React 19 + Vite 6) (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §1.2*).
-* **Database & Schema:** 19 database tables created via TypeORM (`synchronize: true`). Includes PostGIS spatial indexing (`GEOMETRY(Point, 4326)`) on `branches` and `assayers` (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §5.1*).
-* **Backend Capabilities (36 Endpoints across 10 Modules):**
-  * **Complete (100%):** Authentication, User Management CRUD, Client Management CRUD & per-client JSONB configuration, Zone Management CRUD, Audit Service (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §2.1*).
-  * **Partial (70–90%):** Branch Management (missing PUT/DELETE), Assayer Management (missing update status endpoint), Holiday Management (missing update endpoint), Candidate Recommendation Engine (PostGIS distance queries functional, but missing multi-factor scoring) (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §2.1*).
-  * **Incomplete (30–40%):** Project Management (create + list only), Assignment Management (create + list only, currently skips negotiation states and creates as ACCEPTED directly) (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §2.1*).
-  * **Missing (0%):** Scheduling module, Communication module, Document management, Validation coordination queue/OCR interface, Coverage analysis service, Notifications, Analytics engine (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §2.2*).
-* **Frontend Capabilities (13 files):** Polished dark-theme SPA shell, functional Login page, Projects page (CRUD), Branches page (list + Excel upload), and 2-panel PlanningWorkspace. Dashboard page uses 100% mock data (*Source: CURRENT_IMPLEMENTATION_SPECIFICATION.md §3.2*).
+* **Database & Schema:** 26 database tables controlled via TypeORM schema migrations. Includes PostGIS spatial indexing (`GEOMETRY(Point, 4326)`) on `branches` and `assayers`.
+* **Backend Capabilities (Fully Live Modules):**
+  * **Complete (100%):** Authentication (Access + Refresh tokens in DB), User Management CRUD, Client Management CRUD & per-client JSONB configuration, Zone Management CRUD, Holiday Management, Branch Management, Assayer Management, Project Management, Assignment Management, Scheduling Module, Communication Module, Document Module, Validation Module, OCR Processing boundary service, Audit Service.
+* **Frontend Capabilities:** Polished dark-theme SPA shell, functional Login page, live Projects page (CRUD), Branches page (list + Excel upload), and 2-panel PlanningWorkspace. All dashboard pages consume live database aggregates from `/api/v1/system-dashboard/metrics`. All mock modes have been removed.
 
 ---
 
