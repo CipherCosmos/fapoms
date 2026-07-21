@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Compass, PhoneCall, Check, X, ShieldAlert, AlertTriangle, CheckCircle } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
 import { api } from '../services/api';
+import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 
 interface ProjectOption {
   id: string;
@@ -25,6 +26,8 @@ interface ProjectBranch {
     state: string;
     district: string;
     city: string;
+    latitude: number | null;
+    longitude: number | null;
   };
 }
 
@@ -267,6 +270,19 @@ export const PlanningWorkspace: React.FC = () => {
             <span>{message.text}</span>
           </div>
         )}
+
+        {/* Geographic Map Visualization panel */}
+        <InteractivePlanningMap
+          branches={branches.map(b => ({
+            id: b.id,
+            name: b.branch.name,
+            latitude: b.branch.latitude,
+            longitude: b.branch.longitude,
+            status: b.status,
+          }))}
+          selectedBranchId={selectedBranchId}
+          onSelectBranch={(id) => setSelectedBranchId(id)}
+        />
 
         {/* Planning Queue */}
         <div className="glass-card" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>

@@ -39,7 +39,7 @@ __decorate([
     __metadata("design:type", Boolean)
 ], NotificationEntity.prototype, "isRead", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'link', length: 255, nullable: true }),
+    (0, typeorm_1.Column)({ name: 'link', type: 'varchar', length: 255, nullable: true }),
     __metadata("design:type", Object)
 ], NotificationEntity.prototype, "link", void 0);
 __decorate([

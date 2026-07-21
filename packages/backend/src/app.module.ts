@@ -29,6 +29,9 @@ import { AssignmentModule } from './modules/assignment/assignment.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { CommunicationModule } from './modules/communication/communication.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { DocumentModule } from './modules/document/document.module';
+import { ValidationModule } from './modules/validation/validation.module';
+import { OcrModule } from './infrastructure/ocr/ocr.module';
 
 @Module({
   imports: [
@@ -62,6 +65,9 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     SchedulingModule,
     CommunicationModule,
     NotificationsModule,
+    DocumentModule,
+    ValidationModule,
+    OcrModule,
   ],
 })
 export class AppModule {}

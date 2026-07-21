@@ -138,5 +138,16 @@ describe('AssignmentService', () => {
             expect(result.status).toBe(shared_1.AssignmentStatus.CANDIDATE_SELECTED);
         });
     });
+    describe('update', () => {
+        it('should throw BadRequestException if assignment is locked (ACCEPTED status)', async () => {
+            const mockAssignment = {
+                id: 'asn-123',
+                status: shared_1.AssignmentStatus.ACCEPTED,
+                projectBranch: { id: 'pb-1' },
+            };
+            mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
+            await expect(service.update('asn-123', { proposedFee: 600 }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
+        });
+    });
 });
 //# sourceMappingURL=assignment.service.spec.js.map

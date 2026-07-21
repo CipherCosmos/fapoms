@@ -179,4 +179,19 @@ describe('AssignmentService', () => {
       expect(result.status).toBe(AssignmentStatus.CANDIDATE_SELECTED);
     });
   });
+
+  describe('update', () => {
+    it('should throw BadRequestException if assignment is locked (ACCEPTED status)', async () => {
+      const mockAssignment = {
+        id: 'asn-123',
+        status: AssignmentStatus.ACCEPTED,
+        projectBranch: { id: 'pb-1' },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
+
+      await expect(
+        service.update('asn-123', { proposedFee: 600 }, 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
 });

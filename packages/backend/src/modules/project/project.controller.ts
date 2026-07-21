@@ -31,6 +31,7 @@ export class ProjectController {
   constructor(private readonly projectService: ProjectService) {}
 
   @Post()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Create a new project linked to a client institution' })
   async create(@Body() dto: CreateProjectDto, @Req() req: any) {
     const project = await this.projectService.create(dto, req.user.id);

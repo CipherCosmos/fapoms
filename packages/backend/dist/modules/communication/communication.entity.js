@@ -44,7 +44,7 @@ __decorate([
     __metadata("design:type", String)
 ], CommunicationEntity.prototype, "initiatedBy", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'recipient_ref', length: 150, nullable: true }),
+    (0, typeorm_1.Column)({ name: 'recipient_ref', type: 'varchar', length: 150, nullable: true }),
     __metadata("design:type", Object)
 ], CommunicationEntity.prototype, "recipientRef", void 0);
 __decorate([

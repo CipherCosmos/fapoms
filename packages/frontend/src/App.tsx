@@ -6,6 +6,10 @@ import { Dashboard } from './pages/Dashboard';
 import { Projects } from './pages/Projects';
 import { Branches } from './pages/Branches';
 import { PlanningWorkspace } from './pages/PlanningWorkspace';
+import { Assignments } from './pages/Assignments';
+import { Scheduling } from './pages/Scheduling';
+import { Documents } from './pages/Documents';
+import { Validation } from './pages/Validation';
 import { api } from './services/api';
 
 interface UserProfile {
@@ -62,32 +66,10 @@ export const App: React.FC = () => {
         <Route path="/projects" element={<Projects />} />
         <Route path="/branches" element={<Branches />} />
         <Route path="/planning" element={<PlanningWorkspace />} />
-        
-        {/* Placeholder routes for Phase 1 endpoints */}
-        <Route path="/assignments" element={
-          <div className="glass-card">
-            <h3>Assignments Module</h3>
-            <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Assignments lifecycle tracking (Phase 4).</p>
-          </div>
-        } />
-        <Route path="/scheduling" element={
-          <div className="glass-card">
-            <h3>Scheduling Module</h3>
-            <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Calendar grid & national holiday conflict checkers (Phase 4).</p>
-          </div>
-        } />
-        <Route path="/documents" element={
-          <div className="glass-card">
-            <h3>Document Management</h3>
-            <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Branch list imports, master data mapping, PDF builder (Phase 5).</p>
-          </div>
-        } />
-        <Route path="/validation" element={
-          <div className="glass-card">
-            <h3>Validation Dashboard</h3>
-            <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Validator human review workspace (Phase 6).</p>
-          </div>
-        } />
+        <Route path="/assignments" element={<Assignments />} />
+        <Route path="/scheduling" element={<Scheduling />} />
+        <Route path="/documents" element={<Documents />} />
+        <Route path="/validation" element={<Validation />} />
         <Route path="/reports" element={
           <div className="glass-card">
             <h3>Operational Reports</h3>

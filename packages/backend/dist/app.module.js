@@ -25,6 +25,9 @@ const assignment_module_1 = require("./modules/assignment/assignment.module");
 const scheduling_module_1 = require("./modules/scheduling/scheduling.module");
 const communication_module_1 = require("./modules/communication/communication.module");
 const notifications_module_1 = require("./modules/notifications/notifications.module");
+const document_module_1 = require("./modules/document/document.module");
+const validation_module_1 = require("./modules/validation/validation.module");
+const ocr_module_1 = require("./infrastructure/ocr/ocr.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -54,6 +57,9 @@ exports.AppModule = AppModule = __decorate([
             scheduling_module_1.SchedulingModule,
             communication_module_1.CommunicationModule,
             notifications_module_1.NotificationsModule,
+            document_module_1.DocumentModule,
+            validation_module_1.ValidationModule,
+            ocr_module_1.OcrModule,
         ],
     })
 ], AppModule);

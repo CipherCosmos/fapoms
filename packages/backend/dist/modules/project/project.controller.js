@@ -76,6 +76,7 @@ let ProjectController = class ProjectController {
 exports.ProjectController = ProjectController;
 __decorate([
     (0, common_1.Post)(),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new project linked to a client institution' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),

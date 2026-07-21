@@ -129,6 +129,17 @@ export class AssignmentService {
   async update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
 
+    if (
+      assignment.status === AssignmentStatus.ACCEPTED ||
+      assignment.status === AssignmentStatus.SCHEDULED ||
+      assignment.status === AssignmentStatus.AUDIT_COMPLETED ||
+      assignment.status === AssignmentStatus.CLOSED
+    ) {
+      throw new BadRequestException(
+        `Locked: Cannot modify assignment details after acceptance (Current status: ${assignment.status}).`
+      );
+    }
+
     if (dto.proposedFee !== undefined) assignment.proposedFee = dto.proposedFee;
     if (dto.agreedFee !== undefined) assignment.agreedFee = dto.agreedFee;
     if (dto.scheduledDate !== undefined) {

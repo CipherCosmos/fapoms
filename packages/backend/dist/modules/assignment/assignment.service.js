@@ -97,6 +97,12 @@ let AssignmentService = class AssignmentService {
     }
     async update(id, dto, userId) {
         const assignment = await this.findOne(id);
+        if (assignment.status === shared_1.AssignmentStatus.ACCEPTED ||
+            assignment.status === shared_1.AssignmentStatus.SCHEDULED ||
+            assignment.status === shared_1.AssignmentStatus.AUDIT_COMPLETED ||
+            assignment.status === shared_1.AssignmentStatus.CLOSED) {
+            throw new common_1.BadRequestException(`Locked: Cannot modify assignment details after acceptance (Current status: ${assignment.status}).`);
+        }
         if (dto.proposedFee !== undefined)
             assignment.proposedFee = dto.proposedFee;
         if (dto.agreedFee !== undefined)
