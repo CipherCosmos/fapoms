@@ -37,6 +37,10 @@ export declare class UserController {
             };
         };
     }>;
+    findAllRoles(): Promise<{
+        success: boolean;
+        data: import("./role.entity").RoleEntity[];
+    }>;
     findOne(id: string): Promise<{
         success: boolean;
         data: any;
@@ -48,10 +52,6 @@ export declare class UserController {
     assignRoles(id: string, dto: AssignRolesDto, req: any): Promise<{
         success: boolean;
         data: any;
-    }>;
-    findAllRoles(): Promise<{
-        success: boolean;
-        data: import("./role.entity").RoleEntity[];
     }>;
     private sanitizeUser;
 }

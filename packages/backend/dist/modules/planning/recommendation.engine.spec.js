@@ -8,7 +8,8 @@ const assignment_entity_1 = require("../assignment/assignment.entity");
 const routing_provider_1 = require("../geo/routing.provider");
 const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const client_entity_1 = require("../client/client.entity");
-const rule_engine_1 = require("./rule.engine");
+const rule_engine_1 = require("../platform/rules/rule.engine");
+const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
 describe('RecommendationEngine', () => {
     let engine;
     const mockAssayerRepo = {
@@ -28,7 +29,7 @@ describe('RecommendationEngine', () => {
         calculateRoute: jest.fn(),
     };
     const mockRuleEngine = {
-        evaluateEligibility: jest.fn().mockResolvedValue(true),
+        evaluate: jest.fn().mockResolvedValue([{ passed: true, actionType: 'ALERT' }]),
     };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
@@ -48,6 +49,7 @@ describe('RecommendationEngine', () => {
                 recommendation_engine_1.SLAComplianceScoreCalculator,
                 recommendation_engine_1.ProfitabilityScoreCalculator,
                 recommendation_engine_1.RiskScoreCalculator,
+                configuration_resolver_1.ConfigurationResolver,
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(assayer_entity_1.AssayerEntity),
                     useValue: mockAssayerRepo,

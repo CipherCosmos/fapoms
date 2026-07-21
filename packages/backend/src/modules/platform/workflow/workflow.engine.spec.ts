@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { WorkflowEngine } from './workflow.engine';
-import { AuditService } from '../../core/audit/audit.service';
+import { AuditService } from '../../../core/audit/audit.service';
 
 describe('WorkflowEngine', () => {
   let engine: WorkflowEngine;

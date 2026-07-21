@@ -202,6 +202,95 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   maxWeeklyWorkload?: number;
 }
 
+export class CreateWorkforceAttributeRequestDto {
+  @IsString() @IsNotEmpty()
+  type: string;
+
+  @IsString() @IsNotEmpty()
+  name: string;
+
+  @IsOptional() @IsString()
+  level?: string;
+
+  @IsOptional() @IsString()
+  expiryDate?: string;
+
+  @IsOptional() @IsObject()
+  metadata?: Record<string, any>;
+}
+
+export class UpdateWorkforceAttributeRequestDto {
+  @IsOptional() @IsString()
+  name?: string;
+
+  @IsOptional() @IsString()
+  level?: string;
+
+  @IsOptional() @IsString()
+  expiryDate?: string | null;
+
+  @IsOptional() @IsObject()
+  metadata?: Record<string, any>;
+}
+
+export class CreateCommercialProfileRequestDto {
+  @IsNumber() @IsNotEmpty()
+  baseFee: number;
+
+  @IsNumber() @IsNotEmpty()
+  hourlyRate: number;
+
+  @IsNumber() @IsNotEmpty()
+  dailyRate: number;
+
+  @IsNumber() @IsNotEmpty()
+  travelReimbursement: number;
+
+  @IsNumber() @IsNotEmpty()
+  accommodationAllowance: number;
+
+  @IsNumber() @IsNotEmpty()
+  mealAllowance: number;
+
+  @IsOptional() @IsString()
+  currency?: string;
+
+  @IsString() @IsNotEmpty()
+  effectiveStartDate: string;
+
+  @IsOptional() @IsString()
+  effectiveEndDate?: string | null;
+}
+
+export class UpdateCommercialProfileRequestDto {
+  @IsOptional() @IsNumber()
+  baseFee?: number;
+
+  @IsOptional() @IsNumber()
+  hourlyRate?: number;
+
+  @IsOptional() @IsNumber()
+  dailyRate?: number;
+
+  @IsOptional() @IsNumber()
+  travelReimbursement?: number;
+
+  @IsOptional() @IsNumber()
+  accommodationAllowance?: number;
+
+  @IsOptional() @IsNumber()
+  mealAllowance?: number;
+
+  @IsOptional() @IsString()
+  currency?: string;
+
+  @IsOptional() @IsString()
+  effectiveStartDate?: string;
+
+  @IsOptional() @IsString()
+  effectiveEndDate?: string | null;
+}
+
 @ApiTags('Assayers')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -390,91 +479,3 @@ export class AssayerController {
   }
 }
 
-export class CreateWorkforceAttributeRequestDto {
-  @IsString() @IsNotEmpty()
-  type: string;
-
-  @IsString() @IsNotEmpty()
-  name: string;
-
-  @IsOptional() @IsString()
-  level?: string;
-
-  @IsOptional() @IsString()
-  expiryDate?: string;
-
-  @IsOptional() @IsObject()
-  metadata?: Record<string, any>;
-}
-
-export class UpdateWorkforceAttributeRequestDto {
-  @IsOptional() @IsString()
-  name?: string;
-
-  @IsOptional() @IsString()
-  level?: string;
-
-  @IsOptional() @IsString()
-  expiryDate?: string | null;
-
-  @IsOptional() @IsObject()
-  metadata?: Record<string, any>;
-}
-
-export class CreateCommercialProfileRequestDto {
-  @IsNumber() @IsNotEmpty()
-  baseFee: number;
-
-  @IsNumber() @IsNotEmpty()
-  hourlyRate: number;
-
-  @IsNumber() @IsNotEmpty()
-  dailyRate: number;
-
-  @IsNumber() @IsNotEmpty()
-  travelReimbursement: number;
-
-  @IsNumber() @IsNotEmpty()
-  accommodationAllowance: number;
-
-  @IsNumber() @IsNotEmpty()
-  mealAllowance: number;
-
-  @IsOptional() @IsString()
-  currency?: string;
-
-  @IsString() @IsNotEmpty()
-  effectiveStartDate: string;
-
-  @IsOptional() @IsString()
-  effectiveEndDate?: string | null;
-}
-
-export class UpdateCommercialProfileRequestDto {
-  @IsOptional() @IsNumber()
-  baseFee?: number;
-
-  @IsOptional() @IsNumber()
-  hourlyRate?: number;
-
-  @IsOptional() @IsNumber()
-  dailyRate?: number;
-
-  @IsOptional() @IsNumber()
-  travelReimbursement?: number;
-
-  @IsOptional() @IsNumber()
-  accommodationAllowance?: number;
-
-  @IsOptional() @IsNumber()
-  mealAllowance?: number;
-
-  @IsOptional() @IsString()
-  currency?: string;
-
-  @IsOptional() @IsString()
-  effectiveStartDate?: string;
-
-  @IsOptional() @IsString()
-  effectiveEndDate?: string | null;
-}

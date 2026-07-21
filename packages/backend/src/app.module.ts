@@ -16,6 +16,7 @@ import { databaseConfig } from './infrastructure/database/database.config';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { AuditModule } from './core/audit/audit.module';
+import { PlatformModule } from './modules/platform/platform.module';
 
 // Business modules
 import { ClientModule } from './modules/client/client.module';
@@ -53,6 +54,7 @@ import { GeoModule } from './modules/geo/geo.module';
     AuditModule,
     AuthModule,
     UserModule,
+    PlatformModule,
 
     // Business modules
     ClientModule,

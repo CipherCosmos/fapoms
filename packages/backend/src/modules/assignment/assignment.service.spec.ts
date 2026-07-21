@@ -8,6 +8,7 @@ import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -38,16 +39,52 @@ describe('AssignmentService', () => {
 
   const mockDataSource = {
     transaction: jest.fn((cb) => cb({
-      save: jest.fn((arg) => {
-        // Track saves to mock repositories
-        if (arg.projectBranchId) {
-          mockAssignmentRepo.save(arg);
-        } else {
-          mockProjectBranchRepo.save(arg);
-        }
-        return Promise.resolve(arg);
-      }),
+      save: jest.fn((arg) => Promise.resolve(arg)),
     })),
+  };
+
+  const mockWorkflowEngine = {
+    registerWorkflow: jest.fn(),
+    executeTransition: jest.fn().mockImplementation(async (key, id, from, to, ctx) => {
+      // Simulate valid transition paths
+      const validPaths: Record<string, string[]> = {
+        CREATED: ['ACCEPTED', 'REJECTED', 'CANCELLED', 'CANDIDATE_SELECTED'],
+        ACCEPTED: ['SCHEDULED'],
+        SCHEDULED: ['AUDIT_COMPLETED'],
+        AUDIT_COMPLETED: ['CLOSED'],
+      };
+      const allowed = validPaths[from] || [];
+      if (!allowed.includes(to)) {
+        throw new BadRequestException(`Invalid transition from '${from}' to '${to}'`);
+      }
+
+      if (to === 'ACCEPTED') {
+        ctx.payload.assignment.agreedFee = ctx.payload.fee ?? ctx.payload.assignment.proposedFee;
+        ctx.payload.assignment.projectBranch.status = 'ASSIGNMENT_CONFIRMED';
+      }
+      if (to === 'REJECTED') {
+        ctx.payload.assignment.rejectReason = ctx.payload.reason ?? 'Rejected';
+        ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
+      }
+      if (to === 'CANCELLED') {
+        ctx.payload.assignment.cancelReason = ctx.payload.reason ?? 'Cancelled';
+        ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
+      }
+      if (to === 'SCHEDULED') {
+        if (ctx.payload.scheduledDate) {
+          ctx.payload.assignment.scheduledDate = new Date(ctx.payload.scheduledDate);
+          ctx.payload.assignment.projectBranch.scheduledDate = new Date(ctx.payload.scheduledDate);
+        }
+        ctx.payload.assignment.projectBranch.status = 'SCHEDULED';
+      }
+      if (to === 'AUDIT_COMPLETED') {
+        ctx.payload.assignment.completionDate = new Date();
+        ctx.payload.assignment.projectBranch.status = 'AUDIT_COMPLETED';
+      }
+      if (to === 'CLOSED') {
+        ctx.payload.assignment.projectBranch.status = 'CLOSED';
+      }
+    }),
   };
 
   beforeEach(async () => {
@@ -69,6 +106,10 @@ describe('AssignmentService', () => {
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: WorkflowEngine,
+          useValue: mockWorkflowEngine,
         },
         {
           provide: DataSource,
@@ -165,7 +206,7 @@ describe('AssignmentService', () => {
       );
 
       expect(result.status).toBe(AssignmentStatus.CREATED);
-      expect(mockProjectBranchRepo.save).toHaveBeenCalled();
+      expect(mockDataSource.transaction).toHaveBeenCalled();
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
     });
   });
@@ -175,7 +216,7 @@ describe('AssignmentService', () => {
       const mockAssignment = {
         id: 'asn-123',
         status: AssignmentStatus.CREATED,
-        projectBranch: { id: 'pb-1' },
+        projectBranch: { id: 'pb-1', branch: { state: 'MH' } },
       };
       mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
 
@@ -188,7 +229,7 @@ describe('AssignmentService', () => {
       const mockAssignment = {
         id: 'asn-123',
         status: AssignmentStatus.CREATED,
-        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING },
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
       };
       mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
       mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));

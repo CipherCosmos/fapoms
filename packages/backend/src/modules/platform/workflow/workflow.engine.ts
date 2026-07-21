@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { AuditService } from '../../core/audit/audit.service';
+import { AuditService } from '../../../core/audit/audit.service';
 import { EventCategory } from '@fapoms/shared';
 
 export interface WorkflowContext {
@@ -22,16 +22,10 @@ export class WorkflowEngine {
 
   constructor(private readonly auditService: AuditService) {}
 
-  /**
-   * Registers a list of valid state transitions for a given workflow key.
-   */
   registerWorkflow(workflowKey: string, transitions: TransitionDefinition[]) {
     this.registries.set(workflowKey, transitions);
   }
 
-  /**
-   * Checks if an entity can transition from the current state to the target state.
-   */
   async canTransition(
     workflowKey: string,
     fromState: string,
@@ -56,9 +50,6 @@ export class WorkflowEngine {
     return true;
   }
 
-  /**
-   * Executes a state transition, validating guards and side effects.
-   */
   async executeTransition(
     workflowKey: string,
     entityId: string,
@@ -81,7 +72,6 @@ export class WorkflowEngine {
       );
     }
 
-    // 1. Run guards
     if (matched.guards) {
       for (const guard of matched.guards) {
         const ok = await guard(context);
@@ -91,12 +81,10 @@ export class WorkflowEngine {
       }
     }
 
-    // 2. Pre-transition hook
     if (matched.beforeTransition) {
       await matched.beforeTransition(context);
     }
 
-    // 3. Log event
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'WORKFLOW_TRANSITION',
@@ -106,7 +94,6 @@ export class WorkflowEngine {
       remarks: `Transitioned '${workflowKey}' ${entityId} from ${fromState} -> ${toState}`,
     });
 
-    // 4. Post-transition hook
     if (matched.afterTransition) {
       await matched.afterTransition(context);
     }

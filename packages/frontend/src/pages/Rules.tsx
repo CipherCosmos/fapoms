@@ -32,9 +32,9 @@ export const Rules: React.FC = () => {
   const fetchRules = async () => {
     setLoading(true);
     try {
-      const res = await api.request<{ success: boolean; data: BusinessRule[] }>('/planning/rules');
-      if (res && res.data) {
-        setRules(res.data);
+      const data = await api.request<BusinessRule[]>('/planning/rules');
+      if (data) {
+        setRules(data);
       }
     } catch (e) {
       console.error(e);

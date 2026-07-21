@@ -14,6 +14,7 @@ const database_config_1 = require("./infrastructure/database/database.config");
 const auth_module_1 = require("./modules/auth/auth.module");
 const user_module_1 = require("./modules/user/user.module");
 const audit_module_1 = require("./core/audit/audit.module");
+const platform_module_1 = require("./modules/platform/platform.module");
 const client_module_1 = require("./modules/client/client.module");
 const branch_module_1 = require("./modules/branch/branch.module");
 const assayer_module_1 = require("./modules/assayer/assayer.module");
@@ -47,6 +48,7 @@ exports.AppModule = AppModule = __decorate([
             audit_module_1.AuditModule,
             auth_module_1.AuthModule,
             user_module_1.UserModule,
+            platform_module_1.PlatformModule,
             client_module_1.ClientModule,
             branch_module_1.BranchModule,
             assayer_module_1.AssayerModule,

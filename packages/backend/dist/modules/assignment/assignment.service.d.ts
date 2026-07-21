@@ -1,8 +1,10 @@
+import { OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { AssignmentStatus } from '@fapoms/shared';
 export interface CreateAssignmentDto {
     projectBranchId: string;
@@ -24,13 +26,15 @@ export interface TransitionAssignmentDto {
     fee?: number;
     scheduledDate?: string;
 }
-export declare class AssignmentService {
+export declare class AssignmentService implements OnModuleInit {
     private readonly assignmentRepository;
     private readonly projectBranchRepository;
     private readonly holidayService;
     private readonly auditService;
+    private readonly workflowEngine;
     private readonly dataSource;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, holidayService: HolidayService, auditService: AuditService, dataSource: DataSource);
+    constructor(assignmentRepository: Repository<AssignmentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, holidayService: HolidayService, auditService: AuditService, workflowEngine: WorkflowEngine, dataSource: DataSource);
+    onModuleInit(): void;
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
     update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity>;

@@ -80,6 +80,41 @@ declare class UpdateAssayerRequestDto implements UpdateAssayerDto {
     maxDailyWorkload?: number;
     maxWeeklyWorkload?: number;
 }
+export declare class CreateWorkforceAttributeRequestDto {
+    type: string;
+    name: string;
+    level?: string;
+    expiryDate?: string;
+    metadata?: Record<string, any>;
+}
+export declare class UpdateWorkforceAttributeRequestDto {
+    name?: string;
+    level?: string;
+    expiryDate?: string | null;
+    metadata?: Record<string, any>;
+}
+export declare class CreateCommercialProfileRequestDto {
+    baseFee: number;
+    hourlyRate: number;
+    dailyRate: number;
+    travelReimbursement: number;
+    accommodationAllowance: number;
+    mealAllowance: number;
+    currency?: string;
+    effectiveStartDate: string;
+    effectiveEndDate?: string | null;
+}
+export declare class UpdateCommercialProfileRequestDto {
+    baseFee?: number;
+    hourlyRate?: number;
+    dailyRate?: number;
+    travelReimbursement?: number;
+    accommodationAllowance?: number;
+    mealAllowance?: number;
+    currency?: string;
+    effectiveStartDate?: string;
+    effectiveEndDate?: string | null;
+}
 export declare class AssayerController {
     private readonly assayerService;
     constructor(assayerService: AssayerService);
@@ -149,40 +184,5 @@ export declare class AssayerController {
         success: boolean;
         data: import("./workforce-attribute.entity").WorkforceAttributeEntity[];
     }>;
-}
-export declare class CreateWorkforceAttributeRequestDto {
-    type: string;
-    name: string;
-    level?: string;
-    expiryDate?: string;
-    metadata?: Record<string, any>;
-}
-export declare class UpdateWorkforceAttributeRequestDto {
-    name?: string;
-    level?: string;
-    expiryDate?: string | null;
-    metadata?: Record<string, any>;
-}
-export declare class CreateCommercialProfileRequestDto {
-    baseFee: number;
-    hourlyRate: number;
-    dailyRate: number;
-    travelReimbursement: number;
-    accommodationAllowance: number;
-    mealAllowance: number;
-    currency?: string;
-    effectiveStartDate: string;
-    effectiveEndDate?: string | null;
-}
-export declare class UpdateCommercialProfileRequestDto {
-    baseFee?: number;
-    hourlyRate?: number;
-    dailyRate?: number;
-    travelReimbursement?: number;
-    accommodationAllowance?: number;
-    mealAllowance?: number;
-    currency?: string;
-    effectiveStartDate?: string;
-    effectiveEndDate?: string | null;
 }
 export {};

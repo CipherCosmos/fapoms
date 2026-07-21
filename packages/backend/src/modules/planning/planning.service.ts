@@ -9,7 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { BranchEntity } from '../branch/branch.entity';
-import { BusinessRuleEntity } from './business-rule.entity';
+import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';

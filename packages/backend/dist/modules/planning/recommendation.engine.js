@@ -22,7 +22,8 @@ const assignment_entity_1 = require("../assignment/assignment.entity");
 const shared_1 = require("@fapoms/shared");
 const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const client_entity_1 = require("../client/client.entity");
-const rule_engine_1 = require("./rule.engine");
+const rule_engine_1 = require("../platform/rules/rule.engine");
+const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
 let AvailabilityFilter = class AvailabilityFilter {
     assignmentRepository;
     name = 'availability';
@@ -41,19 +42,7 @@ let AvailabilityFilter = class AvailabilityFilter {
                 isActive: true,
             },
         });
-        if (doubleBooked)
-            return false;
-        if (assayer.leaves && assayer.leaves.length > 0) {
-            const targetTime = context.scheduledDate.getTime();
-            const onLeave = assayer.leaves.some((l) => {
-                const start = new Date(l.startDate).getTime();
-                const end = new Date(l.endDate).getTime();
-                return targetTime >= start && targetTime <= end;
-            });
-            if (onLeave)
-                return false;
-        }
-        return true;
+        return !doubleBooked;
     }
 };
 exports.AvailabilityFilter = AvailabilityFilter;
@@ -65,10 +54,10 @@ exports.AvailabilityFilter = AvailabilityFilter = __decorate([
 let ClientRestrictionFilter = class ClientRestrictionFilter {
     name = 'clientRestriction';
     async evaluate(assayer, context) {
-        if (context.client?.restrictedAssayers?.includes(assayer.id)) {
-            return false;
-        }
-        return true;
+        if (!context.client)
+            return true;
+        const restricted = context.client.restrictedAssayers || [];
+        return !restricted.includes(assayer.id);
     }
 };
 exports.ClientRestrictionFilter = ClientRestrictionFilter;
@@ -83,10 +72,18 @@ let RuleEngineEligibilityFilter = class RuleEngineEligibilityFilter {
     }
     async evaluate(assayer, context) {
         const results = await this.ruleEngine.evaluate({
-            assayer,
-            branch: context.branch,
-            client: context.client,
+            subject: {
+                id: assayer.id,
+                state: assayer.state,
+                skills: assayer.skills || [],
+                certifications: assayer.certifications || [],
+            },
+            target: {
+                id: context.branch.id,
+                clientId: context.branch.clientId,
+            },
             scheduledDate: context.scheduledDate,
+            restrictedAssayers: context.client?.restrictedAssayers,
         });
         return !results.some((r) => !r.passed && r.actionType === 'BLOCK');
     }
@@ -322,11 +319,12 @@ let RecommendationEngine = class RecommendationEngine {
     slaComplianceCalculator;
     profitabilityCalculator;
     riskCalculator;
+    configResolver;
     assayerRepository;
     clientRepository;
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, clientRestrictionFilter, ruleEngineEligibilityFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, assayerRepository, clientRepository) {
+    constructor(availabilityFilter, clientRestrictionFilter, ruleEngineEligibilityFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository) {
         this.availabilityFilter = availabilityFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
         this.ruleEngineEligibilityFilter = ruleEngineEligibilityFilter;
@@ -341,6 +339,7 @@ let RecommendationEngine = class RecommendationEngine {
         this.slaComplianceCalculator = slaComplianceCalculator;
         this.profitabilityCalculator = profitabilityCalculator;
         this.riskCalculator = riskCalculator;
+        this.configResolver = configResolver;
         this.assayerRepository = assayerRepository;
         this.clientRepository = clientRepository;
         this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.ruleEngineEligibilityFilter);
@@ -350,25 +349,12 @@ let RecommendationEngine = class RecommendationEngine {
         const client = branch.clientId
             ? await this.clientRepository.findOne({ where: { id: branch.clientId, isActive: true } })
             : null;
-        const mergedWeights = {
-            distance: 0.2,
-            travelTime: 0.1,
-            workload: 0.1,
-            performance: 0.1,
-            experience: 0.1,
-            cost: 0.1,
-            clientPreference: 0.1,
-            branchFamiliarity: 0.1,
-            slaCompliance: 0.05,
-            profitability: 0.05,
-            riskScore: 0.1,
-            ...weights,
-        };
+        const resolvedConfig = this.configResolver.resolveRecommendationConfig(client, { weights });
         const context = {
             branch,
             client,
             scheduledDate,
-            weights: mergedWeights,
+            weights: resolvedConfig.weights,
         };
         const assayers = await this.assayerRepository.find({
             where: { isActive: true, status: 'ACTIVE' },
@@ -390,7 +376,7 @@ let RecommendationEngine = class RecommendationEngine {
             for (const calculator of this.calculators) {
                 const score = await calculator.calculate(assayer, context);
                 scoreBreakdown[calculator.name] = score;
-                const weight = mergedWeights[calculator.name] ?? 0;
+                const weight = context.weights[calculator.name] ?? 0;
                 weightedSum += score * weight;
                 totalWeight += weight;
             }
@@ -407,8 +393,8 @@ let RecommendationEngine = class RecommendationEngine {
 exports.RecommendationEngine = RecommendationEngine;
 exports.RecommendationEngine = RecommendationEngine = __decorate([
     (0, common_1.Injectable)(),
-    __param(14, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
-    __param(15, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(15, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(16, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [AvailabilityFilter,
         ClientRestrictionFilter,
         RuleEngineEligibilityFilter,
@@ -423,6 +409,7 @@ exports.RecommendationEngine = RecommendationEngine = __decorate([
         SLAComplianceScoreCalculator,
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
+        configuration_resolver_1.ConfigurationResolver,
         typeorm_2.Repository,
         typeorm_2.Repository])
 ], RecommendationEngine);

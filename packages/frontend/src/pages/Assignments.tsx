@@ -59,7 +59,7 @@ export const Assignments: React.FC = () => {
     }
   };
 
-  const handleTransition = async (id: string, targetStatus: AssignmentStatus) => {
+  const handleTransition = async (id: string, targetStatus: AssignmentStatus, extraPayload: Record<string, any> = {}) => {
     try {
       const token = localStorage.getItem('fapoms_token');
       const response = await fetch(`/api/v1/assignments/${id}/transition`, {
@@ -70,7 +70,8 @@ export const Assignments: React.FC = () => {
         },
         body: JSON.stringify({
           targetStatus,
-          remarks: `Transitioned via UI dashboard`
+          remarks: `Transitioned via UI dashboard`,
+          ...extraPayload
         })
       });
       const data = await response.json();
@@ -136,8 +137,8 @@ export const Assignments: React.FC = () => {
                   <td style={{ padding: '16px 24px' }}>{asn.assayer?.displayName}</td>
                   <td style={{ padding: '16px 24px' }}>
                     <span className="badge" style={{
-                      background: asn.status === AssignmentStatus.ACCEPTED ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
-                      color: asn.status === AssignmentStatus.ACCEPTED ? 'var(--status-active)' : 'var(--text-secondary)',
+                      background: asn.status === AssignmentStatus.ACCEPTED || asn.status === AssignmentStatus.CLOSED ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                      color: asn.status === AssignmentStatus.ACCEPTED || asn.status === AssignmentStatus.CLOSED ? 'var(--status-active)' : 'var(--text-secondary)',
                       padding: '4px 8px'
                     }}>
                       {asn.status}
@@ -155,7 +156,7 @@ export const Assignments: React.FC = () => {
                     </div>
                   </td>
                   <td style={{ padding: '16px 24px' }}>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                       {asn.status === AssignmentStatus.CREATED && (
                         <button onClick={() => handleTransition(asn.id, AssignmentStatus.CANDIDATE_SELECTED)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px' }}>
                           Select Candidate
@@ -174,6 +175,35 @@ export const Assignments: React.FC = () => {
                       {asn.status === AssignmentStatus.NEGOTIATION && (
                         <button onClick={() => handleTransition(asn.id, AssignmentStatus.ACCEPTED)} className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '12px' }}>
                           Accept
+                        </button>
+                      )}
+                      {asn.status === AssignmentStatus.ACCEPTED && (
+                        <button onClick={() => {
+                          const date = prompt("Enter scheduled date (YYYY-MM-DD):", asn.scheduledDate ? new Date(asn.scheduledDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+                          if (date) {
+                            handleTransition(asn.id, AssignmentStatus.SCHEDULED, { scheduledDate: date });
+                          }
+                        }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px' }}>
+                          Schedule
+                        </button>
+                      )}
+                      {asn.status === AssignmentStatus.SCHEDULED && (
+                        <button onClick={() => handleTransition(asn.id, AssignmentStatus.AUDIT_COMPLETED)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px' }}>
+                          Complete Audit
+                        </button>
+                      )}
+                      {asn.status === AssignmentStatus.AUDIT_COMPLETED && (
+                        <button onClick={() => handleTransition(asn.id, AssignmentStatus.CLOSED)} className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '12px' }}>
+                          Close Assignment
+                        </button>
+                      )}
+                      {asn.status !== AssignmentStatus.CLOSED && asn.status !== AssignmentStatus.CANCELLED && (
+                        <button onClick={() => {
+                          if (confirm("Are you sure you want to cancel this assignment?")) {
+                            handleTransition(asn.id, AssignmentStatus.CANCELLED, { reason: "Cancelled via UI" });
+                          }
+                        }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', border: '1px solid rgba(239, 68, 68, 0.4)', background: 'transparent', color: 'rgb(239, 68, 68)' }}>
+                          Cancel
                         </button>
                       )}
                     </div>

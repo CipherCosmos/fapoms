@@ -16,10 +16,8 @@ const assayer_entity_1 = require("../assayer/assayer.entity");
 const assignment_entity_1 = require("../assignment/assignment.entity");
 const geo_module_1 = require("../geo/geo.module");
 const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
-const business_rule_entity_1 = require("./business-rule.entity");
+const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
 const client_entity_1 = require("../client/client.entity");
-const rule_engine_1 = require("./rule.engine");
-const workflow_engine_1 = require("./workflow.engine");
 const recommendation_engine_1 = require("./recommendation.engine");
 let PlanningModule = class PlanningModule {
 };
@@ -40,8 +38,6 @@ exports.PlanningModule = PlanningModule = __decorate([
         controllers: [planning_controller_1.PlanningController],
         providers: [
             planning_service_1.PlanningService,
-            rule_engine_1.RuleEngine,
-            workflow_engine_1.WorkflowEngine,
             recommendation_engine_1.AvailabilityFilter,
             recommendation_engine_1.ClientRestrictionFilter,
             recommendation_engine_1.RuleEngineEligibilityFilter,
@@ -58,7 +54,7 @@ exports.PlanningModule = PlanningModule = __decorate([
             recommendation_engine_1.RiskScoreCalculator,
             recommendation_engine_1.RecommendationEngine,
         ],
-        exports: [planning_service_1.PlanningService, recommendation_engine_1.RecommendationEngine, rule_engine_1.RuleEngine, workflow_engine_1.WorkflowEngine],
+        exports: [planning_service_1.PlanningService, recommendation_engine_1.RecommendationEngine],
     })
 ], PlanningModule);
 //# sourceMappingURL=planning.module.js.map

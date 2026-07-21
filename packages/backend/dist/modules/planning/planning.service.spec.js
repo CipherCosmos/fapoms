@@ -7,7 +7,7 @@ const planning_service_1 = require("./planning.service");
 const branch_entity_1 = require("../branch/branch.entity");
 const recommendation_engine_1 = require("./recommendation.engine");
 const routing_provider_1 = require("../geo/routing.provider");
-const business_rule_entity_1 = require("./business-rule.entity");
+const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
 describe('PlanningService', () => {
     let service;
     let recommendationEngine;

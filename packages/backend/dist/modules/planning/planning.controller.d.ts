@@ -24,11 +24,11 @@ export declare class PlanningController {
     }>;
     createRule(dto: CreateBusinessRuleRequestDto, req: any): Promise<{
         success: boolean;
-        data: import("./business-rule.entity").BusinessRuleEntity;
+        data: import("../platform/rules/business-rule.entity").BusinessRuleEntity;
     }>;
     updateRule(id: string, dto: UpdateBusinessRuleRequestDto, req: any): Promise<{
         success: boolean;
-        data: import("./business-rule.entity").BusinessRuleEntity;
+        data: import("../platform/rules/business-rule.entity").BusinessRuleEntity;
     }>;
     deleteRule(id: string, req: any): Promise<{
         success: boolean;
@@ -38,10 +38,10 @@ export declare class PlanningController {
     }>;
     getRules(scope?: string): Promise<{
         success: boolean;
-        data: import("./business-rule.entity").BusinessRuleEntity[];
+        data: import("../platform/rules/business-rule.entity").BusinessRuleEntity[];
     }>;
     getRule(id: string): Promise<{
         success: boolean;
-        data: import("./business-rule.entity").BusinessRuleEntity;
+        data: import("../platform/rules/business-rule.entity").BusinessRuleEntity;
     }>;
 }

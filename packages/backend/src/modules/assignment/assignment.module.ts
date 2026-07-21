@@ -10,11 +10,13 @@ import { AssignmentController } from './assignment.controller';
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { HolidayModule } from '../holiday/holiday.module';
+import { PlatformModule } from '../platform/platform.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AssignmentEntity, ProjectBranchEntity]),
     HolidayModule,
+    PlatformModule,
   ],
   controllers: [AssignmentController],
   providers: [AssignmentService],

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, In } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -7,6 +7,7 @@ import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, AssignmentStatus, ProjectBranchStatus, ASSIGNMENT_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 
 export interface CreateAssignmentDto {
@@ -33,7 +34,7 @@ export interface TransitionAssignmentDto {
 }
 
 @Injectable()
-export class AssignmentService {
+export class AssignmentService implements OnModuleInit {
   constructor(
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
@@ -41,9 +42,111 @@ export class AssignmentService {
     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
     private readonly holidayService: HolidayService,
     private readonly auditService: AuditService,
+    private readonly workflowEngine: WorkflowEngine,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
+
+  onModuleInit() {
+    this.workflowEngine.registerWorkflow('assignment', [
+      {
+        from: [AssignmentStatus.CREATED],
+        to: AssignmentStatus.CANDIDATE_SELECTED,
+        beforeTransition: async (ctx) => {
+          // Candidate selected state initialization hook
+        },
+      },
+      {
+        from: [AssignmentStatus.CANDIDATE_SELECTED],
+        to: AssignmentStatus.CONTACT_INITIATED,
+        beforeTransition: async (ctx) => {
+          // Contact initiated state initialization hook
+        },
+      },
+      {
+        from: [AssignmentStatus.CONTACT_INITIATED],
+        to: AssignmentStatus.NEGOTIATION,
+        beforeTransition: async (ctx) => {
+          // Negotiation state initialization hook
+        },
+      },
+      {
+        from: [AssignmentStatus.CREATED, AssignmentStatus.NEGOTIATION],
+        to: AssignmentStatus.ACCEPTED,
+        beforeTransition: async (ctx) => {
+          const { assignment, fee } = ctx.payload;
+          assignment.agreedFee = fee ?? assignment.proposedFee;
+          assignment.projectBranch.status = ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
+        },
+      },
+      {
+        from: [AssignmentStatus.CREATED, AssignmentStatus.NEGOTIATION],
+        to: AssignmentStatus.REJECTED,
+        beforeTransition: async (ctx) => {
+          const { assignment, reason, remarks } = ctx.payload;
+          assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
+          assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
+        },
+      },
+      {
+        from: [
+          AssignmentStatus.CREATED,
+          AssignmentStatus.CANDIDATE_SELECTED,
+          AssignmentStatus.CONTACT_INITIATED,
+          AssignmentStatus.NEGOTIATION,
+          AssignmentStatus.ACCEPTED,
+        ],
+        to: AssignmentStatus.CANCELLED,
+        beforeTransition: async (ctx) => {
+          const { assignment, reason, remarks } = ctx.payload;
+          assignment.cancelReason = reason ?? remarks ?? 'Cancelled by Admin';
+          assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
+        },
+      },
+      {
+        from: [AssignmentStatus.ACCEPTED],
+        to: AssignmentStatus.SCHEDULED,
+        guards: [
+          async (ctx) => {
+            const { scheduledDate, state } = ctx.payload;
+            if (scheduledDate) {
+              const isHoliday = await this.holidayService.isHoliday(new Date(scheduledDate), state);
+              if (isHoliday) {
+                throw new BadRequestException(`Holiday Conflict: ${scheduledDate} is a holiday in ${state}.`);
+              }
+            }
+            return true;
+          },
+        ],
+        beforeTransition: async (ctx) => {
+          const { assignment, scheduledDate } = ctx.payload;
+          if (scheduledDate) {
+            const scheduledDateObj = new Date(scheduledDate);
+            assignment.scheduledDate = scheduledDateObj;
+            assignment.projectBranch.scheduledDate = scheduledDateObj;
+          }
+          assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
+        },
+      },
+      {
+        from: [AssignmentStatus.SCHEDULED],
+        to: AssignmentStatus.AUDIT_COMPLETED,
+        beforeTransition: async (ctx) => {
+          const { assignment } = ctx.payload;
+          assignment.completionDate = new Date();
+          assignment.projectBranch.status = ProjectBranchStatus.AUDIT_COMPLETED;
+        },
+      },
+      {
+        from: [AssignmentStatus.AUDIT_COMPLETED],
+        to: AssignmentStatus.CLOSED,
+        beforeTransition: async (ctx) => {
+          const { assignment } = ctx.payload;
+          assignment.projectBranch.status = ProjectBranchStatus.CLOSED;
+        },
+      },
+    ]);
+  }
 
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
     const projectBranch = await this.projectBranchRepository.findOne({
@@ -53,6 +156,24 @@ export class AssignmentService {
 
     if (!projectBranch) {
       throw new NotFoundException(`Project branch link ${dto.projectBranchId} not found.`);
+    }
+
+    // Resolve unique constraint conflicts for re-assignments
+    const existingAssignment = await this.assignmentRepository.findOne({
+      where: { projectBranchId: projectBranch.id },
+    });
+
+    if (existingAssignment) {
+      if (
+        existingAssignment.status === AssignmentStatus.CANCELLED ||
+        existingAssignment.status === AssignmentStatus.REJECTED
+      ) {
+        await this.assignmentRepository.remove(existingAssignment);
+      } else {
+        throw new ConflictException(
+          `Branch Busy: An active assignment (${existingAssignment.assignmentNumber}) already exists for this branch.`
+        );
+      }
     }
 
     const scheduledDateObj = new Date(dto.scheduledDate);
@@ -186,45 +307,30 @@ export class AssignmentService {
     const assignment = await this.findOne(id);
     const prevStatus = assignment.status;
 
-    if (!isValidTransition(ASSIGNMENT_TRANSITIONS, prevStatus, targetStatus)) {
-      throw new BadRequestException(
-        `Invalid Transition: Cannot transition assignment from ${prevStatus} to ${targetStatus}.`
-      );
+    if (prevStatus === targetStatus) {
+      return assignment;
     }
+
+    await this.workflowEngine.executeTransition(
+      'assignment',
+      assignment.id,
+      prevStatus,
+      targetStatus,
+      {
+        userId,
+        payload: {
+          assignment,
+          fee,
+          scheduledDate,
+          state: assignment.projectBranch.branch.state,
+          reason,
+          remarks,
+        },
+      },
+    );
 
     assignment.status = targetStatus;
     if (remarks) assignment.remarks = remarks;
-
-    // Apply state-specific transition rules
-    if (targetStatus === AssignmentStatus.REJECTED) {
-      assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
-      assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
-    } else if (targetStatus === AssignmentStatus.CANCELLED) {
-      assignment.cancelReason = reason ?? remarks ?? 'Cancelled by Admin';
-      assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
-    } else if (targetStatus === AssignmentStatus.ACCEPTED) {
-      if (fee) assignment.agreedFee = fee;
-      else assignment.agreedFee = assignment.proposedFee;
-      assignment.projectBranch.status = ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
-    } else if (targetStatus === AssignmentStatus.SCHEDULED) {
-      if (scheduledDate) {
-        const scheduledDateObj = new Date(scheduledDate);
-        const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
-        if (isHolidayConflict) {
-          throw new BadRequestException(
-            `Holiday Conflict: ${scheduledDate} is a holiday in ${assignment.projectBranch.branch.state}.`
-          );
-        }
-        assignment.scheduledDate = scheduledDateObj;
-        assignment.projectBranch.scheduledDate = scheduledDateObj;
-      }
-      assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
-    } else if (targetStatus === AssignmentStatus.AUDIT_COMPLETED) {
-      assignment.completionDate = new Date();
-      assignment.projectBranch.status = ProjectBranchStatus.AUDIT_COMPLETED;
-    } else if (targetStatus === AssignmentStatus.CLOSED) {
-      assignment.projectBranch.status = ProjectBranchStatus.CLOSED;
-    }
 
     assignment.updatedBy = userId;
     assignment.projectBranch.updatedBy = userId;

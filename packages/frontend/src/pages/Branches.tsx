@@ -287,7 +287,7 @@ export const Branches: React.FC = () => {
                       {b.latitude && b.longitude ? (
                         <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <MapPin size={12} style={{ color: 'var(--accent-secondary)' }} />
-                          {b.latitude.toFixed(4)}, {b.longitude.toFixed(4)}
+                          {Number(b.latitude).toFixed(4)}, {Number(b.longitude).toFixed(4)}
                         </span>
                       ) : (
                         <span style={{ color: 'var(--text-muted)' }}>Not geocoded</span>

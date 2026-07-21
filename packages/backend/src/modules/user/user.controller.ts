@@ -105,6 +105,17 @@ export class UserController {
     };
   }
 
+  @Get('roles')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @ApiOperation({ summary: 'List all available roles' })
+  async findAllRoles() {
+    const roles = await this.userService.findAllRoles();
+    return {
+      success: true,
+      data: roles,
+    };
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get user by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -146,17 +157,6 @@ export class UserController {
     return {
       success: true,
       data: this.sanitizeUser(user),
-    };
-  }
-
-  @Get('roles')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @ApiOperation({ summary: 'List all available roles' })
-  async findAllRoles() {
-    const roles = await this.userService.findAllRoles();
-    return {
-      success: true,
-      data: roles,
     };
   }
 

@@ -2,16 +2,25 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BusinessRuleEntity } from './business-rule.entity';
-import { AssayerEntity } from '../assayer/assayer.entity';
-import { BranchEntity } from '../branch/branch.entity';
-import { ClientEntity } from '../client/client.entity';
+
+export interface RuleEvaluationSubject {
+  id: string;
+  state: string;
+  skills?: string[];
+  certifications?: { name: string; expiryDate?: string | Date }[];
+}
+
+export interface RuleEvaluationTarget {
+  id: string;
+  clientId?: string | null;
+}
 
 export interface RuleEvaluationContext {
-  assayer: AssayerEntity;
-  branch: BranchEntity;
-  client?: ClientEntity | null;
+  subject: RuleEvaluationSubject;
+  target: RuleEvaluationTarget;
   scheduledDate: Date;
   activeWorkload?: number;
+  restrictedAssayers?: string[] | null;
 }
 
 export interface RuleResult {
@@ -29,15 +38,14 @@ export class RuleEngine {
   ) {}
 
   /**
-   * Evaluates all applicable business rules for the candidate in the given context.
-   * Returns a list of evaluation results.
+   * Evaluates all applicable business rules for the given subject and target context.
    */
   async evaluate(context: RuleEvaluationContext): Promise<RuleResult[]> {
     const rules = await this.ruleRepository.find({
       where: [
         { scope: 'GLOBAL', isActive: true },
-        { scope: 'CLIENT', targetId: context.branch.clientId || undefined, isActive: true },
-        { scope: 'BRANCH', targetId: context.branch.id, isActive: true },
+        { scope: 'CLIENT', targetId: context.target.clientId || undefined, isActive: true },
+        { scope: 'BRANCH', targetId: context.target.id, isActive: true },
       ],
     });
 
@@ -52,7 +60,7 @@ export class RuleEngine {
   }
 
   private evaluateSingleRule(rule: BusinessRuleEntity, context: RuleEvaluationContext): RuleResult {
-    const { assayer, branch, client, activeWorkload } = context;
+    const { subject, target, scheduledDate, activeWorkload, restrictedAssayers } = context;
     const cond = rule.conditions || {};
     const action = rule.actions || {};
     const actionType = (action.type as 'BLOCK' | 'SCORE_ADJUSTMENT' | 'ALERT') || 'BLOCK';
@@ -61,10 +69,10 @@ export class RuleEngine {
     // 1. Certification Constraint
     if (rule.ruleType === 'CERTIFICATION' && cond.requiredCertification) {
       const required = String(cond.requiredCertification).toLowerCase();
-      const hasCert = assayer.certifications?.some(
+      const hasCert = subject.certifications?.some(
         (c) =>
           c.name.toLowerCase() === required &&
-          (!c.expiryDate || new Date(c.expiryDate) > context.scheduledDate),
+          (!c.expiryDate || new Date(c.expiryDate) > scheduledDate),
       );
       if (!hasCert) {
         return {
@@ -79,7 +87,7 @@ export class RuleEngine {
     // 2. Skill Constraint
     if (rule.ruleType === 'SKILL' && cond.requiredSkill) {
       const required = String(cond.requiredSkill).toLowerCase();
-      const hasSkill = assayer.skills?.some((s) => s.toLowerCase() === required);
+      const hasSkill = subject.skills?.some((s) => s.toLowerCase() === required);
       if (!hasSkill) {
         return {
           passed: false,
@@ -93,12 +101,12 @@ export class RuleEngine {
     // 3. Territory Restriction
     if (rule.ruleType === 'TERRITORY' && cond.restrictedStates) {
       const restricted = Array.isArray(cond.restrictedStates) ? cond.restrictedStates : [];
-      if (restricted.some((state) => String(state).toLowerCase() === assayer.state.toLowerCase())) {
+      if (restricted.some((state) => String(state).toLowerCase() === subject.state.toLowerCase())) {
         return {
           passed: false,
           actionType,
           scoreModifier,
-          message: `Restricted state territory: ${assayer.state}`,
+          message: `Restricted state territory: ${subject.state}`,
         };
       }
     }
@@ -117,8 +125,8 @@ export class RuleEngine {
     }
 
     // 5. Client Restriction
-    if (rule.ruleType === 'PREFERENCE' && client?.restrictedAssayers) {
-      if (client.restrictedAssayers.includes(assayer.id)) {
+    if (rule.ruleType === 'PREFERENCE' && restrictedAssayers) {
+      if (restrictedAssayers.includes(subject.id)) {
         return {
           passed: false,
           actionType,

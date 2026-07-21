@@ -10,6 +10,7 @@ const project_branch_entity_1 = require("../project/project-branch.entity");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 describe('AssignmentService', () => {
     let service;
     let assignmentRepo;
@@ -34,16 +35,49 @@ describe('AssignmentService', () => {
     };
     const mockDataSource = {
         transaction: jest.fn((cb) => cb({
-            save: jest.fn((arg) => {
-                if (arg.projectBranchId) {
-                    mockAssignmentRepo.save(arg);
-                }
-                else {
-                    mockProjectBranchRepo.save(arg);
-                }
-                return Promise.resolve(arg);
-            }),
+            save: jest.fn((arg) => Promise.resolve(arg)),
         })),
+    };
+    const mockWorkflowEngine = {
+        registerWorkflow: jest.fn(),
+        executeTransition: jest.fn().mockImplementation(async (key, id, from, to, ctx) => {
+            const validPaths = {
+                CREATED: ['ACCEPTED', 'REJECTED', 'CANCELLED', 'CANDIDATE_SELECTED'],
+                ACCEPTED: ['SCHEDULED'],
+                SCHEDULED: ['AUDIT_COMPLETED'],
+                AUDIT_COMPLETED: ['CLOSED'],
+            };
+            const allowed = validPaths[from] || [];
+            if (!allowed.includes(to)) {
+                throw new common_1.BadRequestException(`Invalid transition from '${from}' to '${to}'`);
+            }
+            if (to === 'ACCEPTED') {
+                ctx.payload.assignment.agreedFee = ctx.payload.fee ?? ctx.payload.assignment.proposedFee;
+                ctx.payload.assignment.projectBranch.status = 'ASSIGNMENT_CONFIRMED';
+            }
+            if (to === 'REJECTED') {
+                ctx.payload.assignment.rejectReason = ctx.payload.reason ?? 'Rejected';
+                ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
+            }
+            if (to === 'CANCELLED') {
+                ctx.payload.assignment.cancelReason = ctx.payload.reason ?? 'Cancelled';
+                ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
+            }
+            if (to === 'SCHEDULED') {
+                if (ctx.payload.scheduledDate) {
+                    ctx.payload.assignment.scheduledDate = new Date(ctx.payload.scheduledDate);
+                    ctx.payload.assignment.projectBranch.scheduledDate = new Date(ctx.payload.scheduledDate);
+                }
+                ctx.payload.assignment.projectBranch.status = 'SCHEDULED';
+            }
+            if (to === 'AUDIT_COMPLETED') {
+                ctx.payload.assignment.completionDate = new Date();
+                ctx.payload.assignment.projectBranch.status = 'AUDIT_COMPLETED';
+            }
+            if (to === 'CLOSED') {
+                ctx.payload.assignment.projectBranch.status = 'CLOSED';
+            }
+        }),
     };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
@@ -64,6 +98,10 @@ describe('AssignmentService', () => {
                 {
                     provide: audit_service_1.AuditService,
                     useValue: mockAuditService,
+                },
+                {
+                    provide: workflow_engine_1.WorkflowEngine,
+                    useValue: mockWorkflowEngine,
                 },
                 {
                     provide: typeorm_2.DataSource,
@@ -130,7 +168,7 @@ describe('AssignmentService', () => {
                 scheduledDate: '2026-08-01',
             }, 'user-1');
             expect(result.status).toBe(shared_1.AssignmentStatus.CREATED);
-            expect(mockProjectBranchRepo.save).toHaveBeenCalled();
+            expect(mockDataSource.transaction).toHaveBeenCalled();
             expect(mockAuditService.recordEvent).toHaveBeenCalled();
         });
     });
@@ -139,7 +177,7 @@ describe('AssignmentService', () => {
             const mockAssignment = {
                 id: 'asn-123',
                 status: shared_1.AssignmentStatus.CREATED,
-                projectBranch: { id: 'pb-1' },
+                projectBranch: { id: 'pb-1', branch: { state: 'MH' } },
             };
             mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
             await expect(service.transition('asn-123', shared_1.AssignmentStatus.SCHEDULED, 'user-1')).rejects.toThrow(common_1.BadRequestException);
@@ -148,7 +186,7 @@ describe('AssignmentService', () => {
             const mockAssignment = {
                 id: 'asn-123',
                 status: shared_1.AssignmentStatus.CREATED,
-                projectBranch: { id: 'pb-1', status: shared_1.ProjectBranchStatus.PLANNING },
+                projectBranch: { id: 'pb-1', status: shared_1.ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
             };
             mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
             mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));

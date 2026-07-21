@@ -22,7 +22,8 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
-import { RuleEngine } from './rule.engine';
+import { RuleEngine } from '../platform/rules/rule.engine';
+import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
@@ -70,6 +71,7 @@ describe('RecommendationEngine', () => {
         SLAComplianceScoreCalculator,
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
+        ConfigurationResolver,
         {
           provide: getRepositoryToken(AssayerEntity),
           useValue: mockAssayerRepo,

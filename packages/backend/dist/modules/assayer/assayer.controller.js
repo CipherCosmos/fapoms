@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = exports.AssayerController = void 0;
+exports.AssayerController = exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
@@ -371,6 +371,180 @@ __decorate([
     (0, class_validator_1.IsInt)(),
     __metadata("design:type", Number)
 ], UpdateAssayerRequestDto.prototype, "maxWeeklyWorkload", void 0);
+class CreateWorkforceAttributeRequestDto {
+    type;
+    name;
+    level;
+    expiryDate;
+    metadata;
+}
+exports.CreateWorkforceAttributeRequestDto = CreateWorkforceAttributeRequestDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateWorkforceAttributeRequestDto.prototype, "type", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateWorkforceAttributeRequestDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateWorkforceAttributeRequestDto.prototype, "level", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateWorkforceAttributeRequestDto.prototype, "expiryDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], CreateWorkforceAttributeRequestDto.prototype, "metadata", void 0);
+class UpdateWorkforceAttributeRequestDto {
+    name;
+    level;
+    expiryDate;
+    metadata;
+}
+exports.UpdateWorkforceAttributeRequestDto = UpdateWorkforceAttributeRequestDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateWorkforceAttributeRequestDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateWorkforceAttributeRequestDto.prototype, "level", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", Object)
+], UpdateWorkforceAttributeRequestDto.prototype, "expiryDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateWorkforceAttributeRequestDto.prototype, "metadata", void 0);
+class CreateCommercialProfileRequestDto {
+    baseFee;
+    hourlyRate;
+    dailyRate;
+    travelReimbursement;
+    accommodationAllowance;
+    mealAllowance;
+    currency;
+    effectiveStartDate;
+    effectiveEndDate;
+}
+exports.CreateCommercialProfileRequestDto = CreateCommercialProfileRequestDto;
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateCommercialProfileRequestDto.prototype, "baseFee", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateCommercialProfileRequestDto.prototype, "hourlyRate", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateCommercialProfileRequestDto.prototype, "dailyRate", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateCommercialProfileRequestDto.prototype, "travelReimbursement", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateCommercialProfileRequestDto.prototype, "accommodationAllowance", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateCommercialProfileRequestDto.prototype, "mealAllowance", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateCommercialProfileRequestDto.prototype, "currency", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateCommercialProfileRequestDto.prototype, "effectiveStartDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", Object)
+], CreateCommercialProfileRequestDto.prototype, "effectiveEndDate", void 0);
+class UpdateCommercialProfileRequestDto {
+    baseFee;
+    hourlyRate;
+    dailyRate;
+    travelReimbursement;
+    accommodationAllowance;
+    mealAllowance;
+    currency;
+    effectiveStartDate;
+    effectiveEndDate;
+}
+exports.UpdateCommercialProfileRequestDto = UpdateCommercialProfileRequestDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateCommercialProfileRequestDto.prototype, "baseFee", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateCommercialProfileRequestDto.prototype, "hourlyRate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateCommercialProfileRequestDto.prototype, "dailyRate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateCommercialProfileRequestDto.prototype, "travelReimbursement", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateCommercialProfileRequestDto.prototype, "accommodationAllowance", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateCommercialProfileRequestDto.prototype, "mealAllowance", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateCommercialProfileRequestDto.prototype, "currency", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateCommercialProfileRequestDto.prototype, "effectiveStartDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", Object)
+], UpdateCommercialProfileRequestDto.prototype, "effectiveEndDate", void 0);
 let AssayerController = class AssayerController {
     assayerService;
     constructor(assayerService) {
@@ -615,178 +789,4 @@ exports.AssayerController = AssayerController = __decorate([
     (0, common_1.Controller)('assayers'),
     __metadata("design:paramtypes", [assayer_service_1.AssayerService])
 ], AssayerController);
-class CreateWorkforceAttributeRequestDto {
-    type;
-    name;
-    level;
-    expiryDate;
-    metadata;
-}
-exports.CreateWorkforceAttributeRequestDto = CreateWorkforceAttributeRequestDto;
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], CreateWorkforceAttributeRequestDto.prototype, "type", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], CreateWorkforceAttributeRequestDto.prototype, "name", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], CreateWorkforceAttributeRequestDto.prototype, "level", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], CreateWorkforceAttributeRequestDto.prototype, "expiryDate", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsObject)(),
-    __metadata("design:type", Object)
-], CreateWorkforceAttributeRequestDto.prototype, "metadata", void 0);
-class UpdateWorkforceAttributeRequestDto {
-    name;
-    level;
-    expiryDate;
-    metadata;
-}
-exports.UpdateWorkforceAttributeRequestDto = UpdateWorkforceAttributeRequestDto;
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], UpdateWorkforceAttributeRequestDto.prototype, "name", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], UpdateWorkforceAttributeRequestDto.prototype, "level", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", Object)
-], UpdateWorkforceAttributeRequestDto.prototype, "expiryDate", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsObject)(),
-    __metadata("design:type", Object)
-], UpdateWorkforceAttributeRequestDto.prototype, "metadata", void 0);
-class CreateCommercialProfileRequestDto {
-    baseFee;
-    hourlyRate;
-    dailyRate;
-    travelReimbursement;
-    accommodationAllowance;
-    mealAllowance;
-    currency;
-    effectiveStartDate;
-    effectiveEndDate;
-}
-exports.CreateCommercialProfileRequestDto = CreateCommercialProfileRequestDto;
-__decorate([
-    (0, class_validator_1.IsNumber)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", Number)
-], CreateCommercialProfileRequestDto.prototype, "baseFee", void 0);
-__decorate([
-    (0, class_validator_1.IsNumber)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", Number)
-], CreateCommercialProfileRequestDto.prototype, "hourlyRate", void 0);
-__decorate([
-    (0, class_validator_1.IsNumber)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", Number)
-], CreateCommercialProfileRequestDto.prototype, "dailyRate", void 0);
-__decorate([
-    (0, class_validator_1.IsNumber)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", Number)
-], CreateCommercialProfileRequestDto.prototype, "travelReimbursement", void 0);
-__decorate([
-    (0, class_validator_1.IsNumber)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", Number)
-], CreateCommercialProfileRequestDto.prototype, "accommodationAllowance", void 0);
-__decorate([
-    (0, class_validator_1.IsNumber)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", Number)
-], CreateCommercialProfileRequestDto.prototype, "mealAllowance", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], CreateCommercialProfileRequestDto.prototype, "currency", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], CreateCommercialProfileRequestDto.prototype, "effectiveStartDate", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", Object)
-], CreateCommercialProfileRequestDto.prototype, "effectiveEndDate", void 0);
-class UpdateCommercialProfileRequestDto {
-    baseFee;
-    hourlyRate;
-    dailyRate;
-    travelReimbursement;
-    accommodationAllowance;
-    mealAllowance;
-    currency;
-    effectiveStartDate;
-    effectiveEndDate;
-}
-exports.UpdateCommercialProfileRequestDto = UpdateCommercialProfileRequestDto;
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsNumber)(),
-    __metadata("design:type", Number)
-], UpdateCommercialProfileRequestDto.prototype, "baseFee", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsNumber)(),
-    __metadata("design:type", Number)
-], UpdateCommercialProfileRequestDto.prototype, "hourlyRate", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsNumber)(),
-    __metadata("design:type", Number)
-], UpdateCommercialProfileRequestDto.prototype, "dailyRate", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsNumber)(),
-    __metadata("design:type", Number)
-], UpdateCommercialProfileRequestDto.prototype, "travelReimbursement", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsNumber)(),
-    __metadata("design:type", Number)
-], UpdateCommercialProfileRequestDto.prototype, "accommodationAllowance", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsNumber)(),
-    __metadata("design:type", Number)
-], UpdateCommercialProfileRequestDto.prototype, "mealAllowance", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], UpdateCommercialProfileRequestDto.prototype, "currency", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
-], UpdateCommercialProfileRequestDto.prototype, "effectiveStartDate", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", Object)
-], UpdateCommercialProfileRequestDto.prototype, "effectiveEndDate", void 0);
 //# sourceMappingURL=assayer.controller.js.map

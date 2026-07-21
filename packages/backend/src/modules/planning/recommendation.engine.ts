@@ -8,7 +8,8 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AssignmentStatus } from '@fapoms/shared';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
-import { RuleEngine } from './rule.engine';
+import { RuleEngine } from '../platform/rules/rule.engine';
+import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 
 export interface PlanningContext {
   branch: BranchEntity;
@@ -50,19 +51,7 @@ export class AvailabilityFilter implements CandidateFilter {
       },
     });
 
-    if (doubleBooked) return false;
-
-    if (assayer.leaves && assayer.leaves.length > 0) {
-      const targetTime = context.scheduledDate.getTime();
-      const onLeave = assayer.leaves.some((l) => {
-        const start = new Date(l.startDate).getTime();
-        const end = new Date(l.endDate).getTime();
-        return targetTime >= start && targetTime <= end;
-      });
-      if (onLeave) return false;
-    }
-
-    return true;
+    return !doubleBooked;
   }
 }
 
@@ -71,10 +60,9 @@ export class ClientRestrictionFilter implements CandidateFilter {
   name = 'clientRestriction';
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
-    if (context.client?.restrictedAssayers?.includes(assayer.id)) {
-      return false; // Client restricted this assayer
-    }
-    return true;
+    if (!context.client) return true;
+    const restricted = context.client.restrictedAssayers || [];
+    return !restricted.includes(assayer.id);
   }
 }
 
@@ -86,10 +74,18 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     const results = await this.ruleEngine.evaluate({
-      assayer,
-      branch: context.branch,
-      client: context.client,
+      subject: {
+        id: assayer.id,
+        state: assayer.state,
+        skills: assayer.skills || [],
+        certifications: assayer.certifications || [],
+      },
+      target: {
+        id: context.branch.id,
+        clientId: context.branch.clientId,
+      },
       scheduledDate: context.scheduledDate,
+      restrictedAssayers: context.client?.restrictedAssayers,
     });
     // If any active rule block action fails, return false
     return !results.some((r) => !r.passed && r.actionType === 'BLOCK');
@@ -324,6 +320,7 @@ export class RecommendationEngine {
     private readonly slaComplianceCalculator: SLAComplianceScoreCalculator,
     private readonly profitabilityCalculator: ProfitabilityScoreCalculator,
     private readonly riskCalculator: RiskScoreCalculator,
+    private readonly configResolver: ConfigurationResolver,
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
     @InjectRepository(ClientEntity)
@@ -359,26 +356,13 @@ export class RecommendationEngine {
       ? await this.clientRepository.findOne({ where: { id: branch.clientId, isActive: true } })
       : null;
 
-    const mergedWeights: Record<string, number> = {
-      distance: 0.2,
-      travelTime: 0.1,
-      workload: 0.1,
-      performance: 0.1,
-      experience: 0.1,
-      cost: 0.1,
-      clientPreference: 0.1,
-      branchFamiliarity: 0.1,
-      slaCompliance: 0.05,
-      profitability: 0.05,
-      riskScore: 0.1,
-      ...weights,
-    };
+    const resolvedConfig = this.configResolver.resolveRecommendationConfig(client, { weights });
 
     const context: PlanningContext = {
       branch,
       client,
       scheduledDate,
-      weights: mergedWeights,
+      weights: resolvedConfig.weights,
     };
 
     const assayers = await this.assayerRepository.find({
@@ -405,7 +389,7 @@ export class RecommendationEngine {
         const score = await calculator.calculate(assayer, context);
         scoreBreakdown[calculator.name] = score;
 
-        const weight = mergedWeights[calculator.name] ?? 0;
+        const weight = context.weights[calculator.name] ?? 0;
         weightedSum += score * weight;
         totalWeight += weight;
       }

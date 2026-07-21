@@ -5,7 +5,7 @@ import { PlanningService } from './planning.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
-import { BusinessRuleEntity } from './business-rule.entity';
+import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 
 describe('PlanningService', () => {
   let service: PlanningService;

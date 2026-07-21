@@ -14,6 +14,7 @@ const assignment_controller_1 = require("./assignment.controller");
 const assignment_entity_1 = require("./assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
 const holiday_module_1 = require("../holiday/holiday.module");
+const platform_module_1 = require("../platform/platform.module");
 let AssignmentModule = class AssignmentModule {
 };
 exports.AssignmentModule = AssignmentModule;
@@ -22,6 +23,7 @@ exports.AssignmentModule = AssignmentModule = __decorate([
         imports: [
             typeorm_1.TypeOrmModule.forFeature([assignment_entity_1.AssignmentEntity, project_branch_entity_1.ProjectBranchEntity]),
             holiday_module_1.HolidayModule,
+            platform_module_1.PlatformModule,
         ],
         controllers: [assignment_controller_1.AssignmentController],
         providers: [assignment_service_1.AssignmentService],

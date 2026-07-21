@@ -1,5 +1,5 @@
 import { Entity, Column, Index } from 'typeorm';
-import { BaseEntity } from '../../core/entities/base.entity';
+import { BaseEntity } from '../../../core/entities/base.entity';
 
 @Entity('business_rules')
 @Index(['scope', 'targetId'])
@@ -14,7 +14,7 @@ export class BusinessRuleEntity extends BaseEntity {
   targetId: string | null;
 
   @Column({ name: 'rule_type', type: 'varchar', length: 100 })
-  ruleType: string; // 'ELIGIBILITY', 'CAPACITY', 'CERTIFICATION', 'TERRITORY'
+  ruleType: string;
 
   @Column({ type: 'jsonb' })
   conditions: Record<string, any>;
