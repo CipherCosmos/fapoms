@@ -36,7 +36,7 @@ let ProjectService = class ProjectService {
             description: dto.description ?? null,
             clientId: dto.clientId,
             priority: dto.priority,
-            status: shared_1.ProjectStatus.PLANNING,
+            status: shared_1.ProjectStatus.DRAFT,
             startDate: dto.startDate ? new Date(dto.startDate) : null,
             endDate: dto.endDate ? new Date(dto.endDate) : null,
             createdBy: userId,
@@ -70,6 +70,43 @@ let ProjectService = class ProjectService {
             throw new common_1.NotFoundException(`Project ${id} not found.`);
         }
         return project;
+    }
+    async update(id, dto, userId) {
+        const project = await this.findOne(id);
+        project.name = dto.name;
+        project.projectNumber = dto.projectNumber;
+        project.description = dto.description ?? null;
+        project.clientId = dto.clientId;
+        project.priority = dto.priority;
+        if (dto.startDate)
+            project.startDate = new Date(dto.startDate);
+        if (dto.endDate)
+            project.endDate = new Date(dto.endDate);
+        project.updatedBy = userId;
+        const saved = await this.projectRepository.save(project);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'PROJECT_UPDATED',
+            entityType: 'PROJECT',
+            entityId: saved.id,
+            userId,
+            remarks: `Updated project: ${saved.name} (${saved.projectNumber})`,
+        });
+        return saved;
+    }
+    async remove(id, userId) {
+        const project = await this.findOne(id);
+        project.isActive = false;
+        project.updatedBy = userId;
+        await this.projectRepository.save(project);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'PROJECT_DELETED',
+            entityType: 'PROJECT',
+            entityId: id,
+            userId,
+            remarks: `Soft deleted project ${project.name}`,
+        });
     }
     async findProjectBranches(projectId) {
         const project = await this.findOne(projectId);

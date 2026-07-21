@@ -84,6 +84,13 @@ let HolidayController = class HolidayController {
             data: { isHoliday },
         };
     }
+    async update(id, dto, req) {
+        const holiday = await this.holidayService.update(id, dto, req.user.id);
+        return {
+            success: true,
+            data: holiday,
+        };
+    }
     async remove(id, req) {
         await this.holidayService.remove(id, req.user.id);
         return {
@@ -122,6 +129,17 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], HolidayController.prototype, "checkHoliday", null);
+__decorate([
+    (0, common_1.Put)(':id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Update holiday record details' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, CreateHolidayRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], HolidayController.prototype, "update", null);
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),

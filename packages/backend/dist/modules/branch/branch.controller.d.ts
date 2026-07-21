@@ -37,6 +37,16 @@ export declare class BranchController {
         success: boolean;
         data: import("./branch.entity").BranchEntity;
     }>;
+    update(id: string, dto: CreateBranchRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./branch.entity").BranchEntity;
+    }>;
+    remove(id: string, req: any): Promise<{
+        success: boolean;
+        data: {
+            message: string;
+        };
+    }>;
     importExcel(clientId: string, file: Express.Multer.File, req: any): Promise<{
         success: boolean;
         error: string;

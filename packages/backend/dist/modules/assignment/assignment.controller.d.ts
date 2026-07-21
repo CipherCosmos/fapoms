@@ -1,4 +1,4 @@
-import { AssignmentService, CreateAssignmentDto } from './assignment.service';
+import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto, TransitionAssignmentDto } from './assignment.service';
 export declare class AssignmentController {
     private readonly assignmentService;
     constructor(assignmentService: AssignmentService);
@@ -16,5 +16,17 @@ export declare class AssignmentController {
                 total: number;
             };
         };
+    }>;
+    findOne(id: string): Promise<{
+        success: boolean;
+        data: import("./assignment.entity").AssignmentEntity;
+    }>;
+    update(id: string, dto: UpdateAssignmentDetailsDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assignment.entity").AssignmentEntity;
+    }>;
+    transition(id: string, dto: TransitionAssignmentDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assignment.entity").AssignmentEntity;
     }>;
 }

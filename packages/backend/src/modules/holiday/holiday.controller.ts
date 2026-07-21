@@ -8,6 +8,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Body,
   Param,
@@ -93,6 +94,21 @@ export class HolidayController {
     return {
       success: true,
       data: { isHoliday },
+    };
+  }
+
+  @Put(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @ApiOperation({ summary: 'Update holiday record details' })
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateHolidayRequestDto,
+    @Req() req: any,
+  ) {
+    const holiday = await this.holidayService.update(id, dto, req.user.id);
+    return {
+      success: true,
+      data: holiday,
     };
   }
 

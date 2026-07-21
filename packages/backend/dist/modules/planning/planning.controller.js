@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const planning_service_1 = require("./planning.service");
 const guards_1 = require("../auth/guards");
+const shared_1 = require("@fapoms/shared");
 let PlanningController = class PlanningController {
     planningService;
     constructor(planningService) {
@@ -33,6 +34,7 @@ let PlanningController = class PlanningController {
 exports.PlanningController = PlanningController;
 __decorate([
     (0, common_1.Get)('recommendations'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, swagger_1.ApiOperation)({ summary: 'Retrieve and rank candidates assayers by PostGIS proximity sphere' }),
     __param(0, (0, common_1.Query)('branchId', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),

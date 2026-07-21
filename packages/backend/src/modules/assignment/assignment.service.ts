@@ -1,10 +1,3 @@
-/**
- * FAPOMS — Assignment Service
- *
- * Implements scheduling calendar validations (holidays, double booking checks)
- * and controls assignment commitments (Part 3 Modules 6 & 7, Part 5 §8 & §9).
- */
-
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -13,7 +6,7 @@ import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory, AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
+import { EventCategory, AssignmentStatus, ProjectBranchStatus, ASSIGNMENT_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 
 export interface CreateAssignmentDto {
   projectBranchId: string;
@@ -21,6 +14,21 @@ export interface CreateAssignmentDto {
   proposedFee: number;
   scheduledDate: string;
   remarks?: string;
+}
+
+export interface UpdateAssignmentDetailsDto {
+  proposedFee?: number;
+  agreedFee?: number;
+  scheduledDate?: string;
+  remarks?: string;
+}
+
+export interface TransitionAssignmentDto {
+  targetStatus: AssignmentStatus;
+  remarks?: string;
+  reason?: string;
+  fee?: number;
+  scheduledDate?: string;
 }
 
 @Injectable()
@@ -35,7 +43,6 @@ export class AssignmentService {
   ) {}
 
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
-    // 1. Retrieve project branch and nested branch/state details
     const projectBranch = await this.projectBranchRepository.findOne({
       where: { id: dto.projectBranchId, isActive: true },
       relations: ['branch'],
@@ -47,7 +54,7 @@ export class AssignmentService {
 
     const scheduledDateObj = new Date(dto.scheduledDate);
 
-    // 2. Validate proposed date against Holiday calendar (Part 3 Module 6, Part 5 §8)
+    // Validate proposed date against Holiday calendar
     const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, projectBranch.branch.state);
     if (isHolidayConflict) {
       throw new BadRequestException(
@@ -55,8 +62,7 @@ export class AssignmentService {
       );
     }
 
-    // 3. Validate Assayer availability and prevent double-booking (Part 3 Module 6, Part 5 §8)
-    // Check if assayer has any active assignments on that specific date
+    // Validate Assayer availability and prevent double-booking
     const isDoubleBooked = await this.assignmentRepository.findOne({
       where: {
         assayerId: dto.assayerId,
@@ -72,18 +78,18 @@ export class AssignmentService {
       );
     }
 
-    // 4. Create the assignment record (status set to ACCEPTED as commitment is confirmed)
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const assignmentNumber = `ASN-${new Date().getFullYear()}-${randomSuffix}`;
 
+    // Create the assignment record starting in CREATED status
     const assignment = this.assignmentRepository.create({
       assignmentNumber,
       projectBranchId: projectBranch.id,
       projectId: projectBranch.projectId,
       assayerId: dto.assayerId,
-      status: AssignmentStatus.ACCEPTED,
+      status: AssignmentStatus.CREATED,
       proposedFee: dto.proposedFee,
-      agreedFee: dto.proposedFee, // initial commitment match
+      agreedFee: null,
       scheduledDate: scheduledDateObj,
       remarks: dto.remarks ?? null,
       createdBy: userId,
@@ -92,23 +98,136 @@ export class AssignmentService {
 
     const savedAssignment = await this.assignmentRepository.save(assignment);
 
-    // 5. Update ProjectBranch status to ASSIGNMENT_CONFIRMED (Part 6 §4)
-    projectBranch.status = ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
-    projectBranch.scheduledDate = scheduledDateObj;
+    // Update ProjectBranch status to PLANNING (or appropriate transitional state)
+    projectBranch.status = ProjectBranchStatus.PLANNING;
     projectBranch.updatedBy = userId;
     await this.projectBranchRepository.save(projectBranch);
 
-    // 6. Record Audit Event trail
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
-      eventType: 'ASSIGNMENT_ACCEPTED',
+      eventType: 'ASSIGNMENT_CREATED',
       entityType: 'ASSIGNMENT',
       entityId: savedAssignment.id,
       userId,
-      remarks: `Assigned branch ${projectBranch.branch.name} to assayer. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+      remarks: `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
     });
 
     return savedAssignment;
+  }
+
+  async findOne(id: string): Promise<AssignmentEntity> {
+    const assignment = await this.assignmentRepository.findOne({
+      where: { id, isActive: true },
+      relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+    });
+    if (!assignment) {
+      throw new NotFoundException(`Assignment ${id} not found.`);
+    }
+    return assignment;
+  }
+
+  async update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity> {
+    const assignment = await this.findOne(id);
+
+    if (dto.proposedFee !== undefined) assignment.proposedFee = dto.proposedFee;
+    if (dto.agreedFee !== undefined) assignment.agreedFee = dto.agreedFee;
+    if (dto.scheduledDate !== undefined) {
+      const scheduledDateObj = new Date(dto.scheduledDate);
+      const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
+      if (isHolidayConflict) {
+        throw new BadRequestException(
+          `Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${assignment.projectBranch.branch.state}.`
+        );
+      }
+      assignment.scheduledDate = scheduledDateObj;
+    }
+    if (dto.remarks !== undefined) assignment.remarks = dto.remarks;
+    assignment.updatedBy = userId;
+
+    const saved = await this.assignmentRepository.save(assignment);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSIGNMENT_UPDATED',
+      entityType: 'ASSIGNMENT',
+      entityId: saved.id,
+      userId,
+      remarks: `Updated details for assignment ${saved.assignmentNumber}.`,
+    });
+
+    return saved;
+  }
+
+  async transition(
+    id: string,
+    targetStatus: AssignmentStatus,
+    userId: string,
+    remarks?: string,
+    reason?: string,
+    fee?: number,
+    scheduledDate?: string,
+  ): Promise<AssignmentEntity> {
+    const assignment = await this.findOne(id);
+    const prevStatus = assignment.status;
+
+    if (!isValidTransition(ASSIGNMENT_TRANSITIONS, prevStatus, targetStatus)) {
+      throw new BadRequestException(
+        `Invalid Transition: Cannot transition assignment from ${prevStatus} to ${targetStatus}.`
+      );
+    }
+
+    assignment.status = targetStatus;
+    if (remarks) assignment.remarks = remarks;
+
+    // Apply state-specific transition rules
+    if (targetStatus === AssignmentStatus.REJECTED) {
+      assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
+      assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
+    } else if (targetStatus === AssignmentStatus.CANCELLED) {
+      assignment.cancelReason = reason ?? remarks ?? 'Cancelled by Admin';
+      assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
+    } else if (targetStatus === AssignmentStatus.ACCEPTED) {
+      if (fee) assignment.agreedFee = fee;
+      else assignment.agreedFee = assignment.proposedFee;
+      assignment.projectBranch.status = ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
+    } else if (targetStatus === AssignmentStatus.SCHEDULED) {
+      if (scheduledDate) {
+        const scheduledDateObj = new Date(scheduledDate);
+        const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
+        if (isHolidayConflict) {
+          throw new BadRequestException(
+            `Holiday Conflict: ${scheduledDate} is a holiday in ${assignment.projectBranch.branch.state}.`
+          );
+        }
+        assignment.scheduledDate = scheduledDateObj;
+        assignment.projectBranch.scheduledDate = scheduledDateObj;
+      }
+      assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
+    } else if (targetStatus === AssignmentStatus.AUDIT_COMPLETED) {
+      assignment.completionDate = new Date();
+      assignment.projectBranch.status = ProjectBranchStatus.AUDIT_COMPLETED;
+    } else if (targetStatus === AssignmentStatus.CLOSED) {
+      assignment.projectBranch.status = ProjectBranchStatus.CLOSED;
+    }
+
+    assignment.updatedBy = userId;
+    assignment.projectBranch.updatedBy = userId;
+
+    await this.projectBranchRepository.save(assignment.projectBranch);
+    const saved = await this.assignmentRepository.save(assignment);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: `ASSIGNMENT_${targetStatus}`,
+      entityType: 'ASSIGNMENT',
+      entityId: saved.id,
+      previousState: prevStatus,
+      newState: targetStatus,
+      userId,
+      remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
+    });
+
+    return saved;
   }
 
   async findAll(page = 1, limit = 50): Promise<{ assignments: AssignmentEntity[]; total: number }> {

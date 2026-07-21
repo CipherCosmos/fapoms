@@ -22,5 +22,7 @@ export declare class ProjectService {
         total: number;
     }>;
     findOne(id: string): Promise<ProjectEntity>;
+    update(id: string, dto: CreateProjectDto, userId: string): Promise<ProjectEntity>;
+    remove(id: string, userId: string): Promise<void>;
     findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]>;
 }

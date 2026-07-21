@@ -26,6 +26,8 @@ export declare class BranchService {
     constructor(branchRepository: Repository<BranchEntity>, stateRepository: Repository<GeoStateEntity>, districtRepository: Repository<GeoDistrictEntity>, cityRepository: Repository<GeoCityEntity>, clientService: ClientService, auditService: AuditService);
     create(dto: CreateBranchDto, userId: string): Promise<BranchEntity>;
     findOne(id: string): Promise<BranchEntity>;
+    update(id: string, dto: CreateBranchDto, userId: string): Promise<BranchEntity>;
+    remove(id: string, userId: string): Promise<void>;
     findAll(page?: number, limit?: number, clientId?: string): Promise<{
         branches: BranchEntity[];
         total: number;

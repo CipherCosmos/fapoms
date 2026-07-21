@@ -80,6 +80,56 @@ let BranchService = class BranchService {
         }
         return branch;
     }
+    async update(id, dto, userId) {
+        const branch = await this.findOne(id);
+        await this.validateGeography(dto.state, dto.district, dto.city);
+        let location = null;
+        if (dto.latitude && dto.longitude) {
+            location = {
+                type: 'Point',
+                coordinates: [dto.longitude, dto.latitude],
+            };
+        }
+        branch.branchCode = dto.branchCode;
+        branch.solId = dto.solId ?? null;
+        branch.name = dto.name;
+        branch.address = dto.address;
+        branch.state = dto.state;
+        branch.district = dto.district;
+        branch.city = dto.city;
+        branch.pincode = dto.pincode ?? null;
+        branch.latitude = dto.latitude ?? null;
+        branch.longitude = dto.longitude ?? null;
+        branch.location = location;
+        if (dto.clientId) {
+            branch.clientId = dto.clientId;
+        }
+        branch.updatedBy = userId;
+        const saved = await this.branchRepository.save(branch);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'BRANCH_UPDATED',
+            entityType: 'BRANCH',
+            entityId: saved.id,
+            userId,
+            remarks: `Updated branch ${saved.name} (Code: ${saved.branchCode})`,
+        });
+        return saved;
+    }
+    async remove(id, userId) {
+        const branch = await this.findOne(id);
+        branch.isActive = false;
+        branch.updatedBy = userId;
+        await this.branchRepository.save(branch);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'BRANCH_DELETED',
+            entityType: 'BRANCH',
+            entityId: id,
+            userId,
+            remarks: `Soft deleted branch ${branch.name}`,
+        });
+    }
     async findAll(page = 1, limit = 20, clientId) {
         const query = this.branchRepository.createQueryBuilder('branch')
             .where('branch.is_active = :isActive', { isActive: true });

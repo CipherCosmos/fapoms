@@ -55,6 +55,26 @@ let HolidayService = class HolidayService {
         }
         return holiday;
     }
+    async update(id, dto, userId) {
+        const holiday = await this.findOne(id);
+        const holidayDate = new Date(dto.date);
+        holiday.name = dto.name;
+        holiday.date = holidayDate;
+        holiday.type = dto.type;
+        holiday.applicableStates = dto.applicableStates ?? null;
+        holiday.year = holidayDate.getFullYear();
+        holiday.updatedBy = userId;
+        const saved = await this.holidayRepository.save(holiday);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'HOLIDAY_UPDATED',
+            entityType: 'HOLIDAY',
+            entityId: saved.id,
+            userId,
+            remarks: `Updated holiday ${saved.name} for ${dto.date}`,
+        });
+        return saved;
+    }
     async findAll(page = 1, limit = 50, year) {
         const query = this.holidayRepository.createQueryBuilder('holiday')
             .where('holiday.is_active = :isActive', { isActive: true });

@@ -37,6 +37,10 @@ export declare class HolidayController {
         };
         error?: undefined;
     }>;
+    update(id: string, dto: CreateHolidayRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./holiday.entity").HolidayEntity;
+    }>;
     remove(id: string, req: any): Promise<{
         success: boolean;
         data: {

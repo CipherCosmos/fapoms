@@ -9,6 +9,7 @@ import {
   Get,
   Post,
   Put,
+  Delete,
   Body,
   Param,
   Query,
@@ -110,6 +111,32 @@ export class BranchController {
     return {
       success: true,
       data: branch,
+    };
+  }
+
+  @Put(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @ApiOperation({ summary: 'Update branch details manually' })
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateBranchRequestDto,
+    @Req() req: any,
+  ) {
+    const branch = await this.branchService.update(id, dto, req.user.id);
+    return {
+      success: true,
+      data: branch,
+    };
+  }
+
+  @Delete(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @ApiOperation({ summary: 'Soft delete branch record' })
+  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    await this.branchService.remove(id, req.user.id);
+    return {
+      success: true,
+      data: { message: 'Branch deleted successfully' },
     };
   }
 

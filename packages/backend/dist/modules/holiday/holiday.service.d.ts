@@ -13,6 +13,7 @@ export declare class HolidayService {
     constructor(holidayRepository: Repository<HolidayEntity>, auditService: AuditService);
     create(dto: CreateHolidayDto, userId: string): Promise<HolidayEntity>;
     findOne(id: string): Promise<HolidayEntity>;
+    update(id: string, dto: CreateHolidayDto, userId: string): Promise<HolidayEntity>;
     findAll(page?: number, limit?: number, year?: number): Promise<{
         holidays: HolidayEntity[];
         total: number;

@@ -97,6 +97,68 @@ export class BranchService {
     return branch;
   }
 
+  async update(id: string, dto: CreateBranchDto, userId: string): Promise<BranchEntity> {
+    const branch = await this.findOne(id);
+    
+    // Validate geography against master reference tables
+    await this.validateGeography(dto.state, dto.district, dto.city);
+
+    // Build PostGIS spatial location point if coordinates are provided
+    let location = null;
+    if (dto.latitude && dto.longitude) {
+      location = {
+        type: 'Point',
+        coordinates: [dto.longitude, dto.latitude],
+      };
+    }
+
+    branch.branchCode = dto.branchCode;
+    branch.solId = dto.solId ?? null;
+    branch.name = dto.name;
+    branch.address = dto.address;
+    branch.state = dto.state;
+    branch.district = dto.district;
+    branch.city = dto.city;
+    branch.pincode = dto.pincode ?? null;
+    branch.latitude = dto.latitude ?? null;
+    branch.longitude = dto.longitude ?? null;
+    branch.location = location;
+    if (dto.clientId) {
+      branch.clientId = dto.clientId;
+    }
+    branch.updatedBy = userId;
+
+    const saved = await this.branchRepository.save(branch);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_UPDATED',
+      entityType: 'BRANCH',
+      entityId: saved.id,
+      userId,
+      remarks: `Updated branch ${saved.name} (Code: ${saved.branchCode})`,
+    });
+
+    return saved;
+  }
+
+  async remove(id: string, userId: string): Promise<void> {
+    const branch = await this.findOne(id);
+    branch.isActive = false;
+    branch.updatedBy = userId;
+    
+    await this.branchRepository.save(branch);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_DELETED',
+      entityType: 'BRANCH',
+      entityId: id,
+      userId,
+      remarks: `Soft deleted branch ${branch.name}`,
+    });
+  }
+
   async findAll(
     page = 1,
     limit = 20,

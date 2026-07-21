@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const assignment_service_1 = require("./assignment.service");
 const guards_1 = require("../auth/guards");
+const shared_1 = require("@fapoms/shared");
 let AssignmentController = class AssignmentController {
     assignmentService;
     constructor(assignmentService) {
@@ -43,11 +44,33 @@ let AssignmentController = class AssignmentController {
             },
         };
     }
+    async findOne(id) {
+        const assignment = await this.assignmentService.findOne(id);
+        return {
+            success: true,
+            data: assignment,
+        };
+    }
+    async update(id, dto, req) {
+        const assignment = await this.assignmentService.update(id, dto, req.user.id);
+        return {
+            success: true,
+            data: assignment,
+        };
+    }
+    async transition(id, dto, req) {
+        const assignment = await this.assignmentService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.reason, dto.fee, dto.scheduledDate);
+        return {
+            success: true,
+            data: assignment,
+        };
+    }
 };
 exports.AssignmentController = AssignmentController;
 __decorate([
     (0, common_1.Post)(),
-    (0, swagger_1.ApiOperation)({ summary: 'Create a confirmed assignment commitment (validates holidays and double booking)' }),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, swagger_1.ApiOperation)({ summary: 'Create a new assignment in CREATED status' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
@@ -63,6 +86,36 @@ __decorate([
     __metadata("design:paramtypes", [Number, Number]),
     __metadata("design:returntype", Promise)
 ], AssignmentController.prototype, "findAll", null);
+__decorate([
+    (0, common_1.Get)(':id'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get details for a single assignment by ID' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Put)(':id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, swagger_1.ApiOperation)({ summary: 'Update assignment details' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "update", null);
+__decorate([
+    (0, common_1.Post)(':id/transition'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, swagger_1.ApiOperation)({ summary: 'Transition assignment to a new state' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "transition", null);
 exports.AssignmentController = AssignmentController = __decorate([
     (0, swagger_1.ApiTags)('Assignments'),
     (0, swagger_1.ApiBearerAuth)(),

@@ -124,6 +124,20 @@ let BranchController = class BranchController {
             data: branch,
         };
     }
+    async update(id, dto, req) {
+        const branch = await this.branchService.update(id, dto, req.user.id);
+        return {
+            success: true,
+            data: branch,
+        };
+    }
+    async remove(id, req) {
+        await this.branchService.remove(id, req.user.id);
+        return {
+            success: true,
+            data: { message: 'Branch deleted successfully' },
+        };
+    }
     async importExcel(clientId, file, req) {
         if (!file) {
             return { success: false, error: 'No file uploaded.' };
@@ -164,6 +178,27 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], BranchController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Put)(':id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Update branch details manually' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, CreateBranchRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], BranchController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Soft delete branch record' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], BranchController.prototype, "remove", null);
 __decorate([
     (0, common_1.Post)('import/:clientId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),

@@ -26,6 +26,9 @@ import { ZoneModule } from './modules/zone/zone.module';
 import { PlanningModule } from './modules/planning/planning.module';
 import { ProjectModule } from './modules/project/project.module';
 import { AssignmentModule } from './modules/assignment/assignment.module';
+import { SchedulingModule } from './modules/scheduling/scheduling.module';
+import { CommunicationModule } from './modules/communication/communication.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -56,6 +59,9 @@ import { AssignmentModule } from './modules/assignment/assignment.module';
     PlanningModule,
     ProjectModule,
     AssignmentModule,
+    SchedulingModule,
+    CommunicationModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

@@ -430,8 +430,25 @@ The following must never be violated:
 
 ---
 
+# Session Governance
+
+All engineering sessions and tasks are bound by the following mandatory governance rules:
+
+* **Context Initialization:** Every task must begin by identifying the authoritative source documents that will be used. Before producing any analysis, design, implementation, or recommendation, the executing agent must explicitly state which approved documents are being referenced.
+* **Authoritative Source Identification:** Refer to [GOVERNANCE_PROTOCOL.md](file:///Users/deepstacker/WorkSpace/dupcq/gssAutomation/GOVERNANCE_PROTOCOL.md) for the mapping of authoritative sources.
+* **Decision Hierarchy:** Refer to [GOVERNANCE_PROTOCOL.md](file:///Users/deepstacker/WorkSpace/dupcq/gssAutomation/GOVERNANCE_PROTOCOL.md) §Decision Hierarchy.
+* **Conflict Handling:** If multiple approved documents conflict, compare them without modifying or merging their intent. Report the inconsistencies exactly as written, and mark unresolved conflicts as **Pending Product Owner Decision**. Do not resolve them yourself or elevate one document over another.
+* **Traceability Requirements:** Every statement, conclusion, or recommendation must be traceable to one or more approved sources.
+* **Working Agreement:** Do not redesign approved artifacts, introduce new business concepts, modify business rules, or change domain boundaries unless explicitly instructed by the Product Owner.
+* **Change Management:** Proposing changes to approved specifications requires Product Owner review and approval.
+* **Product Owner Approval:** Specification changes must not be implemented until explicit Product Owner approval is documented.
+
+For detailed procedures, refer to [GOVERNANCE_PROTOCOL.md](file:///Users/deepstacker/WorkSpace/dupcq/gssAutomation/GOVERNANCE_PROTOCOL.md).
+
+---
+
 # Final Statement
 
 The purpose of this constitution is to ensure that every implementation decision remains aligned with the business domain while producing software that is robust, maintainable, scalable, and suitable for long-term enterprise use.
 
-All engineering decisions should be evaluated against these principles before implementation.
+All engineering decisions should be evaluated against these principles and [GOVERNANCE_PROTOCOL.md](file:///Users/deepstacker/WorkSpace/dupcq/gssAutomation/GOVERNANCE_PROTOCOL.md) before implementation.

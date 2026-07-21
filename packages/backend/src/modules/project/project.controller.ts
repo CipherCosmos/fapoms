@@ -8,6 +8,8 @@ import {
   Controller,
   Get,
   Post,
+  Put,
+  Delete,
   Body,
   Param,
   Query,
@@ -18,7 +20,8 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { ProjectService, CreateProjectDto } from './project.service';
-import { JwtAuthGuard, RolesGuard } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { SystemRole } from '@fapoms/shared';
 
 @ApiTags('Projects')
 @ApiBearerAuth()
@@ -54,6 +57,42 @@ export class ProjectController {
           total: result.total,
         },
       },
+    };
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get details for a single project by ID' })
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+    const project = await this.projectService.findOne(id);
+    return {
+      success: true,
+      data: project,
+    };
+  }
+
+  @Put(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @ApiOperation({ summary: 'Update project details' })
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateProjectDto,
+    @Req() req: any,
+  ) {
+    const project = await this.projectService.update(id, dto, req.user.id);
+    return {
+      success: true,
+      data: project,
+    };
+  }
+
+  @Delete(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @ApiOperation({ summary: 'Soft delete a project' })
+  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    await this.projectService.remove(id, req.user.id);
+    return {
+      success: true,
+      data: { message: 'Project deleted successfully' },
     };
   }
 

@@ -63,28 +63,124 @@ let AssignmentService = class AssignmentService {
             projectBranchId: projectBranch.id,
             projectId: projectBranch.projectId,
             assayerId: dto.assayerId,
-            status: shared_1.AssignmentStatus.ACCEPTED,
+            status: shared_1.AssignmentStatus.CREATED,
             proposedFee: dto.proposedFee,
-            agreedFee: dto.proposedFee,
+            agreedFee: null,
             scheduledDate: scheduledDateObj,
             remarks: dto.remarks ?? null,
             createdBy: userId,
             updatedBy: userId,
         });
         const savedAssignment = await this.assignmentRepository.save(assignment);
-        projectBranch.status = shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
-        projectBranch.scheduledDate = scheduledDateObj;
+        projectBranch.status = shared_1.ProjectBranchStatus.PLANNING;
         projectBranch.updatedBy = userId;
         await this.projectBranchRepository.save(projectBranch);
         await this.auditService.recordEvent({
             category: shared_1.EventCategory.OPERATIONAL,
-            eventType: 'ASSIGNMENT_ACCEPTED',
+            eventType: 'ASSIGNMENT_CREATED',
             entityType: 'ASSIGNMENT',
             entityId: savedAssignment.id,
             userId,
-            remarks: `Assigned branch ${projectBranch.branch.name} to assayer. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+            remarks: `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
         });
         return savedAssignment;
+    }
+    async findOne(id) {
+        const assignment = await this.assignmentRepository.findOne({
+            where: { id, isActive: true },
+            relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+        });
+        if (!assignment) {
+            throw new common_1.NotFoundException(`Assignment ${id} not found.`);
+        }
+        return assignment;
+    }
+    async update(id, dto, userId) {
+        const assignment = await this.findOne(id);
+        if (dto.proposedFee !== undefined)
+            assignment.proposedFee = dto.proposedFee;
+        if (dto.agreedFee !== undefined)
+            assignment.agreedFee = dto.agreedFee;
+        if (dto.scheduledDate !== undefined) {
+            const scheduledDateObj = new Date(dto.scheduledDate);
+            const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
+            if (isHolidayConflict) {
+                throw new common_1.BadRequestException(`Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${assignment.projectBranch.branch.state}.`);
+            }
+            assignment.scheduledDate = scheduledDateObj;
+        }
+        if (dto.remarks !== undefined)
+            assignment.remarks = dto.remarks;
+        assignment.updatedBy = userId;
+        const saved = await this.assignmentRepository.save(assignment);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'ASSIGNMENT_UPDATED',
+            entityType: 'ASSIGNMENT',
+            entityId: saved.id,
+            userId,
+            remarks: `Updated details for assignment ${saved.assignmentNumber}.`,
+        });
+        return saved;
+    }
+    async transition(id, targetStatus, userId, remarks, reason, fee, scheduledDate) {
+        const assignment = await this.findOne(id);
+        const prevStatus = assignment.status;
+        if (!(0, shared_1.isValidTransition)(shared_1.ASSIGNMENT_TRANSITIONS, prevStatus, targetStatus)) {
+            throw new common_1.BadRequestException(`Invalid Transition: Cannot transition assignment from ${prevStatus} to ${targetStatus}.`);
+        }
+        assignment.status = targetStatus;
+        if (remarks)
+            assignment.remarks = remarks;
+        if (targetStatus === shared_1.AssignmentStatus.REJECTED) {
+            assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+        }
+        else if (targetStatus === shared_1.AssignmentStatus.CANCELLED) {
+            assignment.cancelReason = reason ?? remarks ?? 'Cancelled by Admin';
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+        }
+        else if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
+            if (fee)
+                assignment.agreedFee = fee;
+            else
+                assignment.agreedFee = assignment.proposedFee;
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
+        }
+        else if (targetStatus === shared_1.AssignmentStatus.SCHEDULED) {
+            if (scheduledDate) {
+                const scheduledDateObj = new Date(scheduledDate);
+                const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
+                if (isHolidayConflict) {
+                    throw new common_1.BadRequestException(`Holiday Conflict: ${scheduledDate} is a holiday in ${assignment.projectBranch.branch.state}.`);
+                }
+                assignment.scheduledDate = scheduledDateObj;
+                assignment.projectBranch.scheduledDate = scheduledDateObj;
+            }
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.SCHEDULED;
+        }
+        else if (targetStatus === shared_1.AssignmentStatus.AUDIT_COMPLETED) {
+            assignment.completionDate = new Date();
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.AUDIT_COMPLETED;
+        }
+        else if (targetStatus === shared_1.AssignmentStatus.CLOSED) {
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.CLOSED;
+        }
+        assignment.updatedBy = userId;
+        assignment.projectBranch.updatedBy = userId;
+        await this.projectBranchRepository.save(assignment.projectBranch);
+        const saved = await this.assignmentRepository.save(assignment);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: `ASSIGNMENT_${targetStatus}`,
+            entityType: 'ASSIGNMENT',
+            entityId: saved.id,
+            previousState: prevStatus,
+            newState: targetStatus,
+            userId,
+            remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
+        });
+        return saved;
     }
     async findAll(page = 1, limit = 50) {
         const [assignments, total] = await this.assignmentRepository.findAndCount({

@@ -17,6 +17,20 @@ export declare class ProjectController {
             };
         };
     }>;
+    findOne(id: string): Promise<{
+        success: boolean;
+        data: import("./project.entity").ProjectEntity;
+    }>;
+    update(id: string, dto: CreateProjectDto, req: any): Promise<{
+        success: boolean;
+        data: import("./project.entity").ProjectEntity;
+    }>;
+    remove(id: string, req: any): Promise<{
+        success: boolean;
+        data: {
+            message: string;
+        };
+    }>;
     getProjectBranches(id: string): Promise<{
         success: boolean;
         data: import("./project-branch.entity").ProjectBranchEntity[];

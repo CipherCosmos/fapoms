@@ -22,6 +22,9 @@ const zone_module_1 = require("./modules/zone/zone.module");
 const planning_module_1 = require("./modules/planning/planning.module");
 const project_module_1 = require("./modules/project/project.module");
 const assignment_module_1 = require("./modules/assignment/assignment.module");
+const scheduling_module_1 = require("./modules/scheduling/scheduling.module");
+const communication_module_1 = require("./modules/communication/communication.module");
+const notifications_module_1 = require("./modules/notifications/notifications.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -48,6 +51,9 @@ exports.AppModule = AppModule = __decorate([
             planning_module_1.PlanningModule,
             project_module_1.ProjectModule,
             assignment_module_1.AssignmentModule,
+            scheduling_module_1.SchedulingModule,
+            communication_module_1.CommunicationModule,
+            notifications_module_1.NotificationsModule,
         ],
     })
 ], AppModule);

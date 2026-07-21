@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const project_service_1 = require("./project.service");
 const guards_1 = require("../auth/guards");
+const shared_1 = require("@fapoms/shared");
 let ProjectController = class ProjectController {
     projectService;
     constructor(projectService) {
@@ -41,6 +42,27 @@ let ProjectController = class ProjectController {
                     total: result.total,
                 },
             },
+        };
+    }
+    async findOne(id) {
+        const project = await this.projectService.findOne(id);
+        return {
+            success: true,
+            data: project,
+        };
+    }
+    async update(id, dto, req) {
+        const project = await this.projectService.update(id, dto, req.user.id);
+        return {
+            success: true,
+            data: project,
+        };
+    }
+    async remove(id, req) {
+        await this.projectService.remove(id, req.user.id);
+        return {
+            success: true,
+            data: { message: 'Project deleted successfully' },
         };
     }
     async getProjectBranches(id) {
@@ -70,6 +92,35 @@ __decorate([
     __metadata("design:paramtypes", [Number, Number]),
     __metadata("design:returntype", Promise)
 ], ProjectController.prototype, "findAll", null);
+__decorate([
+    (0, common_1.Get)(':id'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get details for a single project by ID' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Put)(':id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Update project details' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Soft delete a project' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "remove", null);
 __decorate([
     (0, common_1.Get)(':id/branches'),
     (0, swagger_1.ApiOperation)({ summary: 'Get unassigned and planning branches queue for project' }),
