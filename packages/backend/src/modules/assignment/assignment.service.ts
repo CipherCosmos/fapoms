@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { DataSource, Repository, In } from 'typeorm';
+import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
@@ -40,6 +41,8 @@ export class AssignmentService {
     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
     private readonly holidayService: HolidayService,
     private readonly auditService: AuditService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
@@ -96,23 +99,25 @@ export class AssignmentService {
       updatedBy: userId,
     });
 
-    const savedAssignment = await this.assignmentRepository.save(assignment);
+    return this.dataSource.transaction(async (manager) => {
+      const savedAssignment = await manager.save(assignment);
 
-    // Update ProjectBranch status to PLANNING (or appropriate transitional state)
-    projectBranch.status = ProjectBranchStatus.PLANNING;
-    projectBranch.updatedBy = userId;
-    await this.projectBranchRepository.save(projectBranch);
+      // Update ProjectBranch status to PLANNING (or appropriate transitional state)
+      projectBranch.status = ProjectBranchStatus.PLANNING;
+      projectBranch.updatedBy = userId;
+      await manager.save(projectBranch);
 
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSIGNMENT_CREATED',
-      entityType: 'ASSIGNMENT',
-      entityId: savedAssignment.id,
-      userId,
-      remarks: `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+      await this.auditService.recordEvent({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSIGNMENT_CREATED',
+        entityType: 'ASSIGNMENT',
+        entityId: savedAssignment.id,
+        userId,
+        remarks: `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+      });
+
+      return savedAssignment;
     });
-
-    return savedAssignment;
   }
 
   async findOne(id: string): Promise<AssignmentEntity> {
@@ -224,21 +229,23 @@ export class AssignmentService {
     assignment.updatedBy = userId;
     assignment.projectBranch.updatedBy = userId;
 
-    await this.projectBranchRepository.save(assignment.projectBranch);
-    const saved = await this.assignmentRepository.save(assignment);
+    return this.dataSource.transaction(async (manager) => {
+      await manager.save(assignment.projectBranch);
+      const saved = await manager.save(assignment);
 
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: `ASSIGNMENT_${targetStatus}`,
-      entityType: 'ASSIGNMENT',
-      entityId: saved.id,
-      previousState: prevStatus,
-      newState: targetStatus,
-      userId,
-      remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
+      await this.auditService.recordEvent({
+        category: EventCategory.OPERATIONAL,
+        eventType: `ASSIGNMENT_${targetStatus}`,
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        previousState: prevStatus,
+        newState: targetStatus,
+        userId,
+        remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
+      });
+
+      return saved;
     });
-
-    return saved;
   }
 
   async findAll(page = 1, limit = 50): Promise<{ assignments: AssignmentEntity[]; total: number }> {

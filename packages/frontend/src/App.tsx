@@ -25,15 +25,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (token) {
-      api.request<UserProfile>('/users/me', { method: 'GET' }, {
-        displayName: 'Sandbox Admin',
-        email: 'admin@fapoms.com',
-        username: 'admin'
-      })
-      .then(setCurrentUser)
-      .catch(() => {
-        handleLogout();
-      });
+      api.request<UserProfile>('/users/me', { method: 'GET' })
+        .then(setCurrentUser)
+        .catch(() => {
+          handleLogout();
+        });
     }
   }, [token]);
 
@@ -70,18 +66,6 @@ export const App: React.FC = () => {
         <Route path="/scheduling" element={<Scheduling />} />
         <Route path="/documents" element={<Documents />} />
         <Route path="/validation" element={<Validation />} />
-        <Route path="/reports" element={
-          <div className="glass-card">
-            <h3>Operational Reports</h3>
-            <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Coverage statistics, assayer utilization analytics (Phase 6).</p>
-          </div>
-        } />
-        <Route path="/admin" element={
-          <div className="glass-card">
-            <h3>Administration</h3>
-            <p style={{ color: 'var(--text-secondary)', marginTop: '8px' }}>Role privileges configurations, user listings, reference parameters (Phase 1).</p>
-          </div>
-        } />
         
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

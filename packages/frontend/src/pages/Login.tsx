@@ -30,12 +30,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         setError(resData.message || resData.error?.message || 'Invalid credentials');
       }
     } catch (err) {
-      // Direct mock fallback for initial sandbox UAT if backend is offline
-      if (username === 'admin' && password === 'admin123') {
-        onLoginSuccess('mock-jwt-token');
-      } else {
-        setError('Authentication server offline and credentials not recognized.');
-      }
+      setError('Authentication server connection failed.');
     } finally {
       setIsLoading(false);
     }
@@ -177,12 +172,6 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             >
               {isLoading ? 'Authenticating...' : 'Sign In'}
             </button>
-
-            <div style={{ textAlign: 'center', marginTop: '12px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Demo Credentials: <b>admin</b> / <b>admin123</b>
-              </span>
-            </div>
 
           </form>
 

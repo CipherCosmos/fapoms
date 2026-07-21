@@ -9,12 +9,13 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { UserService } from './user.service';
 import { UserController } from './user.controller';
+import { SystemDashboardController } from './system-dashboard.controller';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([UserEntity, RoleEntity, PermissionEntity]),
   ],
-  controllers: [UserController],
+  controllers: [UserController, SystemDashboardController],
   providers: [UserService],
   exports: [UserService],
 })

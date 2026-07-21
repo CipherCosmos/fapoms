@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const testing_1 = require("@nestjs/testing");
 const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
+const typeorm_2 = require("typeorm");
 const assignment_service_1 = require("./assignment.service");
 const assignment_entity_1 = require("./assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
@@ -31,6 +32,19 @@ describe('AssignmentService', () => {
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
+    const mockDataSource = {
+        transaction: jest.fn((cb) => cb({
+            save: jest.fn((arg) => {
+                if (arg.projectBranchId) {
+                    mockAssignmentRepo.save(arg);
+                }
+                else {
+                    mockProjectBranchRepo.save(arg);
+                }
+                return Promise.resolve(arg);
+            }),
+        })),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
@@ -50,6 +64,10 @@ describe('AssignmentService', () => {
                 {
                     provide: audit_service_1.AuditService,
                     useValue: mockAuditService,
+                },
+                {
+                    provide: typeorm_2.DataSource,
+                    useValue: mockDataSource,
                 },
             ],
         }).compile();

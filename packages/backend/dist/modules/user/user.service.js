@@ -40,7 +40,9 @@ let UserService = class UserService {
         const passwordHash = await bcrypt.hash(dto.password, 12);
         let roles = [];
         if (dto.roleIds && dto.roleIds.length > 0) {
-            roles = await this.roleRepository.findByIds(dto.roleIds);
+            roles = await this.roleRepository.find({
+                where: { id: (0, typeorm_2.In)(dto.roleIds) }
+            });
         }
         const user = this.userRepository.create({
             username: dto.username,
@@ -117,7 +119,9 @@ let UserService = class UserService {
     }
     async assignRoles(userId, roleIds, assignedById) {
         const user = await this.findById(userId);
-        const roles = await this.roleRepository.findByIds(roleIds);
+        const roles = await this.roleRepository.find({
+            where: { id: (0, typeorm_2.In)(roleIds) }
+        });
         user.roles = roles;
         user.updatedBy = assignedById;
         const saved = await this.userRepository.save(user);

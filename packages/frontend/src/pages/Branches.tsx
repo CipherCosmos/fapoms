@@ -46,10 +46,7 @@ export const Branches: React.FC = () => {
 
   const loadClients = async () => {
     try {
-      const response = await api.request<ClientOption[]>('/clients', { method: 'GET' }, [
-        { id: '1', clientCode: 'SBI', name: 'State Bank of India' },
-        { id: '2', clientCode: 'HDFC', name: 'HDFC Bank Limited' }
-      ]);
+      const response = await api.request<ClientOption[]>('/clients', { method: 'GET' });
       setClients(response);
       if (response.length > 0) {
         setSelectedClientId(response[0].id);
@@ -63,14 +60,7 @@ export const Branches: React.FC = () => {
     setIsLoading(true);
     try {
       const url = clientId ? `/branches?clientId=${clientId}&limit=100` : '/branches?limit=100';
-      const fallbackData = [
-        { id: '1', branchCode: 'BR-0010', solId: '1029', name: 'Pune Main Branch', address: '123 Pune Road', city: 'Pune City', state: 'Maharashtra', district: 'Pune', pincode: '411001', latitude: 18.5204, longitude: 73.8567 },
-        { id: '2', branchCode: 'BR-0011', solId: '1043', name: 'Pimpri Branch', address: '456 Pimpri Road', city: 'Pimpri-Chinchwad', state: 'Maharashtra', district: 'Pune', pincode: '411018', latitude: 18.6298, longitude: 73.7997 },
-        { id: '3', branchCode: 'BR-0012', solId: '1105', name: 'Mumbai Fort Branch', address: '789 Fort Street', city: 'Mumbai City', state: 'Maharashtra', district: 'Mumbai', pincode: '400001', latitude: 18.9696, longitude: 72.8240 },
-        { id: '4', branchCode: 'BR-0020', solId: '2055', name: 'Ahmedabad Navrangpura', address: '101 Navrang Road', city: 'Ahmedabad City', state: 'Gujarat', district: 'Ahmedabad', pincode: '380001', latitude: 23.0225, longitude: 72.5714 },
-        { id: '5', branchCode: 'BR-0030', solId: '3049', name: 'Bangalore MG Road', address: '202 MG Road', city: 'Bangalore', state: 'Karnataka', district: 'Bangalore Urban', pincode: '560001', latitude: 12.9716, longitude: 77.5946 },
-      ];
-      const response = await api.request<Branch[]>(url, { method: 'GET' }, fallbackData);
+      const response = await api.request<Branch[]>(url, { method: 'GET' });
       setBranches(response);
     } catch (err) {
       console.error('Failed to load branches');

@@ -47,20 +47,7 @@ export const Projects: React.FC = () => {
   const loadProjects = async () => {
     setIsLoading(true);
     try {
-      const fallback = [
-        {
-          id: '1',
-          projectNumber: 'PRJ-2026-001',
-          name: 'SBI Corporate Audit 2026',
-          clientId: '1',
-          status: ProjectStatus.PLANNING,
-          priority: Priority.HIGH,
-          startDate: '2026-07-01',
-          endDate: '2026-07-31',
-          createdAt: new Date().toISOString()
-        }
-      ];
-      const response = await api.request<ProjectItem[]>('/projects', { method: 'GET' }, fallback);
+      const response = await api.request<ProjectItem[]>('/projects', { method: 'GET' });
       setProjects(response);
     } catch (err) {
       console.error('Failed to load projects');
@@ -71,7 +58,7 @@ export const Projects: React.FC = () => {
 
   const loadClients = async () => {
     try {
-      const response = await api.request<ClientOption[]>('/clients', { method: 'GET' }, []);
+      const response = await api.request<ClientOption[]>('/clients', { method: 'GET' });
       setClients(response);
       if (response.length > 0) {
         setSelectedClientId(response[0].id);

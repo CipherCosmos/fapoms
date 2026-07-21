@@ -16,6 +16,7 @@ exports.AssignmentService = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
+const typeorm_3 = require("@nestjs/typeorm");
 const assignment_entity_1 = require("./assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
 const holiday_service_1 = require("../holiday/holiday.service");
@@ -26,11 +27,13 @@ let AssignmentService = class AssignmentService {
     projectBranchRepository;
     holidayService;
     auditService;
-    constructor(assignmentRepository, projectBranchRepository, holidayService, auditService) {
+    dataSource;
+    constructor(assignmentRepository, projectBranchRepository, holidayService, auditService, dataSource) {
         this.assignmentRepository = assignmentRepository;
         this.projectBranchRepository = projectBranchRepository;
         this.holidayService = holidayService;
         this.auditService = auditService;
+        this.dataSource = dataSource;
     }
     async create(dto, userId) {
         const projectBranch = await this.projectBranchRepository.findOne({
@@ -71,19 +74,21 @@ let AssignmentService = class AssignmentService {
             createdBy: userId,
             updatedBy: userId,
         });
-        const savedAssignment = await this.assignmentRepository.save(assignment);
-        projectBranch.status = shared_1.ProjectBranchStatus.PLANNING;
-        projectBranch.updatedBy = userId;
-        await this.projectBranchRepository.save(projectBranch);
-        await this.auditService.recordEvent({
-            category: shared_1.EventCategory.OPERATIONAL,
-            eventType: 'ASSIGNMENT_CREATED',
-            entityType: 'ASSIGNMENT',
-            entityId: savedAssignment.id,
-            userId,
-            remarks: `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+        return this.dataSource.transaction(async (manager) => {
+            const savedAssignment = await manager.save(assignment);
+            projectBranch.status = shared_1.ProjectBranchStatus.PLANNING;
+            projectBranch.updatedBy = userId;
+            await manager.save(projectBranch);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.OPERATIONAL,
+                eventType: 'ASSIGNMENT_CREATED',
+                entityType: 'ASSIGNMENT',
+                entityId: savedAssignment.id,
+                userId,
+                remarks: `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+            });
+            return savedAssignment;
         });
-        return savedAssignment;
     }
     async findOne(id) {
         const assignment = await this.assignmentRepository.findOne({
@@ -174,19 +179,21 @@ let AssignmentService = class AssignmentService {
         }
         assignment.updatedBy = userId;
         assignment.projectBranch.updatedBy = userId;
-        await this.projectBranchRepository.save(assignment.projectBranch);
-        const saved = await this.assignmentRepository.save(assignment);
-        await this.auditService.recordEvent({
-            category: shared_1.EventCategory.OPERATIONAL,
-            eventType: `ASSIGNMENT_${targetStatus}`,
-            entityType: 'ASSIGNMENT',
-            entityId: saved.id,
-            previousState: prevStatus,
-            newState: targetStatus,
-            userId,
-            remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
+        return this.dataSource.transaction(async (manager) => {
+            await manager.save(assignment.projectBranch);
+            const saved = await manager.save(assignment);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.OPERATIONAL,
+                eventType: `ASSIGNMENT_${targetStatus}`,
+                entityType: 'ASSIGNMENT',
+                entityId: saved.id,
+                previousState: prevStatus,
+                newState: targetStatus,
+                userId,
+                remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
+            });
+            return saved;
         });
-        return saved;
     }
     async findAll(page = 1, limit = 50) {
         const [assignments, total] = await this.assignmentRepository.findAndCount({
@@ -204,9 +211,11 @@ exports.AssignmentService = AssignmentService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
+    __param(4, (0, typeorm_3.InjectDataSource)()),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
         holiday_service_1.HolidayService,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        typeorm_2.DataSource])
 ], AssignmentService);
 //# sourceMappingURL=assignment.service.js.map

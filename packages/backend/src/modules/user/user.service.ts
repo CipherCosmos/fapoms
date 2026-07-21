@@ -10,7 +10,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { UserEntity } from './user.entity';
 import { RoleEntity } from './role.entity';
@@ -64,7 +64,9 @@ export class UserService {
     // Load roles if specified
     let roles: RoleEntity[] = [];
     if (dto.roleIds && dto.roleIds.length > 0) {
-      roles = await this.roleRepository.findByIds(dto.roleIds);
+      roles = await this.roleRepository.find({
+        where: { id: In(dto.roleIds) }
+      });
     }
 
     const user = this.userRepository.create({
@@ -160,7 +162,9 @@ export class UserService {
     assignedById: string,
   ): Promise<UserEntity> {
     const user = await this.findById(userId);
-    const roles = await this.roleRepository.findByIds(roleIds);
+    const roles = await this.roleRepository.find({
+      where: { id: In(roleIds) }
+    });
     user.roles = roles;
     user.updatedBy = assignedById;
     const saved = await this.userRepository.save(user);

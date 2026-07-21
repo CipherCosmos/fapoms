@@ -36,7 +36,7 @@ export const Documents: React.FC = () => {
     setError(null);
     try {
       const token = localStorage.getItem('fapoms_token');
-      // Fetch generic lists (default to active project branches placeholders if none specified)
+      // Fetch project list and auto-select first project branch for document listing
       const response = await fetch('/api/v1/projects', {
         headers: {
           'Authorization': `Bearer ${token}`

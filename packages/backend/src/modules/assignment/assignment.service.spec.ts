@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { AssignmentService } from './assignment.service';
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
@@ -36,6 +36,20 @@ describe('AssignmentService', () => {
     recordEvent: jest.fn(),
   };
 
+  const mockDataSource = {
+    transaction: jest.fn((cb) => cb({
+      save: jest.fn((arg) => {
+        // Track saves to mock repositories
+        if (arg.projectBranchId) {
+          mockAssignmentRepo.save(arg);
+        } else {
+          mockProjectBranchRepo.save(arg);
+        }
+        return Promise.resolve(arg);
+      }),
+    })),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -55,6 +69,10 @@ describe('AssignmentService', () => {
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
         },
       ],
     }).compile();

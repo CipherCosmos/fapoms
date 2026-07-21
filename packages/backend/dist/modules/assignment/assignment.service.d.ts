@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { HolidayService } from '../holiday/holiday.service';
@@ -29,7 +29,8 @@ export declare class AssignmentService {
     private readonly projectBranchRepository;
     private readonly holidayService;
     private readonly auditService;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, holidayService: HolidayService, auditService: AuditService);
+    private readonly dataSource;
+    constructor(assignmentRepository: Repository<AssignmentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, holidayService: HolidayService, auditService: AuditService, dataSource: DataSource);
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
     update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity>;

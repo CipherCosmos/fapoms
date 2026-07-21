@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Compass, PhoneCall, Check, X, ShieldAlert, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Compass, PhoneCall, Check, X, ShieldAlert, AlertTriangle, CheckCircle, Search } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
@@ -29,6 +29,15 @@ interface ProjectBranch {
     latitude: number | null;
     longitude: number | null;
   };
+  assignment: {
+    id: string;
+    status: string;
+    proposedFee: number;
+    agreedFee: number | null;
+    assayer?: {
+      displayName: string;
+    };
+  } | null;
 }
 
 interface Candidate {
@@ -54,6 +63,11 @@ export const PlanningWorkspace: React.FC = () => {
   
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
+
+  // Filters & Search State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [stateFilter, setStateFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   // Modal & Input States
   const [showNegotiationModal, setShowNegotiationModal] = useState(false);
@@ -90,10 +104,7 @@ export const PlanningWorkspace: React.FC = () => {
 
   const loadProjects = async () => {
     try {
-      const fallback = [
-        { id: '1', name: 'SBI Corporate Audit 2026', projectNumber: 'PRJ-2026-001' }
-      ];
-      const response = await api.request<ProjectOption[]>('/projects', { method: 'GET' }, fallback);
+      const response = await api.request<ProjectOption[]>('/projects', { method: 'GET' });
       setProjects(response);
       if (response.length > 0) {
         setSelectedProjectId(response[0].id);
@@ -131,10 +142,7 @@ export const PlanningWorkspace: React.FC = () => {
   const loadCandidates = async (branchId: string) => {
     setIsLoadingCandidates(true);
     try {
-      const fallback = [
-        { id: '1', assayerCode: 'AS-01', displayName: 'Nilesh Rahane', phone: '+91 98765 43210', email: 'nilesh@fapoms.com', status: 'ACTIVE', state: 'Maharashtra', district: 'Pune', city: 'Pune City', distanceKm: 4.8 }
-      ];
-      const response = await api.request<Candidate[]>(`/planning/recommendations?branchId=${branchId}`, { method: 'GET' }, fallback);
+      const response = await api.request<Candidate[]>(`/planning/recommendations?branchId=${branchId}`, { method: 'GET' });
       setCandidates(response);
     } catch (err) {
       console.error('Failed to load candidate recommendations');
@@ -163,7 +171,7 @@ export const PlanningWorkspace: React.FC = () => {
           assayerId: selectedCandidate.id,
           proposedFee: Number(negotiatingFee),
           scheduledDate: negotiatingDate
-        })
+         })
       });
 
       const resData = await response.json();
@@ -188,6 +196,45 @@ export const PlanningWorkspace: React.FC = () => {
     }
   };
 
+  // 5. Handle unassigning/cancelling active commitment
+  const handleCancelAssignment = async (assignmentId: string) => {
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/v1/assignments/${assignmentId}/transition`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
+        },
+        body: JSON.stringify({
+          targetStatus: 'CANCELLED',
+          remarks: 'Operational unassign from map planning workspace.'
+        })
+      });
+      const resData = await response.json();
+      if (response.ok && resData.success) {
+        setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' });
+        loadProjectBranches(selectedProjectId);
+      } else {
+        setMessage({ type: 'error', text: resData.message || 'Failed to unassign.' });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Network request failure during unassign.' });
+    }
+  };
+
+  // Extract unique states for filters list
+  const statesList = Array.from(new Set(branches.map(b => b.branch.state)));
+
+  // Filtered branches queue list matching search terms and select options
+  const filteredBranches = branches.filter((b) => {
+    const matchesSearch = b.branch.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          b.branch.branchCode.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesState = stateFilter === 'ALL' || b.branch.state === stateFilter;
+    const matchesStatus = statusFilter === 'ALL' || b.status === statusFilter;
+    return matchesSearch && matchesState && matchesStatus;
+  });
+
   const selectedPb = branches.find(b => b.id === selectedBranchId);
 
   // Recalculate dynamic Confirmed Coverage percentage
@@ -206,49 +253,95 @@ export const PlanningWorkspace: React.FC = () => {
       {/* Left + Center Area (Workspace Queue) */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', overflowY: 'auto' }}>
         
-        {/* Workspace Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>SELECT PROJECT</label>
-              <select
-                value={selectedProjectId}
-                onChange={(e) => setSelectedProjectId(e.target.value)}
-                style={{
-                  padding: '8px 12px',
-                  background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '14px',
-                  outline: 'none',
-                  minWidth: '220px'
-                }}
-              >
-                {projects.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>
-                ))}
-              </select>
+        {/* Workspace Header & Filters */}
+        <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>SELECT PROJECT</label>
+                <select
+                  value={selectedProjectId}
+                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-md)',
+                    color: 'var(--text-primary)',
+                    fontSize: '14px',
+                    outline: 'none',
+                    minWidth: '220px'
+                  }}
+                >
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            
+            {/* Coverage gauge */}
+            <div style={{
+              background: 'var(--bg-primary)',
+              border: '1px solid var(--border-color)',
+              padding: '8px 16px',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>CONFIRMED COVERAGE</span>
+                <span style={{ fontSize: '16px', fontWeight: 800, color: 'var(--status-active)', fontFamily: 'var(--font-display)' }}>
+                  {coveragePercentage}%
+                </span>
+              </div>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: `conic-gradient(var(--status-active) ${coveragePercentage}%, var(--bg-tertiary) 0)` }} />
             </div>
           </div>
-          
-          {/* Coverage gauge */}
-          <div style={{
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)',
-            padding: '10px 20px',
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px'
-          }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>CONFIRMED COVERAGE</span>
-              <span style={{ fontSize: '18px', fontWeight: 800, color: 'var(--status-active)', fontFamily: 'var(--font-display)' }}>
-                {coveragePercentage}%
-              </span>
+
+          {/* Search, State, Status filters */}
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+            <div style={{ flex: 1, minWidth: '180px', position: 'relative' }}>
+              <Search size={16} style={{ position: 'absolute', left: '12px', top: '10px', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Search branch code or name..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px 8px 36px',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: '#fff',
+                  outline: 'none',
+                  fontSize: '13px'
+                }}
+              />
             </div>
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: `conic-gradient(var(--status-active) ${coveragePercentage}%, var(--bg-tertiary) 0)` }} />
+
+            <select
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value)}
+              style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}
+            >
+              <option value="ALL">All States</option>
+              {statesList.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}
+            >
+              <option value="ALL">All Statuses</option>
+              <option value="IMPORTED">Imported</option>
+              <option value="PLANNING">Planning</option>
+              <option value="ASSIGNMENT_CONFIRMED">Confirmed</option>
+              <option value="SCHEDULED">Scheduled</option>
+            </select>
           </div>
         </div>
 
@@ -273,7 +366,7 @@ export const PlanningWorkspace: React.FC = () => {
 
         {/* Geographic Map Visualization panel */}
         <InteractivePlanningMap
-          branches={branches.map(b => ({
+          branches={filteredBranches.map(b => ({
             id: b.id,
             name: b.branch.name,
             latitude: b.branch.latitude,
@@ -286,7 +379,7 @@ export const PlanningWorkspace: React.FC = () => {
 
         {/* Planning Queue */}
         <div className="glass-card" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Project Branches Queue ({branches.length})</h4>
+          <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Project Branches Queue ({filteredBranches.length})</h4>
           
           <div className="table-container" style={{ flex: 1 }}>
             {isLoadingQueue ? (
@@ -304,14 +397,14 @@ export const PlanningWorkspace: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {branches.length === 0 ? (
+                  {filteredBranches.length === 0 ? (
                     <tr>
                       <td colSpan={4} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
-                        No branches associated with this project.
+                        No branches matched the filter parameters.
                       </td>
                     </tr>
                   ) : (
-                    branches.map((b) => (
+                    filteredBranches.map((b) => (
                       <tr 
                         key={b.id} 
                         onClick={() => setSelectedBranchId(b.id)}
@@ -359,10 +452,21 @@ export const PlanningWorkspace: React.FC = () => {
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
                   {selectedPb.branch.city}, {selectedPb.branch.district}, {selectedPb.branch.state}
                 </p>
-                {selectedPb.scheduledDate && (
-                  <p style={{ fontSize: '12px', color: 'var(--accent-secondary)', marginTop: '4px', fontWeight: 600 }}>
-                    Scheduled Date: {new Date(selectedPb.scheduledDate).toLocaleDateString()}
-                  </p>
+                {selectedPb.assignment && (
+                  <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>ACTIVE ASSIGNMENT</span>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff', display: 'block', marginTop: '2px' }}>
+                      {selectedPb.assignment.assayer?.displayName || 'Assigned Candidate'}
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Agreed Professional Fee: ₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee}</span>
+                    <button 
+                      onClick={() => handleCancelAssignment(selectedPb.assignment!.id)}
+                      className="btn btn-secondary" 
+                      style={{ width: '100%', marginTop: '10px', padding: '4px', fontSize: '11px', color: 'red' }}
+                    >
+                      Unassign / Cancel
+                    </button>
+                  </div>
                 )}
               </div>
 

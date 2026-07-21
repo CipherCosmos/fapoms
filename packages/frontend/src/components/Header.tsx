@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Search, Bell, LogOut, ChevronDown, Building2, Server } from 'lucide-react';
-import { api } from '../services/api';
+import React from 'react';
+import { Search, Bell, LogOut } from 'lucide-react';
 
 interface HeaderProps {
   onLogout?: () => void;
@@ -8,12 +7,6 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onLogout, title = 'Dashboard' }) => {
-  const [isLive, setIsLive] = useState(api.isLive);
-
-  useEffect(() => {
-    return api.subscribe(setIsLive);
-  }, []);
-
   return (
     <header className="header-area" style={{ 
       display: 'flex', 
@@ -27,47 +20,12 @@ export const Header: React.FC<HeaderProps> = ({ onLogout, title = 'Dashboard' })
         <h2 style={{ fontSize: '20px', fontWeight: 700, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>
           {title}
         </h2>
-
-        {/* Database Live/Mock Mode Indicator */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          padding: '4px 10px',
-          borderRadius: 'var(--radius-full)',
-          fontSize: '11px',
-          fontWeight: 600,
-          background: isLive ? 'var(--status-active-bg)' : 'rgba(251, 191, 36, 0.1)',
-          color: isLive ? 'var(--status-active)' : 'var(--status-pending)',
-          border: `1px solid ${isLive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(251, 191, 36, 0.2)'}`
-        }}>
-          <Server size={12} />
-          <span>{isLive ? 'Live Database Mode' : 'Sandbox Demo Mode'}</span>
-        </div>
-        
-        {/* Quick Organization Selector */}
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '8px', 
-          background: 'var(--bg-tertiary)',
-          padding: '6px 12px',
-          borderRadius: 'var(--radius-sm)',
-          fontSize: '12px',
-          fontWeight: 500,
-          border: '1px solid var(--border-color)',
-          color: 'var(--text-secondary)'
-        }}>
-          <Building2 size={14} />
-          <span>Axis Bank Project</span>
-          <ChevronDown size={12} />
-        </div>
       </div>
 
       {/* Global Search & Actions Area */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
         
-        {/* Search Input (Part 10 §12) */}
+        {/* Search Input */}
         <div style={{ position: 'relative', width: '300px' }}>
           <Search size={16} style={{ 
             position: 'absolute', 
