@@ -87,6 +87,13 @@ let ProjectController = class ProjectController {
             data: list,
         };
     }
+    async removeBranch(id, pbId, req) {
+        const list = await this.projectService.removeProjectBranch(id, pbId, req.user.id);
+        return {
+            success: true,
+            data: list,
+        };
+    }
 };
 exports.ProjectController = ProjectController;
 __decorate([
@@ -168,6 +175,17 @@ __decorate([
     __metadata("design:paramtypes", [String, Object, Object]),
     __metadata("design:returntype", Promise)
 ], ProjectController.prototype, "uploadBranches", null);
+__decorate([
+    (0, common_1.Delete)(':id/branches/:pbId'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Remove a branch association from a project' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Param)('pbId', common_1.ParseUUIDPipe)),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "removeBranch", null);
 exports.ProjectController = ProjectController = __decorate([
     (0, swagger_1.ApiTags)('Projects'),
     (0, swagger_1.ApiBearerAuth)(),

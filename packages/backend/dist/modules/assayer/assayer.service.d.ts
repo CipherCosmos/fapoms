@@ -57,6 +57,7 @@ export interface CreateAssayerDto {
     };
     maxDailyWorkload?: number;
     maxWeeklyWorkload?: number;
+    eligibleClients?: string[];
 }
 export interface UpdateAssayerDto {
     firstName?: string;
@@ -107,6 +108,7 @@ export interface UpdateAssayerDto {
     };
     maxDailyWorkload?: number;
     maxWeeklyWorkload?: number;
+    eligibleClients?: string[];
 }
 export interface CreateGovernmentDocumentDto {
     documentType: string;
@@ -137,12 +139,14 @@ export interface CreateRemarkDto {
     category: string;
     visibility: string;
     attachmentPaths?: string[];
+    rating?: number;
 }
 export interface UpdateRemarkDto {
     content?: string;
     category?: string;
     visibility?: string;
     attachmentPaths?: string[];
+    rating?: number;
 }
 export interface UpdateAssayerDocumentDto {
     documentType?: string;
@@ -186,6 +190,9 @@ export declare class AssayerService {
         remarks: AssayerRemarkEntity[];
         total: number;
     }>;
+    recomputeAverageRating(assayerId: string): Promise<void>;
+    updateAssayerStats(assayerId: string): Promise<void>;
+    getProfile(assayerId: string): Promise<AssayerEntity>;
     private recordActivity;
     getActivityTimeline(assayerId: string, page?: number, limit?: number): Promise<{
         activities: AssayerActivityEntity[];

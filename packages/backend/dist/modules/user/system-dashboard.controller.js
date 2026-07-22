@@ -54,7 +54,7 @@ let SystemDashboardController = class SystemDashboardController {
 exports.SystemDashboardController = SystemDashboardController;
 __decorate([
     (0, common_1.Get)('metrics'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Retrieve live aggregated system counts and event history metrics' }),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),

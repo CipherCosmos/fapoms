@@ -13,6 +13,7 @@ import { Documents } from './pages/Documents';
 import { Validation } from './pages/Validation';
 import { Users } from './pages/Users';
 import { Assayers } from './pages/Assayers';
+import { AssayerProfile } from './pages/AssayerProfile';
 import { Clients } from './pages/Clients';
 import { Rules } from './pages/Rules';
 import { api } from './services/api';
@@ -76,6 +77,7 @@ export const App: React.FC = () => {
         <Route path="/validation" element={<Validation />} />
         <Route path="/users" element={<Users />} />
         <Route path="/assayers" element={<Assayers />} />
+        <Route path="/assayers/:id" element={<AssayerProfile />} />
         <Route path="/clients" element={<Clients />} />
         <Route path="/rules" element={<Rules />} />
         

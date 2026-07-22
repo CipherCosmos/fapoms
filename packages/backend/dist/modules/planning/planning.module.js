@@ -46,6 +46,7 @@ exports.PlanningModule = PlanningModule = __decorate([
             recommendation_engine_1.ClientRestrictionFilter,
             recommendation_engine_1.ClientEligibilityFilter,
             recommendation_engine_1.RuleEngineEligibilityFilter,
+            recommendation_engine_1.RequiredSkillsFilter,
             recommendation_engine_1.DistanceScoreCalculator,
             recommendation_engine_1.TravelTimeScoreCalculator,
             recommendation_engine_1.WorkloadScoreCalculator,

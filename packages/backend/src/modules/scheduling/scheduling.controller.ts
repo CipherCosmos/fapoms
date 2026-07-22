@@ -1,18 +1,36 @@
 import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsUUID, IsDateString } from 'class-validator';
 import { SchedulingService, CreateScheduleDto, UpdateScheduleDto } from './scheduling.service';
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
 
 class CreateScheduleRequestDto implements CreateScheduleDto {
+  @IsUUID()
+  @IsNotEmpty()
   assignmentId: string;
+
+  @IsDateString()
+  @IsNotEmpty()
   scheduledDate: string;
+
+  @IsString()
+  @IsOptional()
   remarks?: string;
 }
 
 class TransitionScheduleRequestDto {
+  @IsString()
+  @IsNotEmpty()
   targetStatus: ScheduleStatus;
+
+  @IsString()
+  @IsOptional()
   remarks?: string;
+
+  @IsDateString()
+  @IsOptional()
+  scheduledDate?: string;
 }
 
 @ApiTags('Scheduling')
@@ -68,10 +86,20 @@ export class SchedulingController {
     @Body() dto: TransitionScheduleRequestDto,
     @Req() req: any,
   ) {
-    const schedule = await this.schedulingService.transition(id, dto.targetStatus, req.user.id, dto.remarks);
+    const schedule = await this.schedulingService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.scheduledDate);
     return {
       success: true,
       data: schedule,
+    };
+  }
+
+  @Get(':id/timeline')
+  @ApiOperation({ summary: 'Get unified activity timeline for a schedule' })
+  async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
+    const timeline = await this.schedulingService.getTimeline(id);
+    return {
+      success: true,
+      data: timeline,
     };
   }
 }

@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 
 import { BranchEntity } from '../branch/branch.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
+import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
@@ -28,6 +29,7 @@ export interface AssayerRecommendation {
   score?: number;
   latitude?: number | null;
   longitude?: number | null;
+  baseFee?: number;
 }
 
 export interface CreateBusinessRuleDto {
@@ -55,6 +57,8 @@ export class PlanningService {
     private readonly branchRepository: Repository<BranchEntity>,
     @InjectRepository(BusinessRuleEntity)
     private readonly ruleRepository: Repository<BusinessRuleEntity>,
+    @InjectRepository(AssayerCommercialProfileEntity)
+    private readonly commercialRepository: Repository<AssayerCommercialProfileEntity>,
     private readonly recommendationEngine: RecommendationEngine,
     private readonly routingService: RoutingService,
   ) {}
@@ -81,6 +85,12 @@ export class PlanningService {
         distanceKm = route.distanceKm;
       }
 
+      const profile = await this.commercialRepository.findOne({
+        where: { assayerId: r.assayer.id, isActive: true },
+        order: { effectiveStartDate: 'DESC' },
+      });
+      const baseFee = profile ? Number(profile.baseFee) : 1500;
+
       recommendations.push({
         id: r.assayer.id,
         assayerCode: r.assayer.assayerCode,
@@ -95,6 +105,7 @@ export class PlanningService {
         score: r.score,
         latitude: r.assayer.latitude,
         longitude: r.assayer.longitude,
+        baseFee,
       });
     }
 

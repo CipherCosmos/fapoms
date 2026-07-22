@@ -16,7 +16,7 @@ export class SystemDashboardController {
   ) {}
 
   @Get('metrics')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Retrieve live aggregated system counts and event history metrics' })
   async getMetrics() {
     // Run simple count queries for live aggregates

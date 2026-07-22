@@ -25,5 +25,6 @@ export declare class SchedulingService {
         schedules: ScheduleEntity[];
         total: number;
     }>;
-    transition(id: string, targetStatus: ScheduleStatus, userId: string, remarks?: string): Promise<ScheduleEntity>;
+    transition(id: string, targetStatus: ScheduleStatus, userId: string, remarks?: string, newScheduledDate?: string): Promise<ScheduleEntity>;
+    getTimeline(scheduleId: string): Promise<any[]>;
 }

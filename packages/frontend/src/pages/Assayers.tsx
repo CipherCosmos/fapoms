@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
-import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star } from 'lucide-react';
+import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star, ExternalLink, Search } from 'lucide-react';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
 interface Assayer {
@@ -93,6 +94,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export const Assayers: React.FC = () => {
+  const navigate = useNavigate();
   const [assayers, setAssayers] = useState<Assayer[]>([]);
   const [selectedAssayer, setSelectedAssayer] = useState<Assayer | null>(null);
   const [commercials, setCommercials] = useState<CommercialProfile[]>([]);
@@ -104,6 +106,31 @@ export const Assayers: React.FC = () => {
   const [showLifecycleModal, setShowLifecycleModal] = useState(false);
   const [targetLifecycle, setTargetLifecycle] = useState('');
   const [activeTab, setActiveTab] = useState<'profile' | 'commercial'>('profile');
+
+  // Filters
+  const [searchText, setSearchText] = useState('');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterCity, setFilterCity] = useState('');
+  const [filterState, setFilterState] = useState('ALL');
+  const [filterEmployment, setFilterEmployment] = useState('ALL');
+  const [filterSkills, setFilterSkills] = useState('');
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+
+  const filteredAssayers = assayers.filter(a => {
+    if (searchText) {
+      const q = searchText.toLowerCase();
+      if (!a.displayName.toLowerCase().includes(q) &&
+          !a.assayerCode.toLowerCase().includes(q) &&
+          !(a.email || '').toLowerCase().includes(q) &&
+          !a.phone.includes(q)) return false;
+    }
+    if (filterStatus !== 'ALL' && a.lifecycleStatus !== filterStatus && a.status !== filterStatus) return false;
+    if (filterCity && !a.city.toLowerCase().includes(filterCity.toLowerCase())) return false;
+    if (filterState !== 'ALL' && a.state !== filterState) return false;
+    if (filterEmployment !== 'ALL' && a.employmentType !== filterEmployment) return false;
+    if (filterSkills && !(a.skills || []).some(s => s.toLowerCase().includes(filterSkills.toLowerCase()))) return false;
+    return true;
+  });
 
   const [baseFee, setBaseFee] = useState(0);
   const [hourlyRate, setHourlyRate] = useState(0);
@@ -216,19 +243,65 @@ export const Assayers: React.FC = () => {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', gap: '24px', height: 'calc(100vh - 320px)' }}>
+      <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
+            <input type="text" placeholder="Search by name, code, email, phone..." value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              style={{ width: '100%', padding: '8px 12px 8px 34px', fontSize: '13px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}
+            />
+            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          </div>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
+            style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+            <option value="ALL">All Status</option>
+            {Object.values(AssayerLifecycleStatus).map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+          </select>
+          <select value={filterEmployment} onChange={(e) => setFilterEmployment(e.target.value)}
+            style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+            <option value="ALL">All Employment</option>
+            <option value="INTERNAL">Internal</option>
+            <option value="EXTERNAL">External</option>
+            <option value="CONTRACT">Contract</option>
+          </select>
+          <button type="button" onClick={() => setFiltersExpanded(!filtersExpanded)}
+            style={{ padding: '8px 12px', fontSize: '12px', background: 'none', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            {filtersExpanded ? 'Fewer Filters −' : 'More Filters +'}
+          </button>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredAssayers.length} of {assayers.length} assayers</span>
+        </div>
+        {filtersExpanded && (
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', paddingTop: '8px', borderTop: '1px solid var(--border-color)' }}>
+            <input type="text" placeholder="Filter by city..." value={filterCity}
+              onChange={(e) => setFilterCity(e.target.value)}
+              style={{ padding: '6px 10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '160px' }}
+            />
+            <select value={filterState} onChange={(e) => setFilterState(e.target.value)}
+              style={{ padding: '6px 10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+              <option value="ALL">All States</option>
+              {[...new Set(assayers.map(a => a.state))].sort().map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <input type="text" placeholder="Filter by skill..." value={filterSkills}
+              onChange={(e) => setFilterSkills(e.target.value)}
+              style={{ padding: '6px 10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '160px' }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', gap: '24px', height: 'calc(100vh - 480px)' }}>
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)' }}>
             <h2 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>Assayers Directory</h2>
           </div>
-          <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-            {loading ? (
-              <div style={{ textAlign: 'center', padding: '20px' }}>Loading...</div>
-            ) : assayers.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>No assayers registered.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {assayers.map((a) => (
+              <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+                {loading ? (
+                  <div style={{ textAlign: 'center', padding: '20px' }}>Loading...</div>
+                ) : filteredAssayers.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>No assayers match filters.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {filteredAssayers.map((a) => (
                   <div key={a.id} onClick={() => selectAssayer(a)}
                     style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer',
                       background: selectedAssayer?.id === a.id ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
@@ -259,6 +332,9 @@ export const Assayers: React.FC = () => {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => navigate(`/assayers/${selectedAssayer.id}`)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <ExternalLink size={12} /> Full Profile
+                  </button>
                   <button onClick={() => setShowEditModal(true)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Edit2 size={12} /> Edit
                   </button>
@@ -302,7 +378,18 @@ export const Assayers: React.FC = () => {
                       <Row label="State" value={selectedAssayer.state} />
                       <Row label="Pincode" value={selectedAssayer.pincode || '-'} />
                       <Row label="Region" value={selectedAssayer.region || '-'} />
-                      <Row label="Coordinates" value={selectedAssayer.latitude && selectedAssayer.longitude ? `${Number(selectedAssayer.latitude).toFixed(4)}, ${Number(selectedAssayer.longitude).toFixed(4)}` : '-'} />
+                      <Row label="Coordinates" value={
+                        selectedAssayer.latitude && selectedAssayer.longitude ? (
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <span>{Number(selectedAssayer.latitude).toFixed(4)}, {Number(selectedAssayer.longitude).toFixed(4)}</span>
+                            <a href={`https://www.google.com/maps/search/?api=1&query=${selectedAssayer.latitude},${selectedAssayer.longitude}`}
+                              target="_blank" rel="noopener noreferrer"
+                              style={{ fontSize: '11px', color: 'var(--accent-primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                              🗺️ Verify
+                            </a>
+                          </div>
+                        ) : '-'
+                      } />
                     </Section>
 
                     <Section title="Employment" icon={<Briefcase size={14} />}>
@@ -447,7 +534,7 @@ const Section: React.FC<{ title: string; icon: React.ReactNode; children: React.
   </div>
 );
 
-const Row: React.FC<{ label: string; value: string; code?: boolean; full?: boolean }> = ({ label, value, code, full }) => (
+const Row: React.FC<{ label: string; value: React.ReactNode; code?: boolean; full?: boolean }> = ({ label, value, code, full }) => (
   <div style={full ? { gridColumn: '1 / -1' } : {}}>
     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{label}</span>
     <div style={{ fontWeight: 600, fontSize: '13px', fontFamily: code ? 'monospace' : undefined, wordBreak: 'break-word' }}>{value}</div>
@@ -548,8 +635,6 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'city', label: 'City' },
   { key: 'pincode', label: 'Pincode' },
   { key: 'region', label: 'Region' },
-  { key: 'latitude', label: 'Latitude', type: 'number' },
-  { key: 'longitude', label: 'Longitude', type: 'number' },
   { key: 'employeeId', label: 'Employee ID' },
   { key: 'employeeCode', label: 'Employee Code' },
   { key: 'employmentType', label: 'Employment Type', options: EMPLOYMENT_TYPES },

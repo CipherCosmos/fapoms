@@ -6,6 +6,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
+import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 
 describe('PlanningService', () => {
   let service: PlanningService;
@@ -30,6 +31,10 @@ describe('PlanningService', () => {
     find: jest.fn(),
   };
 
+  const mockCommercialRepo = {
+    findOne: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,6 +46,10 @@ describe('PlanningService', () => {
         {
           provide: getRepositoryToken(BusinessRuleEntity),
           useValue: mockRuleRepository,
+        },
+        {
+          provide: getRepositoryToken(AssayerCommercialProfileEntity),
+          useValue: mockCommercialRepo,
         },
         {
           provide: RecommendationEngine,
@@ -56,6 +65,7 @@ describe('PlanningService', () => {
     service = module.get<PlanningService>(PlanningService);
     recommendationEngine = module.get<RecommendationEngine>(RecommendationEngine);
 
+    mockCommercialRepo.findOne.mockResolvedValue({ baseFee: 1500 });
     jest.clearAllMocks();
   });
 

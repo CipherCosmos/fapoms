@@ -8,6 +8,7 @@ const branch_entity_1 = require("../branch/branch.entity");
 const recommendation_engine_1 = require("./recommendation.engine");
 const routing_provider_1 = require("../geo/routing.provider");
 const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
+const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 describe('PlanningService', () => {
     let service;
     let recommendationEngine;
@@ -26,6 +27,9 @@ describe('PlanningService', () => {
         findOne: jest.fn(),
         find: jest.fn(),
     };
+    const mockCommercialRepo = {
+        findOne: jest.fn(),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
@@ -39,6 +43,10 @@ describe('PlanningService', () => {
                     useValue: mockRuleRepository,
                 },
                 {
+                    provide: (0, typeorm_1.getRepositoryToken)(assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity),
+                    useValue: mockCommercialRepo,
+                },
+                {
                     provide: recommendation_engine_1.RecommendationEngine,
                     useValue: mockRecommendationEngine,
                 },
@@ -50,6 +58,7 @@ describe('PlanningService', () => {
         }).compile();
         service = module.get(planning_service_1.PlanningService);
         recommendationEngine = module.get(recommendation_engine_1.RecommendationEngine);
+        mockCommercialRepo.findOne.mockResolvedValue({ baseFee: 1500 });
         jest.clearAllMocks();
     });
     it('should throw NotFoundException if branch is missing', async () => {

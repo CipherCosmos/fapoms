@@ -142,6 +142,9 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
 
   @IsOptional() @IsInt()
   maxWeeklyWorkload?: number;
+
+  @IsOptional() @IsArray()
+  eligibleClients?: string[];
 }
 
 class UpdateAssayerRequestDto implements UpdateAssayerDto {
@@ -264,6 +267,9 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
 
   @IsOptional() @IsInt()
   maxWeeklyWorkload?: number;
+
+  @IsOptional() @IsArray()
+  eligibleClients?: string[];
 }
 
 export class CreateWorkforceAttributeRequestDto {
@@ -435,6 +441,9 @@ export class CreateRemarkRequestDto {
 
   @IsOptional() @IsArray()
   attachmentPaths?: string[];
+
+  @IsOptional() @IsNumber()
+  rating?: number;
 }
 
 export class UpdateRemarkRequestDto {
@@ -449,6 +458,9 @@ export class UpdateRemarkRequestDto {
 
   @IsOptional() @IsArray()
   attachmentPaths?: string[];
+
+  @IsOptional() @IsNumber()
+  rating?: number;
 }
 
 export class UpdateAssayerDocumentRequestDto {
@@ -517,6 +529,16 @@ export class AssayerController {
   @ApiOperation({ summary: 'Get details for a single assayer by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const assayer = await this.assayerService.findOne(id);
+    return {
+      success: true,
+      data: assayer,
+    };
+  }
+
+  @Get(':assayerId/profile')
+  @ApiOperation({ summary: 'Get detailed profile with stats for an assayer' })
+  async getProfile(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+    const assayer = await this.assayerService.getProfile(assayerId);
     return {
       success: true,
       data: assayer,

@@ -25,6 +25,36 @@ const zone_entity_1 = require("../zone/zone.entity");
 const geo_entities_1 = require("../geo/geo.entities");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
+async function geocodeAddress(address, city, district, state) {
+    const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
+        .replace(/\s+/g, ' ')
+        .trim();
+    try {
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        const res = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
+            }
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data[0]) {
+                return {
+                    lat: parseFloat(data[0].lat),
+                    lng: parseFloat(data[0].lon)
+                };
+            }
+        }
+    }
+    catch (err) {
+        console.error(`Error geocoding inside service: ${cleanQ}`, err);
+    }
+    return null;
+}
 let BranchService = class BranchService {
     branchRepository;
     contactRepository;
@@ -54,10 +84,20 @@ let BranchService = class BranchService {
                 throw new common_1.BadRequestException(`Zone ${dto.zoneId} not found.`);
             }
         }
-        let location = null;
-        if (dto.latitude && dto.longitude) {
-            location = { type: 'Point', coordinates: [dto.longitude, dto.latitude] };
+        let lat = dto.latitude;
+        let lng = dto.longitude;
+        if (!lat || !lng) {
+            const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+            if (coords) {
+                lat = coords.lat;
+                lng = coords.lng;
+            }
+            else {
+                lat = 19.076;
+                lng = 72.8777;
+            }
         }
+        const location = { type: 'Point', coordinates: [lng, lat] };
         const branch = this.branchRepository.create({
             branchCode: dto.branchCode,
             solId: dto.solId ?? null,
@@ -77,8 +117,8 @@ let BranchService = class BranchService {
             openingDate: dto.openingDate ?? null,
             lastAuditDate: dto.lastAuditDate ?? null,
             operatingHours: dto.operatingHours ?? null,
-            latitude: dto.latitude ?? null,
-            longitude: dto.longitude ?? null,
+            latitude: lat,
+            longitude: lng,
             location,
             clientId: dto.clientId ?? null,
             riskScore: dto.riskScore ?? 0,
@@ -136,12 +176,25 @@ let BranchService = class BranchService {
             if (!zone)
                 throw new common_1.BadRequestException(`Zone ${dto.zoneId} not found.`);
         }
+        let lat = dto.latitude !== undefined ? dto.latitude : branch.latitude;
+        let lng = dto.longitude !== undefined ? dto.longitude : branch.longitude;
+        const addressChanged = dto.address !== undefined && dto.address !== branch.address;
+        const cityChanged = dto.city !== undefined && dto.city !== branch.city;
+        const districtChanged = dto.district !== undefined && dto.district !== branch.district;
+        const stateChanged = dto.state !== undefined && dto.state !== branch.state;
+        if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
+            const coords = await geocodeAddress(dto.address ?? branch.address, dto.city ?? branch.city, dto.district ?? branch.district, dto.state ?? branch.state);
+            if (coords) {
+                lat = coords.lat;
+                lng = coords.lng;
+            }
+        }
         let location = branch.location;
-        const lat = dto.latitude ?? branch.latitude;
-        const lng = dto.longitude ?? branch.longitude;
         if (lat && lng) {
             location = { type: 'Point', coordinates: [lng, lat] };
         }
+        branch.latitude = lat;
+        branch.longitude = lng;
         if (dto.branchCode !== undefined)
             branch.branchCode = dto.branchCode;
         if (dto.solId !== undefined)

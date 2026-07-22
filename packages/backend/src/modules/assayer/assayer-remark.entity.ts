@@ -30,4 +30,7 @@ export class AssayerRemarkEntity extends BaseEntity {
 
   @Column({ name: 'attachment_paths', type: 'jsonb', default: [] })
   attachmentPaths: string[];
+
+  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  rating: number | null;
 }

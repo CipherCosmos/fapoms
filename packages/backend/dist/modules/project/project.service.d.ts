@@ -42,4 +42,5 @@ export declare class ProjectService implements OnModuleInit {
     findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]>;
     associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]>;
     uploadBranchesFromExcel(projectId: string, fileBuffer: Buffer, userId: string): Promise<ProjectBranchEntity[]>;
+    removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]>;
 }

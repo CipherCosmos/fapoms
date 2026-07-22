@@ -6,6 +6,7 @@ import {
   ClientRestrictionFilter,
   ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
+  RequiredSkillsFilter,
   DistanceScoreCalculator,
   TravelTimeScoreCalculator,
   WorkloadScoreCalculator,
@@ -23,6 +24,7 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
+import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 
@@ -36,6 +38,7 @@ describe('RecommendationEngine', () => {
   const mockAssignmentRepo = {
     findOne: jest.fn(),
     count: jest.fn(),
+    find: jest.fn(),
   };
 
   const mockCommercialRepo = {
@@ -43,6 +46,10 @@ describe('RecommendationEngine', () => {
   };
 
   const mockClientRepo = {
+    findOne: jest.fn(),
+  };
+
+  const mockProjectBranchRepo = {
     findOne: jest.fn(),
   };
 
@@ -62,6 +69,7 @@ describe('RecommendationEngine', () => {
         ClientRestrictionFilter,
         ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
+        RequiredSkillsFilter,
         DistanceScoreCalculator,
         TravelTimeScoreCalculator,
         WorkloadScoreCalculator,
@@ -91,6 +99,10 @@ describe('RecommendationEngine', () => {
           useValue: mockClientRepo,
         },
         {
+          provide: getRepositoryToken(ProjectBranchEntity),
+          useValue: mockProjectBranchRepo,
+        },
+        {
           provide: RoutingService,
           useValue: mockRoutingService,
         },
@@ -102,6 +114,7 @@ describe('RecommendationEngine', () => {
     }).compile();
 
     engine = module.get<RecommendationEngine>(RecommendationEngine);
+    mockAssignmentRepo.find.mockResolvedValue([]);
     jest.clearAllMocks();
   });
 

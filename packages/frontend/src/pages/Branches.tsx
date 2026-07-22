@@ -401,7 +401,16 @@ export const Branches: React.FC = () => {
                 <InfoRow label="Last Audit" value={branchDetail.lastAuditDate ? new Date(branchDetail.lastAuditDate).toLocaleDateString() : '-'} />
                 <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-muted)' }}>Address</span><div style={{ fontWeight: 600, marginTop: '2px' }}>{branchDetail.address}, {branchDetail.city}, {branchDetail.state} - {branchDetail.pincode || 'N/A'}</div></div>
                 {branchDetail.latitude && branchDetail.longitude && (
-                  <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-muted)' }}>Coordinates</span><div style={{ fontWeight: 600, fontFamily: 'monospace', marginTop: '2px' }}>{Number(branchDetail.latitude).toFixed(4)}, {Number(branchDetail.longitude).toFixed(4)}</div></div>
+                  <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-muted)' }}>Coordinates</span>
+                    <div style={{ fontWeight: 600, fontFamily: 'monospace', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span>{Number(branchDetail.latitude).toFixed(4)}, {Number(branchDetail.longitude).toFixed(4)}</span>
+                      <a href={`https://www.google.com/maps/search/?api=1&query=${branchDetail.latitude},${branchDetail.longitude}`}
+                        target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
+                        🗺️ Verify on Google Maps
+                      </a>
+                    </div>
+                  </div>
                 )}
                 {branchDetail.requiredCompetencies && branchDetail.requiredCompetencies.length > 0 && (
                   <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-muted)' }}>Competencies</span><div style={{ fontWeight: 600, marginTop: '2px' }}>{branchDetail.requiredCompetencies.join(', ')}</div></div>
@@ -603,8 +612,6 @@ const BranchFormModal: React.FC<{
             {field('Region', 'region')}
             {field('Territory', 'territory')}
             {field('Zone ID', 'zoneId')}
-            {field('Latitude', 'latitude', { type: 'number', placeholder: 'e.g. 19.0760' })}
-            {field('Longitude', 'longitude', { type: 'number', placeholder: 'e.g. 72.8777' })}
 
             <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT</span>
             {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}

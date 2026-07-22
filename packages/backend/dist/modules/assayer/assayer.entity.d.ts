@@ -56,4 +56,11 @@ export declare class AssayerEntity extends BaseEntity {
     maxDailyWorkload: number;
     maxWeeklyWorkload: number;
     eligibleClients: string[] | null;
+    totalAssignments: number;
+    completedAssignments: number;
+    cancelledAssignments: number;
+    onTimeCompletions: number;
+    totalEarnings: number;
+    lastAssignmentDate: Date | null;
+    averageRating: number;
 }

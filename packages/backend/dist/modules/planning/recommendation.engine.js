@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
+exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RequiredSkillsFilter = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
@@ -24,6 +24,7 @@ const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commerci
 const client_entity_1 = require("../client/client.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
+const project_branch_entity_1 = require("../project/project-branch.entity");
 function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
     const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -119,6 +120,44 @@ exports.RuleEngineEligibilityFilter = RuleEngineEligibilityFilter = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [rule_engine_1.RuleEngine])
 ], RuleEngineEligibilityFilter);
+let RequiredSkillsFilter = class RequiredSkillsFilter {
+    projectBranchRepository;
+    name = 'requiredSkills';
+    constructor(projectBranchRepository) {
+        this.projectBranchRepository = projectBranchRepository;
+    }
+    async evaluate(assayer, context) {
+        const pb = await this.projectBranchRepository.findOne({
+            where: { branchId: context.branch.id, isActive: true },
+            relations: ['project'],
+        });
+        if (!pb || !pb.project) {
+            return true;
+        }
+        const project = pb.project;
+        if (project.requiredSkills && project.requiredSkills.length > 0) {
+            const assayerSkills = assayer.skills || [];
+            const hasAllSkills = project.requiredSkills.every((skill) => assayerSkills.some((s) => s.toLowerCase() === skill.toLowerCase()));
+            if (!hasAllSkills) {
+                return false;
+            }
+        }
+        if (project.requiredCertifications && project.requiredCertifications.length > 0) {
+            const assayerCerts = (assayer.certifications || []).map((c) => c.name.toLowerCase());
+            const hasAllCerts = project.requiredCertifications.every((cert) => assayerCerts.includes(cert.toLowerCase()));
+            if (!hasAllCerts) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+exports.RequiredSkillsFilter = RequiredSkillsFilter;
+exports.RequiredSkillsFilter = RequiredSkillsFilter = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
+    __metadata("design:paramtypes", [typeorm_2.Repository])
+], RequiredSkillsFilter);
 let DistanceScoreCalculator = class DistanceScoreCalculator {
     routingService;
     name = 'distance';
@@ -204,6 +243,18 @@ exports.ExperienceScoreCalculator = ExperienceScoreCalculator;
 exports.ExperienceScoreCalculator = ExperienceScoreCalculator = __decorate([
     (0, common_1.Injectable)()
 ], ExperienceScoreCalculator);
+function getCityTierMultiplier(city) {
+    if (!city)
+        return 1.0;
+    const c = city.trim().toLowerCase();
+    const tier1 = ['mumbai', 'delhi', 'bangalore', 'bengaluru', 'chennai', 'kolkata', 'hyderabad', 'pune', 'ahmedabad', 'gurgaon', 'gurugram', 'noida'];
+    if (tier1.includes(c))
+        return 1.5;
+    const tier2 = ['jaipur', 'lucknow', 'patna', 'bhopal', 'nagpur', 'indore', 'coimbatore', 'kochi', 'visakhapatnam', 'chandigarh', 'surat', 'vadodara', 'ludhiana', 'agra', 'nashik', 'meerut', 'rajkot', 'varanasi', 'srinagar', 'aurangabad', 'amritsar', 'allahabad', 'ranchi', 'jabalpur', 'gwalior', 'vijayawada'];
+    if (tier2.includes(c))
+        return 1.2;
+    return 1.0;
+}
 let CostScoreCalculator = class CostScoreCalculator {
     commercialRepository;
     name = 'cost';
@@ -226,7 +277,8 @@ let CostScoreCalculator = class CostScoreCalculator {
         if (!activeProfile) {
             return 50;
         }
-        const baseFee = Number(activeProfile.baseFee) || 0;
+        const multiplier = getCityTierMultiplier(context.branch.city);
+        const baseFee = (Number(activeProfile.baseFee) || 0) * multiplier;
         return Math.max(0, 100 - (baseFee / 20000) * 100);
     }
 };
@@ -313,7 +365,32 @@ let BranchFamiliarityScoreCalculator = class BranchFamiliarityScoreCalculator {
                 isActive: true,
             },
         });
-        return Math.min(100, 50 + count * 10);
+        let score = 50 + count * 10;
+        if (context.scheduledDate) {
+            const sameDayAssignments = await this.assignmentRepository.find({
+                where: {
+                    assayerId: assayer.id,
+                    scheduledDate: context.scheduledDate,
+                    isActive: true,
+                },
+                relations: ['projectBranch', 'projectBranch.branch'],
+            });
+            let hasNearbyGrouping = false;
+            for (const assign of sameDayAssignments) {
+                const otherBranch = assign.projectBranch?.branch;
+                if (otherBranch && otherBranch.latitude && otherBranch.longitude && context.branch.latitude && context.branch.longitude) {
+                    const dist = calculateHaversineDistance(Number(context.branch.latitude), Number(context.branch.longitude), Number(otherBranch.latitude), Number(otherBranch.longitude));
+                    if (dist <= 60) {
+                        hasNearbyGrouping = true;
+                        break;
+                    }
+                }
+            }
+            if (hasNearbyGrouping) {
+                score += 30;
+            }
+        }
+        return Math.min(100, score);
     }
 };
 exports.BranchFamiliarityScoreCalculator = BranchFamiliarityScoreCalculator;
@@ -384,6 +461,7 @@ let RecommendationEngine = class RecommendationEngine {
     clientRestrictionFilter;
     clientEligibilityFilter;
     ruleEngineEligibilityFilter;
+    requiredSkillsFilter;
     distanceCalculator;
     travelTimeCalculator;
     workloadCalculator;
@@ -400,11 +478,12 @@ let RecommendationEngine = class RecommendationEngine {
     clientRepository;
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository) {
+    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository) {
         this.availabilityFilter = availabilityFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
         this.clientEligibilityFilter = clientEligibilityFilter;
         this.ruleEngineEligibilityFilter = ruleEngineEligibilityFilter;
+        this.requiredSkillsFilter = requiredSkillsFilter;
         this.distanceCalculator = distanceCalculator;
         this.travelTimeCalculator = travelTimeCalculator;
         this.workloadCalculator = workloadCalculator;
@@ -419,7 +498,7 @@ let RecommendationEngine = class RecommendationEngine {
         this.configResolver = configResolver;
         this.assayerRepository = assayerRepository;
         this.clientRepository = clientRepository;
-        this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter);
+        this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter, this.requiredSkillsFilter);
         this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.profitabilityCalculator, this.riskCalculator);
     }
     async recommend(branch, scheduledDate, weights = {}) {
@@ -470,12 +549,13 @@ let RecommendationEngine = class RecommendationEngine {
 exports.RecommendationEngine = RecommendationEngine;
 exports.RecommendationEngine = RecommendationEngine = __decorate([
     (0, common_1.Injectable)(),
-    __param(16, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
-    __param(17, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(17, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(18, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [AvailabilityFilter,
         ClientRestrictionFilter,
         ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
+        RequiredSkillsFilter,
         DistanceScoreCalculator,
         TravelTimeScoreCalculator,
         WorkloadScoreCalculator,

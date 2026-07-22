@@ -302,6 +302,11 @@ async function seed() {
                 status: 'ACTIVE',
                 lifecycleStatus: shared_1.AssayerLifecycleStatus.ACTIVE,
                 eligibleClients: ['*'],
+                skills: ['Gold', 'Gold Valuation', 'Agricultural Audit', 'Financial Auditing'],
+                certifications: [
+                    { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+                    { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' }
+                ],
                 organizationId: defaultOrg.id,
                 createdBy: 'system',
                 updatedBy: 'system',

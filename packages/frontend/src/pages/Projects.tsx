@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink } from 'lucide-react';
+import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 
@@ -90,18 +90,25 @@ const LIFECYCLE_INDEX: Record<ProjectStatus, number> = {
 
 const LIFECYCLE_STEPS = ['Draft', 'Planning', 'Scheduling', 'Execution', 'Validation', 'Completed', 'Archived'];
 
-const emptyForm: FormData = {
-  name: '',
-  projectNumber: '',
-  clientId: '',
-  priority: Priority.MEDIUM,
-  startDate: '2026-07-01',
-  endDate: '2026-07-31',
-  budget: '',
-  scope: '',
-  requiredSkills: '',
-  requiredCertifications: '',
-  description: '',
+const getInitialProjectForm = (clientId = ''): FormData => {
+  const today = new Date();
+  const nextMonth = new Date();
+  nextMonth.setDate(today.getDate() + 30);
+  const formatDate = (d: Date) => d.toISOString().split('T')[0];
+  const rand = Math.floor(1000 + Math.random() * 9000);
+  return {
+    name: '',
+    projectNumber: `PRJ-${today.getFullYear()}-${rand}`,
+    clientId,
+    priority: Priority.MEDIUM,
+    startDate: formatDate(today),
+    endDate: formatDate(nextMonth),
+    budget: '',
+    scope: 'Default Gold Asset Audit and Vault Verification.',
+    requiredSkills: 'Gold, Gold Valuation',
+    requiredCertifications: 'Gold Valuation Specialist',
+    description: 'Gold valuation and storage audit cycle.',
+  };
 };
 
 const statusBadge = (status: ProjectStatus) => {
@@ -136,10 +143,13 @@ export const Projects: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [form, setForm] = useState<FormData>({ ...emptyForm });
+  const [activeTab, setActiveTab] = useState<'overview' | 'branches' | 'settings'>('overview');
+  const [form, setForm] = useState<FormData>(getInitialProjectForm());
   const [isSaving, setIsSaving] = useState(false);
 
   const [projectBranches, setProjectBranches] = useState<any[]>([]);
+  const [allClientBranches, setAllClientBranches] = useState<any[]>([]);
+  const [branchSearch, setBranchSearch] = useState('');
 
   useEffect(() => {
     loadProjects();
@@ -176,6 +186,19 @@ export const Projects: React.FC = () => {
     }
   };
 
+  const loadClientBranches = async (clientId: string) => {
+    try {
+      const response = await api.request<any>(`/branches?clientId=${clientId}&limit=1000`);
+      if (response && Array.isArray(response)) {
+        setAllClientBranches(response);
+      } else if (response && response.data && Array.isArray(response.data)) {
+        setAllClientBranches(response.data);
+      }
+    } catch (err) {
+      console.error('Failed to load client branches', err);
+    }
+  };
+
   const loadDetail = async (id: string) => {
     setIsLoadingDetail(true);
     try {
@@ -183,12 +206,50 @@ export const Projects: React.FC = () => {
       setDetail(response);
       const branchesResponse = await api.request<any>(`/projects/${id}/branches`, { method: 'GET' });
       setProjectBranches(branchesResponse || []);
+      if (response && response.clientId) {
+        loadClientBranches(response.clientId);
+      }
     } catch (err) {
       console.error('Failed to load project detail');
       setDetail(null);
       setProjectBranches([]);
     } finally {
       setIsLoadingDetail(false);
+    }
+  };
+
+  const handleAddBranch = async (branchId: string) => {
+    if (!detail) return;
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      await api.request(`/projects/${detail.id}/branches`, {
+        method: 'POST',
+        body: JSON.stringify({ branchIds: [branchId] })
+      });
+      setMessage({ type: 'success', text: 'Branch associated successfully!' });
+      loadDetail(detail.id);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to add branch.' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRemoveBranch = async (projectBranchId: string) => {
+    if (!detail) return;
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      await api.request(`/projects/${detail.id}/branches/${projectBranchId}`, {
+        method: 'DELETE'
+      });
+      setMessage({ type: 'success', text: 'Branch removed successfully!' });
+      loadDetail(detail.id);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to remove branch.' });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -219,7 +280,7 @@ export const Projects: React.FC = () => {
       });
       setMessage({ type: 'success', text: `Project "${response.name}" successfully created!` });
       setShowCreateModal(false);
-      setForm({ ...emptyForm });
+      setForm(getInitialProjectForm());
       loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.message || 'Failed to create project.' });
@@ -444,7 +505,7 @@ export const Projects: React.FC = () => {
           <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <FileSpreadsheet size={15} /> Export
           </button>
-          <button onClick={() => { setMessage(null); setForm({ ...emptyForm, clientId: clients[0]?.id || '' }); setShowCreateModal(true); }}
+          <button onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}
             style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)', border: 'none', color: '#fff', padding: '10px 18px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer', boxShadow: 'var(--shadow-neon)' }}>
             <Plus size={16} /> Create Project
           </button>
@@ -574,11 +635,18 @@ export const Projects: React.FC = () => {
                         </span>
                       </td>
                       <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
-                          className="btn btn-secondary"
-                          style={{ padding: '5px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <Eye size={13} /> {selectedId === p.id ? 'Close' : 'Detail'}
-                        </button>
+                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                          <button onClick={() => navigate(`/planning?projectId=${p.id}`)}
+                            className="btn btn-primary"
+                            style={{ padding: '5px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Compass size={13} /> Plan
+                          </button>
+                          <button onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                            className="btn btn-secondary"
+                            style={{ padding: '5px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Eye size={13} /> {selectedId === p.id ? 'Close' : 'Detail'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -610,206 +678,281 @@ export const Projects: React.FC = () => {
                     </span>
                   </div>
                 </div>
-
-                {/* Lifecycle Progress */}
-                {detail.status !== ProjectStatus.CANCELLED && (
-                  <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '10px' }}>Lifecycle</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      {LIFECYCLE_STEPS.map((step, i) => {
-                        const currentIdx = LIFECYCLE_INDEX[detail.status];
-                        const stepIdx = i;
-                        const isActive = stepIdx === currentIdx;
-                        const isPast = currentIdx >= 0 && stepIdx <= currentIdx;
-                        return (
-                          <div key={step} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-                            <div style={{
-                              width: '100%', height: '4px', borderRadius: '2px',
-                              background: isActive ? 'var(--accent-primary)' : isPast ? 'var(--accent-secondary)' : 'var(--border-color)',
-                              transition: 'background 0.3s',
-                            }} />
-                            <span style={{
-                              fontSize: '8px', fontWeight: isActive ? 700 : 400,
-                              color: isActive ? 'var(--accent-primary)' : isPast ? 'var(--text-secondary)' : 'var(--text-muted)',
-                              whiteSpace: 'nowrap',
-                            }}>
-                              {step}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Key Info */}
-                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
-                  <div>
-                    <span style={{ color: 'var(--text-muted)' }}>Client</span>
-                    <div style={{ fontWeight: 600, marginTop: '1px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Building2 size={12} style={{ color: 'var(--text-muted)' }} />
-                      {detail.client?.name || getClientName(detail.clientId)}
-                    </div>
-                  </div>
-                  <div>
-                    <span style={{ color: 'var(--text-muted)' }}>Priority</span>
-                    <div style={{ fontWeight: 600, marginTop: '1px', color: detail.priority === Priority.CRITICAL ? 'var(--priority-critical)' : detail.priority === Priority.HIGH ? 'var(--priority-high)' : 'var(--priority-medium)' }}>
-                      {detail.priority}
-                    </div>
-                  </div>
-                  {detail.startDate && (
-                    <div>
-                      <span style={{ color: 'var(--text-muted)' }}>Timeline</span>
-                      <div style={{ fontWeight: 600, marginTop: '1px' }}>
-                        {new Date(detail.startDate).toLocaleDateString()} – {detail.endDate ? new Date(detail.endDate).toLocaleDateString() : 'Ongoing'}
-                      </div>
-                    </div>
-                  )}
-                  {detail.budget != null && (
-                    <div>
-                      <span style={{ color: 'var(--text-muted)' }}>Budget</span>
-                      <div style={{ fontWeight: 600, marginTop: '1px' }}>₹{Number(detail.budget).toLocaleString()}</div>
-                    </div>
-                  )}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.01)' }}>
+                  <button type="button" onClick={() => setActiveTab('overview')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'overview' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'overview' ? '#fff' : 'var(--text-muted)', fontWeight: activeTab === 'overview' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                    📁 Overview
+                  </button>
+                  <button type="button" onClick={() => setActiveTab('branches')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'branches' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'branches' ? '#fff' : 'var(--text-muted)', fontWeight: activeTab === 'branches' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                    🏢 Branches ({projectBranches.length})
+                  </button>
+                  <button type="button" onClick={() => setActiveTab('settings')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'settings' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'settings' ? '#fff' : 'var(--text-muted)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                    ⚙️ Settings & Workflow
+                  </button>
                 </div>
 
-                {/* Scope / Description */}
-                {(detail.scope || detail.description) && (
-                  <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Scope & Description</span>
-                    {detail.scope && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>{detail.scope}</p>}
-                    {detail.description && <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '6px 0 0', lineHeight: 1.5, fontStyle: 'italic' }}>{detail.description}</p>}
+                {activeTab === 'overview' && (
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {/* Key Info */}
+                    <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)' }}>Client</span>
+                        <div style={{ fontWeight: 600, marginTop: '1px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Building2 size={12} style={{ color: 'var(--text-muted)' }} />
+                          {detail.client?.name || getClientName(detail.clientId)}
+                        </div>
+                      </div>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)' }}>Priority</span>
+                        <div style={{ fontWeight: 600, marginTop: '1px', color: detail.priority === Priority.CRITICAL ? 'var(--priority-critical)' : detail.priority === Priority.HIGH ? 'var(--priority-high)' : 'var(--priority-medium)' }}>
+                          {detail.priority}
+                        </div>
+                      </div>
+                      {detail.startDate && (
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Timeline</span>
+                          <div style={{ fontWeight: 600, marginTop: '1px' }}>
+                            {new Date(detail.startDate).toLocaleDateString()} – {detail.endDate ? new Date(detail.endDate).toLocaleDateString() : 'Ongoing'}
+                          </div>
+                        </div>
+                      )}
+                      {detail.budget != null && (
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Budget</span>
+                          <div style={{ fontWeight: 600, marginTop: '1px' }}>₹{Number(detail.budget).toLocaleString()}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Scope / Description */}
+                    {(detail.scope || detail.description) && (
+                      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Scope & Description</span>
+                        {detail.scope && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>{detail.scope}</p>}
+                        {detail.description && <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '6px 0 0', lineHeight: 1.5, fontStyle: 'italic' }}>{detail.description}</p>}
+                      </div>
+                    )}
+
+                    {/* Required Qualifications */}
+                    {(() => {
+                      const skills = detail.requiredSkills ?? [];
+                      const certs = detail.requiredCertifications ?? [];
+                      if (skills.length === 0 && certs.length === 0) return null;
+                      return (
+                        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Required Qualifications</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {skills.length > 0 && (
+                              <div>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Skills: </span>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                                  {skills.map((s, i) => (
+                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(99,102,241,0.08)', borderRadius: '4px', color: 'var(--accent-primary)', fontWeight: 500 }}>{s}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {certs.length > 0 && (
+                              <div>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Certifications: </span>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                                  {certs.map((c, i) => (
+                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(16,185,129,0.08)', borderRadius: '4px', color: 'var(--accent-secondary)', fontWeight: 500 }}>{c}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
-                {/* Required Qualifications */}
-                {(() => {
-                  const skills = detail.requiredSkills ?? [];
-                  const certs = detail.requiredCertifications ?? [];
-                  if (skills.length === 0 && certs.length === 0) return null;
+                {activeTab === 'branches' && (() => {
+                  const unassociated = allClientBranches.filter(
+                    (b: any) => !projectBranches.some((pb: any) => pb.branchId === b.id)
+                  );
+                  const suggestions = branchSearch.trim()
+                    ? unassociated.filter((b: any) =>
+                        (b.name || '').toLowerCase().includes(branchSearch.toLowerCase()) ||
+                        (b.branchCode || '').toLowerCase().includes(branchSearch.toLowerCase()) ||
+                        (b.city || '').toLowerCase().includes(branchSearch.toLowerCase())
+                      )
+                    : [];
+
                   return (
-                    <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Required Qualifications</span>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {skills.length > 0 && (
-                          <div>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Skills: </span>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                              {skills.map((s, i) => (
-                                <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(99,102,241,0.08)', borderRadius: '4px', color: 'var(--accent-primary)', fontWeight: 500 }}>{s}</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        {certs.length > 0 && (
-                          <div>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Certifications: </span>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-                              {certs.map((c, i) => (
-                                <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(16,185,129,0.08)', borderRadius: '4px', color: 'var(--accent-secondary)', fontWeight: 500 }}>{c}</span>
-                              ))}
-                            </div>
-                          </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', padding: '16px 20px', gap: '14px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                          Associated Branches ({projectBranches.length})
+                        </span>
+                        {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
+                          <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'var(--gradient-neon)', border: 'none', color: '#fff', borderRadius: 'var(--radius-sm)', fontWeight: 600, boxShadow: 'var(--shadow-neon)' }}>
+                            <Plus size={12} /> Upload Excel
+                            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                setIsSaving(true);
+                                setMessage(null);
+                                const formData = new FormData();
+                                formData.append('file', file);
+                                try {
+                                  const token = localStorage.getItem('fapoms_token');
+                                  const response = await fetch(`/api/v1/projects/${detail.id}/branches/upload`, {
+                                    method: 'POST',
+                                    headers: { 'Authorization': `Bearer ${token}` },
+                                    body: formData
+                                  });
+                                  if (!response.ok) throw new Error('Failed to upload branches sheet');
+                                  setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
+                                  loadDetail(detail.id);
+                                } catch (err: any) {
+                                  setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
+                                } finally {
+                                  setIsSaving(false);
+                                }
+                              }}
+                            />
+                          </label>
                         )}
                       </div>
+
+                      {/* Dynamic Branch Search Adder Widget */}
+                      {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>ADD BRANCH MANUALLY</span>
+                          <input type="text" value={branchSearch} onChange={e => setBranchSearch(e.target.value)} placeholder="Type branch name or code to search..."
+                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
+                          {branchSearch.trim() && (
+                            <div style={{ maxHeight: '120px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', padding: '4px' }}>
+                              {suggestions.length === 0 ? (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '6px', textAlign: 'center' }}>No matching unassociated branches found.</div>
+                              ) : (
+                                suggestions.slice(0, 10).map((b: any) => (
+                                  <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', fontSize: '11px' }}>
+                                    <div>
+                                      <span style={{ fontWeight: 600, color: '#fff' }}>{b.name}</span>
+                                      <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.branchCode})</span>
+                                    </div>
+                                    <button type="button" onClick={() => { handleAddBranch(b.id); setBranchSearch(''); }}
+                                      style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                                      + Add
+                                    </button>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {projectBranches.length === 0 ? (
+                        <div style={{ border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)', padding: '30px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <FileSpreadsheet size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
+                          <p style={{ fontSize: '12px', margin: 0 }}>No branches selected for audit yet.</p>
+                          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Search above to add manually, or upload an Excel file.</p>
+                        </div>
+                      ) : (
+                        <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {projectBranches.map((pb: any) => (
+                            <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '8px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
+                              <div>
+                                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</div>
+                                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{pb.status}</span>
+                                {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
+                                  <button type="button" onClick={() => handleRemoveBranch(pb.id)}
+                                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <X size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
 
-                {/* Associated Branches Queue */}
-                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>
-                      Audit Branches ({projectBranches.length})
-                    </span>
-                    {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
-                      <label style={{ padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', background: 'var(--gradient-neon)', border: 'none', color: '#fff', borderRadius: 'var(--radius-sm)', fontWeight: 600 }}>
-                        <Plus size={11} /> Upload Excel
-                        <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            setIsSaving(true);
-                            setMessage(null);
-                            const formData = new FormData();
-                            formData.append('file', file);
-                            try {
-                              const token = localStorage.getItem('fapoms_token');
-                              const response = await fetch(`/api/v1/projects/${detail.id}/branches/upload`, {
-                                method: 'POST',
-                                headers: { 'Authorization': `Bearer ${token}` },
-                                body: formData
-                              });
-                              if (!response.ok) throw new Error('Failed to upload branches sheet');
-                              setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
-                              loadDetail(detail.id);
-                            } catch (err: any) {
-                              setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
-                            } finally {
-                              setIsSaving(false);
-                            }
-                          }}
-                        />
-                      </label>
-                    )}
-                  </div>
-                  {projectBranches.length === 0 ? (
-                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No branches selected for audit yet.</p>
-                  ) : (
-                    <div style={{ maxHeight: '140px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      {projectBranches.map((pb: any) => (
-                        <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', padding: '6px 8px', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', borderLeft: '3px solid var(--accent-secondary)' }}>
-                          <div>
-                            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</div>
-                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{pb.branch?.city}, {pb.branch?.state}</div>
-                          </div>
-                          <span className="badge" style={{ fontSize: '9px', padding: '2px 6px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{pb.status}</span>
+                {activeTab === 'settings' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', padding: '16px 20px', gap: '16px' }}>
+                    {/* Lifecycle Progress */}
+                    {detail.status !== ProjectStatus.CANCELLED && (
+                      <div>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '10px' }}>Lifecycle</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                          {LIFECYCLE_STEPS.map((step, i) => {
+                            const currentIdx = LIFECYCLE_INDEX[detail.status];
+                            const stepIdx = i;
+                            const isActive = stepIdx === currentIdx;
+                            const isPast = currentIdx >= 0 && stepIdx <= currentIdx;
+                            return (
+                              <div key={step} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                                <div style={{
+                                  width: '100%', height: '4px', borderRadius: '2px',
+                                  background: isActive ? 'var(--accent-primary)' : isPast ? 'var(--accent-secondary)' : 'var(--border-color)',
+                                  transition: 'background 0.3s',
+                                }} />
+                                <span style={{
+                                  fontSize: '8px', fontWeight: isActive ? 700 : 400,
+                                  color: isActive ? 'var(--accent-primary)' : isPast ? 'var(--text-secondary)' : 'var(--text-muted)',
+                                  whiteSpace: 'nowrap',
+                                }}>
+                                  {step}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
-                      ))}
+                      </div>
+                    )}
+
+                    {/* Lifecycle Transitions */}
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Transitions</span>
+                      {CAN_TRANSITION[detail.status] ? (
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {TRANSITIONS[detail.status]?.map(target => (
+                            <button key={target} onClick={() => handleTransition(target)}
+                              style={{
+                                padding: '6px 12px', fontSize: '11px', borderRadius: 'var(--radius-sm)',
+                                background: target === ProjectStatus.CANCELLED ? 'rgba(239,68,68,0.08)' : 'rgba(99,102,241,0.08)',
+                                border: `1px solid ${target === ProjectStatus.CANCELLED ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.3)'}`,
+                                color: target === ProjectStatus.CANCELLED ? '#ef4444' : 'var(--accent-primary)',
+                                cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s'
+                              }}>
+                              {target === ProjectStatus.CANCELLED ? 'Cancel' : `→ ${target}`}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No transitions available for this status.</span>
+                      )}
                     </div>
-                  )}
-                </div>
+
+                    {/* Actions */}
+                    <div style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: 'auto' }}>
+                      <button onClick={() => navigate(`/planning?projectId=${detail.id}`)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
+                        <ExternalLink size={13} /> Planning Workspace
+                      </button>
+                      <button onClick={openEdit} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
+                        <Edit2 size={13} /> Edit
+                      </button>
+                      <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}>
+                        <Trash2 size={13} /> Delete
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Metadata */}
-                <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '16px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '16px', fontSize: '10px', color: 'var(--text-muted)', marginTop: 'auto', background: 'rgba(255,255,255,0.01)' }}>
                   <span>Created: {new Date(detail.createdAt).toLocaleDateString()}</span>
                   <span>Updated: {new Date(detail.updatedAt).toLocaleDateString()}</span>
-                </div>
-
-                {/* Lifecycle Transitions */}
-                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Transitions</span>
-                  {CAN_TRANSITION[detail.status] ? (
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                      {TRANSITIONS[detail.status]?.map(target => (
-                        <button key={target} onClick={() => handleTransition(target)}
-                          style={{
-                            padding: '5px 10px', fontSize: '11px', borderRadius: 'var(--radius-sm)',
-                            background: target === ProjectStatus.CANCELLED ? 'rgba(239,68,68,0.08)' : 'rgba(99,102,241,0.08)',
-                            border: `1px solid ${target === ProjectStatus.CANCELLED ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.3)'}`,
-                            color: target === ProjectStatus.CANCELLED ? '#ef4444' : 'var(--accent-primary)',
-                            cursor: 'pointer', fontWeight: 600,
-                          }}>
-                          {target === ProjectStatus.CANCELLED ? 'Cancel' : `→ ${target}`}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No transitions available for this status.</span>
-                  )}
-                </div>
-
-                {/* Actions */}
-                <div style={{ padding: '16px 20px', display: 'flex', gap: '8px', marginTop: 'auto' }}>
-                  <button onClick={() => navigate(`/planning?projectId=${detail.id}`)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
-                    <ExternalLink size={13} /> Planning
-                  </button>
-                  <button onClick={openEdit} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
-                    <Edit2 size={13} /> Edit
-                  </button>
-                  <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}>
-                    <Trash2 size={13} /> Delete
-                  </button>
                 </div>
               </>
             ) : (

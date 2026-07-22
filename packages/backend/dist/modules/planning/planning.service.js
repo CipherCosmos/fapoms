@@ -18,16 +18,19 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const branch_entity_1 = require("../branch/branch.entity");
 const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
+const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const recommendation_engine_1 = require("./recommendation.engine");
 const routing_provider_1 = require("../geo/routing.provider");
 let PlanningService = class PlanningService {
     branchRepository;
     ruleRepository;
+    commercialRepository;
     recommendationEngine;
     routingService;
-    constructor(branchRepository, ruleRepository, recommendationEngine, routingService) {
+    constructor(branchRepository, ruleRepository, commercialRepository, recommendationEngine, routingService) {
         this.branchRepository = branchRepository;
         this.ruleRepository = ruleRepository;
+        this.commercialRepository = commercialRepository;
         this.recommendationEngine = recommendationEngine;
         this.routingService = routingService;
     }
@@ -46,6 +49,11 @@ let PlanningService = class PlanningService {
                 const route = await this.routingService.calculateRoute({ latitude: branch.latitude, longitude: branch.longitude }, { latitude: r.assayer.latitude, longitude: r.assayer.longitude });
                 distanceKm = route.distanceKm;
             }
+            const profile = await this.commercialRepository.findOne({
+                where: { assayerId: r.assayer.id, isActive: true },
+                order: { effectiveStartDate: 'DESC' },
+            });
+            const baseFee = profile ? Number(profile.baseFee) : 1500;
             recommendations.push({
                 id: r.assayer.id,
                 assayerCode: r.assayer.assayerCode,
@@ -60,6 +68,7 @@ let PlanningService = class PlanningService {
                 score: r.score,
                 latitude: r.assayer.latitude,
                 longitude: r.assayer.longitude,
+                baseFee,
             });
         }
         return recommendations;
@@ -110,7 +119,9 @@ exports.PlanningService = PlanningService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(branch_entity_1.BranchEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(business_rule_entity_1.BusinessRuleEntity)),
+    __param(2, (0, typeorm_1.InjectRepository)(assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         recommendation_engine_1.RecommendationEngine,
         routing_provider_1.RoutingService])

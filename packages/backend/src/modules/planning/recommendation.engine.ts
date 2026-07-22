@@ -10,6 +10,7 @@ import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-pr
 import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
+import { ProjectBranchEntity } from '../project/project-branch.entity';
 
 export interface PlanningContext {
   branch: BranchEntity;
@@ -119,6 +120,53 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
 }
 
 @Injectable()
+export class RequiredSkillsFilter implements CandidateFilter {
+  name = 'requiredSkills';
+
+  constructor(
+    @InjectRepository(ProjectBranchEntity)
+    private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+  ) {}
+
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    const pb = await this.projectBranchRepository.findOne({
+      where: { branchId: context.branch.id, isActive: true },
+      relations: ['project'],
+    });
+
+    if (!pb || !pb.project) {
+      return true;
+    }
+
+    const project = pb.project;
+
+    // Check required skills
+    if (project.requiredSkills && project.requiredSkills.length > 0) {
+      const assayerSkills = assayer.skills || [];
+      const hasAllSkills = project.requiredSkills.every((skill: string) =>
+        assayerSkills.some((s) => s.toLowerCase() === skill.toLowerCase())
+      );
+      if (!hasAllSkills) {
+        return false;
+      }
+    }
+
+    // Check required certifications
+    if (project.requiredCertifications && project.requiredCertifications.length > 0) {
+      const assayerCerts = (assayer.certifications || []).map((c) => c.name.toLowerCase());
+      const hasAllCerts = project.requiredCertifications.every((cert: string) =>
+        assayerCerts.includes(cert.toLowerCase())
+      );
+      if (!hasAllCerts) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+}
+
+@Injectable()
 export class DistanceScoreCalculator implements ScoreCalculator {
   name = 'distance';
 
@@ -198,6 +246,16 @@ export class ExperienceScoreCalculator implements ScoreCalculator {
   }
 }
 
+function getCityTierMultiplier(city?: string): number {
+  if (!city) return 1.0;
+  const c = city.trim().toLowerCase();
+  const tier1 = ['mumbai', 'delhi', 'bangalore', 'bengaluru', 'chennai', 'kolkata', 'hyderabad', 'pune', 'ahmedabad', 'gurgaon', 'gurugram', 'noida'];
+  if (tier1.includes(c)) return 1.5;
+  const tier2 = ['jaipur', 'lucknow', 'patna', 'bhopal', 'nagpur', 'indore', 'coimbatore', 'kochi', 'visakhapatnam', 'chandigarh', 'surat', 'vadodara', 'ludhiana', 'agra', 'nashik', 'meerut', 'rajkot', 'varanasi', 'srinagar', 'aurangabad', 'amritsar', 'allahabad', 'ranchi', 'jabalpur', 'gwalior', 'vijayawada'];
+  if (tier2.includes(c)) return 1.2;
+  return 1.0;
+}
+
 @Injectable()
 export class CostScoreCalculator implements ScoreCalculator {
   name = 'cost';
@@ -226,7 +284,8 @@ export class CostScoreCalculator implements ScoreCalculator {
       return 50;
     }
 
-    const baseFee = Number(activeProfile.baseFee) || 0;
+    const multiplier = getCityTierMultiplier(context.branch.city);
+    const baseFee = (Number(activeProfile.baseFee) || 0) * multiplier;
     return Math.max(0, 100 - (baseFee / 20000) * 100);
   }
 }
@@ -330,7 +389,7 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    // Count previous completed assignments of the same client
+    // 1. Client Familiarity score
     const count = await this.assignmentRepository.count({
       where: {
         assayerId: assayer.id,
@@ -339,9 +398,42 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
         isActive: true,
       },
     });
+    let score = 50 + count * 10;
 
-    // Max boost at 5 familiarity audits
-    return Math.min(100, 50 + count * 10);
+    // 2. Same-Day Route Grouping Boost (for maximizing auditor utilization in one day)
+    if (context.scheduledDate) {
+      const sameDayAssignments = await this.assignmentRepository.find({
+        where: {
+          assayerId: assayer.id,
+          scheduledDate: context.scheduledDate,
+          isActive: true,
+        },
+        relations: ['projectBranch', 'projectBranch.branch'],
+      });
+
+      let hasNearbyGrouping = false;
+      for (const assign of sameDayAssignments) {
+        const otherBranch = assign.projectBranch?.branch;
+        if (otherBranch && otherBranch.latitude && otherBranch.longitude && context.branch.latitude && context.branch.longitude) {
+          const dist = calculateHaversineDistance(
+            Number(context.branch.latitude),
+            Number(context.branch.longitude),
+            Number(otherBranch.latitude),
+            Number(otherBranch.longitude)
+          );
+          if (dist <= 60) {
+            hasNearbyGrouping = true;
+            break;
+          }
+        }
+      }
+
+      if (hasNearbyGrouping) {
+        score += 30; // Substantial boost for multi-stop efficiency
+      }
+    }
+
+    return Math.min(100, score);
   }
 }
 
@@ -413,6 +505,7 @@ export class RecommendationEngine {
     private readonly clientRestrictionFilter: ClientRestrictionFilter,
     private readonly clientEligibilityFilter: ClientEligibilityFilter,
     private readonly ruleEngineEligibilityFilter: RuleEngineEligibilityFilter,
+    private readonly requiredSkillsFilter: RequiredSkillsFilter,
     private readonly distanceCalculator: DistanceScoreCalculator,
     private readonly travelTimeCalculator: TravelTimeScoreCalculator,
     private readonly workloadCalculator: WorkloadScoreCalculator,
@@ -435,6 +528,7 @@ export class RecommendationEngine {
       this.clientRestrictionFilter,
       this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
+      this.requiredSkillsFilter,
     );
 
     this.calculators.push(

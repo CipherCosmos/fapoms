@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SchedulingController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const class_validator_1 = require("class-validator");
 const scheduling_service_1 = require("./scheduling.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
@@ -23,10 +24,41 @@ class CreateScheduleRequestDto {
     scheduledDate;
     remarks;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateScheduleRequestDto.prototype, "assignmentId", void 0);
+__decorate([
+    (0, class_validator_1.IsDateString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateScheduleRequestDto.prototype, "scheduledDate", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], CreateScheduleRequestDto.prototype, "remarks", void 0);
 class TransitionScheduleRequestDto {
     targetStatus;
     remarks;
+    scheduledDate;
 }
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], TransitionScheduleRequestDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], TransitionScheduleRequestDto.prototype, "remarks", void 0);
+__decorate([
+    (0, class_validator_1.IsDateString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], TransitionScheduleRequestDto.prototype, "scheduledDate", void 0);
 let SchedulingController = class SchedulingController {
     schedulingService;
     constructor(schedulingService) {
@@ -61,10 +93,17 @@ let SchedulingController = class SchedulingController {
         };
     }
     async transition(id, dto, req) {
-        const schedule = await this.schedulingService.transition(id, dto.targetStatus, req.user.id, dto.remarks);
+        const schedule = await this.schedulingService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.scheduledDate);
         return {
             success: true,
             data: schedule,
+        };
+    }
+    async getTimeline(id) {
+        const timeline = await this.schedulingService.getTimeline(id);
+        return {
+            success: true,
+            data: timeline,
         };
     }
 };
@@ -107,6 +146,14 @@ __decorate([
     __metadata("design:paramtypes", [String, TransitionScheduleRequestDto, Object]),
     __metadata("design:returntype", Promise)
 ], SchedulingController.prototype, "transition", null);
+__decorate([
+    (0, common_1.Get)(':id/timeline'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get unified activity timeline for a schedule' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], SchedulingController.prototype, "getTimeline", null);
 exports.SchedulingController = SchedulingController = __decorate([
     (0, swagger_1.ApiTags)('Scheduling'),
     (0, swagger_1.ApiBearerAuth)(),

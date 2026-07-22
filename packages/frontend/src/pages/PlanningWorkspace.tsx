@@ -53,6 +53,7 @@ interface Candidate {
   latitude: number | null;
   longitude: number | null;
   score?: number;
+  baseFee?: number;
 }
 
 const STATUS_OPTIONS = [
@@ -79,6 +80,9 @@ export const PlanningWorkspace: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [stateFilter, setStateFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [cityFilter, setCityFilter] = useState('');
+  const [districtFilter, setDistrictFilter] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('ALL');
 
   const [showNegotiationModal, setShowNegotiationModal] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
@@ -225,12 +229,15 @@ export const PlanningWorkspace: React.FC = () => {
     } catch { setMessage({ type: 'error', text: 'Network request failure during unassign.' }); }
   };
 
-  const statesList = Array.from(new Set(branches.map(b => b.branch.state)));
+  const statesList = Array.from(new Set(branches.map(b => b.branch?.state).filter(Boolean)));
   const filteredBranches = branches.filter(b => {
     const q = searchTerm.toLowerCase();
-    return (b.branch.name.toLowerCase().includes(q) || b.branch.branchCode.toLowerCase().includes(q)) &&
-      (stateFilter === 'ALL' || b.branch.state === stateFilter) &&
-      (statusFilter === 'ALL' || b.status === statusFilter);
+    return (b.branch?.name.toLowerCase().includes(q) || b.branch?.branchCode.toLowerCase().includes(q)) &&
+      (stateFilter === 'ALL' || b.branch?.state === stateFilter) &&
+      (statusFilter === 'ALL' || b.status === statusFilter) &&
+      (cityFilter === '' || (b.branch?.city || '').toLowerCase().includes(cityFilter.toLowerCase())) &&
+      (districtFilter === '' || (b.branch?.district || '').toLowerCase().includes(districtFilter.toLowerCase())) &&
+      (priorityFilter === 'ALL' || b.priority === priorityFilter);
   });
   const selectedPb = branches.find(b => b.id === selectedBranchId);
   const totalCount = branches.length;
@@ -294,7 +301,12 @@ export const PlanningWorkspace: React.FC = () => {
                   className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Compass size={11} /> Route
                 </button>
-                <button onClick={() => { setSelectedCandidate(c); setShowNegotiationModal(true); }}
+                <button onClick={() => {
+                  setSelectedCandidate(c);
+                  setNegotiatingFee(c.baseFee ? c.baseFee.toString() : '1500');
+                  setNegotiatingDate(new Date().toISOString().split('T')[0]);
+                  setShowNegotiationModal(true);
+                }}
                   className="btn btn-primary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Check size={11} /> Assign
                 </button>
@@ -327,6 +339,11 @@ export const PlanningWorkspace: React.FC = () => {
         )}
         {s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'State' }, ...statesList.map(s => ({ value: s, label: s }))])}
         {s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
+        {s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'Priority' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
+        <input type="text" placeholder="City..." value={cityFilter} onChange={e => setCityFilter(e.target.value)}
+          style={{ width: '90px', padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
+        <input type="text" placeholder="District..." value={districtFilter} onChange={e => setDistrictFilter(e.target.value)}
+          style={{ width: '90px', padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <b style={{ color: 'var(--accent-primary)' }}>{totalCount}</b> branches
           <span style={{ color: 'var(--status-active)' }}>{coveragePct}%</span> confirmed
@@ -368,14 +385,28 @@ export const PlanningWorkspace: React.FC = () => {
                 filteredBranches.map(pb => {
                   const isSelected = pb.id === selectedBranchId;
                   const isAssigned = !!pb.assignment;
+                  const statusColor = isAssigned ? 'var(--status-active)' : '#f59e0b';
                   return (
                     <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
-                      style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px', background: isSelected ? 'rgba(99,102,241,0.12)' : 'transparent', borderLeft: isSelected ? '3px solid var(--accent-primary)' : '3px solid transparent' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>{pb.branch.name}</div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{pb.branch.city}, {pb.branch.state}</div>
-                      <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center' }}>
-                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: isAssigned ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{pb.status}</span>
-                        {isAssigned && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{pb.assignment?.assayer?.displayName}</span>}
+                      style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px',
+                        background: isSelected ? 'rgba(99,102,241,0.2)' : isAssigned ? 'rgba(16,185,129,0.04)' : 'transparent',
+                        borderLeft: isSelected ? '3px solid var(--accent-primary)' : isAssigned ? '3px solid rgba(16,185,129,0.4)' : '3px solid transparent',
+                        outline: isSelected ? '1px solid rgba(99,102,241,0.3)' : 'none', outlineOffset: '-1px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                          background: isSelected ? 'var(--accent-primary)' : isAssigned ? 'var(--status-active)' : '#f59e0b',
+                          boxShadow: isSelected ? '0 0 6px rgba(99,102,241,0.5)' : 'none' }} />
+                        <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff', flex: 1 }}>{pb.branch.name}</div>
+                        {isAssigned && (
+                          <span style={{ fontSize: '9px', color: 'var(--status-active)', whiteSpace: 'nowrap', fontWeight: 500 }}>✓ Assigned</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px', marginLeft: '14px' }}>{pb.branch.city}, {pb.branch.state}</div>
+                      <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center', marginLeft: '14px' }}>
+                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: statusColor, fontWeight: 500 }}>{pb.status.replace(/_/g, ' ')}</span>
+                        {isAssigned && (
+                          <span style={{ fontSize: '9px', color: 'var(--status-active)' }}>{pb.assignment?.assayer?.displayName}</span>
+                        )}
                       </div>
                     </div>
                   );
@@ -390,6 +421,7 @@ export const PlanningWorkspace: React.FC = () => {
               selectedBranchId={selectedBranchId}
               onSelectBranch={id => setSelectedBranchId(id)}
               routePoints={routePoints}
+              selectedAssayerFromParent={selectedCandidateForMap}
             />
             <div ref={drawerRef} style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -438,12 +470,25 @@ export const PlanningWorkspace: React.FC = () => {
                 const isAssigned = !!pb.assignment;
                 return (
                   <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
-                    style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px', background: isSelected ? 'rgba(99,102,241,0.12)' : 'transparent', borderLeft: isSelected ? '3px solid var(--accent-primary)' : '3px solid transparent' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>{pb.branch.name}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{pb.branch.city}, {pb.branch.state}</div>
-                    <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center' }}>
-                      <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: isAssigned ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{pb.status}</span>
-                      {isAssigned && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{pb.assignment?.assayer?.displayName}</span>}
+                    style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px',
+                      background: isSelected ? 'rgba(99,102,241,0.2)' : isAssigned ? 'rgba(16,185,129,0.04)' : 'transparent',
+                      borderLeft: isSelected ? '3px solid var(--accent-primary)' : isAssigned ? '3px solid rgba(16,185,129,0.4)' : '3px solid transparent',
+                      outline: isSelected ? '1px solid rgba(99,102,241,0.3)' : 'none', outlineOffset: '-1px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                        background: isSelected ? 'var(--accent-primary)' : isAssigned ? 'var(--status-active)' : '#f59e0b',
+                        boxShadow: isSelected ? '0 0 6px rgba(99,102,241,0.5)' : 'none' }} />
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff', flex: 1 }}>{pb.branch.name}</div>
+                      {isAssigned && (
+                        <span style={{ fontSize: '9px', color: 'var(--status-active)', whiteSpace: 'nowrap', fontWeight: 500 }}>✓</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px', marginLeft: '14px' }}>{pb.branch.city}, {pb.branch.state}</div>
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center', marginLeft: '14px' }}>
+                      <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: isAssigned ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{pb.status.replace(/_/g, ' ')}</span>
+                      {isAssigned && (
+                        <span style={{ fontSize: '9px', color: 'var(--status-active)' }}>{pb.assignment?.assayer?.displayName}</span>
+                      )}
                     </div>
                   </div>
                 );
@@ -457,6 +502,7 @@ export const PlanningWorkspace: React.FC = () => {
               selectedBranchId={selectedBranchId}
               onSelectBranch={id => setSelectedBranchId(id)}
               routePoints={routePoints}
+              selectedAssayerFromParent={selectedCandidateForMap}
             />
           </div>
 
@@ -492,6 +538,7 @@ export const PlanningWorkspace: React.FC = () => {
             selectedBranchId={selectedBranchId}
             onSelectBranch={id => setSelectedBranchId(id)}
             routePoints={routePoints}
+            selectedAssayerFromParent={selectedCandidateForMap}
           />
         </div>
       )}

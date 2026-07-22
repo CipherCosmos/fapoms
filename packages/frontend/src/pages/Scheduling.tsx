@@ -1,6 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CalendarDays, AlertCircle, RefreshCw, Calendar, Check, Globe, ShieldAlert, Plus, Search, Clock, CheckCircle2, ExternalLink } from 'lucide-react';
+import { 
+  CalendarDays, 
+  AlertCircle, 
+  RefreshCw, 
+  Calendar, 
+  Check, 
+  ShieldAlert, 
+  Plus, 
+  Search, 
+  Clock, 
+  CheckCircle2, 
+  History
+} from 'lucide-react';
 import { ScheduleStatus } from '@fapoms/shared';
 import { api } from '../services/api';
 
@@ -16,19 +27,21 @@ interface Schedule {
   assignment: { assignmentNumber: string; };
 }
 
-interface Holiday {
-  id: string;
-  name: string;
-  date: string;
-  type: string;
-  applicableStates: string[] | null;
-}
 
 interface AssignmentOption {
   id: string;
   assignmentNumber: string;
   assayer: { displayName: string; };
   projectBranch: { branch: { name: string; state: string; }; };
+}
+
+interface TimelineEvent {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  timestamp: string;
+  user: string;
 }
 
 const STATE_CODES = [
@@ -72,11 +85,8 @@ const STATE_CODES = [
 ];
 
 export const Scheduling: React.FC = () => {
-  const navigate = useNavigate();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingHolidays, setIsLoadingHolidays] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -89,14 +99,35 @@ export const Scheduling: React.FC = () => {
   const [scheduleRemarks, setScheduleRemarks] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
+  // Selected schedule detail & timeline states
+  const [selectedSchId, setSelectedSchId] = useState<string | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+
+  // Reschedule form states
+  const [newRescheduleDate, setNewRescheduleDate] = useState(new Date().toISOString().split('T')[0]);
+  const [rescheduleRemarks, setRescheduleRemarks] = useState('');
+  const [isRescheduling, setIsRescheduling] = useState(false);
+
   const [lookupDate, setLookupDate] = useState('');
   const [lookupState, setLookupState] = useState('MH');
   const [lookupResult, setLookupResult] = useState<string | null>(null);
 
   useEffect(() => {
     loadSchedules();
-    loadHolidays();
   }, []);
+
+  useEffect(() => {
+    if (selectedSchId) {
+      loadTimeline(selectedSchId);
+      const activeSch = schedules.find(s => s.id === selectedSchId);
+      if (activeSch) {
+        setNewRescheduleDate(activeSch.scheduledDate);
+      }
+    } else {
+      setTimeline([]);
+    }
+  }, [selectedSchId, schedules]);
 
   const loadSchedules = async () => {
     setIsLoading(true);
@@ -104,6 +135,9 @@ export const Scheduling: React.FC = () => {
     try {
       const data = await api.request<Schedule[]>('/schedules');
       setSchedules(data);
+      if (data.length > 0 && !selectedSchId) {
+        setSelectedSchId(data[0].id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch schedules');
     } finally {
@@ -111,15 +145,15 @@ export const Scheduling: React.FC = () => {
     }
   };
 
-  const loadHolidays = async () => {
-    setIsLoadingHolidays(true);
+  const loadTimeline = async (id: string) => {
+    setIsLoadingTimeline(true);
     try {
-      const data = await api.request<Holiday[]>('/holidays?limit=20');
-      setHolidays(data);
+      const data = await api.request<TimelineEvent[]>(`/schedules/${id}/timeline`);
+      setTimeline(data);
     } catch (err) {
-      console.error('Failed to load holiday calendar');
+      console.error('Failed to load schedule timeline events');
     } finally {
-      setIsLoadingHolidays(false);
+      setIsLoadingTimeline(false);
     }
   };
 
@@ -131,6 +165,9 @@ export const Scheduling: React.FC = () => {
       const data = await response.json();
       if (response.ok && data.success) {
         setAssignments(data.data);
+        if (data.data && data.data.length > 0) {
+          setSelectedAssignmentId(data.data[0].id);
+        }
       }
     } catch (err) {
       console.error('Failed to load assignments');
@@ -138,11 +175,11 @@ export const Scheduling: React.FC = () => {
   };
 
   const openCreateModal = () => {
-    loadAcceptedAssignments();
     setSelectedAssignmentId('');
     setScheduleDate(new Date().toISOString().split('T')[0]);
     setScheduleRemarks('');
     setShowCreateModal(true);
+    loadAcceptedAssignments();
   };
 
   const handleCreateSchedule = async (e: React.FormEvent) => {
@@ -188,13 +225,37 @@ export const Scheduling: React.FC = () => {
     try {
       await api.request(`/schedules/${id}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus, remarks: 'Updated via scheduling dashboard' }),
+        body: JSON.stringify({ targetStatus, remarks: 'Transitioned via UI dashboard' }),
       });
       loadSchedules();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to transition schedule');
     }
   };
+
+  const handleRescheduleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSchId || !newRescheduleDate) return;
+    setIsRescheduling(true);
+    try {
+      await api.request(`/schedules/${selectedSchId}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({
+          targetStatus: ScheduleStatus.RESCHEDULED,
+          scheduledDate: newRescheduleDate,
+          remarks: rescheduleRemarks || 'Audit Rescheduled via scheduling panel',
+        }),
+      });
+      setRescheduleRemarks('');
+      loadSchedules();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to reschedule audit');
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
+  const selectedSch = schedules.find(s => s.id === selectedSchId);
 
   const todayStr = new Date().toISOString().split('T')[0];
   const totalSchedules = schedules.length;
@@ -216,7 +277,7 @@ export const Scheduling: React.FC = () => {
         <div>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Scheduling Dashboard</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
-            Monitor and coordinate scheduled audits and holiday collision status. Create new schedules from accepted assignments.
+            Monitor and coordinate scheduled audits, view audit trails, and manage rescheduling date/times.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -236,6 +297,7 @@ export const Scheduling: React.FC = () => {
         </div>
       )}
 
+      {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-md)', padding: '10px', color: 'var(--accent-primary)' }}>
@@ -276,6 +338,8 @@ export const Scheduling: React.FC = () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '24px', alignItems: 'start' }}>
+        
+        {/* Left Column - List */}
         <div className="glass-card" style={{ padding: 0, overflowX: 'auto' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '12px', alignItems: 'center' }}>
             <div style={{ position: 'relative', flex: 1 }}>
@@ -316,18 +380,27 @@ export const Scheduling: React.FC = () => {
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase' }}>
-                  <th style={{ padding: '16px 24px' }}>Assignment</th>
+                  <th style={{ padding: '16px 24px' }}>Assignment ID</th>
                   <th style={{ padding: '16px 24px' }}>Project</th>
                   <th style={{ padding: '16px 24px' }}>Assayer</th>
                   <th style={{ padding: '16px 24px' }}>Date</th>
                   <th style={{ padding: '16px 24px' }}>Status</th>
-                  <th style={{ padding: '16px 24px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSchedules.map((sch) => (
-                  <tr key={sch.id} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px' }}>
-                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <tr 
+                    key={sch.id} 
+                    onClick={() => setSelectedSchId(sch.id)}
+                    style={{ 
+                      borderBottom: '1px solid var(--border-color)', 
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      background: selectedSchId === sch.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
+                      borderLeft: selectedSchId === sch.id ? '4px solid var(--accent-primary)' : '4px solid transparent'
+                    }}
+                  >
+                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text-secondary)', fontWeight: 600 }}>
                       {sch.assignment?.assignmentNumber || '-'}
                     </td>
                     <td style={{ padding: '16px 24px', fontWeight: 600 }}>{sch.project?.name || '-'}</td>
@@ -352,30 +425,6 @@ export const Scheduling: React.FC = () => {
                         {sch.status}
                       </span>
                     </td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        {sch.status === ScheduleStatus.TENTATIVE && (
-                          <button onClick={() => handleTransition(sch.id, ScheduleStatus.CONFIRMED)} className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <Check size={12} /> Confirm
-                          </button>
-                        )}
-                        {sch.status === ScheduleStatus.CONFIRMED && (
-                          <>
-                            <button onClick={() => handleTransition(sch.id, ScheduleStatus.RESCHEDULED)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px' }}>
-                              Reschedule
-                            </button>
-                            <button onClick={() => handleTransition(sch.id, ScheduleStatus.COMPLETED)} className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '12px', background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.3)', color: 'var(--status-active)' }}>
-                              Complete
-                            </button>
-                          </>
-                        )}
-                        {sch.status === ScheduleStatus.RESCHEDULED && (
-                          <button onClick={() => handleTransition(sch.id, ScheduleStatus.CONFIRMED)} className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '12px' }}>
-                            Re-confirm
-                          </button>
-                        )}
-                      </div>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -383,30 +432,123 @@ export const Scheduling: React.FC = () => {
           )}
         </div>
 
+        {/* Right Column - Schedule Details, Rescheduling Form, Audit Trail Timeline */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <div className="glass-card" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <h4 style={{ fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)' }}>
-              <ExternalLink size={14} /> Quick Links
-            </h4>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              <button onClick={() => navigate('/assignments')} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <ExternalLink size={11} /> Assignments
-              </button>
-              <button onClick={() => navigate('/planning')} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <ExternalLink size={11} /> Planning
-              </button>
-              <button onClick={() => navigate('/projects')} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <ExternalLink size={11} /> Projects
-              </button>
+          {selectedSch ? (
+            <div className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div>
+                <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Schedule Details</span>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', margin: '4px 0 2px' }}>{selectedSch.project?.name}</h4>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+                  <span>Assayer: <b>{selectedSch.assayer?.displayName}</b></span>
+                  <span>Date: <b>{new Date(selectedSch.scheduledDate).toLocaleDateString()}</b></span>
+                  <span>Assignment: <code style={{ color: 'var(--accent-secondary)' }}>{selectedSch.assignment?.assignmentNumber}</code></span>
+                </div>
+              </div>
+
+              {/* Confirm / Reschedule / Complete state control buttons */}
+              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {selectedSch.status === ScheduleStatus.TENTATIVE && (
+                  <button 
+                    onClick={() => handleTransition(selectedSch.id, ScheduleStatus.CONFIRMED)} 
+                    className="btn btn-primary" 
+                    style={{ flex: 1, padding: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                  >
+                    <Check size={14} /> Confirm Schedule
+                  </button>
+                )}
+                {selectedSch.status === ScheduleStatus.CONFIRMED && (
+                  <button 
+                    onClick={() => handleTransition(selectedSch.id, ScheduleStatus.COMPLETED)} 
+                    className="btn btn-primary" 
+                    style={{ flex: 1, padding: '8px', fontSize: '12px', background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.3)', color: 'var(--status-active)' }}
+                  >
+                    Complete Audit
+                  </button>
+                )}
+                {selectedSch.status === ScheduleStatus.RESCHEDULED && (
+                  <button 
+                    onClick={() => handleTransition(selectedSch.id, ScheduleStatus.CONFIRMED)} 
+                    className="btn btn-primary" 
+                    style={{ flex: 1, padding: '8px', fontSize: '12px' }}
+                  >
+                    Re-Confirm Schedule
+                  </button>
+                )}
+              </div>
+
+              {/* Advanced Rescheduling Date Form */}
+              {(selectedSch.status === ScheduleStatus.CONFIRMED || selectedSch.status === ScheduleStatus.RESCHEDULED) && (
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, display: 'block', marginBottom: '8px' }}>RESCHEDULE AUDIT</span>
+                  <form onSubmit={handleRescheduleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>New Target Date</label>
+                      <input 
+                        type="date" 
+                        value={newRescheduleDate} 
+                        onChange={(e) => setNewRescheduleDate(e.target.value)} 
+                        required 
+                        style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Reason / Remarks</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. Assayer requested date change..." 
+                        value={rescheduleRemarks} 
+                        onChange={(e) => setRescheduleRemarks(e.target.value)} 
+                        required 
+                        style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }}
+                      />
+                    </div>
+                    <button type="submit" disabled={isRescheduling} className="btn btn-secondary" style={{ padding: '8px', fontSize: '12px', fontWeight: 600 }}>
+                      {isRescheduling ? 'Updating Schedule...' : 'Apply Rescheduling'}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* Audit Trail Timeline */}
+              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
+                  <History size={13} style={{ color: 'var(--accent-secondary)' }} /> AUDIT TRAIL / TIMELINE
+                </span>
+                
+                {isLoadingTimeline ? (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px 0' }}>Syncing timeline trail...</div>
+                ) : timeline.length === 0 ? (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px 0' }}>No trail logs found.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
+                    {timeline.map((evt) => (
+                      <div key={evt.id} style={{ display: 'flex', gap: '10px', fontSize: '12px' }}>
+                        <div style={{ marginTop: '4px', width: '5px', height: '5px', borderRadius: '50%', background: 'var(--accent-primary)', flexShrink: 0 }} />
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: 600, color: '#fff' }}>{evt.title.replace(/_/g, ' ')}</span>
+                          <span style={{ color: 'var(--text-secondary)', fontSize: '11px', marginTop: '1px' }}>{evt.description}</span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '9px', marginTop: '2px' }}>
+                            {new Date(evt.timestamp).toLocaleString()} by {evt.user}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="glass-card" style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>
+              Select a schedule row to view details, timeline audit trails, and perform rescheduling actions.
+            </div>
+          )}
+
+          {/* Holiday collision validation widget */}
           <div className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <h4 style={{ fontSize: '15px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
               <ShieldAlert size={16} /> Holiday Collision Check
             </h4>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Verify whether a scheduled date conflicts with a regional holiday before confirming.
-            </p>
             <form onSubmit={handleCheckHoliday} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <input
@@ -454,35 +596,8 @@ export const Scheduling: React.FC = () => {
             )}
           </div>
 
-          <div className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <h4 style={{ fontSize: '15px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Globe size={16} /> Regional Calendar Directory
-            </h4>
-            {isLoadingHolidays ? (
-              <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Loading calendar data...</div>
-            ) : holidays.length === 0 ? (
-              <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>No holidays registered.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '320px', overflowY: 'auto' }}>
-                {holidays.map((h) => (
-                  <div key={h.id} style={{
-                    padding: '10px', background: 'rgba(255,255,255,0.02)',
-                    border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px'
-                  }}>
-                    <div>
-                      <span style={{ fontWeight: 600, color: '#fff', display: 'block' }}>{h.name}</span>
-                      <span style={{ color: 'var(--text-muted)' }}>Type: {h.type}</span>
-                    </div>
-                    <span style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                      {new Date(h.date).toLocaleDateString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
+
       </div>
 
       {showCreateModal && (

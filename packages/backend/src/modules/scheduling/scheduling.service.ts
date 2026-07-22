@@ -150,7 +150,7 @@ export class SchedulingService {
     return { schedules, total };
   }
 
-  async transition(id: string, targetStatus: ScheduleStatus, userId: string, remarks?: string): Promise<ScheduleEntity> {
+  async transition(id: string, targetStatus: ScheduleStatus, userId: string, remarks?: string, newScheduledDate?: string): Promise<ScheduleEntity> {
     const schedule = await this.findOne(id);
     const prevStatus = schedule.status;
 
@@ -160,6 +160,16 @@ export class SchedulingService {
 
     schedule.status = targetStatus;
     if (remarks) schedule.remarks = remarks;
+    if (newScheduledDate) {
+      schedule.scheduledDate = new Date(newScheduledDate);
+      if (schedule.assignmentId) {
+        const assignment = await this.assignmentRepository.findOne({ where: { id: schedule.assignmentId } });
+        if (assignment) {
+          assignment.scheduledDate = new Date(newScheduledDate);
+          await this.assignmentRepository.save(assignment);
+        }
+      }
+    }
     schedule.updatedBy = userId;
 
     const saved = await this.scheduleRepository.save(schedule);
@@ -176,5 +186,22 @@ export class SchedulingService {
     });
 
     return saved;
+  }
+
+  async getTimeline(scheduleId: string): Promise<any[]> {
+    const schedule = await this.findOne(scheduleId);
+    const { events } = await this.auditService.getEntityHistory('SCHEDULE', schedule.id, 100);
+    const timelineEvents: any[] = [];
+    for (const e of events) {
+      timelineEvents.push({
+        id: e.id,
+        type: 'SYSTEM_EVENT',
+        title: e.eventType,
+        description: e.remarks,
+        timestamp: e.occurredAt,
+        user: e.userDisplayName || e.userId,
+      });
+    }
+    return timelineEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }
 }

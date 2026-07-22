@@ -9,4 +9,5 @@ export declare class AssayerRemarkEntity extends BaseEntity {
     category: string;
     visibility: string;
     attachmentPaths: string[];
+    rating: number | null;
 }

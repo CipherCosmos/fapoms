@@ -22,11 +22,17 @@ const STATUS_BADGE: Record<string, { bg: string; color: string }> = {
 export const Validation: React.FC = () => {
   const [cases, setCases] = useState<ValidationCase[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  const [remarksInput, setRemarksInput] = useState('');
+  const [remarksInput, setRemarksInput] = useState('Verification approved. No discrepancies found.');
   const [notesInput, setNotesInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const selectCase = (id: string) => {
+    setSelectedCaseId(id);
+    setRemarksInput('Verification approved. No discrepancies found.');
+    setNotesInput('');
+  };
 
   useEffect(() => { loadCases(); }, []);
 
@@ -38,7 +44,7 @@ export const Validation: React.FC = () => {
       const data = await response.json();
       if (response.ok && data.success) {
         setCases(data.data);
-        if (data.data.length > 0 && !selectedCaseId) setSelectedCaseId(data.data[0].id);
+        if (data.data.length > 0 && !selectedCaseId) selectCase(data.data[0].id);
       } else setError(data.message || 'Failed to fetch validation queue');
     } catch { setError('Network connection error while fetching validation cases.'); }
     finally { setIsLoading(false); }
@@ -142,7 +148,7 @@ export const Validation: React.FC = () => {
                   {filtered.map(c => {
                     const badge = STATUS_BADGE[c.status] || STATUS_BADGE.PENDING;
                     return (
-                      <tr key={c.id} onClick={() => setSelectedCaseId(c.id)}
+                      <tr key={c.id} onClick={() => selectCase(c.id)}
                         style={{ cursor: 'pointer', background: selectedCaseId === c.id ? 'rgba(99,102,241,0.08)' : 'transparent', borderLeft: selectedCaseId === c.id ? '3px solid var(--accent-primary)' : '3px solid transparent' }}>
                         <td style={{ fontWeight: 600 }}>{c.projectBranch?.branch?.name || '—'}</td>
                         <td><span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, background: badge.bg, color: badge.color }}>{c.status}</span></td>

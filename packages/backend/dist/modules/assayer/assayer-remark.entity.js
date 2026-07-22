@@ -22,6 +22,7 @@ let AssayerRemarkEntity = class AssayerRemarkEntity extends base_entity_1.BaseEn
     category;
     visibility;
     attachmentPaths;
+    rating;
 };
 exports.AssayerRemarkEntity = AssayerRemarkEntity;
 __decorate([
@@ -57,6 +58,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'attachment_paths', type: 'jsonb', default: [] }),
     __metadata("design:type", Array)
 ], AssayerRemarkEntity.prototype, "attachmentPaths", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'decimal', precision: 3, scale: 2, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerRemarkEntity.prototype, "rating", void 0);
 exports.AssayerRemarkEntity = AssayerRemarkEntity = __decorate([
     (0, typeorm_1.Entity)('assayer_remarks'),
     (0, typeorm_1.Index)(['assayerId']),

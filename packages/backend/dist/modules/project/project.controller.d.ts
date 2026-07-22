@@ -45,4 +45,8 @@ export declare class ProjectController {
         success: boolean;
         data: import("./project-branch.entity").ProjectBranchEntity[];
     }>;
+    removeBranch(id: string, pbId: string, req: any): Promise<{
+        success: boolean;
+        data: import("./project-branch.entity").ProjectBranchEntity[];
+    }>;
 }

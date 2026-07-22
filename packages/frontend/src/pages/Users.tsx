@@ -26,6 +26,21 @@ export const Users: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Filters
+  const [searchText, setSearchText] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+
+  const filteredUsers = users.filter(u => {
+    if (searchText) {
+      const q = searchText.toLowerCase();
+      if (!u.displayName.toLowerCase().includes(q) &&
+          !u.username.toLowerCase().includes(q) &&
+          !u.email.toLowerCase().includes(q)) return false;
+    }
+    if (filterStatus !== 'ALL' && u.status !== filterStatus) return false;
+    return true;
+  });
+
   // New User Form State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [username, setUsername] = useState('');
@@ -196,13 +211,13 @@ export const Users: React.FC = () => {
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <UsersIcon size={20} style={{ color: 'var(--accent-primary)' }} />
           </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{users.length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Total Users</div></div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{filteredUsers.length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Total Users</div></div>
         </div>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <UserCheck size={20} style={{ color: 'var(--status-active)' }} />
           </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{users.filter(u => u.status === 'ACTIVE').length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Active</div></div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{filteredUsers.filter(u => u.status === 'ACTIVE').length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Active</div></div>
         </div>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -231,6 +246,27 @@ export const Users: React.FC = () => {
         </div>
       )}
 
+      {/* Filter Bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
+          <input type="text" placeholder="Search by name, username, email..." value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: '100%', padding: '8px 12px 8px 34px', fontSize: '13px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}
+          />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+          </svg>
+        </div>
+        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as any)}
+          style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+          <option value="ALL">All Status</option>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </select>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} users</span>
+      </div>
+
       {/* Main Grid View */}
       <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: '24px', alignItems: 'start' }}>
         
@@ -238,7 +274,7 @@ export const Users: React.FC = () => {
         <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
           <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: '15px', fontWeight: 600 }}>Active Users Directory</span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{users.length} registered accounts</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} registered accounts</span>
           </div>
 
           {isLoading ? (
@@ -255,7 +291,9 @@ export const Users: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
+                {filteredUsers.length === 0 ? (
+                  <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No users match filters.</td></tr>
+                ) : (filteredUsers.map((u) => (
                   <tr key={u.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                     <td style={{ padding: '14px 24px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -275,7 +313,8 @@ export const Users: React.FC = () => {
                           <span key={r.id} style={{ fontSize: '10px', background: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
                             {r.name.replace(/_/g, ' ')}
                           </span>
-                        ))}
+                ))}
+                )}  
                         {u.roles.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No roles assigned</span>}
                       </div>
                     </td>

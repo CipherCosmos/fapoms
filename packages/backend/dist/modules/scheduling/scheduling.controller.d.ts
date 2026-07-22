@@ -8,6 +8,7 @@ declare class CreateScheduleRequestDto implements CreateScheduleDto {
 declare class TransitionScheduleRequestDto {
     targetStatus: ScheduleStatus;
     remarks?: string;
+    scheduledDate?: string;
 }
 export declare class SchedulingController {
     private readonly schedulingService;
@@ -34,6 +35,10 @@ export declare class SchedulingController {
     transition(id: string, dto: TransitionScheduleRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./schedule.entity").ScheduleEntity;
+    }>;
+    getTimeline(id: string): Promise<{
+        success: boolean;
+        data: any[];
     }>;
 }
 export {};

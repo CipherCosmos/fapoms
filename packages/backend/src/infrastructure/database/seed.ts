@@ -655,6 +655,11 @@ async function seed() {
           location: { type: 'Point', coordinates: [ad.longitude, ad.latitude] },
           status: 'ACTIVE',
           lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+          skills: ['Gold', 'Gold Valuation', 'Agricultural Audit', 'Financial Auditing'],
+          certifications: [
+            { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+            { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' }
+          ],
           organizationId: defaultOrg.id,
           createdBy: 'system',
           updatedBy: 'system',

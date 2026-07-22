@@ -131,7 +131,7 @@ let SchedulingService = class SchedulingService {
         });
         return { schedules, total };
     }
-    async transition(id, targetStatus, userId, remarks) {
+    async transition(id, targetStatus, userId, remarks, newScheduledDate) {
         const schedule = await this.findOne(id);
         const prevStatus = schedule.status;
         if (!(0, shared_1.isValidTransition)(shared_1.SCHEDULE_TRANSITIONS, prevStatus, targetStatus)) {
@@ -140,6 +140,16 @@ let SchedulingService = class SchedulingService {
         schedule.status = targetStatus;
         if (remarks)
             schedule.remarks = remarks;
+        if (newScheduledDate) {
+            schedule.scheduledDate = new Date(newScheduledDate);
+            if (schedule.assignmentId) {
+                const assignment = await this.assignmentRepository.findOne({ where: { id: schedule.assignmentId } });
+                if (assignment) {
+                    assignment.scheduledDate = new Date(newScheduledDate);
+                    await this.assignmentRepository.save(assignment);
+                }
+            }
+        }
         schedule.updatedBy = userId;
         const saved = await this.scheduleRepository.save(schedule);
         await this.auditService.recordEvent({
@@ -153,6 +163,22 @@ let SchedulingService = class SchedulingService {
             remarks: remarks ?? `Transitioned schedule to ${targetStatus}`,
         });
         return saved;
+    }
+    async getTimeline(scheduleId) {
+        const schedule = await this.findOne(scheduleId);
+        const { events } = await this.auditService.getEntityHistory('SCHEDULE', schedule.id, 100);
+        const timelineEvents = [];
+        for (const e of events) {
+            timelineEvents.push({
+                id: e.id,
+                type: 'SYSTEM_EVENT',
+                title: e.eventType,
+                description: e.remarks,
+                timestamp: e.occurredAt,
+                user: e.userDisplayName || e.userId,
+            });
+        }
+        return timelineEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
 };
 exports.SchedulingService = SchedulingService;

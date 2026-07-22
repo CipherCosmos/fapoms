@@ -8,6 +8,7 @@ const assignment_entity_1 = require("../assignment/assignment.entity");
 const routing_provider_1 = require("../geo/routing.provider");
 const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const client_entity_1 = require("../client/client.entity");
+const project_branch_entity_1 = require("../project/project-branch.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
 describe('RecommendationEngine', () => {
@@ -18,11 +19,15 @@ describe('RecommendationEngine', () => {
     const mockAssignmentRepo = {
         findOne: jest.fn(),
         count: jest.fn(),
+        find: jest.fn(),
     };
     const mockCommercialRepo = {
         find: jest.fn(),
     };
     const mockClientRepo = {
+        findOne: jest.fn(),
+    };
+    const mockProjectBranchRepo = {
         findOne: jest.fn(),
     };
     const mockRoutingService = {
@@ -39,6 +44,7 @@ describe('RecommendationEngine', () => {
                 recommendation_engine_1.ClientRestrictionFilter,
                 recommendation_engine_1.ClientEligibilityFilter,
                 recommendation_engine_1.RuleEngineEligibilityFilter,
+                recommendation_engine_1.RequiredSkillsFilter,
                 recommendation_engine_1.DistanceScoreCalculator,
                 recommendation_engine_1.TravelTimeScoreCalculator,
                 recommendation_engine_1.WorkloadScoreCalculator,
@@ -68,6 +74,10 @@ describe('RecommendationEngine', () => {
                     useValue: mockClientRepo,
                 },
                 {
+                    provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
+                    useValue: mockProjectBranchRepo,
+                },
+                {
                     provide: routing_provider_1.RoutingService,
                     useValue: mockRoutingService,
                 },
@@ -78,6 +88,7 @@ describe('RecommendationEngine', () => {
             ],
         }).compile();
         engine = module.get(recommendation_engine_1.RecommendationEngine);
+        mockAssignmentRepo.find.mockResolvedValue([]);
         jest.clearAllMocks();
     });
     it('should filter out inactive assayers', async () => {

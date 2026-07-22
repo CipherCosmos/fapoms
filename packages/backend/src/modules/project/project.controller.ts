@@ -140,4 +140,19 @@ export class ProjectController {
       data: list,
     };
   }
+
+  @Delete(':id/branches/:pbId')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @ApiOperation({ summary: 'Remove a branch association from a project' })
+  async removeBranch(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('pbId', ParseUUIDPipe) pbId: string,
+    @Req() req: any
+  ) {
+    const list = await this.projectService.removeProjectBranch(id, pbId, req.user.id);
+    return {
+      success: true,
+      data: list,
+    };
+  }
 }

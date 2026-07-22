@@ -59,6 +59,7 @@ class CreateAssayerRequestDto {
     workingHours;
     maxDailyWorkload;
     maxWeeklyWorkload;
+    eligibleClients;
 }
 __decorate([
     (0, class_validator_1.IsString)(),
@@ -255,6 +256,11 @@ __decorate([
     (0, class_validator_1.IsInt)(),
     __metadata("design:type", Number)
 ], CreateAssayerRequestDto.prototype, "maxWeeklyWorkload", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], CreateAssayerRequestDto.prototype, "eligibleClients", void 0);
 class UpdateAssayerRequestDto {
     firstName;
     lastName;
@@ -296,6 +302,7 @@ class UpdateAssayerRequestDto {
     workingHours;
     maxDailyWorkload;
     maxWeeklyWorkload;
+    eligibleClients;
 }
 __decorate([
     (0, class_validator_1.IsOptional)(),
@@ -497,6 +504,11 @@ __decorate([
     (0, class_validator_1.IsInt)(),
     __metadata("design:type", Number)
 ], UpdateAssayerRequestDto.prototype, "maxWeeklyWorkload", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], UpdateAssayerRequestDto.prototype, "eligibleClients", void 0);
 class CreateWorkforceAttributeRequestDto {
     type;
     name;
@@ -808,6 +820,7 @@ class CreateRemarkRequestDto {
     category;
     visibility;
     attachmentPaths;
+    rating;
 }
 exports.CreateRemarkRequestDto = CreateRemarkRequestDto;
 __decorate([
@@ -830,11 +843,17 @@ __decorate([
     (0, class_validator_1.IsArray)(),
     __metadata("design:type", Array)
 ], CreateRemarkRequestDto.prototype, "attachmentPaths", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], CreateRemarkRequestDto.prototype, "rating", void 0);
 class UpdateRemarkRequestDto {
     content;
     category;
     visibility;
     attachmentPaths;
+    rating;
 }
 exports.UpdateRemarkRequestDto = UpdateRemarkRequestDto;
 __decorate([
@@ -857,6 +876,11 @@ __decorate([
     (0, class_validator_1.IsArray)(),
     __metadata("design:type", Array)
 ], UpdateRemarkRequestDto.prototype, "attachmentPaths", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateRemarkRequestDto.prototype, "rating", void 0);
 class UpdateAssayerDocumentRequestDto {
     documentType;
     fileName;
@@ -927,6 +951,13 @@ let AssayerController = class AssayerController {
     }
     async findOne(id) {
         const assayer = await this.assayerService.findOne(id);
+        return {
+            success: true,
+            data: assayer,
+        };
+    }
+    async getProfile(assayerId) {
+        const assayer = await this.assayerService.getProfile(assayerId);
         return {
             success: true,
             data: assayer,
@@ -1108,6 +1139,14 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Get)(':assayerId/profile'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get detailed profile with stats for an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "getProfile", null);
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),

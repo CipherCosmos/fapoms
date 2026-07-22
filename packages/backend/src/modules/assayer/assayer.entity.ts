@@ -152,4 +152,25 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ name: 'eligible_clients', type: 'jsonb', nullable: true })
   eligibleClients: string[] | null;
+
+  @Column({ name: 'total_assignments', type: 'int', default: 0 })
+  totalAssignments: number;
+
+  @Column({ name: 'completed_assignments', type: 'int', default: 0 })
+  completedAssignments: number;
+
+  @Column({ name: 'cancelled_assignments', type: 'int', default: 0 })
+  cancelledAssignments: number;
+
+  @Column({ name: 'on_time_completions', type: 'int', default: 0 })
+  onTimeCompletions: number;
+
+  @Column({ name: 'total_earnings', type: 'decimal', precision: 14, scale: 2, default: 0 })
+  totalEarnings: number;
+
+  @Column({ name: 'last_assignment_date', type: 'timestamptz', nullable: true })
+  lastAssignmentDate: Date | null;
+
+  @Column({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 })
+  averageRating: number;
 }

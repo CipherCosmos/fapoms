@@ -52,4 +52,5 @@ export declare class AssignmentService implements OnModuleInit {
     getTimeline(assignmentId: string): Promise<any[]>;
     checkSlaBreaches(): Promise<number>;
     getDashboardSummary(): Promise<any>;
+    private updateAssayerStats;
 }

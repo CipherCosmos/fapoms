@@ -8,6 +8,7 @@ interface MapBranch {
   latitude: number | null;
   longitude: number | null;
   status: string;
+  city?: string;
 }
 
 interface InteractivePlanningMapProps {
@@ -48,20 +49,58 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
   const activeRoutePolylineRef = useRef<L.Polyline | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
 
-  // GIP Layer state configuration
-  const [showBranches, setShowBranches] = useState(true);
-  const [showRoutes, setShowRoutes] = useState(true);
-  
-  // Phase 4 Analytics Layers states
-  const [showSlaRisk, setShowSlaRisk] = useState(false);
-  const [showWorkforceDensity, setShowWorkforceDensity] = useState(false);
-  const [showRevenueDensity, setShowRevenueDensity] = useState(false);
+  // GIP Layer state configuration (persisted in localStorage)
+  const [showBranches, setShowBranches] = useState(() => localStorage.getItem('map_showBranches') !== 'false');
+  const [showRoutes, setShowRoutes] = useState(() => localStorage.getItem('map_showRoutes') !== 'false');
+  const [showAssayers, setShowAssayers] = useState(() => localStorage.getItem('map_showAssayers') !== 'false');
 
-  // Basemap selection state
-  const [useGoogleMap, setUseGoogleMap] = useState(false);
+  useEffect(() => localStorage.setItem('map_showBranches', String(showBranches)), [showBranches]);
+  useEffect(() => localStorage.setItem('map_showRoutes', String(showRoutes)), [showRoutes]);
+  useEffect(() => localStorage.setItem('map_showAssayers', String(showAssayers)), [showAssayers]);
 
-  // Radius search filter config
-  const [radiusKm, setRadiusKm] = useState<number>(300);
+  // Phase 4 Analytics Layers states (persisted in localStorage)
+  const [showSlaRisk, setShowSlaRisk] = useState(() => localStorage.getItem('map_showSlaRisk') === 'true');
+  const [showWorkforceDensity, setShowWorkforceDensity] = useState(() => localStorage.getItem('map_showWorkforceDensity') === 'true');
+  const [showRevenueDensity, setShowRevenueDensity] = useState(() => localStorage.getItem('map_showRevenueDensity') === 'true');
+
+  useEffect(() => localStorage.setItem('map_showSlaRisk', String(showSlaRisk)), [showSlaRisk]);
+  useEffect(() => localStorage.setItem('map_showWorkforceDensity', String(showWorkforceDensity)), [showWorkforceDensity]);
+  useEffect(() => localStorage.setItem('map_showRevenueDensity', String(showRevenueDensity)), [showRevenueDensity]);
+
+  // Basemap selection state (persisted in localStorage)
+  const [mapStyle, setMapStyle] = useState<'voyager' | 'dark' | 'satellite'>(() => {
+    const saved = localStorage.getItem('map_style');
+    return (saved === 'voyager' || saved === 'dark' || saved === 'satellite') ? saved : 'dark';
+  });
+  const [showLegend, setShowLegend] = useState(false);
+
+  useEffect(() => localStorage.setItem('map_style', mapStyle), [mapStyle]);
+
+  // Radius search filter config (persisted in localStorage)
+  const [radiusKm, setRadiusKm] = useState<number>(() => {
+    const saved = localStorage.getItem('map_radiusKm');
+    return saved ? Number(saved) : 300;
+  });
+
+  useEffect(() => localStorage.setItem('map_radiusKm', String(radiusKm)), [radiusKm]);
+
+  // Filter states (persisted)
+  const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('map_searchQuery') || '');
+  const [cityFilter, setCityFilter] = useState(() => localStorage.getItem('map_cityFilter') || '');
+  const [branchStatusFilter, setBranchStatusFilter] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('map_branchStatusFilter') || '[]'); } catch { return []; }
+  });
+
+  useEffect(() => localStorage.setItem('map_searchQuery', searchQuery), [searchQuery]);
+  useEffect(() => localStorage.setItem('map_cityFilter', cityFilter), [cityFilter]);
+  useEffect(() => localStorage.setItem('map_branchStatusFilter', JSON.stringify(branchStatusFilter)), [branchStatusFilter]);
+
+  const filteredBranches = branches.filter(b => {
+    if (searchQuery && !b.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (cityFilter && !(b.city || '').toLowerCase().includes(cityFilter.toLowerCase())) return false;
+    if (branchStatusFilter.length > 0 && !branchStatusFilter.includes(b.status)) return false;
+    return true;
+  });
 
   // Real-time routing overlay states
   const [selectedAssayerForRouting, setSelectedAssayerForRouting] = useState<any | null>(null);
@@ -72,6 +111,16 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
 
   // Real Assayers coordinates list loaded from API
   const [realAssayers, setRealAssayers] = useState<any[]>([]);
+
+  const filteredAssayers = realAssayers.filter(a => {
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const nameMatch = ((a.firstName || '') + ' ' + (a.lastName || '')).toLowerCase().includes(q);
+      const codeMatch = (a.assayerCode || '').toLowerCase().includes(q);
+      if (!nameMatch && !codeMatch) return false;
+    }
+    return true;
+  });
 
   // Synchronize parent selected assayer to map routing state
   useEffect(() => {
@@ -173,13 +222,16 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
       tileLayerRef.current.remove();
     }
 
-    const tileUrl = useGoogleMap 
+    const tileUrl = mapStyle === 'satellite'
       ? 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}' // Google Hybrid Satellite
-      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'; // OpenStreetMap
+      : mapStyle === 'dark'
+      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' // CartoDB Dark Matter
+      : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'; // CartoDB Voyager
 
+    const isSatellite = mapStyle === 'satellite';
     tileLayerRef.current = L.tileLayer(tileUrl, {
-      subdomains: useGoogleMap ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c'],
-      attribution: useGoogleMap ? '&copy; Google Maps' : '&copy; OpenStreetMap contributors',
+      subdomains: isSatellite ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c', 'd'],
+      attribution: isSatellite ? '&copy; Google Maps' : '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
 
     // Clear old markers
@@ -211,7 +263,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
 
     // Layer 1: Branches
     if (showBranches) {
-      branches.forEach((b) => {
+      filteredBranches.forEach((b) => {
         if (b.latitude !== null && b.longitude !== null) {
           const lat = Number(b.latitude);
           const lng = Number(b.longitude);
@@ -274,8 +326,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
     }
 
     // Branch Proximity Search Radius Circle and Assayer Markers
+    // 1. Draw search radius circle if branch is selected
     if (selectedBranchLatLng) {
-      // 1. Draw search radius circle
       const searchCircle = L.circle(selectedBranchLatLng, {
         radius: radiusKm * 1000,
         color: '#8b5cf6',
@@ -285,65 +337,110 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
         dashArray: '4, 6'
       }).addTo(map);
       circlesRef.current.push(searchCircle);
-
-      // 2. Render assayers within straight-line radius
-      realAssayers.forEach((assayer) => {
-        if (assayer.latitude !== null && assayer.longitude !== null) {
-          const aLat = Number(assayer.latitude);
-          const aLng = Number(assayer.longitude);
-          const straightDist = calculateHaversineDistance(selectedBranchLatLng![0], selectedBranchLatLng![1], aLat, aLng);
-
-          if (straightDist <= radiusKm) {
-            const assayerSvg = `
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#a855f7" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
-                <!-- Auditor User Avatar -->
-                <circle cx="12" cy="12" r="10" fill="none" stroke="#a855f7" stroke-width="2"/>
-                <path d="M12 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V18h14v-1.5c0-2.33-4.67-3.5-7-3.5z"/>
-              </svg>
-            `;
-
-            const assayerIcon = L.divIcon({
-              html: assayerSvg,
-              className: 'custom-assayer-marker',
-              iconSize: [24, 24],
-              iconAnchor: [12, 24],
-            });
-
-            const assayerMarker = L.marker([aLat, aLng], { icon: assayerIcon })
-              .addTo(map)
-              .on('click', () => {
-                setSelectedAssayerForRouting({
-                  ...assayer,
-                  straightDistance: straightDist,
-                  aLat,
-                  aLng,
-                  bLat: selectedBranchLatLng![0],
-                  bLng: selectedBranchLatLng![1],
-                  branchName: selectedBranch?.name || 'Target Branch'
-                });
-              });
-
-            markersRef.current[`assayer-${assayer.id}`] = assayerMarker;
-          }
-        }
-      });
     }
 
-    // GIP Phase 4 Analytics Layer: Workforce Density
-    if (showWorkforceDensity && realAssayers.length > 0 && !selectedBranchLatLng) {
-      realAssayers.forEach((assayer) => {
-        if (assayer.latitude !== null && assayer.longitude !== null) {
-          const lat = Number(assayer.latitude);
-          const lng = Number(assayer.longitude);
-          const densityCircle = L.circle([lat, lng], {
-            radius: 50000,
-            color: '#10b981',
-            fillColor: '#10b981',
-            fillOpacity: 0.15,
-            weight: 1
-          }).addTo(map);
-          circlesRef.current.push(densityCircle);
+    // 2. Render Assayers
+    if (showAssayers) {
+      filteredAssayers.forEach((assayer) => {
+      if (assayer.latitude !== null && assayer.longitude !== null) {
+        const aLat = Number(assayer.latitude);
+        const aLng = Number(assayer.longitude);
+
+        let shouldRender = false;
+        let straightDist = 0;
+
+        if (selectedBranchLatLng) {
+          straightDist = calculateHaversineDistance(selectedBranchLatLng[0], selectedBranchLatLng[1], aLat, aLng);
+          if (straightDist <= radiusKm) {
+            shouldRender = true;
+          }
+        } else {
+          // National coverage: show all assayers!
+          shouldRender = true;
         }
+
+        if (shouldRender) {
+          const assayerSvg = `
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#a855f7" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
+              <!-- Auditor User Avatar -->
+              <circle cx="12" cy="12" r="10" fill="none" stroke="#a855f7" stroke-width="2"/>
+              <path d="M12 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V18h14v-1.5c0-2.33-4.67-3.5-7-3.5z"/>
+            </svg>
+          `;
+
+          const assayerIcon = L.divIcon({
+            html: assayerSvg,
+            className: 'custom-assayer-marker',
+            iconSize: [24, 24],
+            iconAnchor: [12, 24],
+          });
+
+          const assayerMarker = L.marker([aLat, aLng], { icon: assayerIcon })
+            .addTo(map);
+
+          if (selectedBranchLatLng) {
+            assayerMarker.on('click', () => {
+              setSelectedAssayerForRouting({
+                ...assayer,
+                straightDistance: straightDist,
+                aLat,
+                aLng,
+                bLat: selectedBranchLatLng[0],
+                bLng: selectedBranchLatLng[1],
+                branchName: selectedBranch?.name || 'Target Branch'
+              });
+            });
+          } else {
+            assayerMarker.bindPopup(`
+              <div style="color:#000; font-family:sans-serif; font-size:12px; min-width: 140px;">
+                <b style="color:#a855f7; display:block; margin-bottom: 4px;">${assayer.firstName} ${assayer.lastName}</b>
+                <div>Code: <b>${assayer.assayerCode}</b></div>
+                <div>Status: <span style="color:var(--status-active)">${assayer.status}</span></div>
+                <div>Skills: <i>${assayer.skills?.join(', ') || 'gold'}</i></div>
+              </div>
+            `);
+          }
+
+          markersRef.current[`assayer-${assayer.id}`] = assayerMarker;
+        }
+      }
+    });
+    }
+
+    // 3. Render Audit Density Heat Overlay
+    if (showWorkforceDensity && filteredBranches.length > 0) {
+      const cityCounts: Record<string, { lat: number; lng: number; count: number }> = {};
+      filteredBranches.forEach((b) => {
+        if (b.latitude !== null && b.longitude !== null && b.city) {
+          const lat = Number(b.latitude);
+          const lng = Number(b.longitude);
+          if (!cityCounts[b.city]) {
+            cityCounts[b.city] = { lat, lng, count: 0 };
+          }
+          cityCounts[b.city].count += 1;
+        }
+      });
+
+      Object.entries(cityCounts).forEach(([city, data]) => {
+        const isHigh = data.count >= 2;
+        const color = isHigh ? '#ef4444' : '#10b981';
+        const densityCircle = L.circle([data.lat, data.lng], {
+          radius: Math.min(120000, data.count * 25000),
+          color: color,
+          fillColor: color,
+          fillOpacity: 0.12,
+          weight: 1.5,
+          dashArray: isHigh ? 'none' : '4, 6'
+        }).addTo(map);
+
+        densityCircle.bindPopup(`
+          <div style="color:#000; font-size:11px; font-family:sans-serif; min-width: 120px;">
+            <b style="display:block; margin-bottom: 4px;">${city} Audit Density</b>
+            <div>Audit sites: <b>${data.count}</b></div>
+            <div style="margin-top: 4px; font-weight:600; color:${color}">${isHigh ? '🔥 High Volume' : 'Standard Volume'}</div>
+          </div>
+        `);
+        circlesRef.current.push(densityCircle);
       });
     }
 
@@ -393,7 +490,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
         map.fitBounds(bounds, { padding: [30, 30] });
       }
     }
-  }, [branches, selectedBranchId, routePoints, showBranches, showRoutes, showSlaRisk, showWorkforceDensity, showRevenueDensity, realAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, useGoogleMap]);
+  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter]);
 
   // Travel math calculations based on OSRM real road distance
   const actualDistance = roadDistanceKm !== null ? roadDistanceKm : (selectedAssayerForRouting?.straightDistance || 0);
@@ -408,8 +505,22 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
 
   return (
     <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative', flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
         <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Geographic Workspace Map</h4>
+        <MapLayerControls 
+          showBranches={showBranches} setShowBranches={setShowBranches}
+          showAssayers={showAssayers} setShowAssayers={setShowAssayers}
+          showRoutes={showRoutes} setShowRoutes={setShowRoutes}
+          showSlaRisk={showSlaRisk} setShowSlaRisk={setShowSlaRisk}
+          showWorkforceDensity={showWorkforceDensity} setShowWorkforceDensity={setShowWorkforceDensity}
+          showRevenueDensity={showRevenueDensity} setShowRevenueDensity={setShowRevenueDensity}
+          mapStyle={mapStyle} setMapStyle={setMapStyle}
+          radiusKm={radiusKm} setRadiusKm={setRadiusKm}
+          searchQuery={searchQuery} setSearchQuery={setSearchQuery}
+          cityFilter={cityFilter} setCityFilter={setCityFilter}
+          branchStatusFilter={branchStatusFilter} setBranchStatusFilter={setBranchStatusFilter}
+          inline
+        />
       </div>
       
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
@@ -425,32 +536,81 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
           }} 
         />
 
-        {/* Floating Proximity Radius Control Widget */}
-        <div style={{
-          position: 'absolute',
-          top: '10px',
-          left: '50px',
-          zIndex: 1000,
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border-color)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          fontSize: '11px',
-          color: '#fff'
-        }}>
-          <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>Radius:</span>
-          <input 
-            type="number" 
-            value={radiusKm} 
-            onChange={(e) => setRadiusKm(Math.max(1, Number(e.target.value)))}
-            style={{ width: '40px', padding: '2px 4px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-xs)', color: '#fff', outline: 'none', textAlign: 'center', fontSize: '11px' }} 
-          />
-          <span style={{ color: 'var(--text-muted)' }}>km</span>
-        </div>
+        {/* Collapsible Map Legend */}
+        {showLegend ? (
+          <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '20px',
+            zIndex: 1000,
+            background: 'rgba(21, 23, 30, 0.9)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 14px',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            fontSize: '11px',
+            color: '#fff',
+            minWidth: '160px'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '4px' }}>
+              <span style={{ fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-primary)' }}>Map Legend</span>
+              <button type="button" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}>&times;</button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#6366f1' }} />
+              <span>Selected Target</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }} />
+              <span>Planning Queue</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
+              <span>Scheduled/Confirmed</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#a855f7' }} />
+              <span>Assayer (Auditor)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', border: '1px dashed #ef4444', background: 'rgba(239,68,68,0.1)' }} />
+              <span>🔥 High Audit Demand</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', border: '1px dashed #10b981', background: 'rgba(16,185,129,0.1)' }} />
+              <span>Standard Audit Demand</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', border: '1px dashed #8b5cf6', background: 'rgba(139,92,246,0.1)' }} />
+              <span>Search Radius ({radiusKm}km)</span>
+            </div>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setShowLegend(true)} style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '20px',
+            zIndex: 1000,
+            background: 'rgba(21, 23, 30, 0.85)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '6px 10px',
+            color: '#fff',
+            fontSize: '11px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+            transition: 'all 0.2s',
+            outline: 'none'
+          }}>
+            🗺️ Show Legend
+          </button>
+        )}
 
       {/* Floating Route Intelligence Panel */}
       {selectedAssayerForRouting && (
@@ -520,15 +680,6 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
           </div>
         </div>
       )}
-
-      <MapLayerControls 
-        showBranches={showBranches} setShowBranches={setShowBranches}
-        showRoutes={showRoutes} setShowRoutes={setShowRoutes}
-        showSlaRisk={showSlaRisk} setShowSlaRisk={setShowSlaRisk}
-        showWorkforceDensity={showWorkforceDensity} setShowWorkforceDensity={setShowWorkforceDensity}
-        showRevenueDensity={showRevenueDensity} setShowRevenueDensity={setShowRevenueDensity}
-        useGoogleMap={useGoogleMap} setUseGoogleMap={setUseGoogleMap}
-      />
       </div>
     </div>
   );

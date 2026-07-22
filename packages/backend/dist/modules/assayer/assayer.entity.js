@@ -61,6 +61,13 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     maxDailyWorkload;
     maxWeeklyWorkload;
     eligibleClients;
+    totalAssignments;
+    completedAssignments;
+    cancelledAssignments;
+    onTimeCompletions;
+    totalEarnings;
+    lastAssignmentDate;
+    averageRating;
 };
 exports.AssayerEntity = AssayerEntity;
 __decorate([
@@ -252,6 +259,34 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'eligible_clients', type: 'jsonb', nullable: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "eligibleClients", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'total_assignments', type: 'int', default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "totalAssignments", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'completed_assignments', type: 'int', default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "completedAssignments", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'cancelled_assignments', type: 'int', default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "cancelledAssignments", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'on_time_completions', type: 'int', default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "onTimeCompletions", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'total_earnings', type: 'decimal', precision: 14, scale: 2, default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "totalEarnings", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'last_assignment_date', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "lastAssignmentDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "averageRating", void 0);
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),

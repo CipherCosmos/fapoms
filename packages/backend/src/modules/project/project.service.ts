@@ -452,4 +452,28 @@ export class ProjectService implements OnModuleInit {
 
     return this.findProjectBranches(project.id);
   }
+
+  /**
+   * Remove a branch association link from a project.
+   */
+  async removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]> {
+    const pb = await this.projectBranchRepository.findOne({
+      where: { id: projectBranchId, projectId, isActive: true },
+    });
+    if (pb) {
+      pb.isActive = false;
+      pb.updatedBy = userId;
+      await this.projectBranchRepository.save(pb);
+
+      await this.auditService.recordEvent({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'PROJECT_BRANCH_REMOVED',
+        entityType: 'PROJECT',
+        entityId: projectId,
+        userId,
+        remarks: `Removed branch association link ${projectBranchId}`,
+      });
+    }
+    return this.findProjectBranches(projectId);
+  }
 }

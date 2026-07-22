@@ -11,6 +11,36 @@ import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 
+async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
+  const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
+    .replace(/\s+/g, ' ')
+    .trim();
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
+      }
+    });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json() as any[];
+      if (data && data[0]) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lng: parseFloat(data[0].lon)
+        };
+      }
+    }
+  } catch (err) {
+    console.error(`Error geocoding inside assayer service: ${cleanQ}`, err);
+  }
+  return null;
+}
+
 const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
   [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.INACTIVE],
@@ -71,6 +101,7 @@ export interface CreateAssayerDto {
   workingHours?: { start: string; end: string };
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
+  eligibleClients?: string[];
 }
 
 export interface UpdateAssayerDto {
@@ -113,6 +144,7 @@ export interface UpdateAssayerDto {
   workingHours?: { start: string; end: string };
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
+  eligibleClients?: string[];
 }
 
 export interface CreateGovernmentDocumentDto {
@@ -147,6 +179,7 @@ export interface CreateRemarkDto {
   category: string;
   visibility: string;
   attachmentPaths?: string[];
+  rating?: number;
 }
 
 export interface UpdateRemarkDto {
@@ -154,6 +187,7 @@ export interface UpdateRemarkDto {
   category?: string;
   visibility?: string;
   attachmentPaths?: string[];
+  rating?: number;
 }
 
 export interface UpdateAssayerDocumentDto {
@@ -205,15 +239,26 @@ export class AssayerService {
     const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
     if (existing) throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
 
-    let location = null;
-    if (dto.latitude && dto.longitude) {
-      location = { type: 'Point', coordinates: [dto.longitude, dto.latitude] };
+    let lat = dto.latitude;
+    let lng = dto.longitude;
+    if (!lat || !lng) {
+      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+      if (coords) {
+        lat = coords.lat;
+        lng = coords.lng;
+      } else {
+        lat = 19.076;
+        lng = 72.8777;
+      }
     }
+    const location = { type: 'Point', coordinates: [lng, lat] };
 
     const assayer = this.assayerRepository.create({
       ...dto,
       joiningDate: dto.joiningDate ? new Date(dto.joiningDate) : null,
       displayName: `${dto.firstName} ${dto.lastName}`,
+      latitude: lat,
+      longitude: lng,
       location,
       lifecycleStatus: AssayerLifecycleStatus.INVITED,
       status: 'INACTIVE',
@@ -245,8 +290,31 @@ export class AssayerService {
     if (dto.joiningDate) assayer.joiningDate = new Date(dto.joiningDate);
     if (dto.exitDate) assayer.exitDate = new Date(dto.exitDate);
     if (dto.terminationDate) assayer.terminationDate = new Date(dto.terminationDate);
-    if (dto.latitude && dto.longitude) {
-      (assayer as any).location = { type: 'Point', coordinates: [dto.longitude, dto.latitude] };
+    let lat = dto.latitude !== undefined ? dto.latitude : assayer.latitude;
+    let lng = dto.longitude !== undefined ? dto.longitude : assayer.longitude;
+
+    const addressChanged = dto.address !== undefined && dto.address !== assayer.address;
+    const cityChanged = dto.city !== undefined && dto.city !== assayer.city;
+    const districtChanged = dto.district !== undefined && dto.district !== assayer.district;
+    const stateChanged = dto.state !== undefined && dto.state !== assayer.state;
+
+    if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
+      const coords = await geocodeAddress(
+        dto.address ?? assayer.address,
+        dto.city ?? assayer.city,
+        dto.district ?? assayer.district,
+        dto.state ?? assayer.state
+      );
+      if (coords) {
+        lat = coords.lat;
+        lng = coords.lng;
+      }
+    }
+
+    if (lat && lng) {
+      assayer.latitude = lat;
+      assayer.longitude = lng;
+      (assayer as any).location = { type: 'Point', coordinates: [lng, lat] };
     }
     assayer.updatedBy = userId;
     const saved = await this.assayerRepository.save(assayer);
@@ -471,10 +539,14 @@ export class AssayerService {
       category: dto.category,
       visibility: dto.visibility,
       attachmentPaths: dto.attachmentPaths || [],
+      rating: dto.rating ?? null,
       createdBy: userId,
       updatedBy: userId,
     });
     const saved = await this.remarkRepository.save(remark);
+    if (dto.rating != null) {
+      await this.recomputeAverageRating(assayerId);
+    }
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_REMARK_ADDED',
@@ -494,8 +566,12 @@ export class AssayerService {
     if (dto.category !== undefined) remark.category = dto.category;
     if (dto.visibility !== undefined) remark.visibility = dto.visibility;
     if (dto.attachmentPaths !== undefined) remark.attachmentPaths = dto.attachmentPaths;
+    if (dto.rating !== undefined) remark.rating = dto.rating;
     remark.updatedBy = userId;
     const saved = await this.remarkRepository.save(remark);
+    if (dto.rating !== undefined) {
+      await this.recomputeAverageRating(remark.assayerId);
+    }
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_REMARK_UPDATED',
@@ -535,6 +611,72 @@ export class AssayerService {
       take: limit,
     });
     return { remarks, total };
+  }
+
+  // ---- Stats & Profile ----
+
+  async recomputeAverageRating(assayerId: string): Promise<void> {
+    const result = await this.remarkRepository
+      .createQueryBuilder('r')
+      .select('AVG(r.rating)', 'avg')
+      .where('r.assayerId = :assayerId', { assayerId })
+      .andWhere('r.rating IS NOT NULL')
+      .andWhere('r.isActive = :isActive', { isActive: true })
+      .getRawOne();
+    const avg = result?.avg ? parseFloat(Number(result.avg).toFixed(2)) : 0;
+    await this.assayerRepository.update(assayerId, { averageRating: avg });
+  }
+
+  async updateAssayerStats(assayerId: string): Promise<void> {
+    const mgr = this.assayerRepository.manager;
+
+    const total = await mgr.count('assignments', { where: { assayer_id: assayerId, is_active: true } });
+
+    const completed = await mgr.count('assignments', {
+      where: { assayer_id: assayerId, status: 7, is_active: true },
+    });
+
+    const cancelled = await mgr.count('assignments', {
+      where: { assayer_id: assayerId, status: 8, is_active: true },
+    });
+
+    const onTimeResult = await mgr.query(
+      `SELECT COUNT(*) as cnt FROM assignments a
+       WHERE a.assayer_id = $1 AND a.status = $2
+       AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
+       AND a.completion_date <= a.scheduled_date`,
+      [assayerId, 6],
+    );
+
+    const earningsResult = await mgr.query(
+      `SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
+       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`,
+      [assayerId, 6, 7],
+    );
+
+    const lastAssignment = await mgr.query(
+      `SELECT updated_at FROM assignments a
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       ORDER BY a.updated_at DESC LIMIT 1`,
+      [assayerId],
+    );
+
+    await this.assayerRepository.update(assayerId, {
+      totalAssignments: total,
+      completedAssignments: completed,
+      cancelledAssignments: cancelled,
+      onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
+      totalEarnings: Number(earningsResult[0]?.total ?? 0),
+      lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
+    });
+  }
+
+  async getProfile(assayerId: string): Promise<AssayerEntity> {
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: assayerId, isActive: true },
+    });
+    if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
+    return assayer;
   }
 
   // ---- Activity Timeline ----

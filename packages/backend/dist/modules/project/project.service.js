@@ -391,6 +391,25 @@ let ProjectService = class ProjectService {
         }
         return this.findProjectBranches(project.id);
     }
+    async removeProjectBranch(projectId, projectBranchId, userId) {
+        const pb = await this.projectBranchRepository.findOne({
+            where: { id: projectBranchId, projectId, isActive: true },
+        });
+        if (pb) {
+            pb.isActive = false;
+            pb.updatedBy = userId;
+            await this.projectBranchRepository.save(pb);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.OPERATIONAL,
+                eventType: 'PROJECT_BRANCH_REMOVED',
+                entityType: 'PROJECT',
+                entityId: projectId,
+                userId,
+                remarks: `Removed branch association link ${projectBranchId}`,
+            });
+        }
+        return this.findProjectBranches(projectId);
+    }
 };
 exports.ProjectService = ProjectService;
 exports.ProjectService = ProjectService = __decorate([

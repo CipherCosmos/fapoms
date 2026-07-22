@@ -157,15 +157,15 @@ let AssignmentService = class AssignmentService {
             throw new common_1.NotFoundException(`Assayer ${dto.assayerId} not found.`);
         }
         if (projectBranch.project && projectBranch.project.requiredSkills && projectBranch.project.requiredSkills.length > 0) {
-            const assayerSkills = assayer.skills || [];
-            const missingSkills = projectBranch.project.requiredSkills.filter((skill) => !assayerSkills.includes(skill));
+            const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
+            const missingSkills = projectBranch.project.requiredSkills.filter((skill) => !assayerSkills.includes(skill.trim().toLowerCase()));
             if (missingSkills.length > 0) {
                 throw new common_1.BadRequestException(`Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`);
             }
         }
         if (projectBranch.project && projectBranch.project.requiredCertifications && projectBranch.project.requiredCertifications.length > 0) {
-            const assayerCerts = (assayer.certifications || []).map((c) => c.name);
-            const missingCerts = projectBranch.project.requiredCertifications.filter((cert) => !assayerCerts.includes(cert));
+            const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
+            const missingCerts = projectBranch.project.requiredCertifications.filter((cert) => !assayerCerts.includes(cert.trim().toLowerCase()));
             if (missingCerts.length > 0) {
                 throw new common_1.BadRequestException(`Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`);
             }
@@ -343,6 +343,16 @@ let AssignmentService = class AssignmentService {
             catch (err) {
                 console.error('Failed to dispatch transition notification', err);
             }
+            try {
+                if (targetStatus === shared_1.AssignmentStatus.AUDIT_COMPLETED ||
+                    targetStatus === shared_1.AssignmentStatus.CLOSED ||
+                    targetStatus === shared_1.AssignmentStatus.CANCELLED) {
+                    await this.updateAssayerStats(saved.assayerId);
+                }
+            }
+            catch (err) {
+                console.error('Failed to update assayer stats', err);
+            }
             return saved;
         });
     }
@@ -461,6 +471,29 @@ let AssignmentService = class AssignmentService {
             statusCounts: summary,
             slaCounts: slaSummary,
         };
+    }
+    async updateAssayerStats(assayerId) {
+        const mgr = this.dataSource.manager;
+        const total = await mgr.count('assignments', { where: { assayer_id: assayerId, is_active: true } });
+        const completed = await mgr.count('assignments', { where: { assayer_id: assayerId, status: 7, is_active: true } });
+        const cancelled = await mgr.count('assignments', { where: { assayer_id: assayerId, status: 8, is_active: true } });
+        const onTimeResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
+       WHERE a.assayer_id = $1 AND a.status = $2
+       AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
+       AND a.completion_date <= a.scheduled_date`, [assayerId, 6]);
+        const earningsResult = await mgr.query(`SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
+       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`, [assayerId, 6, 7]);
+        const lastAssignment = await mgr.query(`SELECT updated_at FROM assignments a
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       ORDER BY a.updated_at DESC LIMIT 1`, [assayerId]);
+        await this.assayerRepository.update(assayerId, {
+            totalAssignments: total,
+            completedAssignments: completed,
+            cancelledAssignments: cancelled,
+            onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
+            totalEarnings: Number(earningsResult[0]?.total ?? 0),
+            lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
+        });
     }
 };
 exports.AssignmentService = AssignmentService;

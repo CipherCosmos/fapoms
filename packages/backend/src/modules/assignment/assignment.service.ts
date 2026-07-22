@@ -174,9 +174,9 @@ export class AssignmentService implements OnModuleInit {
     }
 
     if (projectBranch.project && projectBranch.project.requiredSkills && projectBranch.project.requiredSkills.length > 0) {
-      const assayerSkills = assayer.skills || [];
+      const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
       const missingSkills = projectBranch.project.requiredSkills.filter(
-        (skill) => !assayerSkills.includes(skill)
+        (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
       );
       if (missingSkills.length > 0) {
         throw new BadRequestException(
@@ -186,9 +186,9 @@ export class AssignmentService implements OnModuleInit {
     }
 
     if (projectBranch.project && projectBranch.project.requiredCertifications && projectBranch.project.requiredCertifications.length > 0) {
-      const assayerCerts = (assayer.certifications || []).map((c) => c.name);
+      const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
       const missingCerts = projectBranch.project.requiredCertifications.filter(
-        (cert) => !assayerCerts.includes(cert)
+        (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
       );
       if (missingCerts.length > 0) {
         throw new BadRequestException(
@@ -425,6 +425,19 @@ export class AssignmentService implements OnModuleInit {
         console.error('Failed to dispatch transition notification', err);
       }
 
+      // Update assayer stats on terminal or completion states
+      try {
+        if (
+          targetStatus === AssignmentStatus.AUDIT_COMPLETED ||
+          targetStatus === AssignmentStatus.CLOSED ||
+          targetStatus === AssignmentStatus.CANCELLED
+        ) {
+          await this.updateAssayerStats(saved.assayerId);
+        }
+      } catch (err) {
+        console.error('Failed to update assayer stats', err);
+      }
+
       return saved;
     });
   }
@@ -565,5 +578,43 @@ export class AssignmentService implements OnModuleInit {
       statusCounts: summary,
       slaCounts: slaSummary,
     };
+  }
+
+  private async updateAssayerStats(assayerId: string): Promise<void> {
+    const mgr = this.dataSource.manager;
+
+    const total = await mgr.count('assignments', { where: { assayer_id: assayerId, is_active: true } });
+    const completed = await mgr.count('assignments', { where: { assayer_id: assayerId, status: 7, is_active: true } });
+    const cancelled = await mgr.count('assignments', { where: { assayer_id: assayerId, status: 8, is_active: true } });
+
+    const onTimeResult = await mgr.query(
+      `SELECT COUNT(*) as cnt FROM assignments a
+       WHERE a.assayer_id = $1 AND a.status = $2
+       AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
+       AND a.completion_date <= a.scheduled_date`,
+      [assayerId, 6],
+    );
+
+    const earningsResult = await mgr.query(
+      `SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
+       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`,
+      [assayerId, 6, 7],
+    );
+
+    const lastAssignment = await mgr.query(
+      `SELECT updated_at FROM assignments a
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       ORDER BY a.updated_at DESC LIMIT 1`,
+      [assayerId],
+    );
+
+    await this.assayerRepository.update(assayerId, {
+      totalAssignments: total,
+      completedAssignments: completed,
+      cancelledAssignments: cancelled,
+      onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
+      totalEarnings: Number(earningsResult[0]?.total ?? 0),
+      lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
+    });
   }
 }

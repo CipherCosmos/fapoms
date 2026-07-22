@@ -48,6 +48,7 @@ declare class CreateAssayerRequestDto implements CreateAssayerDto {
     };
     maxDailyWorkload?: number;
     maxWeeklyWorkload?: number;
+    eligibleClients?: string[];
 }
 declare class UpdateAssayerRequestDto implements UpdateAssayerDto {
     firstName?: string;
@@ -99,6 +100,7 @@ declare class UpdateAssayerRequestDto implements UpdateAssayerDto {
     };
     maxDailyWorkload?: number;
     maxWeeklyWorkload?: number;
+    eligibleClients?: string[];
 }
 export declare class CreateWorkforceAttributeRequestDto {
     type: string;
@@ -168,12 +170,14 @@ export declare class CreateRemarkRequestDto {
     category: string;
     visibility: string;
     attachmentPaths?: string[];
+    rating?: number;
 }
 export declare class UpdateRemarkRequestDto {
     content?: string;
     category?: string;
     visibility?: string;
     attachmentPaths?: string[];
+    rating?: number;
 }
 export declare class UpdateAssayerDocumentRequestDto {
     documentType?: string;
@@ -205,6 +209,10 @@ export declare class AssayerController {
         };
     }>;
     findOne(id: string): Promise<{
+        success: boolean;
+        data: import("./assayer.entity").AssayerEntity;
+    }>;
+    getProfile(assayerId: string): Promise<{
         success: boolean;
         data: import("./assayer.entity").AssayerEntity;
     }>;
