@@ -140,8 +140,46 @@ export interface Branch extends AuditMetadata {
     pincode?: string;
     latitude?: number;
     longitude?: number;
+    region?: string;
+    territory?: string;
+    zoneId?: string;
+    branchType?: string;
+    phone?: string;
+    email?: string;
+    managerName?: string;
+    openingDate?: string;
+    lastAuditDate?: string;
+    operatingHours?: Record<string, unknown>;
+    riskScore: number;
+    complexity: string;
+    riskCategory?: string;
+    estimatedDurationHours: number;
+    requiredCompetencies?: string[];
     clientId?: string;
     organizationId?: string;
+    contacts?: BranchContact[];
+    documents?: BranchDocument[];
+}
+export interface BranchContact extends AuditMetadata {
+    id: string;
+    branchId: string;
+    name: string;
+    email: string;
+    phone: string;
+    designation: string;
+    department?: string;
+    isPrimary: boolean;
+    notes?: string;
+}
+export interface BranchDocument extends AuditMetadata {
+    id: string;
+    branchId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType?: string;
+    category: string;
+    remarks?: string;
 }
 export interface ProjectBranch extends ExtendedAuditMetadata {
     id: string;

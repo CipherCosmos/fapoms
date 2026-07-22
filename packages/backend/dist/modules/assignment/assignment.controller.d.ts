@@ -6,7 +6,7 @@ export declare class AssignmentController {
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
     }>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, status?: string): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity[];
         meta: {

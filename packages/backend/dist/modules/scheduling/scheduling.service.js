@@ -124,7 +124,7 @@ let SchedulingService = class SchedulingService {
     async findAll(page = 1, limit = 50) {
         const [schedules, total] = await this.scheduleRepository.findAndCount({
             where: { isActive: true },
-            relations: ['assignment', 'assayer'],
+            relations: ['assignment', 'assayer', 'project'],
             order: { scheduledDate: 'ASC' },
             take: limit,
             skip: (page - 1) * limit,

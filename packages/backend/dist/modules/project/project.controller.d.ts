@@ -35,4 +35,14 @@ export declare class ProjectController {
         success: boolean;
         data: import("./project-branch.entity").ProjectBranchEntity[];
     }>;
+    associateBranches(id: string, dto: {
+        branchIds: string[];
+    }, req: any): Promise<{
+        success: boolean;
+        data: import("./project-branch.entity").ProjectBranchEntity[];
+    }>;
+    uploadBranches(id: string, file: any, req: any): Promise<{
+        success: boolean;
+        data: import("./project-branch.entity").ProjectBranchEntity[];
+    }>;
 }

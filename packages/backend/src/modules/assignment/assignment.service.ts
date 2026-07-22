@@ -429,10 +429,12 @@ export class AssignmentService implements OnModuleInit {
     });
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ assignments: AssignmentEntity[]; total: number }> {
+  async findAll(page = 1, limit = 50, status?: string): Promise<{ assignments: AssignmentEntity[]; total: number }> {
+    const where: any = { isActive: true };
+    if (status) where.status = status;
     const [assignments, total] = await this.assignmentRepository.findAndCount({
-      where: { isActive: true },
-      relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+      where,
+      relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project'],
       order: { createdAt: 'DESC' },
       take: limit,
       skip: (page - 1) * limit,

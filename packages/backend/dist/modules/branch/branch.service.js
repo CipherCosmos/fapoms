@@ -419,19 +419,19 @@ let BranchService = class BranchService {
     async validateGeography(state, district, city) {
         const stateEntity = await this.stateRepository.findOne({ where: { name: state } });
         if (!stateEntity) {
-            throw new Error(`State '${state}' not found in master reference data.`);
+            throw new common_1.BadRequestException(`State '${state}' not found in master reference data.`);
         }
         const districtEntity = await this.districtRepository.findOne({
             where: { name: district, stateId: stateEntity.id },
         });
         if (!districtEntity) {
-            throw new Error(`District '${district}' not found under state '${state}'.`);
+            throw new common_1.BadRequestException(`District '${district}' not found under state '${state}'.`);
         }
         const cityEntity = await this.cityRepository.findOne({
             where: { name: city, districtId: districtEntity.id },
         });
         if (!cityEntity) {
-            throw new Error(`City '${city}' not found under district '${district}'.`);
+            throw new common_1.BadRequestException(`City '${city}' not found under district '${district}'.`);
         }
     }
 };

@@ -6,7 +6,9 @@ const common_1 = require("@nestjs/common");
 const project_service_1 = require("./project.service");
 const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
+const branch_entity_1 = require("../branch/branch.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
 describe('ProjectService', () => {
     let service;
@@ -20,9 +22,19 @@ describe('ProjectService', () => {
     };
     const mockProjectBranchRepo = {
         find: jest.fn(),
+        findOne: jest.fn(),
+        create: jest.fn(),
+        save: jest.fn(),
+    };
+    const mockBranchRepo = {
+        findOne: jest.fn(),
     };
     const mockAuditService = {
         recordEvent: jest.fn(),
+    };
+    const mockWorkflowEngine = {
+        registerWorkflow: jest.fn(),
+        executeTransition: jest.fn(),
     };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
@@ -37,8 +49,16 @@ describe('ProjectService', () => {
                     useValue: mockProjectBranchRepo,
                 },
                 {
+                    provide: (0, typeorm_1.getRepositoryToken)(branch_entity_1.BranchEntity),
+                    useValue: mockBranchRepo,
+                },
+                {
                     provide: audit_service_1.AuditService,
                     useValue: mockAuditService,
+                },
+                {
+                    provide: workflow_engine_1.WorkflowEngine,
+                    useValue: mockWorkflowEngine,
                 },
             ],
         }).compile();

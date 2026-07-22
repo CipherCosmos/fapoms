@@ -30,8 +30,8 @@ let AssignmentController = class AssignmentController {
             data: assignment,
         };
     }
-    async findAll(page, limit) {
-        const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50);
+    async findAll(page, limit, status) {
+        const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, status);
         return {
             success: true,
             data: result.assignments,
@@ -104,8 +104,9 @@ __decorate([
     (0, swagger_1.ApiOperation)({ summary: 'List all assignments' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
+    __param(2, (0, common_1.Query)('status')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, Number]),
+    __metadata("design:paramtypes", [Number, Number, String]),
     __metadata("design:returntype", Promise)
 ], AssignmentController.prototype, "findAll", null);
 __decorate([

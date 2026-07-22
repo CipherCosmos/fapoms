@@ -28,6 +28,18 @@ export interface ScoreCalculator {
   calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
 }
 
+function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 @Injectable()
 export class AvailabilityFilter implements CandidateFilter {
   name = 'availability';
@@ -63,6 +75,20 @@ export class ClientRestrictionFilter implements CandidateFilter {
     if (!context.client) return true;
     const restricted = context.client.restrictedAssayers || [];
     return !restricted.includes(assayer.id);
+  }
+}
+
+@Injectable()
+export class ClientEligibilityFilter implements CandidateFilter {
+  name = 'clientEligibility';
+
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    if (!context.client) return true;
+    const eligible = assayer.eligibleClients || [];
+    if (eligible.length === 0 || eligible.includes('*') || eligible.includes('ANY') || eligible.includes('ALL')) {
+      return true;
+    }
+    return eligible.includes(context.client.clientCode) || eligible.includes(context.client.id);
   }
 }
 
@@ -106,7 +132,7 @@ export class DistanceScoreCalculator implements ScoreCalculator {
       { latitude: context.branch.latitude, longitude: context.branch.longitude },
       { latitude: assayer.latitude, longitude: assayer.longitude },
     );
-    return Math.max(0, 100 - route.distanceKm);
+    return Math.max(0, 100 - (route.distanceKm / 5));
   }
 }
 
@@ -124,7 +150,7 @@ export class TravelTimeScoreCalculator implements ScoreCalculator {
       { latitude: context.branch.latitude, longitude: context.branch.longitude },
       { latitude: assayer.latitude, longitude: assayer.longitude },
     );
-    return Math.max(0, 100 - route.durationMinutes);
+    return Math.max(0, 100 - (route.durationMinutes / 6));
   }
 }
 
@@ -201,7 +227,7 @@ export class CostScoreCalculator implements ScoreCalculator {
     }
 
     const baseFee = Number(activeProfile.baseFee) || 0;
-    return Math.max(0, 100 - (baseFee / 5000) * 100);
+    return Math.max(0, 100 - (baseFee / 20000) * 100);
   }
 }
 
@@ -210,10 +236,87 @@ export class ClientPreferenceScoreCalculator implements ScoreCalculator {
   name = 'clientPreference';
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    if (context.client?.preferredAssayers?.includes(assayer.id)) {
-      return 100; // Boost score for preferred assayers
+    let score = 50;
+
+    const isPreferred = context.client?.preferredAssayers?.includes(assayer.id);
+    if (isPreferred) {
+      score = 80;
     }
-    return 50; // Neutral default
+
+    const preferences = context.client?.planningPreferences || {};
+
+    // 1. Distance Preferences
+    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+      const distance = calculateHaversineDistance(
+        Number(context.branch.latitude),
+        Number(context.branch.longitude),
+        Number(assayer.latitude),
+        Number(assayer.longitude)
+      );
+
+      const minDistance = Number(preferences.minDistanceKm);
+      const maxDistance = Number(preferences.maxDistanceKm);
+
+      if (!isNaN(minDistance) && distance < minDistance) {
+        score -= 40;
+      }
+      if (!isNaN(maxDistance) && distance > maxDistance) {
+        score -= 40;
+      }
+      if ((isNaN(minDistance) || distance >= minDistance) && (isNaN(maxDistance) || distance <= maxDistance)) {
+        score += 10;
+      }
+    }
+
+    // 2. Skills / Competencies Preferences
+    const assayerSkills = assayer.skills || [];
+    const requiredSkills = preferences.requiredSkills || [];
+    const preferredSkills = preferences.preferredSkills || [];
+
+    if (requiredSkills.length > 0) {
+      const hasAllRequired = requiredSkills.every((s: string) => 
+        assayerSkills.some((as: string) => as.toLowerCase() === s.toLowerCase())
+      );
+      if (!hasAllRequired) {
+        return 0;
+      }
+      score += 10;
+    }
+
+    if (preferredSkills.length > 0) {
+      const hasAnyPreferred = preferredSkills.some((s: string) => 
+        assayerSkills.some((as: string) => as.toLowerCase() === s.toLowerCase())
+      );
+      if (hasAnyPreferred) {
+        score += 10;
+      }
+    }
+
+    // 3. Certifications / Courses Preferences
+    const assayerCertifications = (assayer.certifications || []).map(c => c.name);
+    const requiredCerts = preferences.requiredCertifications || [];
+    const preferredCerts = preferences.preferredCertifications || [];
+
+    if (requiredCerts.length > 0) {
+      const hasAllRequired = requiredCerts.every((c: string) => 
+        assayerCertifications.some((ac: string) => ac.toLowerCase() === c.toLowerCase())
+      );
+      if (!hasAllRequired) {
+        return 0;
+      }
+      score += 10;
+    }
+
+    if (preferredCerts.length > 0) {
+      const hasAnyPreferred = preferredCerts.some((c: string) => 
+        assayerCertifications.some((ac: string) => ac.toLowerCase() === c.toLowerCase())
+      );
+      if (hasAnyPreferred) {
+        score += 10;
+      }
+    }
+
+    return Math.max(0, Math.min(100, score));
   }
 }
 
@@ -308,6 +411,7 @@ export class RecommendationEngine {
   constructor(
     private readonly availabilityFilter: AvailabilityFilter,
     private readonly clientRestrictionFilter: ClientRestrictionFilter,
+    private readonly clientEligibilityFilter: ClientEligibilityFilter,
     private readonly ruleEngineEligibilityFilter: RuleEngineEligibilityFilter,
     private readonly distanceCalculator: DistanceScoreCalculator,
     private readonly travelTimeCalculator: TravelTimeScoreCalculator,
@@ -329,6 +433,7 @@ export class RecommendationEngine {
     this.filters.push(
       this.availabilityFilter,
       this.clientRestrictionFilter,
+      this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
     );
 

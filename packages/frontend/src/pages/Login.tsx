@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
 interface LoginProps {
-  onLoginSuccess: (token: string) => void;
+  onLoginSuccess: (accessToken: string, refreshToken: string) => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
@@ -25,7 +25,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       const resData = await response.json();
 
       if (response.ok && resData.success) {
-        onLoginSuccess(resData.data.accessToken);
+        onLoginSuccess(resData.data.accessToken, resData.data.refreshToken);
       } else {
         setError(resData.message || resData.error?.message || 'Invalid credentials');
       }

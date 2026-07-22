@@ -16,8 +16,11 @@ import {
   UseGuards,
   ParseUUIDPipe,
   Req,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import { ProjectService, CreateProjectDto } from './project.service';
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
@@ -104,6 +107,37 @@ export class ProjectController {
     return {
       success: true,
       data: branches,
+    };
+  }
+
+  @Post(':id/branches')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @ApiOperation({ summary: 'Associate branches with a project' })
+  async associateBranches(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: { branchIds: string[] },
+    @Req() req: any
+  ) {
+    const list = await this.projectService.associateBranches(id, dto.branchIds, req.user.id);
+    return {
+      success: true,
+      data: list,
+    };
+  }
+
+  @Post(':id/branches/upload')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: 'Upload branches from Excel spreadsheet and associate with project' })
+  async uploadBranches(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: any,
+    @Req() req: any
+  ) {
+    const list = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
+    return {
+      success: true,
+      data: list,
     };
   }
 }

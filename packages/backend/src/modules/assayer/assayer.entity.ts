@@ -149,4 +149,7 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ name: 'max_weekly_workload', type: 'int', default: 15 })
   maxWeeklyWorkload: number;
+
+  @Column({ name: 'eligible_clients', type: 'jsonb', nullable: true })
+  eligibleClients: string[] | null;
 }

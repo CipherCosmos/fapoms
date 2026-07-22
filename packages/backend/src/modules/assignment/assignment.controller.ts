@@ -45,8 +45,9 @@ export class AssignmentController {
   async findAll(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('status') status?: string,
   ) {
-    const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50);
+    const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, status);
     return {
       success: true,
       data: result.assignments,

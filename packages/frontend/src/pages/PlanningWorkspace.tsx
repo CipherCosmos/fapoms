@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Compass, PhoneCall, Check, X, ShieldAlert, AlertTriangle, CheckCircle, Search } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
@@ -34,9 +35,7 @@ interface ProjectBranch {
     status: string;
     proposedFee: number;
     agreedFee: number | null;
-    assayer?: {
-      displayName: string;
-    };
+    assayer?: { displayName: string };
   } | null;
 }
 
@@ -53,43 +52,44 @@ interface Candidate {
   distanceKm: number | null;
   latitude: number | null;
   longitude: number | null;
+  score?: number;
 }
 
+const STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All Statuses' },
+  { value: 'IMPORTED', label: 'Imported' },
+  { value: 'PLANNING', label: 'Planning' },
+  { value: 'ASSIGNMENT_CONFIRMED', label: 'Confirmed' },
+  { value: 'SCHEDULED', label: 'Scheduled' },
+];
+
 export const PlanningWorkspace: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
-  
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(searchParams.get('projectId') || '');
   const [branches, setBranches] = useState<ProjectBranch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  
-  const [isLoadingQueue, setIsLoadingQueue] = useState(false);
+  const [, setIsLoadingQueue] = useState(false);
   const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
-
-  // Route Optimization State
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[] | undefined>(undefined);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizedSummary, setOptimizedSummary] = useState<{ totalDistanceKm: number; totalDurationMinutes: number } | null>(null);
-
-  // Filters & Search State
   const [searchTerm, setSearchTerm] = useState('');
   const [stateFilter, setStateFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
 
-  // Modal & Input States
   const [showNegotiationModal, setShowNegotiationModal] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
+  const [selectedCandidateForMap, setSelectedCandidateForMap] = useState<Candidate | null>(null);
   const [negotiatingFee, setNegotiatingFee] = useState('1500');
   const [negotiatingDate, setNegotiatingDate] = useState('2026-07-20');
-
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
 
-  // 1. Load active projects list
-  useEffect(() => {
-    loadProjects();
-  }, []);
+  useEffect(() => { loadProjects(); }, []);
 
-  // 2. Load project branches when project selection changes
   useEffect(() => {
     if (selectedProjectId) {
       loadProjectBranches(selectedProjectId);
@@ -101,9 +101,9 @@ export const PlanningWorkspace: React.FC = () => {
     }
   }, [selectedProjectId]);
 
-  // 3. Load candidate recommendations when branch selection changes
   useEffect(() => {
     const selectedPb = branches.find(b => b.id === selectedBranchId);
+    setSelectedCandidateForMap(null);
     if (selectedPb) {
       loadCandidates(selectedPb.branchId);
     } else {
@@ -111,93 +111,60 @@ export const PlanningWorkspace: React.FC = () => {
     }
   }, [selectedBranchId, branches]);
 
-  const handleOptimizeRoute = async (candidate: Candidate) => {
-    const assignedBranches = branches.filter(
-      b => b.assignment && b.assignment.assayer?.displayName === candidate.displayName
-    );
+  useEffect(() => {
+    if (selectedBranchId && drawerRef.current) {
+      drawerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [selectedBranchId]);
 
+  const handleOptimizeRoute = async (candidate: Candidate) => {
+    let assignedBranches = branches.filter(b => b.assignment && b.assignment.assayer?.displayName === candidate.displayName);
+    if (assignedBranches.length === 0 && selectedBranchId) {
+      const currentPb = branches.find(b => b.id === selectedBranchId);
+      if (currentPb) {
+        assignedBranches = [currentPb];
+      }
+    }
     if (assignedBranches.length === 0) {
-      alert(`No branch allocations found for ${candidate.displayName} under the current project.`);
+      alert(`No branch allocations or selected branch found for ${candidate.displayName}.`);
       return;
     }
-
     const originLat = candidate.latitude ?? assignedBranches[0].branch.latitude;
     const originLng = candidate.longitude ?? assignedBranches[0].branch.longitude;
-
-    if (!originLat || !originLng) {
-      alert('Missing location coordinates: Cannot calculate route.');
-      return;
-    }
-
-    const destinations = assignedBranches
-      .filter(b => b.branch.latitude !== null && b.branch.longitude !== null)
-      .map(b => ({
-        id: b.branch.id,
-        latitude: b.branch.latitude!,
-        longitude: b.branch.longitude!,
-      }));
-
-    if (destinations.length === 0) {
-      alert('No valid branch coordinates found to optimize.');
-      return;
-    }
-
+    if (!originLat || !originLng) { alert('Missing location coordinates: Cannot calculate route.'); return; }
+    const destinations = assignedBranches.filter(b => b.branch.latitude !== null && b.branch.longitude !== null).map(b => ({ id: b.branch.id, latitude: b.branch.latitude!, longitude: b.branch.longitude! }));
+    if (destinations.length === 0) { alert('No valid branch coordinates found to optimize.'); return; }
     setIsOptimizing(true);
     setOptimizedSummary(null);
     setRoutePoints(undefined);
-
     try {
       const response = await fetch('/api/v1/geo/route/optimize', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
-        },
-        body: JSON.stringify({
-          origin: { latitude: originLat, longitude: originLng },
-          destinations,
-          roundTrip: true,
-        })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
+        body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true })
       });
-
       const resData = await response.json();
       if (response.ok && resData.success) {
         const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = resData.data;
-        
         const points = [{ latitude: originLat, longitude: originLng }];
         for (const destId of optimizedSequence) {
           const matchedBranch = assignedBranches.find(b => b.branch.id === destId);
-          if (matchedBranch?.branch.latitude && matchedBranch.branch.longitude) {
-            points.push({
-              latitude: matchedBranch.branch.latitude,
-              longitude: matchedBranch.branch.longitude
-            });
-          }
+          if (matchedBranch?.branch.latitude && matchedBranch.branch.longitude) points.push({ latitude: matchedBranch.branch.latitude, longitude: matchedBranch.branch.longitude });
         }
         points.push({ latitude: originLat, longitude: originLng });
-
         setRoutePoints(points);
         setOptimizedSummary({ totalDistanceKm, totalDurationMinutes });
-      } else {
-        alert(resData.message || 'Failed to calculate optimized route.');
-      }
-    } catch (err) {
-      alert('Network request failure while optimizing route.');
-    } finally {
-      setIsOptimizing(false);
-    }
+      } else { alert(resData.message || 'Failed to calculate optimized route.'); }
+    } catch { alert('Network request failure while optimizing route.'); }
+    finally { setIsOptimizing(false); }
   };
 
   const loadProjects = async () => {
     try {
       const response = await api.request<ProjectOption[]>('/projects', { method: 'GET' });
       setProjects(response);
-      if (response.length > 0) {
-        setSelectedProjectId(response[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to load projects');
-    }
+      if (response.length > 0) setSelectedProjectId(response[0].id);
+    } catch { console.error('Failed to load projects'); }
   };
 
   const loadProjectBranches = async (projectId: string) => {
@@ -205,24 +172,15 @@ export const PlanningWorkspace: React.FC = () => {
     setMessage(null);
     try {
       const response = await fetch(`/api/v1/projects/${projectId}/branches`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
-        }
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` }
       });
       const resData = await response.json();
       if (response.ok && resData.success) {
         setBranches(resData.data);
-        if (resData.data.length > 0) {
-          setSelectedBranchId(resData.data[0].id);
-        } else {
-          setSelectedBranchId(null);
-        }
+        setSelectedBranchId(resData.data.length > 0 ? resData.data[0].id : null);
       }
-    } catch (err) {
-      console.error('Failed to fetch project branches queue');
-    } finally {
-      setIsLoadingQueue(false);
-    }
+    } catch { console.error('Failed to fetch project branches queue'); }
+    finally { setIsLoadingQueue(false); }
   };
 
   const loadCandidates = async (branchId: string) => {
@@ -230,567 +188,350 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       const response = await api.request<Candidate[]>(`/planning/recommendations?branchId=${branchId}`, { method: 'GET' });
       setCandidates(response);
-    } catch (err) {
-      console.error('Failed to load candidate recommendations');
-    } finally {
-      setIsLoadingCandidates(false);
-    }
+    } catch { console.error('Failed to load candidate recommendations'); }
+    finally { setIsLoadingCandidates(false); }
   };
 
-  // 4. Handle creating a confirmed assignment commitment
   const handleConfirmAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBranchId || !selectedCandidate) return;
-
     setMessage(null);
     setShowNegotiationModal(false);
-
     try {
       const response = await fetch('/api/v1/assignments', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
-        },
-        body: JSON.stringify({
-          projectBranchId: selectedBranchId,
-          assayerId: selectedCandidate.id,
-          proposedFee: Number(negotiatingFee),
-          scheduledDate: negotiatingDate
-         })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
+        body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee), scheduledDate: negotiatingDate })
       });
-
       const resData = await response.json();
-
       if (response.ok && resData.success) {
-        setMessage({
-          type: 'success',
-          text: `Successfully assigned branch to ${selectedCandidate.displayName} on ${negotiatingDate}!`
-        });
+        setMessage({ type: 'success', text: `Successfully assigned branch to ${selectedCandidate.displayName} on ${negotiatingDate}!` });
         loadProjectBranches(selectedProjectId);
-      } else {
-        setMessage({
-          type: 'error',
-          text: resData.message || 'Scheduling failed due to validation rules.'
-        });
-      }
-    } catch (err) {
-      setMessage({
-        type: 'error',
-        text: 'Network connection failed while scheduling assignment.'
-      });
-    }
+      } else { setMessage({ type: 'error', text: resData.message || 'Scheduling failed due to validation rules.' }); }
+    } catch { setMessage({ type: 'error', text: 'Network connection failed while scheduling assignment.' }); }
   };
 
-  // 5. Handle unassigning/cancelling active commitment
   const handleCancelAssignment = async (assignmentId: string) => {
     setMessage(null);
     try {
       const response = await fetch(`/api/v1/assignments/${assignmentId}/transition`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
-        },
-        body: JSON.stringify({
-          targetStatus: 'CANCELLED',
-          remarks: 'Operational unassign from map planning workspace.'
-        })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
+        body: JSON.stringify({ targetStatus: 'CANCELLED', remarks: 'Operational unassign from map planning workspace.' })
       });
       const resData = await response.json();
-      if (response.ok && resData.success) {
-        setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' });
-        loadProjectBranches(selectedProjectId);
-      } else {
-        setMessage({ type: 'error', text: resData.message || 'Failed to unassign.' });
-      }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Network request failure during unassign.' });
-    }
+      if (response.ok && resData.success) { setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' }); loadProjectBranches(selectedProjectId); }
+      else { setMessage({ type: 'error', text: resData.message || 'Failed to unassign.' }); }
+    } catch { setMessage({ type: 'error', text: 'Network request failure during unassign.' }); }
   };
 
-  // Extract unique states for filters list
   const statesList = Array.from(new Set(branches.map(b => b.branch.state)));
-
-  // Filtered branches queue list matching search terms and select options
-  const filteredBranches = branches.filter((b) => {
-    const matchesSearch = b.branch.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          b.branch.branchCode.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesState = stateFilter === 'ALL' || b.branch.state === stateFilter;
-    const matchesStatus = statusFilter === 'ALL' || b.status === statusFilter;
-    return matchesSearch && matchesState && matchesStatus;
+  const filteredBranches = branches.filter(b => {
+    const q = searchTerm.toLowerCase();
+    return (b.branch.name.toLowerCase().includes(q) || b.branch.branchCode.toLowerCase().includes(q)) &&
+      (stateFilter === 'ALL' || b.branch.state === stateFilter) &&
+      (statusFilter === 'ALL' || b.status === statusFilter);
   });
-
   const selectedPb = branches.find(b => b.id === selectedBranchId);
-
-  // Recalculate dynamic Confirmed Coverage percentage
   const totalCount = branches.length;
   const confirmedCount = branches.filter(b => b.status === 'ASSIGNMENT_CONFIRMED' || b.status === 'SCHEDULED').length;
-  const coveragePercentage = totalCount > 0 ? parseFloat(((confirmedCount / totalCount) * 100).toFixed(1)) : 0;
+  const coveragePct = totalCount > 0 ? Number(((confirmedCount / totalCount) * 100).toFixed(1)) : 0;
+
+  const layoutMode = localStorage.getItem('planning_layout') || 'default';
+  const [layout, setLayout] = useState(layoutMode);
+  const setLayoutMode = (m: string) => { setLayout(m); localStorage.setItem('planning_layout', m); };
+
+  const s = (sel: string, set: (v: string) => void, opts: { value: string; label: string }[]) => (
+    <select value={sel} onChange={e => set(e.target.value)}
+      style={{ padding: '7px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', cursor: 'pointer' }}>
+      {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+
+  const renderCandidatesList = (horizontal: boolean) => {
+    if (isLoadingCandidates) {
+      return <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Searching for assayers...</div>;
+    }
+    if (candidates.length === 0) {
+      return (
+        <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <AlertTriangle size={20} style={{ margin: '0 auto 6px' }} />
+          No suitable assayers found near this branch.
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: 'flex', gap: '12px', overflowX: horizontal ? 'auto' : 'hidden', flexDirection: horizontal ? 'row' : 'column', paddingBottom: '4px' }}>
+        {candidates.map(c => {
+          const conf = c.score != null ? Math.round(c.score) : c.distanceKm != null && c.distanceKm < 30 ? 98 : c.distanceKm != null && c.distanceKm < 60 ? 88 : 74;
+          return (
+            <div key={c.id} style={{
+              minWidth: horizontal ? '280px' : 'auto', maxWidth: horizontal ? '300px' : 'auto', flexShrink: horizontal ? 0 : undefined,
+              background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '12px',
+              display: 'flex', flexDirection: 'column', gap: '8px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{c.displayName}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '1px' }}>
+                    <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km` : 'Unknown distance'}
+                  </div>
+                </div>
+                <span style={{ padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
+                  {conf}%
+                </span>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '12px' }}>
+                <span>📞 {c.phone}</span>
+                <span>📍 {c.city}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={() => setSelectedCandidateForMap(selectedCandidateForMap?.id === c.id ? null : c)}
+                  className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px', flex: 1, justifyContent: 'center', background: selectedCandidateForMap?.id === c.id ? 'rgba(139, 92, 246, 0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : '#fff' }}>
+                  👁️ Map
+                </button>
+                <button onClick={() => handleOptimizeRoute(c)} disabled={isOptimizing}
+                  className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  <Compass size={11} /> Route
+                </button>
+                <button onClick={() => { setSelectedCandidate(c); setShowNegotiationModal(true); }}
+                  className="btn btn-primary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  <Check size={11} /> Assign
+                </button>
+              </div>
+              {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
+                <div style={{ padding: '6px 8px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '10px', color: 'var(--accent-secondary)' }}>
+                  Route: {optimizedSummary.totalDistanceKm} km / {optimizedSummary.totalDurationMinutes} min
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
-    <div style={{ 
-      display: 'grid', 
-      gridTemplateColumns: '1fr 360px', 
-      gap: '24px', 
-      height: 'calc(100vh - var(--header-height) - 64px)'
-    }}>
-      
-      {/* Left + Center Area (Workspace Queue) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', overflowY: 'auto' }}>
-        
-        {/* Workspace Header & Filters */}
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>SELECT PROJECT</label>
-                <select
-                  value={selectedProjectId}
-                  onChange={(e) => setSelectedProjectId(e.target.value)}
-                  style={{
-                    padding: '8px 12px',
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-md)',
-                    color: 'var(--text-primary)',
-                    fontSize: '14px',
-                    outline: 'none',
-                    minWidth: '220px'
-                  }}
-                >
-                  {projects.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            
-            {/* Coverage gauge */}
-            <div style={{
-              background: 'var(--bg-primary)',
-              border: '1px solid var(--border-color)',
-              padding: '8px 16px',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px'
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>CONFIRMED COVERAGE</span>
-                <span style={{ fontSize: '16px', fontWeight: 800, color: 'var(--status-active)', fontFamily: 'var(--font-display)' }}>
-                  {coveragePercentage}%
-                </span>
-              </div>
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: `conic-gradient(var(--status-active) ${coveragePercentage}%, var(--bg-tertiary) 0)` }} />
-            </div>
-          </div>
-
-          {/* Search, State, Status filters */}
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
-            <div style={{ flex: 1, minWidth: '180px', position: 'relative' }}>
-              <Search size={16} style={{ position: 'absolute', left: '12px', top: '10px', color: 'var(--text-muted)' }} />
-              <input
-                type="text"
-                placeholder="Search branch code or name..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px 8px 36px',
-                  background: 'var(--bg-primary)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
-                  outline: 'none',
-                  fontSize: '13px'
-                }}
-              />
-            </div>
-
-            <select
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value)}
-              style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}
-            >
-              <option value="ALL">All States</option>
-              {statesList.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="IMPORTED">Imported</option>
-              <option value="PLANNING">Planning</option>
-              <option value="ASSIGNMENT_CONFIRMED">Confirmed</option>
-              <option value="SCHEDULED">Scheduled</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Notifications Alert */}
-        {message && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '12px 16px',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '13px',
-            border: '1px solid',
-            background: message.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-            borderColor: message.type === 'success' ? 'var(--accent-secondary)' : 'rgba(239,68,68,0.4)',
-            color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171'
-          }}>
-            {message.type === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
-            <span>{message.text}</span>
-          </div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: '-32px' }}>
+      {/* ── Toolbar: Project select + filters + KPI + Layout ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 32px 0', flexShrink: 0 }}>
+        <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
+          style={{ padding: '6px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: '13px', outline: 'none', minWidth: '180px' }}>
+          {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>)}
+        </select>
+        {selectedProjectId && (
+          <button onClick={() => navigate(`/projects`)} title="Open project"
+            style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer', padding: '5px 8px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+            <ExternalLink size={12} /> Project
+          </button>
         )}
-
-        {/* Geographic Map Visualization panel */}
-        <InteractivePlanningMap
-          branches={filteredBranches.map(b => ({
-            id: b.id,
-            name: b.branch.name,
-            latitude: b.branch.latitude,
-            longitude: b.branch.longitude,
-            status: b.status,
-          }))}
-          selectedBranchId={selectedBranchId}
-          onSelectBranch={(id) => setSelectedBranchId(id)}
-          routePoints={routePoints}
-        />
-
-        {/* Planning Queue */}
-        <div className="glass-card" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Project Branches Queue ({filteredBranches.length})</h4>
-          
-          <div className="table-container" style={{ flex: 1 }}>
-            {isLoadingQueue ? (
-              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                Loading project branches queue...
-              </div>
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Branch Name</th>
-                    <th>SOL ID / Code</th>
-                    <th>District / State</th>
-                    <th>Planning Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredBranches.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
-                        No branches matched the filter parameters.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredBranches.map((b) => (
-                      <tr 
-                        key={b.id} 
-                        onClick={() => setSelectedBranchId(b.id)}
-                        style={{ 
-                          cursor: 'pointer',
-                          background: selectedBranchId === b.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
-                          borderLeft: selectedBranchId === b.id ? '4px solid var(--accent-primary)' : '4px solid transparent'
-                        }}
-                      >
-                        <td style={{ fontWeight: 600 }}>{b.branch.name}</td>
-                        <td style={{ fontSize: '13px', fontFamily: 'monospace' }}>
-                          {b.branch.solId || '-'} / {b.branch.branchCode}
-                        </td>
-                        <td>{b.branch.district}, {b.branch.state}</td>
-                        <td>
-                          <span className="badge" style={{
-                            background: b.status === 'ASSIGNMENT_CONFIRMED' ? 'var(--status-active-bg)' : 'rgba(99, 102, 241, 0.1)',
-                            color: b.status === 'ASSIGNMENT_CONFIRMED' ? 'var(--status-active)' : 'var(--accent-primary)'
-                          }}>
-                            {b.status.replace(/_/g, ' ')}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            )}
-          </div>
+        {s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'State' }, ...statesList.map(s => ({ value: s, label: s }))])}
+        {s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <b style={{ color: 'var(--accent-primary)' }}>{totalCount}</b> branches
+          <span style={{ color: 'var(--status-active)' }}>{coveragePct}%</span> confirmed
+          <span style={{ color: '#f59e0b' }}>{totalCount - confirmedCount}</span> pending
+        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
+          {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only']].map(([k, lbl]) => (
+            <button key={k} onClick={() => setLayoutMode(k)}
+              style={{ background: layout === k ? 'rgba(99,102,241,0.15)' : 'none', border: `1px solid ${layout === k ? 'var(--accent-primary)' : 'var(--border-color)'}`, borderRadius: 'var(--radius-sm)', color: layout === k ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', padding: '4px 8px', fontSize: '10px', fontWeight: layout === k ? 600 : 400 }}>
+              {lbl}
+            </button>
+          ))}
         </div>
-
       </div>
 
-      {/* Right Area (Assayer Recommendations Panel) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-        
-        {/* Recommendation Detail panel */}
-        <div className="glass-card" style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
-          
-          {selectedPb ? (
-            <>
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>SELECTED BRANCH</span>
-                <h4 style={{ fontSize: '18px', fontWeight: 700, margin: '2px 0' }}>{selectedPb.branch.name}</h4>
-                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                  {selectedPb.branch.city}, {selectedPb.branch.district}, {selectedPb.branch.state}
-                </p>
-                {selectedPb.assignment && (
-                  <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>ACTIVE ASSIGNMENT</span>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff', display: 'block', marginTop: '2px' }}>
-                      {selectedPb.assignment.assayer?.displayName || 'Assigned Candidate'}
-                    </span>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Agreed Professional Fee: ₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee}</span>
-                    <button 
-                      onClick={() => handleCancelAssignment(selectedPb.assignment!.id)}
-                      className="btn btn-secondary" 
-                      style={{ width: '100%', marginTop: '10px', padding: '4px', fontSize: '11px', color: 'red' }}
-                    >
-                      Unassign / Cancel
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 700, display: 'block', marginBottom: '12px' }}>
-                  RECOMMENDED ASSAYERS (PostGIS Proximity)
-                </span>
-
-                {isLoadingCandidates ? (
-                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
-                    Computing proximity sphere...
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    {candidates.length === 0 ? (
-                      <div style={{
-                        padding: '16px',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px dashed var(--border-color)',
-                        textAlign: 'center',
-                        color: 'var(--text-muted)',
-                        fontSize: '13px'
-                      }}>
-                        <AlertTriangle size={24} style={{ margin: '0 auto 8px auto', color: 'rgba(245,158,11,0.6)' }} />
-                        No active candidates within district bounds.
-                      </div>
-                    ) : (
-                      candidates.map((c) => {
-                        const estTravelTime = c.distanceKm !== null ? Math.round(c.distanceKm * 1.5) : 45;
-                        const estTravelCost = c.distanceKm !== null ? Math.round(c.distanceKm * 8) : 250;
-                        const confidenceScore = c.distanceKm !== null && c.distanceKm < 30 ? 98 : c.distanceKm !== null && c.distanceKm < 60 ? 88 : 74;
-                        const reasoningText = c.distanceKm !== null && c.distanceKm < 30 
-                          ? "Closest local auditor with active audit certifications, minimizing travel cost overheads."
-                          : "Certified regional auditor with excellent historic timeliness scores, selected to minimize schedule risk.";
-
-                        return (
-                          <div key={c.id} style={{
-                            background: 'rgba(255, 255, 255, 0.02)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: 'var(--radius-md)',
-                            padding: '14px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '10px'
-                          }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                              <div>
-                                <span style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{c.displayName}</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                                  <Compass size={12} />
-                                  <span>
-                                    {c.distanceKm !== null ? `${c.distanceKm} km away (~${estTravelTime} mins)` : 'Fallback Match (State/District)'}
-                                  </span>
-                                </div>
-                              </div>
-                              <span className="badge" style={{
-                                background: confidenceScore >= 90 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
-                                color: confidenceScore >= 90 ? 'var(--status-active)' : 'var(--text-secondary)',
-                                padding: '2px 6px',
-                                fontSize: '10px'
-                              }}>
-                                Match: {confidenceScore}%
-                              </span>
-                            </div>
-
-                            {/* GIP Route & Cost Intelligence Grid */}
-                            <div style={{ 
-                              display: 'grid', 
-                              gridTemplateColumns: '1fr 1fr', 
-                              gap: '8px', 
-                              background: 'rgba(255,255,255,0.01)', 
-                              padding: '8px', 
-                              borderRadius: 'var(--radius-sm)', 
-                              border: '1px solid rgba(255,255,255,0.03)',
-                              fontSize: '11px' 
-                            }}>
-                              <div>
-                                <span style={{ color: 'var(--text-muted)' }}>Travel Allowance:</span>
-                                <span style={{ display: 'block', fontWeight: 600, color: '#fff' }}>₹{estTravelCost}</span>
-                              </div>
-                              <div>
-                                <span style={{ color: 'var(--text-muted)' }}>Workload Status:</span>
-                                <span style={{ display: 'block', fontWeight: 600, color: '#fff' }}>Optimal (2 Audits)</span>
-                              </div>
-                            </div>
-
-                            {/* AI Recommendation Explanation */}
-                            <div style={{ 
-                              padding: '8px 10px', 
-                              background: 'rgba(99, 102, 241, 0.05)', 
-                              borderLeft: '3px solid var(--accent-primary)',
-                              borderRadius: 'var(--radius-sm)',
-                              fontSize: '11px',
-                              color: 'var(--text-secondary)'
-                            }}>
-                              <b>AI Reasoning:</b> {reasoningText}
-                            </div>
-
-                            <div style={{ display: 'flex', flexDirection: 'column', fontSize: '11px', color: 'var(--text-muted)', gap: '2px' }}>
-                              <span>Home Base: <b>{c.city}, {c.district}</b></span>
-                              <span>Contact Info: <b>{c.phone}</b></span>
-                            </div>
-
-                            <div style={{ display: 'flex', gap: '8px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
-                              <a href={`tel:${c.phone}`} className="btn btn-secondary" style={{ flex: 1, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                                <PhoneCall size={12} /> Call
-                              </a>
-                              <button 
-                                onClick={() => {
-                                  setSelectedCandidate(c);
-                                  setShowNegotiationModal(true);
-                                }} 
-                                className="btn btn-primary" 
-                                style={{ flex: 1, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
-                              >
-                                <Check size={12} /> Assign
-                              </button>
-                            </div>
-
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
-                              <button
-                                type="button"
-                                onClick={() => handleOptimizeRoute(c)}
-                                disabled={isOptimizing}
-                                className="btn btn-secondary"
-                                style={{ width: '100%', padding: '6px 8px', fontSize: '12px' }}
-                              >
-                                {isOptimizing ? 'Optimizing Sequence...' : '🗺️ Optimize Assigned Route'}
-                              </button>
-                              {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
-                                <div style={{ padding: '8px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)' }}>
-                                  <b>Route Optimized (Round Trip):</b><br/>
-                                  Total Distance: {optimizedSummary.totalDistanceKm} km<br/>
-                                  Est. Duration: {optimizedSummary.totalDurationMinutes} mins
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px 0' }}>
-              <ShieldAlert size={32} style={{ margin: '0 auto 12px auto' }} />
-              <p>Select a branch from the planning queue to view recommendations.</p>
-            </div>
-          )}
-
-        </div>
-
-      </div>
-
-      {/* Negotiation Modal overlay */}
-      {showNegotiationModal && selectedCandidate && selectedPb && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100vw',
-          height: '100vh',
-          background: 'rgba(0,0,0,0.7)',
-          backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 100
-        }}>
-          <form onSubmit={handleConfirmAssignment} className="glass-card" style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h4 style={{ fontSize: '18px', fontWeight: 600 }}>Create Assignment Commitment</h4>
-              <button type="button" onClick={() => setShowNegotiationModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                <X size={18} />
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                Assigning branch <b>{selectedPb.branch.name}</b> to assayer <b>{selectedCandidate.displayName}</b>.
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Negotiated Professional Fee (INR)</label>
-                <input 
-                  type="number" 
-                  value={negotiatingFee}
-                  onChange={(e) => setNegotiatingFee(e.target.value)}
-                  required
-                  style={{
-                    padding: '10px',
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-sm)',
-                    color: '#fff',
-                    outline: 'none'
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Proposed Audit Date *</label>
-                <input 
-                  type="date" 
-                  value={negotiatingDate}
-                  onChange={(e) => setNegotiatingDate(e.target.value)}
-                  required
-                  style={{
-                    padding: '10px',
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-sm)',
-                    color: '#fff',
-                    outline: 'none'
-                  }}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-              <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">
-                Cancel
-              </button>
-              <button 
-                type="submit"
-                className="btn btn-primary"
-              >
-                Confirm Commitment
-              </button>
-            </div>
-
-          </form>
+      {/* ── Message Banner ── */}
+      {message && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 32px', fontSize: '12px', borderBottom: '1px solid', background: message.type === 'success' ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', borderColor: message.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171', flexShrink: 0 }}>
+          {message.type === 'success' ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+          <span>{message.text}</span>
         </div>
       )}
 
+      {/* ── Layout: Default (Branch list + Map + Drawer) ── */}
+      {layout === 'default' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '0 32px 32px' }}>
+          <div style={{ width: '280px', minWidth: '280px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+              <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                style={{ flex: 1, background: 'none', border: 'none', color: '#fff', outline: 'none', fontSize: '12px' }} />
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '4px' }}>
+              {branches.length === 0 ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>No branches loaded.</div>
+              ) : filteredBranches.length === 0 ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>No branches match filters.</div>
+              ) : (
+                filteredBranches.map(pb => {
+                  const isSelected = pb.id === selectedBranchId;
+                  const isAssigned = !!pb.assignment;
+                  return (
+                    <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
+                      style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px', background: isSelected ? 'rgba(99,102,241,0.12)' : 'transparent', borderLeft: isSelected ? '3px solid var(--accent-primary)' : '3px solid transparent' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>{pb.branch.name}</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{pb.branch.city}, {pb.branch.state}</div>
+                      <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center' }}>
+                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: isAssigned ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{pb.status}</span>
+                        {isAssigned && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{pb.assignment?.assayer?.displayName}</span>}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+            <InteractivePlanningMap fillContainer
+              branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+              selectedBranchId={selectedBranchId}
+              onSelectBranch={id => setSelectedBranchId(id)}
+              routePoints={routePoints}
+            />
+            <div ref={drawerRef} style={{
+              position: 'absolute', bottom: 0, left: 0, right: 0,
+              maxHeight: selectedBranchId ? '280px' : '0px', overflow: 'hidden',
+              transition: 'max-height 0.3s ease, opacity 0.2s ease', opacity: selectedBranchId ? 1 : 0, zIndex: 20,
+              background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
+            }}>
+              {selectedPb && (
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>RECOMMENDED ASSAYERS</span>
+                      <span style={{ fontSize: '14px', fontWeight: 600, marginLeft: '10px' }}>{selectedPb.branch.name}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}, {selectedPb.branch.state}</span>
+                      {selectedPb.assignment && (
+                        <button onClick={() => handleCancelAssignment(selectedPb.assignment!.id)} className="btn btn-secondary"
+                          style={{ padding: '3px 8px', fontSize: '10px', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>Unassign</button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }}>
+                    {renderCandidatesList(true)}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Layout: 3-Column (Branch list + Map + Detail panel) ── */}
+      {layout === 'three-col' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '0 32px 32px' }}>
+          <div style={{ width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+              <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                style={{ flex: 1, background: 'none', border: 'none', color: '#fff', outline: 'none', fontSize: '12px' }} />
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '4px' }}>
+              {filteredBranches.map(pb => {
+                const isSelected = pb.id === selectedBranchId;
+                const isAssigned = !!pb.assignment;
+                return (
+                  <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
+                    style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px', background: isSelected ? 'rgba(99,102,241,0.12)' : 'transparent', borderLeft: isSelected ? '3px solid var(--accent-primary)' : '3px solid transparent' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>{pb.branch.name}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{pb.branch.city}, {pb.branch.state}</div>
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: isAssigned ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{pb.status}</span>
+                      {isAssigned && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{pb.assignment?.assayer?.displayName}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+            <InteractivePlanningMap fillContainer
+              branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+              selectedBranchId={selectedBranchId}
+              onSelectBranch={id => setSelectedBranchId(id)}
+              routePoints={routePoints}
+            />
+          </div>
+
+          {selectedPb && (
+            <div style={{ width: '340px', minWidth: '340px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>BRANCH DETAILS</span>
+                  <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '1px' }}>{selectedPb.branch.name}</div>
+                </div>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}</span>
+                  {selectedPb.assignment && (
+                    <button onClick={() => handleCancelAssignment(selectedPb.assignment!.id)} className="btn btn-secondary"
+                      style={{ padding: '2px 6px', fontSize: '9px', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>Unassign</button>
+                  )}
+                </div>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '8px' }}>RECOMMENDED ASSAYERS</span>
+                {renderCandidatesList(false)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Layout: Map Only ── */}
+      {layout === 'map-only' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 0 32px' }}>
+          <InteractivePlanningMap fillContainer
+            branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+            selectedBranchId={selectedBranchId}
+            onSelectBranch={id => setSelectedBranchId(id)}
+            routePoints={routePoints}
+          />
+        </div>
+      )}
+
+      {/* ── Negotiation Modal ── */}
+      {showNegotiationModal && selectedCandidate && selectedPb && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <form onSubmit={handleConfirmAssignment} className="glass-card" style={{ width: '420px', display: 'flex', flexDirection: 'column', gap: '20px', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Confirm Assignment</h4>
+              <button type="button" onClick={() => setShowNegotiationModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={18} /></button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', padding: '14px', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: '13px' }}>
+              <div><span style={{ color: 'var(--text-muted)' }}>Branch</span><div style={{ fontWeight: 600, color: '#fff', marginTop: '2px' }}>{selectedPb.branch.name}</div></div>
+              <div><span style={{ color: 'var(--text-muted)' }}>Assayer</span><div style={{ fontWeight: 600, color: '#fff', marginTop: '2px' }}>{selectedCandidate.displayName}</div></div>
+              <div><span style={{ color: 'var(--text-muted)' }}>Location</span><div style={{ fontWeight: 600, color: '#fff', marginTop: '2px' }}>{selectedPb.branch.city}, {selectedPb.branch.state}</div></div>
+              <div><span style={{ color: 'var(--text-muted)' }}>Distance</span><div style={{ fontWeight: 600, color: '#fff', marginTop: '2px' }}>{selectedCandidate.distanceKm ?? 'N/A'} km</div></div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Fee (INR)</label>
+                <input type="number" value={negotiatingFee} onChange={e => setNegotiatingFee(e.target.value)} required
+                  style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px' }} />
+              </div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Audit Date</label>
+                <input type="date" value={negotiatingDate} onChange={e => setNegotiatingDate(e.target.value)} required
+                  style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+              <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" className="btn btn-primary">Confirm Commitment</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

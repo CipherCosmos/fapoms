@@ -13,13 +13,16 @@ const project_service_1 = require("./project.service");
 const project_controller_1 = require("./project.controller");
 const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
+const branch_entity_1 = require("../branch/branch.entity");
+const platform_module_1 = require("../platform/platform.module");
 let ProjectModule = class ProjectModule {
 };
 exports.ProjectModule = ProjectModule;
 exports.ProjectModule = ProjectModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([project_entity_1.ProjectEntity, project_branch_entity_1.ProjectBranchEntity]),
+            typeorm_1.TypeOrmModule.forFeature([project_entity_1.ProjectEntity, project_branch_entity_1.ProjectBranchEntity, branch_entity_1.BranchEntity]),
+            platform_module_1.PlatformModule,
         ],
         controllers: [project_controller_1.ProjectController],
         providers: [project_service_1.ProjectService],

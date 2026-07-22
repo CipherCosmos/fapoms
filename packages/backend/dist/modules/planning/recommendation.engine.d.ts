@@ -31,6 +31,10 @@ export declare class ClientRestrictionFilter implements CandidateFilter {
     name: string;
     evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean>;
 }
+export declare class ClientEligibilityFilter implements CandidateFilter {
+    name: string;
+    evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean>;
+}
 export declare class RuleEngineEligibilityFilter implements CandidateFilter {
     private readonly ruleEngine;
     name: string;
@@ -96,6 +100,7 @@ export declare class RiskScoreCalculator implements ScoreCalculator {
 export declare class RecommendationEngine {
     private readonly availabilityFilter;
     private readonly clientRestrictionFilter;
+    private readonly clientEligibilityFilter;
     private readonly ruleEngineEligibilityFilter;
     private readonly distanceCalculator;
     private readonly travelTimeCalculator;
@@ -113,7 +118,7 @@ export declare class RecommendationEngine {
     private readonly clientRepository;
     private filters;
     private calculators;
-    constructor(availabilityFilter: AvailabilityFilter, clientRestrictionFilter: ClientRestrictionFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>);
+    constructor(availabilityFilter: AvailabilityFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>);
     recommend(branch: BranchEntity, scheduledDate: Date, weights?: Record<string, number>): Promise<{
         assayer: AssayerEntity;
         score: number;

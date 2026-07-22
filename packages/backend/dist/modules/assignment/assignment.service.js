@@ -346,10 +346,13 @@ let AssignmentService = class AssignmentService {
             return saved;
         });
     }
-    async findAll(page = 1, limit = 50) {
+    async findAll(page = 1, limit = 50, status) {
+        const where = { isActive: true };
+        if (status)
+            where.status = status;
         const [assignments, total] = await this.assignmentRepository.findAndCount({
-            where: { isActive: true },
-            relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+            where,
+            relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project'],
             order: { createdAt: 'DESC' },
             take: limit,
             skip: (page - 1) * limit,

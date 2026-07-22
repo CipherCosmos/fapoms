@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProjectController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const platform_express_1 = require("@nestjs/platform-express");
 const project_service_1 = require("./project.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
@@ -70,6 +71,20 @@ let ProjectController = class ProjectController {
         return {
             success: true,
             data: branches,
+        };
+    }
+    async associateBranches(id, dto, req) {
+        const list = await this.projectService.associateBranches(id, dto.branchIds, req.user.id);
+        return {
+            success: true,
+            data: list,
+        };
+    }
+    async uploadBranches(id, file, req) {
+        const list = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
+        return {
+            success: true,
+            data: list,
         };
     }
 };
@@ -130,6 +145,29 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], ProjectController.prototype, "getProjectBranches", null);
+__decorate([
+    (0, common_1.Post)(':id/branches'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Associate branches with a project' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "associateBranches", null);
+__decorate([
+    (0, common_1.Post)(':id/branches/upload'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    (0, swagger_1.ApiOperation)({ summary: 'Upload branches from Excel spreadsheet and associate with project' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.UploadedFile)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "uploadBranches", null);
 exports.ProjectController = ProjectController = __decorate([
     (0, swagger_1.ApiTags)('Projects'),
     (0, swagger_1.ApiBearerAuth)(),

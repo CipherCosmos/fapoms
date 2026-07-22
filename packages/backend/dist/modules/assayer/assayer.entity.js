@@ -60,6 +60,7 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     workingHours;
     maxDailyWorkload;
     maxWeeklyWorkload;
+    eligibleClients;
 };
 exports.AssayerEntity = AssayerEntity;
 __decorate([
@@ -247,6 +248,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'max_weekly_workload', type: 'int', default: 15 }),
     __metadata("design:type", Number)
 ], AssayerEntity.prototype, "maxWeeklyWorkload", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'eligible_clients', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "eligibleClients", void 0);
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),

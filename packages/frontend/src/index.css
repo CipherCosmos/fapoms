@@ -51,7 +51,6 @@
 
   /* Dimensions */
   --sidebar-width: 260px;
-  --header-height: 70px;
   
   /* Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
@@ -130,9 +129,9 @@ h1, h2, h3, h4, h5, h6 {
 .app-container {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
-  grid-template-rows: var(--header-height) 1fr;
+  grid-template-rows: 1fr;
+  transition: grid-template-columns var(--transition-normal);
   grid-template-areas: 
-    "sidebar header"
     "sidebar main";
   height: 100vh;
   width: 100vw;
@@ -142,14 +141,6 @@ h1, h2, h3, h4, h5, h6 {
   grid-area: sidebar;
   background-color: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
-}
-
-.header-area {
-  grid-area: header;
-  background-color: var(--bg-glass);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border-color);
-  z-index: 10;
 }
 
 .main-area {

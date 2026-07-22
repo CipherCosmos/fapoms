@@ -1,7 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Sidebar } from './Sidebar';
-import { Header } from './Header';
-import { useLocation } from 'react-router-dom';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -10,32 +8,11 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
-  const location = useLocation();
-
-  // Get human readable title from route path
-  const getRouteTitle = (path: string): string => {
-    const parts = path.split('/').filter(Boolean);
-    if (parts.length === 0) return 'Dashboard';
-    const mainPart = parts[0];
-    
-    // Capitalize and replace hyphens with spaces
-    const title = mainPart.charAt(0).toUpperCase() + mainPart.slice(1).replace(/-/g, ' ');
-    
-    if (parts.length > 1) {
-      return `${title} Details`;
-    }
-    return title;
-  };
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
   return (
-    <div className="app-container">
-      {/* Sidebar Navigation */}
-      <Sidebar user={user} />
-
-      {/* Global Header */}
-      <Header onLogout={onLogout} title={getRouteTitle(location.pathname)} />
-
-      {/* Main Workspace Area */}
+    <div className="app-container" style={{ '--sidebar-width': sidebarCollapsed ? '64px' : '260px' } as React.CSSProperties}>
+      <Sidebar user={user} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(c => !c)} onLogout={onLogout} />
       <main className="main-area">
         {children}
       </main>

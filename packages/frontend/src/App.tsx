@@ -13,6 +13,7 @@ import { Documents } from './pages/Documents';
 import { Validation } from './pages/Validation';
 import { Users } from './pages/Users';
 import { Assayers } from './pages/Assayers';
+import { Clients } from './pages/Clients';
 import { Rules } from './pages/Rules';
 import { api } from './services/api';
 
@@ -37,14 +38,16 @@ export const App: React.FC = () => {
     }
   }, [token]);
 
-  const handleLoginSuccess = (jwtToken: string) => {
+  const handleLoginSuccess = (jwtToken: string, refreshToken: string) => {
     localStorage.setItem('fapoms_token', jwtToken);
+    localStorage.setItem('fapoms_refresh_token', refreshToken);
     setToken(jwtToken);
     navigate('/dashboard');
   };
 
   const handleLogout = () => {
     localStorage.removeItem('fapoms_token');
+    localStorage.removeItem('fapoms_refresh_token');
     setToken(null);
     setCurrentUser(null);
     navigate('/login');
@@ -73,6 +76,7 @@ export const App: React.FC = () => {
         <Route path="/validation" element={<Validation />} />
         <Route path="/users" element={<Users />} />
         <Route path="/assayers" element={<Assayers />} />
+        <Route path="/clients" element={<Clients />} />
         <Route path="/rules" element={<Rules />} />
         
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

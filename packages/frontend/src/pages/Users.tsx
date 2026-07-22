@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Shield, ToggleLeft, ToggleRight, UserPlus } from 'lucide-react';
+import { User, Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, UserX } from 'lucide-react';
 import { api } from '../services/api';
 
 interface UserRole {
@@ -188,6 +188,34 @@ export const Users: React.FC = () => {
           <UserPlus size={16} />
           <span>Add New User</span>
         </button>
+      </div>
+
+      {/* KPI Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
+        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <UsersIcon size={20} style={{ color: 'var(--accent-primary)' }} />
+          </div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{users.length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Total Users</div></div>
+        </div>
+        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <UserCheck size={20} style={{ color: 'var(--status-active)' }} />
+          </div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{users.filter(u => u.status === 'ACTIVE').length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Active</div></div>
+        </div>
+        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <UserX size={20} style={{ color: '#ef4444' }} />
+          </div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{users.filter(u => u.status === 'INACTIVE').length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Inactive</div></div>
+        </div>
+        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(139,92,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Shield size={20} style={{ color: '#8b5cf6' }} />
+          </div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{new Set(users.flatMap(u => u.roles.map(r => r.name))).size}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Distinct Roles</div></div>
+        </div>
       </div>
 
       {error && (

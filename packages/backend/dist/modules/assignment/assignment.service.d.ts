@@ -44,7 +44,7 @@ export declare class AssignmentService implements OnModuleInit {
     findOne(id: string): Promise<AssignmentEntity>;
     update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity>;
     transition(id: string, targetStatus: AssignmentStatus, userId: string, remarks?: string, reason?: string, fee?: number, scheduledDate?: string): Promise<AssignmentEntity>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, status?: string): Promise<{
         assignments: AssignmentEntity[];
         total: number;
     }>;

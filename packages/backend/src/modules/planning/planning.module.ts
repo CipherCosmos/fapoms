@@ -19,6 +19,7 @@ import { ClientEntity } from '../client/client.entity';
 import {
   AvailabilityFilter,
   ClientRestrictionFilter,
+  ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
   DistanceScoreCalculator,
   TravelTimeScoreCalculator,
@@ -53,6 +54,7 @@ import {
     PlanningOrchestratorService,
     AvailabilityFilter,
     ClientRestrictionFilter,
+    ClientEligibilityFilter,
     RuleEngineEligibilityFilter,
     DistanceScoreCalculator,
     TravelTimeScoreCalculator,

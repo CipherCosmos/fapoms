@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RuleEngineEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
+exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
@@ -24,6 +24,16 @@ const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commerci
 const client_entity_1 = require("../client/client.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
+function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
 let AvailabilityFilter = class AvailabilityFilter {
     assignmentRepository;
     name = 'availability';
@@ -64,6 +74,22 @@ exports.ClientRestrictionFilter = ClientRestrictionFilter;
 exports.ClientRestrictionFilter = ClientRestrictionFilter = __decorate([
     (0, common_1.Injectable)()
 ], ClientRestrictionFilter);
+let ClientEligibilityFilter = class ClientEligibilityFilter {
+    name = 'clientEligibility';
+    async evaluate(assayer, context) {
+        if (!context.client)
+            return true;
+        const eligible = assayer.eligibleClients || [];
+        if (eligible.length === 0 || eligible.includes('*') || eligible.includes('ANY') || eligible.includes('ALL')) {
+            return true;
+        }
+        return eligible.includes(context.client.clientCode) || eligible.includes(context.client.id);
+    }
+};
+exports.ClientEligibilityFilter = ClientEligibilityFilter;
+exports.ClientEligibilityFilter = ClientEligibilityFilter = __decorate([
+    (0, common_1.Injectable)()
+], ClientEligibilityFilter);
 let RuleEngineEligibilityFilter = class RuleEngineEligibilityFilter {
     ruleEngine;
     name = 'ruleEngineEligibility';
@@ -104,7 +130,7 @@ let DistanceScoreCalculator = class DistanceScoreCalculator {
             return 0;
         }
         const route = await this.routingService.calculateRoute({ latitude: context.branch.latitude, longitude: context.branch.longitude }, { latitude: assayer.latitude, longitude: assayer.longitude });
-        return Math.max(0, 100 - route.distanceKm);
+        return Math.max(0, 100 - (route.distanceKm / 5));
     }
 };
 exports.DistanceScoreCalculator = DistanceScoreCalculator;
@@ -123,7 +149,7 @@ let TravelTimeScoreCalculator = class TravelTimeScoreCalculator {
             return 0;
         }
         const route = await this.routingService.calculateRoute({ latitude: context.branch.latitude, longitude: context.branch.longitude }, { latitude: assayer.latitude, longitude: assayer.longitude });
-        return Math.max(0, 100 - route.durationMinutes);
+        return Math.max(0, 100 - (route.durationMinutes / 6));
     }
 };
 exports.TravelTimeScoreCalculator = TravelTimeScoreCalculator;
@@ -201,7 +227,7 @@ let CostScoreCalculator = class CostScoreCalculator {
             return 50;
         }
         const baseFee = Number(activeProfile.baseFee) || 0;
-        return Math.max(0, 100 - (baseFee / 5000) * 100);
+        return Math.max(0, 100 - (baseFee / 20000) * 100);
     }
 };
 exports.CostScoreCalculator = CostScoreCalculator;
@@ -213,10 +239,59 @@ exports.CostScoreCalculator = CostScoreCalculator = __decorate([
 let ClientPreferenceScoreCalculator = class ClientPreferenceScoreCalculator {
     name = 'clientPreference';
     async calculate(assayer, context) {
-        if (context.client?.preferredAssayers?.includes(assayer.id)) {
-            return 100;
+        let score = 50;
+        const isPreferred = context.client?.preferredAssayers?.includes(assayer.id);
+        if (isPreferred) {
+            score = 80;
         }
-        return 50;
+        const preferences = context.client?.planningPreferences || {};
+        if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+            const distance = calculateHaversineDistance(Number(context.branch.latitude), Number(context.branch.longitude), Number(assayer.latitude), Number(assayer.longitude));
+            const minDistance = Number(preferences.minDistanceKm);
+            const maxDistance = Number(preferences.maxDistanceKm);
+            if (!isNaN(minDistance) && distance < minDistance) {
+                score -= 40;
+            }
+            if (!isNaN(maxDistance) && distance > maxDistance) {
+                score -= 40;
+            }
+            if ((isNaN(minDistance) || distance >= minDistance) && (isNaN(maxDistance) || distance <= maxDistance)) {
+                score += 10;
+            }
+        }
+        const assayerSkills = assayer.skills || [];
+        const requiredSkills = preferences.requiredSkills || [];
+        const preferredSkills = preferences.preferredSkills || [];
+        if (requiredSkills.length > 0) {
+            const hasAllRequired = requiredSkills.every((s) => assayerSkills.some((as) => as.toLowerCase() === s.toLowerCase()));
+            if (!hasAllRequired) {
+                return 0;
+            }
+            score += 10;
+        }
+        if (preferredSkills.length > 0) {
+            const hasAnyPreferred = preferredSkills.some((s) => assayerSkills.some((as) => as.toLowerCase() === s.toLowerCase()));
+            if (hasAnyPreferred) {
+                score += 10;
+            }
+        }
+        const assayerCertifications = (assayer.certifications || []).map(c => c.name);
+        const requiredCerts = preferences.requiredCertifications || [];
+        const preferredCerts = preferences.preferredCertifications || [];
+        if (requiredCerts.length > 0) {
+            const hasAllRequired = requiredCerts.every((c) => assayerCertifications.some((ac) => ac.toLowerCase() === c.toLowerCase()));
+            if (!hasAllRequired) {
+                return 0;
+            }
+            score += 10;
+        }
+        if (preferredCerts.length > 0) {
+            const hasAnyPreferred = preferredCerts.some((c) => assayerCertifications.some((ac) => ac.toLowerCase() === c.toLowerCase()));
+            if (hasAnyPreferred) {
+                score += 10;
+            }
+        }
+        return Math.max(0, Math.min(100, score));
     }
 };
 exports.ClientPreferenceScoreCalculator = ClientPreferenceScoreCalculator;
@@ -307,6 +382,7 @@ exports.RiskScoreCalculator = RiskScoreCalculator = __decorate([
 let RecommendationEngine = class RecommendationEngine {
     availabilityFilter;
     clientRestrictionFilter;
+    clientEligibilityFilter;
     ruleEngineEligibilityFilter;
     distanceCalculator;
     travelTimeCalculator;
@@ -324,9 +400,10 @@ let RecommendationEngine = class RecommendationEngine {
     clientRepository;
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, clientRestrictionFilter, ruleEngineEligibilityFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository) {
+    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository) {
         this.availabilityFilter = availabilityFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
+        this.clientEligibilityFilter = clientEligibilityFilter;
         this.ruleEngineEligibilityFilter = ruleEngineEligibilityFilter;
         this.distanceCalculator = distanceCalculator;
         this.travelTimeCalculator = travelTimeCalculator;
@@ -342,7 +419,7 @@ let RecommendationEngine = class RecommendationEngine {
         this.configResolver = configResolver;
         this.assayerRepository = assayerRepository;
         this.clientRepository = clientRepository;
-        this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.ruleEngineEligibilityFilter);
+        this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter);
         this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.profitabilityCalculator, this.riskCalculator);
     }
     async recommend(branch, scheduledDate, weights = {}) {
@@ -393,10 +470,11 @@ let RecommendationEngine = class RecommendationEngine {
 exports.RecommendationEngine = RecommendationEngine;
 exports.RecommendationEngine = RecommendationEngine = __decorate([
     (0, common_1.Injectable)(),
-    __param(15, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
-    __param(16, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(16, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(17, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [AvailabilityFilter,
         ClientRestrictionFilter,
+        ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
         DistanceScoreCalculator,
         TravelTimeScoreCalculator,

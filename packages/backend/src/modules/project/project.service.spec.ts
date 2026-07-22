@@ -5,7 +5,9 @@ import { Repository } from 'typeorm';
 import { ProjectService } from './project.service';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { BranchEntity } from '../branch/branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 
 describe('ProjectService', () => {
@@ -22,10 +24,22 @@ describe('ProjectService', () => {
 
   const mockProjectBranchRepo = {
     find: jest.fn(),
+    findOne: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+
+  const mockBranchRepo = {
+    findOne: jest.fn(),
   };
 
   const mockAuditService = {
     recordEvent: jest.fn(),
+  };
+
+  const mockWorkflowEngine = {
+    registerWorkflow: jest.fn(),
+    executeTransition: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -41,8 +55,16 @@ describe('ProjectService', () => {
           useValue: mockProjectBranchRepo,
         },
         {
+          provide: getRepositoryToken(BranchEntity),
+          useValue: mockBranchRepo,
+        },
+        {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: WorkflowEngine,
+          useValue: mockWorkflowEngine,
         },
       ],
     }).compile();
