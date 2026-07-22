@@ -1,13 +1,9 @@
-/**
- * FAPOMS — Client Entity
- *
- * Represents corporate clients (banks/financial institutions)
- * that request audits (Part 2 §2, Part 5 §3).
- */
-
-import { Entity, Column, OneToOne } from 'typeorm';
+import { Entity, Column, OneToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import type { ClientConfigurationEntity } from './client-configuration.entity';
+import type { ClientContactEntity } from './client-contact.entity';
+import type { ClientContractEntity } from './client-contract.entity';
+import type { ClientBillingEntity } from './client-billing.entity';
 
 @Entity('clients')
 export class ClientEntity extends BaseEntity {
@@ -19,6 +15,27 @@ export class ClientEntity extends BaseEntity {
 
   @Column({ name: 'display_name', length: 255 })
   displayName: string;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  website: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  industry: string | null;
+
+  @Column({ name: 'client_type', length: 50, default: 'OTHER' })
+  clientType: string;
+
+  @Column({ name: 'registration_number', type: 'varchar', length: 100, nullable: true })
+  registrationNumber: string | null;
+
+  @Column({ name: 'tax_id', type: 'varchar', length: 100, nullable: true })
+  taxId: string | null;
+
+  @Column({ name: 'lifecycle_status', length: 50, default: 'PROSPECT' })
+  lifecycleStatus: string;
+
+  @Column({ name: 'organization_id', type: 'uuid', nullable: true })
+  organizationId: string | null;
 
   @Column({ name: 'contact_person', type: 'varchar', length: 200, nullable: true })
   contactPerson: string | null;
@@ -32,9 +49,17 @@ export class ClientEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   address: string | null;
 
-  // Use a string resolver for the target entity to avoid runtime circular import reference errors
   @OneToOne('ClientConfigurationEntity', 'client', { cascade: true, eager: true })
   configuration: any;
+
+  @OneToMany('ClientContactEntity', 'client', { cascade: true })
+  contacts: ClientContactEntity[];
+
+  @OneToMany('ClientContractEntity', 'client', { cascade: true })
+  contracts: ClientContractEntity[];
+
+  @OneToOne('ClientBillingEntity', 'client', { cascade: true })
+  billing: ClientBillingEntity;
 
   @Column({ type: 'varchar', length: 50, default: 'MEDIUM' })
   priority: string;

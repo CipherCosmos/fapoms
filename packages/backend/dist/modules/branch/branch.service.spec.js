@@ -5,71 +5,57 @@ const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
 const branch_service_1 = require("./branch.service");
 const branch_entity_1 = require("./branch.entity");
+const branch_contact_entity_1 = require("./branch-contact.entity");
+const branch_document_entity_1 = require("./branch-document.entity");
 const client_service_1 = require("../client/client.service");
+const zone_entity_1 = require("../zone/zone.entity");
 const geo_entities_1 = require("../geo/geo.entities");
 const audit_service_1 = require("../../core/audit/audit.service");
 describe('BranchService', () => {
     let service;
-    let branchRepo;
-    let stateRepo;
-    let districtRepo;
-    let cityRepo;
     const mockBranchRepo = {
         create: jest.fn(),
         save: jest.fn(),
         findOne: jest.fn(),
         createQueryBuilder: jest.fn(),
     };
-    const mockStateRepo = {
+    const mockContactRepo = {
+        create: jest.fn(),
+        save: jest.fn(),
+        findOne: jest.fn(),
+        find: jest.fn(),
+        update: jest.fn(),
+    };
+    const mockDocumentRepo = {
+        create: jest.fn(),
+        save: jest.fn(),
+        findOne: jest.fn(),
+        find: jest.fn(),
+    };
+    const mockZoneRepo = {
         findOne: jest.fn(),
     };
-    const mockDistrictRepo = {
-        findOne: jest.fn(),
-    };
-    const mockCityRepo = {
-        findOne: jest.fn(),
-    };
-    const mockClientService = {
-        findOne: jest.fn(),
-    };
-    const mockAuditService = {
-        recordEvent: jest.fn(),
-    };
+    const mockStateRepo = { findOne: jest.fn() };
+    const mockDistrictRepo = { findOne: jest.fn() };
+    const mockCityRepo = { findOne: jest.fn() };
+    const mockClientService = { findOne: jest.fn() };
+    const mockAuditService = { recordEvent: jest.fn() };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
                 branch_service_1.BranchService,
-                {
-                    provide: (0, typeorm_1.getRepositoryToken)(branch_entity_1.BranchEntity),
-                    useValue: mockBranchRepo,
-                },
-                {
-                    provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoStateEntity),
-                    useValue: mockStateRepo,
-                },
-                {
-                    provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoDistrictEntity),
-                    useValue: mockDistrictRepo,
-                },
-                {
-                    provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoCityEntity),
-                    useValue: mockCityRepo,
-                },
-                {
-                    provide: client_service_1.ClientService,
-                    useValue: mockClientService,
-                },
-                {
-                    provide: audit_service_1.AuditService,
-                    useValue: mockAuditService,
-                },
+                { provide: (0, typeorm_1.getRepositoryToken)(branch_entity_1.BranchEntity), useValue: mockBranchRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(branch_contact_entity_1.BranchContactEntity), useValue: mockContactRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(branch_document_entity_1.BranchDocumentEntity), useValue: mockDocumentRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(zone_entity_1.ZoneEntity), useValue: mockZoneRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoStateEntity), useValue: mockStateRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoDistrictEntity), useValue: mockDistrictRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoCityEntity), useValue: mockCityRepo },
+                { provide: client_service_1.ClientService, useValue: mockClientService },
+                { provide: audit_service_1.AuditService, useValue: mockAuditService },
             ],
         }).compile();
         service = module.get(branch_service_1.BranchService);
-        branchRepo = module.get((0, typeorm_1.getRepositoryToken)(branch_entity_1.BranchEntity));
-        stateRepo = module.get((0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoStateEntity));
-        districtRepo = module.get((0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoDistrictEntity));
-        cityRepo = module.get((0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoCityEntity));
         jest.clearAllMocks();
     });
     describe('create', () => {

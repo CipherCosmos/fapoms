@@ -11,9 +11,11 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const planning_service_1 = require("./planning.service");
 const planning_controller_1 = require("./planning.controller");
+const planning_orchestrator_service_1 = require("./planning-orchestrator.service");
 const branch_entity_1 = require("../branch/branch.entity");
 const assayer_entity_1 = require("../assayer/assayer.entity");
 const assignment_entity_1 = require("../assignment/assignment.entity");
+const project_branch_entity_1 = require("../project/project-branch.entity");
 const geo_module_1 = require("../geo/geo.module");
 const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
@@ -29,6 +31,7 @@ exports.PlanningModule = PlanningModule = __decorate([
                 branch_entity_1.BranchEntity,
                 assayer_entity_1.AssayerEntity,
                 assignment_entity_1.AssignmentEntity,
+                project_branch_entity_1.ProjectBranchEntity,
                 assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity,
                 business_rule_entity_1.BusinessRuleEntity,
                 client_entity_1.ClientEntity,
@@ -38,6 +41,7 @@ exports.PlanningModule = PlanningModule = __decorate([
         controllers: [planning_controller_1.PlanningController],
         providers: [
             planning_service_1.PlanningService,
+            planning_orchestrator_service_1.PlanningOrchestratorService,
             recommendation_engine_1.AvailabilityFilter,
             recommendation_engine_1.ClientRestrictionFilter,
             recommendation_engine_1.RuleEngineEligibilityFilter,
@@ -54,7 +58,7 @@ exports.PlanningModule = PlanningModule = __decorate([
             recommendation_engine_1.RiskScoreCalculator,
             recommendation_engine_1.RecommendationEngine,
         ],
-        exports: [planning_service_1.PlanningService, recommendation_engine_1.RecommendationEngine],
+        exports: [planning_service_1.PlanningService, planning_orchestrator_service_1.PlanningOrchestratorService, recommendation_engine_1.RecommendationEngine],
     })
 ], PlanningModule);
 //# sourceMappingURL=planning.module.js.map

@@ -4,7 +4,7 @@
  * Represents a single branch's participation in an audit project (Part 2 §5, Part 6 §4).
  */
 
-import { Entity, Column, Index, ManyToOne, JoinColumn, OneToOne } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectEntity } from './project.entity';
 import { BranchEntity } from '../branch/branch.entity';
@@ -53,6 +53,6 @@ export class ProjectBranchEntity extends BaseEntity {
   @JoinColumn({ name: 'branch_id' })
   branch: BranchEntity;
 
-  @OneToOne(() => AssignmentEntity, (a) => a.projectBranch, { nullable: true })
-  assignment: AssignmentEntity | null;
+  @OneToMany(() => AssignmentEntity, (a) => a.projectBranch)
+  assignments: AssignmentEntity[];
 }

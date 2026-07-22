@@ -1,5 +1,7 @@
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ClientEntity } from '../client/client.entity';
+import type { BranchContactEntity } from './branch-contact.entity';
+import type { BranchDocumentEntity } from './branch-document.entity';
 export declare class BranchEntity extends BaseEntity {
     branchCode: string;
     solId: string | null;
@@ -9,13 +11,27 @@ export declare class BranchEntity extends BaseEntity {
     district: string;
     city: string;
     pincode: string | null;
+    region: string | null;
+    territory: string | null;
+    zoneId: string | null;
+    branchType: string | null;
+    phone: string | null;
+    email: string | null;
+    managerName: string | null;
+    openingDate: string | null;
+    lastAuditDate: string | null;
+    operatingHours: Record<string, any> | null;
     latitude: number | null;
     longitude: number | null;
     location: any | null;
+    organizationId: string | null;
     clientId: string | null;
     client: ClientEntity | null;
     riskScore: number;
+    riskCategory: string | null;
     complexity: string;
     estimatedDurationHours: number;
     requiredCompetencies: string[] | null;
+    contacts: BranchContactEntity[];
+    documents: BranchDocumentEntity[];
 }

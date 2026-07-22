@@ -21,6 +21,7 @@ let UserEntity = class UserEntity extends base_entity_1.BaseEntity {
     lastName;
     displayName;
     status;
+    organizationId;
     departmentId;
     phone;
     lastLoginAt;
@@ -63,6 +64,10 @@ __decorate([
     }),
     __metadata("design:type", String)
 ], UserEntity.prototype, "status", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'organization_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], UserEntity.prototype, "organizationId", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'department_id', type: 'uuid', nullable: true }),
     __metadata("design:type", Object)

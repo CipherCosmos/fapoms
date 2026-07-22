@@ -102,16 +102,31 @@ export var ValidationStatus;
     ValidationStatus["SUBMITTED"] = "SUBMITTED";
 })(ValidationStatus || (ValidationStatus = {}));
 // ---------------------------------------------------------------------------
-// Assayer Lifecycle (Part 6 §9)
+// Assayer Operational Status
 // ---------------------------------------------------------------------------
 export var AssayerStatus;
 (function (AssayerStatus) {
-    AssayerStatus["REGISTERED"] = "REGISTERED";
     AssayerStatus["ACTIVE"] = "ACTIVE";
     AssayerStatus["INACTIVE"] = "INACTIVE";
-    AssayerStatus["BUSY"] = "BUSY";
     AssayerStatus["SUSPENDED"] = "SUSPENDED";
 })(AssayerStatus || (AssayerStatus = {}));
+// ---------------------------------------------------------------------------
+// Assayer Enterprise Lifecycle
+// ---------------------------------------------------------------------------
+export var AssayerLifecycleStatus;
+(function (AssayerLifecycleStatus) {
+    AssayerLifecycleStatus["INVITED"] = "INVITED";
+    AssayerLifecycleStatus["DOCUMENT_VERIFICATION"] = "DOCUMENT_VERIFICATION";
+    AssayerLifecycleStatus["BACKGROUND_VERIFICATION"] = "BACKGROUND_VERIFICATION";
+    AssayerLifecycleStatus["TRAINING"] = "TRAINING";
+    AssayerLifecycleStatus["ACTIVE"] = "ACTIVE";
+    AssayerLifecycleStatus["ON_LEAVE"] = "ON_LEAVE";
+    AssayerLifecycleStatus["SUSPENDED"] = "SUSPENDED";
+    AssayerLifecycleStatus["INACTIVE"] = "INACTIVE";
+    AssayerLifecycleStatus["RESIGNED"] = "RESIGNED";
+    AssayerLifecycleStatus["TERMINATED"] = "TERMINATED";
+    AssayerLifecycleStatus["ARCHIVED"] = "ARCHIVED";
+})(AssayerLifecycleStatus || (AssayerLifecycleStatus = {}));
 // ---------------------------------------------------------------------------
 // User Status (Part 8 §5)
 // ---------------------------------------------------------------------------
@@ -235,6 +250,38 @@ export var EventCategory;
     EventCategory["WORKFLOW"] = "WORKFLOW";
     EventCategory["SYSTEM"] = "SYSTEM";
 })(EventCategory || (EventCategory = {}));
+// ---------------------------------------------------------------------------
+// Client Lifecycle (Enterprise)
+// ---------------------------------------------------------------------------
+export var ClientLifecycleStatus;
+(function (ClientLifecycleStatus) {
+    ClientLifecycleStatus["PROSPECT"] = "PROSPECT";
+    ClientLifecycleStatus["ONBOARDING"] = "ONBOARDING";
+    ClientLifecycleStatus["ACTIVE"] = "ACTIVE";
+    ClientLifecycleStatus["SUSPENDED"] = "SUSPENDED";
+    ClientLifecycleStatus["UNDER_REVIEW"] = "UNDER_REVIEW";
+    ClientLifecycleStatus["INACTIVE"] = "INACTIVE";
+    ClientLifecycleStatus["TERMINATED"] = "TERMINATED";
+    ClientLifecycleStatus["ARCHIVED"] = "ARCHIVED";
+})(ClientLifecycleStatus || (ClientLifecycleStatus = {}));
+export var ClientType;
+(function (ClientType) {
+    ClientType["BANK"] = "BANK";
+    ClientType["NBFC"] = "NBFC";
+    ClientType["MICROFINANCE"] = "MICROFINANCE";
+    ClientType["INSURANCE"] = "INSURANCE";
+    ClientType["CORPORATE"] = "CORPORATE";
+    ClientType["GOVERNMENT"] = "GOVERNMENT";
+    ClientType["OTHER"] = "OTHER";
+})(ClientType || (ClientType = {}));
+export var ContractStatus;
+(function (ContractStatus) {
+    ContractStatus["DRAFT"] = "DRAFT";
+    ContractStatus["ACTIVE"] = "ACTIVE";
+    ContractStatus["EXPIRED"] = "EXPIRED";
+    ContractStatus["TERMINATED"] = "TERMINATED";
+    ContractStatus["RENEWED"] = "RENEWED";
+})(ContractStatus || (ContractStatus = {}));
 // ---------------------------------------------------------------------------
 // Priority Levels
 // ---------------------------------------------------------------------------

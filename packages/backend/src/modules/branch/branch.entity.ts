@@ -1,18 +1,16 @@
-/**
- * FAPOMS — Branch Entity
- *
- * Represents a physical bank branch owned by a client (Part 2 §4, Part 5 §4).
- * Stores geographic points using PostGIS to support coordinates search.
- */
-
-import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ClientEntity } from '../client/client.entity';
+import type { ZoneEntity } from '../zone/zone.entity';
+import type { BranchContactEntity } from './branch-contact.entity';
+import type { BranchDocumentEntity } from './branch-document.entity';
 
 @Entity('branches')
 @Index(['branchCode'])
 @Index(['solId'])
 @Index(['clientId'])
+@Index(['region'])
+@Index(['zoneId'])
 export class BranchEntity extends BaseEntity {
   @Column({ name: 'branch_code', length: 50 })
   branchCode: string;
@@ -38,13 +36,42 @@ export class BranchEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   pincode: string | null;
 
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  region: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  territory: string | null;
+
+  @Column({ name: 'zone_id', type: 'uuid', nullable: true })
+  zoneId: string | null;
+
+  @Column({ name: 'branch_type', type: 'varchar', length: 50, nullable: true })
+  branchType: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  phone: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  email: string | null;
+
+  @Column({ name: 'manager_name', type: 'varchar', length: 200, nullable: true })
+  managerName: string | null;
+
+  @Column({ name: 'opening_date', type: 'date', nullable: true })
+  openingDate: string | null;
+
+  @Column({ name: 'last_audit_date', type: 'date', nullable: true })
+  lastAuditDate: string | null;
+
+  @Column({ name: 'operating_hours', type: 'jsonb', nullable: true })
+  operatingHours: Record<string, any> | null;
+
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   latitude: number | null;
 
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   longitude: number | null;
 
-  // PostGIS spatial point for proximity queries (SRID 4326 represents WGS 84 GPS coordinates)
   @Column({
     type: 'geometry',
     spatialFeatureType: 'Point',
@@ -53,6 +80,9 @@ export class BranchEntity extends BaseEntity {
   })
   @Index({ spatial: true })
   location: any | null;
+
+  @Column({ name: 'organization_id', type: 'uuid', nullable: true })
+  organizationId: string | null;
 
   @Column({ name: 'client_id', type: 'uuid', nullable: true })
   clientId: string | null;
@@ -64,6 +94,9 @@ export class BranchEntity extends BaseEntity {
   @Column({ name: 'risk_score', type: 'decimal', precision: 5, scale: 2, default: 0.00 })
   riskScore: number;
 
+  @Column({ name: 'risk_category', type: 'varchar', length: 20, nullable: true })
+  riskCategory: string | null;
+
   @Column({ type: 'varchar', length: 50, default: 'STANDARD' })
   complexity: string;
 
@@ -72,4 +105,10 @@ export class BranchEntity extends BaseEntity {
 
   @Column({ name: 'required_competencies', type: 'jsonb', nullable: true })
   requiredCompetencies: string[] | null;
+
+  @OneToMany('BranchContactEntity', 'branch', { cascade: true })
+  contacts: BranchContactEntity[];
+
+  @OneToMany('BranchDocumentEntity', 'branch', { cascade: true })
+  documents: BranchDocumentEntity[];
 }

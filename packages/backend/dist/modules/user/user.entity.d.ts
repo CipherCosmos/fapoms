@@ -8,6 +8,7 @@ export declare class UserEntity extends BaseEntity {
     lastName: string;
     displayName: string;
     status: string;
+    organizationId: string | null;
     departmentId: string | null;
     phone: string | null;
     lastLoginAt: Date | null;

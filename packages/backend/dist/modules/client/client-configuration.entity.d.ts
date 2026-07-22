@@ -6,6 +6,10 @@ export declare class ClientConfigurationEntity extends BaseEntity {
     workingDays: number[] | null;
     defaultRadius: number;
     slaRules: Record<string, any> | null;
+    serviceLevel: string | null;
+    maxResponseTimeHours: number | null;
+    penaltyRate: number | null;
+    serviceHours: Record<string, any> | null;
     effectiveFrom: Date;
     effectiveTo: Date | null;
 }

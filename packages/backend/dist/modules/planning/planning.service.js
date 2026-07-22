@@ -58,6 +58,8 @@ let PlanningService = class PlanningService {
                 city: r.assayer.city,
                 distanceKm,
                 score: r.score,
+                latitude: r.assayer.latitude,
+                longitude: r.assayer.longitude,
             });
         }
         return recommendations;

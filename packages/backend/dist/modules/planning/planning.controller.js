@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 const planning_service_1 = require("./planning.service");
+const planning_orchestrator_service_1 = require("./planning-orchestrator.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
 class CreateBusinessRuleRequestDto {
@@ -99,8 +100,17 @@ __decorate([
 ], UpdateBusinessRuleRequestDto.prototype, "actions", void 0);
 let PlanningController = class PlanningController {
     planningService;
-    constructor(planningService) {
+    planningOrchestratorService;
+    constructor(planningService, planningOrchestratorService) {
         this.planningService = planningService;
+        this.planningOrchestratorService = planningOrchestratorService;
+    }
+    async getProjectCoverage(projectId) {
+        const coverage = await this.planningOrchestratorService.getProjectCoverage(projectId);
+        return {
+            success: true,
+            data: coverage,
+        };
     }
     async getRecommendations(branchId) {
         const recommendations = await this.planningService.getRecommendedCandidates(branchId);
@@ -146,6 +156,14 @@ let PlanningController = class PlanningController {
     }
 };
 exports.PlanningController = PlanningController;
+__decorate([
+    (0, common_1.Get)('projects/:projectId/coverage'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get project planning coverage and metrics summary' }),
+    __param(0, (0, common_1.Param)('projectId', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], PlanningController.prototype, "getProjectCoverage", null);
 __decorate([
     (0, common_1.Get)('recommendations'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
@@ -207,6 +225,7 @@ exports.PlanningController = PlanningController = __decorate([
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
     (0, common_1.Controller)('planning'),
-    __metadata("design:paramtypes", [planning_service_1.PlanningService])
+    __metadata("design:paramtypes", [planning_service_1.PlanningService,
+        planning_orchestrator_service_1.PlanningOrchestratorService])
 ], PlanningController);
 //# sourceMappingURL=planning.controller.js.map

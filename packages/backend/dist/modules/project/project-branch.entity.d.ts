@@ -13,5 +13,5 @@ export declare class ProjectBranchEntity extends BaseEntity {
     remarks: string | null;
     project: ProjectEntity;
     branch: BranchEntity;
-    assignment: AssignmentEntity | null;
+    assignments: AssignmentEntity[];
 }

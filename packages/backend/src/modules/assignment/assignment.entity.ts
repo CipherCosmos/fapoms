@@ -9,7 +9,7 @@ import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
-import { AssignmentStatus } from '@fapoms/shared';
+import { AssignmentStatus, Priority } from '@fapoms/shared';
 
 @Entity('assignments')
 @Index(['assignmentNumber'])
@@ -36,6 +36,13 @@ export class AssignmentEntity extends BaseEntity {
   })
   status: AssignmentStatus;
 
+  @Column({
+    type: 'enum',
+    enum: Priority,
+    default: Priority.MEDIUM,
+  })
+  priority: Priority;
+
   @Column({ name: 'proposed_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
   proposedFee: number | null;
 
@@ -51,13 +58,19 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
 
+  @Column({ name: 'sla_due_date', type: 'timestamptz', nullable: true })
+  slaDueDate: Date | null;
+
+  @Column({ name: 'sla_status', type: 'varchar', length: 50, default: 'COMPLIANT' })
+  slaStatus: string;
+
   @Column({ name: 'cancel_reason', type: 'text', nullable: true })
   cancelReason: string | null;
 
   @Column({ name: 'reject_reason', type: 'text', nullable: true })
   rejectReason: string | null;
 
-  @OneToOne(() => ProjectBranchEntity, (pb) => pb.assignment, { onDelete: 'CASCADE' })
+  @ManyToOne(() => ProjectBranchEntity, (pb) => pb.assignments, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'project_branch_id' })
   projectBranch: ProjectBranchEntity;
 

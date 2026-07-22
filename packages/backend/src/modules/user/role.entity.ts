@@ -8,6 +8,7 @@
 import { Entity, Column, ManyToMany, JoinTable } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { PermissionEntity } from './permission.entity';
+import { ResponsibilityEntity } from './responsibility.entity';
 
 @Entity('roles')
 export class RoleEntity extends BaseEntity {
@@ -31,4 +32,12 @@ export class RoleEntity extends BaseEntity {
     inverseJoinColumn: { name: 'permission_id' },
   })
   permissions: PermissionEntity[];
+
+  @ManyToMany(() => ResponsibilityEntity, { eager: true })
+  @JoinTable({
+    name: 'role_responsibilities',
+    joinColumn: { name: 'role_id' },
+    inverseJoinColumn: { name: 'responsibility_id' },
+  })
+  responsibilities: ResponsibilityEntity[];
 }

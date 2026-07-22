@@ -36,6 +36,10 @@ export const Projects: React.FC = () => {
   const [selectedPriority, setSelectedPriority] = useState<Priority>(Priority.MEDIUM);
   const [startDate, setStartDate] = useState('2026-07-01');
   const [endDate, setEndDate] = useState('2026-07-31');
+  const [budget, setBudget] = useState<number | ''>('');
+  const [scope, setScope] = useState('');
+  const [requiredSkills, setRequiredSkills] = useState('');
+  const [requiredCertifications, setRequiredCertifications] = useState('');
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -90,7 +94,11 @@ export const Projects: React.FC = () => {
           clientId: selectedClientId,
           priority: selectedPriority,
           startDate,
-          endDate
+          endDate,
+          budget: budget ? Number(budget) : undefined,
+          scope: scope || undefined,
+          requiredSkills: requiredSkills ? requiredSkills.split(',').map(s => s.trim()) : undefined,
+          requiredCertifications: requiredCertifications ? requiredCertifications.split(',').map(s => s.trim()) : undefined,
         })
       });
 
@@ -102,6 +110,10 @@ export const Projects: React.FC = () => {
         // Clear fields
         setNewProjectName('');
         setNewProjectNumber('');
+        setBudget('');
+        setScope('');
+        setRequiredSkills('');
+        setRequiredCertifications('');
         loadProjects();
       } else {
         setMessage({ type: 'error', text: resData.message || 'Failed to create project.' });
@@ -245,8 +257,8 @@ export const Projects: React.FC = () => {
                     <td>
                       <span style={{ 
                         color: p.priority === Priority.CRITICAL ? 'var(--priority-critical)' : 
-                               p.priority === Priority.HIGH ? 'var(--priority-high)' : 
-                               p.priority === Priority.MEDIUM ? 'var(--priority-medium)' : 'var(--priority-low)',
+                                p.priority === Priority.HIGH ? 'var(--priority-high)' : 
+                                p.priority === Priority.MEDIUM ? 'var(--priority-medium)' : 'var(--priority-low)',
                         fontWeight: 600,
                         fontSize: '13px'
                       }}>
@@ -296,7 +308,7 @@ export const Projects: React.FC = () => {
           justifyContent: 'center',
           zIndex: 100
         }}>
-          <form onSubmit={handleCreateProject} className="glass-card" style={{ width: '460px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <form onSubmit={handleCreateProject} className="glass-card" style={{ width: '520px', display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h4 style={{ fontSize: '18px', fontWeight: 600 }}>Create Audit Project</h4>
               <button type="button" onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -418,6 +430,79 @@ export const Projects: React.FC = () => {
                     }}
                   />
                 </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Budget (INR)</label>
+                <input 
+                  type="number" 
+                  value={budget}
+                  onChange={(e) => setBudget(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="e.g. 150000"
+                  style={{
+                    padding: '10px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: '#fff',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scope / Audit Details</label>
+                <textarea 
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value)}
+                  placeholder="Scope details and objectives..."
+                  style={{
+                    padding: '10px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: '#fff',
+                    outline: 'none',
+                    minHeight: '80px',
+                    resize: 'vertical'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Skills (comma-separated)</label>
+                <input 
+                  type="text" 
+                  value={requiredSkills}
+                  onChange={(e) => setRequiredSkills(e.target.value)}
+                  placeholder="e.g. Gold Valuer, Auditing"
+                  style={{
+                    padding: '10px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: '#fff',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Certifications (comma-separated)</label>
+                <input 
+                  type="text" 
+                  value={requiredCertifications}
+                  onChange={(e) => setRequiredCertifications(e.target.value)}
+                  placeholder="e.g. Gold Valuer License, ISO-9001"
+                  style={{
+                    padding: '10px',
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: '#fff',
+                    outline: 'none'
+                  }}
+                />
               </div>
             </div>
 

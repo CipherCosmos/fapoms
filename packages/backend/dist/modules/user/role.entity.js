@@ -13,11 +13,13 @@ exports.RoleEntity = void 0;
 const typeorm_1 = require("typeorm");
 const base_entity_1 = require("../../core/entities/base.entity");
 const permission_entity_1 = require("./permission.entity");
+const responsibility_entity_1 = require("./responsibility.entity");
 let RoleEntity = class RoleEntity extends base_entity_1.BaseEntity {
     name;
     displayName;
     description;
     permissions;
+    responsibilities;
 };
 exports.RoleEntity = RoleEntity;
 __decorate([
@@ -45,6 +47,15 @@ __decorate([
     }),
     __metadata("design:type", Array)
 ], RoleEntity.prototype, "permissions", void 0);
+__decorate([
+    (0, typeorm_1.ManyToMany)(() => responsibility_entity_1.ResponsibilityEntity, { eager: true }),
+    (0, typeorm_1.JoinTable)({
+        name: 'role_responsibilities',
+        joinColumn: { name: 'role_id' },
+        inverseJoinColumn: { name: 'responsibility_id' },
+    }),
+    __metadata("design:type", Array)
+], RoleEntity.prototype, "responsibilities", void 0);
 exports.RoleEntity = RoleEntity = __decorate([
     (0, typeorm_1.Entity)('roles')
 ], RoleEntity);

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
+import { ExecutiveMap } from './pages/ExecutiveMap';
 import { Projects } from './pages/Projects';
 import { Branches } from './pages/Branches';
 import { PlanningWorkspace } from './pages/PlanningWorkspace';
@@ -62,6 +63,7 @@ export const App: React.FC = () => {
     <Layout onLogout={handleLogout} user={currentUser || undefined}>
       <Routes>
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/executive-map" element={<ExecutiveMap />} />
         <Route path="/projects" element={<Projects />} />
         <Route path="/branches" element={<Branches />} />
         <Route path="/planning" element={<PlanningWorkspace />} />

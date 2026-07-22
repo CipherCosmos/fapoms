@@ -77,11 +77,22 @@ export declare enum ValidationStatus {
     SUBMITTED = "SUBMITTED"
 }
 export declare enum AssayerStatus {
-    REGISTERED = "REGISTERED",
     ACTIVE = "ACTIVE",
     INACTIVE = "INACTIVE",
-    BUSY = "BUSY",
     SUSPENDED = "SUSPENDED"
+}
+export declare enum AssayerLifecycleStatus {
+    INVITED = "INVITED",
+    DOCUMENT_VERIFICATION = "DOCUMENT_VERIFICATION",
+    BACKGROUND_VERIFICATION = "BACKGROUND_VERIFICATION",
+    TRAINING = "TRAINING",
+    ACTIVE = "ACTIVE",
+    ON_LEAVE = "ON_LEAVE",
+    SUSPENDED = "SUSPENDED",
+    INACTIVE = "INACTIVE",
+    RESIGNED = "RESIGNED",
+    TERMINATED = "TERMINATED",
+    ARCHIVED = "ARCHIVED"
 }
 export declare enum UserStatus {
     INVITED = "INVITED",
@@ -173,6 +184,32 @@ export declare enum EventCategory {
     USER = "USER",
     WORKFLOW = "WORKFLOW",
     SYSTEM = "SYSTEM"
+}
+export declare enum ClientLifecycleStatus {
+    PROSPECT = "PROSPECT",
+    ONBOARDING = "ONBOARDING",
+    ACTIVE = "ACTIVE",
+    SUSPENDED = "SUSPENDED",
+    UNDER_REVIEW = "UNDER_REVIEW",
+    INACTIVE = "INACTIVE",
+    TERMINATED = "TERMINATED",
+    ARCHIVED = "ARCHIVED"
+}
+export declare enum ClientType {
+    BANK = "BANK",
+    NBFC = "NBFC",
+    MICROFINANCE = "MICROFINANCE",
+    INSURANCE = "INSURANCE",
+    CORPORATE = "CORPORATE",
+    GOVERNMENT = "GOVERNMENT",
+    OTHER = "OTHER"
+}
+export declare enum ContractStatus {
+    DRAFT = "DRAFT",
+    ACTIVE = "ACTIVE",
+    EXPIRED = "EXPIRED",
+    TERMINATED = "TERMINATED",
+    RENEWED = "RENEWED"
 }
 export declare enum Priority {
     LOW = "LOW",

@@ -17,6 +17,10 @@ export declare class AssignmentController {
             };
         };
     }>;
+    getDashboardSummary(): Promise<{
+        success: boolean;
+        data: any;
+    }>;
     findOne(id: string): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
@@ -28,5 +32,15 @@ export declare class AssignmentController {
     transition(id: string, dto: TransitionAssignmentDto, req: any): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
+    }>;
+    getTimeline(id: string): Promise<{
+        success: boolean;
+        data: any[];
+    }>;
+    addComment(id: string, body: {
+        comment: string;
+    }, req: any): Promise<{
+        success: boolean;
+        data: import("./assignment-comment.entity").AssignmentCommentEntity;
     }>;
 }

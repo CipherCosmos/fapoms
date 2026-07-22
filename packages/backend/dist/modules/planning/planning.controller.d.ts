@@ -1,4 +1,5 @@
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
+import { PlanningOrchestratorService } from './planning-orchestrator.service';
 export declare class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
     name: string;
     scope: string;
@@ -17,7 +18,18 @@ export declare class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleD
 }
 export declare class PlanningController {
     private readonly planningService;
-    constructor(planningService: PlanningService);
+    private readonly planningOrchestratorService;
+    constructor(planningService: PlanningService, planningOrchestratorService: PlanningOrchestratorService);
+    getProjectCoverage(projectId: string): Promise<{
+        success: boolean;
+        data: {
+            total: number;
+            scheduled: number;
+            confirmed: number;
+            remaining: number;
+            coveragePercentage: number;
+        };
+    }>;
     getRecommendations(branchId: string): Promise<{
         success: boolean;
         data: import("./planning.service").AssayerRecommendation[];

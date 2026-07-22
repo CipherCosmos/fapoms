@@ -7,9 +7,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { PlanningService } from './planning.service';
 import { PlanningController } from './planning.controller';
+import { PlanningOrchestratorService } from './planning-orchestrator.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { GeoModule } from '../geo/geo.module';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
@@ -38,6 +40,7 @@ import {
       BranchEntity,
       AssayerEntity,
       AssignmentEntity,
+      ProjectBranchEntity,
       AssayerCommercialProfileEntity,
       BusinessRuleEntity,
       ClientEntity,
@@ -47,6 +50,7 @@ import {
   controllers: [PlanningController],
   providers: [
     PlanningService,
+    PlanningOrchestratorService,
     AvailabilityFilter,
     ClientRestrictionFilter,
     RuleEngineEligibilityFilter,
@@ -63,6 +67,6 @@ import {
     RiskScoreCalculator,
     RecommendationEngine,
   ],
-  exports: [PlanningService, RecommendationEngine],
+  exports: [PlanningService, PlanningOrchestratorService, RecommendationEngine],
 })
 export class PlanningModule {}

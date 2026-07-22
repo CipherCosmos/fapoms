@@ -10,6 +10,14 @@ export interface CreateProjectDto {
     priority: string;
     startDate?: string;
     endDate?: string;
+    budget?: number;
+    scope?: string;
+    requiredSkills?: string[];
+    requiredCertifications?: string[];
+    sla?: Record<string, any>;
+    risks?: Record<string, any>;
+    milestones?: Record<string, any>;
+    dependencies?: Record<string, any>;
 }
 export declare class ProjectService {
     private readonly projectRepository;

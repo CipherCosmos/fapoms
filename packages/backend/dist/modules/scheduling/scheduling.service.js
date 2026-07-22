@@ -35,7 +35,7 @@ let SchedulingService = class SchedulingService {
     async create(dto, userId) {
         const assignment = await this.assignmentRepository.findOne({
             where: { id: dto.assignmentId, isActive: true },
-            relations: ['projectBranch', 'projectBranch.branch'],
+            relations: ['projectBranch', 'projectBranch.branch', 'project', 'assayer'],
         });
         if (!assignment) {
             throw new common_1.NotFoundException(`Assignment ${dto.assignmentId} not found.`);
@@ -44,6 +44,32 @@ let SchedulingService = class SchedulingService {
             throw new common_1.BadRequestException(`Cannot schedule assignment. Current status must be ACCEPTED (got ${assignment.status}).`);
         }
         const scheduledDateObj = new Date(dto.scheduledDate);
+        if (assignment.assayer && assignment.assayer.leaves && assignment.assayer.leaves.length > 0) {
+            const targetTime = scheduledDateObj.getTime();
+            const onLeave = assignment.assayer.leaves.some((leave) => {
+                const start = new Date(leave.startDate).getTime();
+                const end = new Date(leave.endDate).getTime();
+                return targetTime >= start && targetTime <= end;
+            });
+            if (onLeave) {
+                throw new common_1.BadRequestException(`Assayer Unavailable: Assayer is on leave on ${dto.scheduledDate}.`);
+            }
+        }
+        if (assignment.project) {
+            const scheduledTime = scheduledDateObj.getTime();
+            if (assignment.project.startDate) {
+                const projectStart = new Date(assignment.project.startDate).getTime();
+                if (scheduledTime < projectStart) {
+                    throw new common_1.BadRequestException(`Timeline Conflict: Scheduled date ${dto.scheduledDate} is before project start date ${assignment.project.startDate}.`);
+                }
+            }
+            if (assignment.project.endDate) {
+                const projectEnd = new Date(assignment.project.endDate).getTime();
+                if (scheduledTime > projectEnd) {
+                    throw new common_1.BadRequestException(`Timeline Conflict: Scheduled date ${dto.scheduledDate} is after project end date ${assignment.project.endDate}.`);
+                }
+            }
+        }
         const isHoliday = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
         if (isHoliday) {
             throw new common_1.BadRequestException(`Holiday Conflict: ${dto.scheduledDate} is a holiday in ${assignment.projectBranch.branch.state}.`);

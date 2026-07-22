@@ -12,6 +12,10 @@ const typeorm_1 = require("@nestjs/typeorm");
 const assayer_entity_1 = require("./assayer.entity");
 const assayer_commercial_profile_entity_1 = require("./assayer-commercial-profile.entity");
 const workforce_attribute_entity_1 = require("./workforce-attribute.entity");
+const assayer_government_document_entity_1 = require("./assayer-government-document.entity");
+const assayer_document_entity_1 = require("./assayer-document.entity");
+const assayer_remark_entity_1 = require("./assayer-remark.entity");
+const assayer_activity_entity_1 = require("./assayer-activity.entity");
 const assayer_service_1 = require("./assayer.service");
 const assayer_controller_1 = require("./assayer.controller");
 let AssayerModule = class AssayerModule {
@@ -19,7 +23,17 @@ let AssayerModule = class AssayerModule {
 exports.AssayerModule = AssayerModule;
 exports.AssayerModule = AssayerModule = __decorate([
     (0, common_1.Module)({
-        imports: [typeorm_1.TypeOrmModule.forFeature([assayer_entity_1.AssayerEntity, assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity, workforce_attribute_entity_1.WorkforceAttributeEntity])],
+        imports: [
+            typeorm_1.TypeOrmModule.forFeature([
+                assayer_entity_1.AssayerEntity,
+                assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity,
+                workforce_attribute_entity_1.WorkforceAttributeEntity,
+                assayer_government_document_entity_1.AssayerGovernmentDocumentEntity,
+                assayer_document_entity_1.AssayerDocumentEntity,
+                assayer_remark_entity_1.AssayerRemarkEntity,
+                assayer_activity_entity_1.AssayerActivityEntity,
+            ]),
+        ],
         controllers: [assayer_controller_1.AssayerController],
         providers: [assayer_service_1.AssayerService],
         exports: [assayer_service_1.AssayerService, typeorm_1.TypeOrmModule],

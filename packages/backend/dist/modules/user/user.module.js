@@ -12,6 +12,8 @@ const typeorm_1 = require("@nestjs/typeorm");
 const user_entity_1 = require("./user.entity");
 const role_entity_1 = require("./role.entity");
 const permission_entity_1 = require("./permission.entity");
+const capability_entity_1 = require("./capability.entity");
+const responsibility_entity_1 = require("./responsibility.entity");
 const user_service_1 = require("./user.service");
 const user_controller_1 = require("./user.controller");
 const system_dashboard_controller_1 = require("./system-dashboard.controller");
@@ -21,7 +23,7 @@ exports.UserModule = UserModule;
 exports.UserModule = UserModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([user_entity_1.UserEntity, role_entity_1.RoleEntity, permission_entity_1.PermissionEntity]),
+            typeorm_1.TypeOrmModule.forFeature([user_entity_1.UserEntity, role_entity_1.RoleEntity, permission_entity_1.PermissionEntity, capability_entity_1.CapabilityEntity, responsibility_entity_1.ResponsibilityEntity]),
         ],
         controllers: [user_controller_1.UserController, system_dashboard_controller_1.SystemDashboardController],
         providers: [user_service_1.UserService],

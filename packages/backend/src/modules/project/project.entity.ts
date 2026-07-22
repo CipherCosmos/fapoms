@@ -23,6 +23,9 @@ export class ProjectEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   description: string | null;
 
+  @Column({ name: 'organization_id', type: 'uuid', nullable: true })
+  organizationId: string | null;
+
   @Column({ name: 'client_id', type: 'uuid' })
   clientId: string;
 
@@ -45,6 +48,30 @@ export class ProjectEntity extends BaseEntity {
 
   @Column({ name: 'end_date', type: 'date', nullable: true })
   endDate: Date | null;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  budget: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  scope: string | null;
+
+  @Column({ name: 'required_skills', type: 'jsonb', nullable: true })
+  requiredSkills: string[] | null;
+
+  @Column({ name: 'required_certifications', type: 'jsonb', nullable: true })
+  requiredCertifications: string[] | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  sla: Record<string, any> | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  risks: Record<string, any> | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  milestones: Record<string, any> | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  dependencies: Record<string, any> | null;
 
   @ManyToOne(() => ClientEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'client_id' })

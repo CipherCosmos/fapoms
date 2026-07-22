@@ -1,5 +1,4 @@
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
-import { AssayerStatus } from '@fapoms/shared';
 declare class CreateAssayerRequestDto implements CreateAssayerDto {
     assayerCode: string;
     firstName: string;
@@ -19,6 +18,16 @@ declare class CreateAssayerRequestDto implements CreateAssayerDto {
     ifscCode?: string;
     notes?: string;
     employmentType?: string;
+    joiningDate?: string;
+    managerId?: string;
+    department?: string;
+    region?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
+    emergencyContactRelation?: string;
+    employeeId?: string;
+    employeeCode?: string;
+    photograph?: string;
     skills?: string[];
     certifications?: {
         name: string;
@@ -53,12 +62,23 @@ declare class UpdateAssayerRequestDto implements UpdateAssayerDto {
     pincode?: string;
     latitude?: number;
     longitude?: number;
-    status?: AssayerStatus;
     panNumber?: string;
     bankAccountNumber?: string;
     ifscCode?: string;
     notes?: string;
     employmentType?: string;
+    joiningDate?: string;
+    exitDate?: string;
+    terminationDate?: string;
+    managerId?: string;
+    department?: string;
+    region?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
+    emergencyContactRelation?: string;
+    employeeId?: string;
+    employeeCode?: string;
+    photograph?: string;
     skills?: string[];
     certifications?: {
         name: string;
@@ -115,6 +135,54 @@ export declare class UpdateCommercialProfileRequestDto {
     effectiveStartDate?: string;
     effectiveEndDate?: string | null;
 }
+export declare class TransitionLifecycleDto {
+    targetStatus: string;
+    reason?: string;
+}
+export declare class CreateGovernmentDocumentRequestDto {
+    documentType: string;
+    documentNumber: string;
+    expiryDate?: string;
+    filePaths?: string[];
+    remarks?: string;
+}
+export declare class UpdateGovernmentDocumentRequestDto {
+    documentNumber?: string;
+    expiryDate?: string | null;
+    verificationStatus?: string;
+    verifiedBy?: string;
+    filePaths?: string[];
+    remarks?: string;
+}
+export declare class CreateAssayerDocumentRequestDto {
+    documentType: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType?: string;
+    parentDocumentId?: string;
+    remarks?: string;
+}
+export declare class CreateRemarkRequestDto {
+    content: string;
+    category: string;
+    visibility: string;
+    attachmentPaths?: string[];
+}
+export declare class UpdateRemarkRequestDto {
+    content?: string;
+    category?: string;
+    visibility?: string;
+    attachmentPaths?: string[];
+}
+export declare class UpdateAssayerDocumentRequestDto {
+    documentType?: string;
+    fileName?: string;
+    filePath?: string;
+    fileSize?: number;
+    mimeType?: string;
+    remarks?: string;
+}
 export declare class AssayerController {
     private readonly assayerService;
     constructor(assayerService: AssayerService);
@@ -144,12 +212,7 @@ export declare class AssayerController {
         success: boolean;
         data: import("./assayer.entity").AssayerEntity;
     }>;
-    remove(id: string, req: any): Promise<{
-        success: boolean;
-        data: {
-            message: string;
-        };
-    }>;
+    remove(id: string, req: any): Promise<void>;
     createCommercial(assayerId: string, dto: CreateCommercialProfileRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./assayer-commercial-profile.entity").AssayerCommercialProfileEntity;
@@ -183,6 +246,73 @@ export declare class AssayerController {
     getWorkforceAttributes(assayerId: string, type?: string): Promise<{
         success: boolean;
         data: import("./workforce-attribute.entity").WorkforceAttributeEntity[];
+    }>;
+    transitionLifecycle(id: string, dto: TransitionLifecycleDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer.entity").AssayerEntity;
+    }>;
+    addGovernmentDocument(assayerId: string, dto: CreateGovernmentDocumentRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer-government-document.entity").AssayerGovernmentDocumentEntity;
+    }>;
+    updateGovernmentDocument(id: string, dto: UpdateGovernmentDocumentRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer-government-document.entity").AssayerGovernmentDocumentEntity;
+    }>;
+    getGovernmentDocuments(assayerId: string): Promise<{
+        success: boolean;
+        data: import("./assayer-government-document.entity").AssayerGovernmentDocumentEntity[];
+    }>;
+    removeGovernmentDocument(id: string, req: any): Promise<void>;
+    addAssayerDocument(assayerId: string, dto: CreateAssayerDocumentRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer-document.entity").AssayerDocumentEntity;
+    }>;
+    updateAssayerDocument(assayerId: string, docId: string, dto: UpdateAssayerDocumentRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer-document.entity").AssayerDocumentEntity;
+    }>;
+    getAssayerDocuments(assayerId: string): Promise<{
+        success: boolean;
+        data: import("./assayer-document.entity").AssayerDocumentEntity[];
+    }>;
+    removeAssayerDocument(id: string, req: any): Promise<void>;
+    addRemark(assayerId: string, dto: CreateRemarkRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer-remark.entity").AssayerRemarkEntity;
+    }>;
+    updateRemark(assayerId: string, remarkId: string, dto: UpdateRemarkRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./assayer-remark.entity").AssayerRemarkEntity;
+    }>;
+    removeRemark(assayerId: string, remarkId: string, req: any): Promise<void>;
+    getRemarks(assayerId: string, visibility?: string, page?: number, limit?: number): Promise<{
+        success: boolean;
+        data: import("./assayer-remark.entity").AssayerRemarkEntity[];
+        meta: {
+            pagination: {
+                page: number;
+                limit: number;
+                total: number;
+                totalPages: number;
+                hasNext: boolean;
+                hasPrevious: boolean;
+            };
+        };
+    }>;
+    getActivityTimeline(assayerId: string, page?: number, limit?: number): Promise<{
+        success: boolean;
+        data: import("./assayer-activity.entity").AssayerActivityEntity[];
+        meta: {
+            pagination: {
+                page: number;
+                limit: number;
+                total: number;
+                totalPages: number;
+                hasNext: boolean;
+                hasPrevious: boolean;
+            };
+        };
     }>;
 }
 export {};

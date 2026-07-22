@@ -5,6 +5,9 @@ import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssignmentCommentEntity } from './assignment-comment.entity';
+import { NotificationService } from '../notifications/notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
@@ -40,6 +43,9 @@ export class AssignmentService implements OnModuleInit {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     @InjectRepository(ProjectBranchEntity)
     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+    @InjectRepository(AssayerEntity)
+    private readonly assayerRepository: Repository<AssayerEntity>,
+    private readonly notificationService: NotificationService,
     private readonly holidayService: HolidayService,
     private readonly auditService: AuditService,
     private readonly workflowEngine: WorkflowEngine,
@@ -151,29 +157,68 @@ export class AssignmentService implements OnModuleInit {
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
     const projectBranch = await this.projectBranchRepository.findOne({
       where: { id: dto.projectBranchId, isActive: true },
-      relations: ['branch'],
+      relations: ['branch', 'project', 'project.client'],
     });
 
     if (!projectBranch) {
       throw new NotFoundException(`Project branch link ${dto.projectBranchId} not found.`);
     }
 
-    // Resolve unique constraint conflicts for re-assignments
-    const existingAssignment = await this.assignmentRepository.findOne({
-      where: { projectBranchId: projectBranch.id },
+    // Validate Assayer exists and has the required skills/certifications
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: dto.assayerId, isActive: true },
     });
 
-    if (existingAssignment) {
-      if (
-        existingAssignment.status === AssignmentStatus.CANCELLED ||
-        existingAssignment.status === AssignmentStatus.REJECTED
-      ) {
-        await this.assignmentRepository.remove(existingAssignment);
-      } else {
-        throw new ConflictException(
-          `Branch Busy: An active assignment (${existingAssignment.assignmentNumber}) already exists for this branch.`
+    if (!assayer) {
+      throw new NotFoundException(`Assayer ${dto.assayerId} not found.`);
+    }
+
+    if (projectBranch.project && projectBranch.project.requiredSkills && projectBranch.project.requiredSkills.length > 0) {
+      const assayerSkills = assayer.skills || [];
+      const missingSkills = projectBranch.project.requiredSkills.filter(
+        (skill) => !assayerSkills.includes(skill)
+      );
+      if (missingSkills.length > 0) {
+        throw new BadRequestException(
+          `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`
         );
       }
+    }
+
+    if (projectBranch.project && projectBranch.project.requiredCertifications && projectBranch.project.requiredCertifications.length > 0) {
+      const assayerCerts = (assayer.certifications || []).map((c) => c.name);
+      const missingCerts = projectBranch.project.requiredCertifications.filter(
+        (cert) => !assayerCerts.includes(cert)
+      );
+      if (missingCerts.length > 0) {
+        throw new BadRequestException(
+          `Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`
+        );
+      }
+    }
+
+    // Check for any active assignment for this branch
+    const activeAssignment = await this.assignmentRepository.findOne({
+      where: {
+        projectBranchId: projectBranch.id,
+        status: In([
+          AssignmentStatus.CREATED,
+          AssignmentStatus.CANDIDATE_SELECTED,
+          AssignmentStatus.CONTACT_INITIATED,
+          AssignmentStatus.NEGOTIATION,
+          AssignmentStatus.ACCEPTED,
+          AssignmentStatus.SCHEDULED,
+          AssignmentStatus.AUDIT_COMPLETED,
+          AssignmentStatus.CLOSED,
+        ]),
+        isActive: true,
+      },
+    });
+
+    if (activeAssignment) {
+      throw new ConflictException(
+        `Branch Busy: An active assignment (${activeAssignment.assignmentNumber}) already exists for this branch.`
+      );
     }
 
     const scheduledDateObj = new Date(dto.scheduledDate);
@@ -205,6 +250,14 @@ export class AssignmentService implements OnModuleInit {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const assignmentNumber = `ASN-${new Date().getFullYear()}-${randomSuffix}`;
 
+    // Resolve SLA timeframe
+    let maxResponseTimeHours = 24;
+    if (projectBranch.project?.client?.configuration?.maxResponseTimeHours) {
+      maxResponseTimeHours = Number(projectBranch.project.client.configuration.maxResponseTimeHours);
+    }
+    const slaDueDate = new Date();
+    slaDueDate.setHours(slaDueDate.getHours() + maxResponseTimeHours);
+
     // Create the assignment record starting in CREATED status
     const assignment = this.assignmentRepository.create({
       assignmentNumber,
@@ -212,9 +265,12 @@ export class AssignmentService implements OnModuleInit {
       projectId: projectBranch.projectId,
       assayerId: dto.assayerId,
       status: AssignmentStatus.CREATED,
+      priority: projectBranch.priority,
       proposedFee: dto.proposedFee,
       agreedFee: null,
       scheduledDate: scheduledDateObj,
+      slaDueDate,
+      slaStatus: 'COMPLIANT',
       remarks: dto.remarks ?? null,
       createdBy: userId,
       updatedBy: userId,
@@ -350,6 +406,25 @@ export class AssignmentService implements OnModuleInit {
         remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
       });
 
+      // Trigger automatic state notifications
+      try {
+        if (targetStatus === AssignmentStatus.ACCEPTED) {
+          await this.notificationService.create({
+            userId: saved.createdBy,
+            title: `Assignment Accepted`,
+            message: `Assignment offer ${saved.assignmentNumber} has been accepted by the assayer.`,
+          }, userId);
+        } else if (targetStatus === AssignmentStatus.REJECTED) {
+          await this.notificationService.create({
+            userId: saved.createdBy,
+            title: `Assignment Rejected`,
+            message: `Assignment offer ${saved.assignmentNumber} was rejected. Reason: ${reason ?? remarks ?? 'None'}.`,
+          }, userId);
+        }
+      } catch (err) {
+        console.error('Failed to dispatch transition notification', err);
+      }
+
       return saved;
     });
   }
@@ -364,5 +439,129 @@ export class AssignmentService implements OnModuleInit {
     });
 
     return { assignments, total };
+  }
+
+  async addComment(assignmentId: string, comment: string, userId: string, userName: string): Promise<AssignmentCommentEntity> {
+    const assignment = await this.findOne(assignmentId);
+    const commentRecord = this.dataSource.getRepository(AssignmentCommentEntity).create({
+      assignmentId: assignment.id,
+      userId,
+      userName,
+      comment,
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    return this.dataSource.getRepository(AssignmentCommentEntity).save(commentRecord);
+  }
+
+  async getTimeline(assignmentId: string): Promise<any[]> {
+    const assignment = await this.findOne(assignmentId);
+    
+    // Fetch audit history
+    const { events } = await this.auditService.getEntityHistory('ASSIGNMENT', assignment.id, 100);
+    
+    // Fetch comments
+    const comments = await this.dataSource.getRepository(AssignmentCommentEntity).find({
+      where: { assignmentId: assignment.id, isActive: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    const timelineEvents: any[] = [];
+
+    for (const e of events) {
+      timelineEvents.push({
+        id: e.id,
+        type: 'SYSTEM_EVENT',
+        title: e.eventType,
+        description: e.remarks,
+        timestamp: e.occurredAt,
+        user: e.userDisplayName || e.userId,
+      });
+    }
+
+    for (const c of comments) {
+      timelineEvents.push({
+        id: c.id,
+        type: 'COMMENT',
+        title: `Comment by ${c.userName}`,
+        description: c.comment,
+        timestamp: c.createdAt,
+        user: c.userName,
+      });
+    }
+
+    // Sort chronologically (most recent first)
+    return timelineEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
+
+  async checkSlaBreaches(): Promise<number> {
+    const now = new Date();
+    const overdueAssignments = await this.assignmentRepository.find({
+      where: {
+        slaStatus: 'COMPLIANT',
+        status: In([
+          AssignmentStatus.CREATED,
+          AssignmentStatus.CANDIDATE_SELECTED,
+          AssignmentStatus.CONTACT_INITIATED,
+          AssignmentStatus.NEGOTIATION,
+          AssignmentStatus.ACCEPTED,
+          AssignmentStatus.SCHEDULED,
+        ]),
+        isActive: true,
+      },
+    });
+
+    let breachedCount = 0;
+    for (const assignment of overdueAssignments) {
+      if (assignment.slaDueDate && assignment.slaDueDate < now) {
+        assignment.slaStatus = 'BREACHED';
+        await this.assignmentRepository.save(assignment);
+
+        await this.auditService.recordEvent({
+          category: EventCategory.SYSTEM,
+          eventType: 'ASSIGNMENT_SLA_BREACHED',
+          entityType: 'ASSIGNMENT',
+          entityId: assignment.id,
+          remarks: `SLA breach detected: Assignment ${assignment.assignmentNumber} exceeded response time deadline of ${assignment.slaDueDate}.`,
+        });
+
+        breachedCount++;
+      }
+    }
+
+    return breachedCount;
+  }
+
+  async getDashboardSummary(): Promise<any> {
+    const counts = await this.assignmentRepository
+      .createQueryBuilder('assignment')
+      .select('assignment.status', 'status')
+      .addSelect('COUNT(assignment.id)', 'count')
+      .where('assignment.isActive = :isActive', { isActive: true })
+      .groupBy('assignment.status')
+      .getRawMany();
+
+    const slaCounts = await this.assignmentRepository
+      .createQueryBuilder('assignment')
+      .select('assignment.slaStatus', 'slaStatus')
+      .addSelect('COUNT(assignment.id)', 'count')
+      .where('assignment.isActive = :isActive', { isActive: true })
+      .groupBy('assignment.slaStatus')
+      .getRawMany();
+
+    const summary: Record<string, number> = {};
+    for (const c of counts) {
+      summary[c.status] = Number(c.count);
+    }
+
+    const slaSummary: Record<string, number> = {};
+    for (const s of slaCounts) {
+      slaSummary[s.slaStatus] = Number(s.count);
+    }
+
+    return {
+      statusCounts: summary,
+      slaCounts: slaSummary,
+    };
   }
 }

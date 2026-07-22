@@ -9,7 +9,7 @@
  * Do not rename without explicit business specification approval.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Priority = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
+exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
 // ---------------------------------------------------------------------------
 // Project Lifecycle (Part 6 §3)
 // ---------------------------------------------------------------------------
@@ -105,16 +105,31 @@ var ValidationStatus;
     ValidationStatus["SUBMITTED"] = "SUBMITTED";
 })(ValidationStatus || (exports.ValidationStatus = ValidationStatus = {}));
 // ---------------------------------------------------------------------------
-// Assayer Lifecycle (Part 6 §9)
+// Assayer Operational Status
 // ---------------------------------------------------------------------------
 var AssayerStatus;
 (function (AssayerStatus) {
-    AssayerStatus["REGISTERED"] = "REGISTERED";
     AssayerStatus["ACTIVE"] = "ACTIVE";
     AssayerStatus["INACTIVE"] = "INACTIVE";
-    AssayerStatus["BUSY"] = "BUSY";
     AssayerStatus["SUSPENDED"] = "SUSPENDED";
 })(AssayerStatus || (exports.AssayerStatus = AssayerStatus = {}));
+// ---------------------------------------------------------------------------
+// Assayer Enterprise Lifecycle
+// ---------------------------------------------------------------------------
+var AssayerLifecycleStatus;
+(function (AssayerLifecycleStatus) {
+    AssayerLifecycleStatus["INVITED"] = "INVITED";
+    AssayerLifecycleStatus["DOCUMENT_VERIFICATION"] = "DOCUMENT_VERIFICATION";
+    AssayerLifecycleStatus["BACKGROUND_VERIFICATION"] = "BACKGROUND_VERIFICATION";
+    AssayerLifecycleStatus["TRAINING"] = "TRAINING";
+    AssayerLifecycleStatus["ACTIVE"] = "ACTIVE";
+    AssayerLifecycleStatus["ON_LEAVE"] = "ON_LEAVE";
+    AssayerLifecycleStatus["SUSPENDED"] = "SUSPENDED";
+    AssayerLifecycleStatus["INACTIVE"] = "INACTIVE";
+    AssayerLifecycleStatus["RESIGNED"] = "RESIGNED";
+    AssayerLifecycleStatus["TERMINATED"] = "TERMINATED";
+    AssayerLifecycleStatus["ARCHIVED"] = "ARCHIVED";
+})(AssayerLifecycleStatus || (exports.AssayerLifecycleStatus = AssayerLifecycleStatus = {}));
 // ---------------------------------------------------------------------------
 // User Status (Part 8 §5)
 // ---------------------------------------------------------------------------
@@ -238,6 +253,38 @@ var EventCategory;
     EventCategory["WORKFLOW"] = "WORKFLOW";
     EventCategory["SYSTEM"] = "SYSTEM";
 })(EventCategory || (exports.EventCategory = EventCategory = {}));
+// ---------------------------------------------------------------------------
+// Client Lifecycle (Enterprise)
+// ---------------------------------------------------------------------------
+var ClientLifecycleStatus;
+(function (ClientLifecycleStatus) {
+    ClientLifecycleStatus["PROSPECT"] = "PROSPECT";
+    ClientLifecycleStatus["ONBOARDING"] = "ONBOARDING";
+    ClientLifecycleStatus["ACTIVE"] = "ACTIVE";
+    ClientLifecycleStatus["SUSPENDED"] = "SUSPENDED";
+    ClientLifecycleStatus["UNDER_REVIEW"] = "UNDER_REVIEW";
+    ClientLifecycleStatus["INACTIVE"] = "INACTIVE";
+    ClientLifecycleStatus["TERMINATED"] = "TERMINATED";
+    ClientLifecycleStatus["ARCHIVED"] = "ARCHIVED";
+})(ClientLifecycleStatus || (exports.ClientLifecycleStatus = ClientLifecycleStatus = {}));
+var ClientType;
+(function (ClientType) {
+    ClientType["BANK"] = "BANK";
+    ClientType["NBFC"] = "NBFC";
+    ClientType["MICROFINANCE"] = "MICROFINANCE";
+    ClientType["INSURANCE"] = "INSURANCE";
+    ClientType["CORPORATE"] = "CORPORATE";
+    ClientType["GOVERNMENT"] = "GOVERNMENT";
+    ClientType["OTHER"] = "OTHER";
+})(ClientType || (exports.ClientType = ClientType = {}));
+var ContractStatus;
+(function (ContractStatus) {
+    ContractStatus["DRAFT"] = "DRAFT";
+    ContractStatus["ACTIVE"] = "ACTIVE";
+    ContractStatus["EXPIRED"] = "EXPIRED";
+    ContractStatus["TERMINATED"] = "TERMINATED";
+    ContractStatus["RENEWED"] = "RENEWED";
+})(ContractStatus || (exports.ContractStatus = ContractStatus = {}));
 // ---------------------------------------------------------------------------
 // Priority Levels
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AssayerController = exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = void 0;
+exports.AssayerController = exports.UpdateAssayerDocumentRequestDto = exports.UpdateRemarkRequestDto = exports.CreateRemarkRequestDto = exports.CreateAssayerDocumentRequestDto = exports.UpdateGovernmentDocumentRequestDto = exports.CreateGovernmentDocumentRequestDto = exports.TransitionLifecycleDto = exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
@@ -38,6 +38,16 @@ class CreateAssayerRequestDto {
     ifscCode;
     notes;
     employmentType;
+    joiningDate;
+    managerId;
+    department;
+    region;
+    emergencyContactName;
+    emergencyContactPhone;
+    emergencyContactRelation;
+    employeeId;
+    employeeCode;
+    photograph;
     skills;
     certifications;
     languages;
@@ -142,6 +152,56 @@ __decorate([
 ], CreateAssayerRequestDto.prototype, "employmentType", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "joiningDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "managerId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "department", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "region", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "emergencyContactName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "emergencyContactPhone", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "emergencyContactRelation", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "employeeId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "employeeCode", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerRequestDto.prototype, "photograph", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsArray)(),
     __metadata("design:type", Array)
 ], CreateAssayerRequestDto.prototype, "skills", void 0);
@@ -208,12 +268,23 @@ class UpdateAssayerRequestDto {
     pincode;
     latitude;
     longitude;
-    status;
     panNumber;
     bankAccountNumber;
     ifscCode;
     notes;
     employmentType;
+    joiningDate;
+    exitDate;
+    terminationDate;
+    managerId;
+    department;
+    region;
+    emergencyContactName;
+    emergencyContactPhone;
+    emergencyContactRelation;
+    employeeId;
+    employeeCode;
+    photograph;
     skills;
     certifications;
     languages;
@@ -290,11 +361,6 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
-], UpdateAssayerRequestDto.prototype, "status", void 0);
-__decorate([
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsString)(),
-    __metadata("design:type", String)
 ], UpdateAssayerRequestDto.prototype, "panNumber", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
@@ -316,6 +382,66 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], UpdateAssayerRequestDto.prototype, "employmentType", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "joiningDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "exitDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "terminationDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "managerId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "department", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "region", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "emergencyContactName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "emergencyContactPhone", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "emergencyContactRelation", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "employeeId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "employeeCode", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerRequestDto.prototype, "photograph", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsArray)(),
@@ -545,6 +671,231 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", Object)
 ], UpdateCommercialProfileRequestDto.prototype, "effectiveEndDate", void 0);
+class TransitionLifecycleDto {
+    targetStatus;
+    reason;
+}
+exports.TransitionLifecycleDto = TransitionLifecycleDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], TransitionLifecycleDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TransitionLifecycleDto.prototype, "reason", void 0);
+class CreateGovernmentDocumentRequestDto {
+    documentType;
+    documentNumber;
+    expiryDate;
+    filePaths;
+    remarks;
+}
+exports.CreateGovernmentDocumentRequestDto = CreateGovernmentDocumentRequestDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateGovernmentDocumentRequestDto.prototype, "documentType", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateGovernmentDocumentRequestDto.prototype, "documentNumber", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", String)
+], CreateGovernmentDocumentRequestDto.prototype, "expiryDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], CreateGovernmentDocumentRequestDto.prototype, "filePaths", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateGovernmentDocumentRequestDto.prototype, "remarks", void 0);
+class UpdateGovernmentDocumentRequestDto {
+    documentNumber;
+    expiryDate;
+    verificationStatus;
+    verifiedBy;
+    filePaths;
+    remarks;
+}
+exports.UpdateGovernmentDocumentRequestDto = UpdateGovernmentDocumentRequestDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateGovernmentDocumentRequestDto.prototype, "documentNumber", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", Object)
+], UpdateGovernmentDocumentRequestDto.prototype, "expiryDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateGovernmentDocumentRequestDto.prototype, "verificationStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateGovernmentDocumentRequestDto.prototype, "verifiedBy", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], UpdateGovernmentDocumentRequestDto.prototype, "filePaths", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateGovernmentDocumentRequestDto.prototype, "remarks", void 0);
+class CreateAssayerDocumentRequestDto {
+    documentType;
+    fileName;
+    filePath;
+    fileSize;
+    mimeType;
+    parentDocumentId;
+    remarks;
+}
+exports.CreateAssayerDocumentRequestDto = CreateAssayerDocumentRequestDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateAssayerDocumentRequestDto.prototype, "documentType", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateAssayerDocumentRequestDto.prototype, "fileName", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateAssayerDocumentRequestDto.prototype, "filePath", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateAssayerDocumentRequestDto.prototype, "fileSize", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerDocumentRequestDto.prototype, "mimeType", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerDocumentRequestDto.prototype, "parentDocumentId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateAssayerDocumentRequestDto.prototype, "remarks", void 0);
+class CreateRemarkRequestDto {
+    content;
+    category;
+    visibility;
+    attachmentPaths;
+}
+exports.CreateRemarkRequestDto = CreateRemarkRequestDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateRemarkRequestDto.prototype, "content", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateRemarkRequestDto.prototype, "category", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateRemarkRequestDto.prototype, "visibility", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], CreateRemarkRequestDto.prototype, "attachmentPaths", void 0);
+class UpdateRemarkRequestDto {
+    content;
+    category;
+    visibility;
+    attachmentPaths;
+}
+exports.UpdateRemarkRequestDto = UpdateRemarkRequestDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateRemarkRequestDto.prototype, "content", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateRemarkRequestDto.prototype, "category", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateRemarkRequestDto.prototype, "visibility", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], UpdateRemarkRequestDto.prototype, "attachmentPaths", void 0);
+class UpdateAssayerDocumentRequestDto {
+    documentType;
+    fileName;
+    filePath;
+    fileSize;
+    mimeType;
+    remarks;
+}
+exports.UpdateAssayerDocumentRequestDto = UpdateAssayerDocumentRequestDto;
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerDocumentRequestDto.prototype, "documentType", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerDocumentRequestDto.prototype, "fileName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerDocumentRequestDto.prototype, "filePath", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateAssayerDocumentRequestDto.prototype, "fileSize", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerDocumentRequestDto.prototype, "mimeType", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateAssayerDocumentRequestDto.prototype, "remarks", void 0);
 let AssayerController = class AssayerController {
     assayerService;
     constructor(assayerService) {
@@ -590,10 +941,6 @@ let AssayerController = class AssayerController {
     }
     async remove(id, req) {
         await this.assayerService.remove(id, req.user.id);
-        return {
-            success: true,
-            data: { message: 'Assayer profile deleted successfully' },
-        };
     }
     async createCommercial(assayerId, dto, req) {
         const profile = await this.assayerService.createCommercialProfile(assayerId, dto, req.user.id);
@@ -652,10 +999,90 @@ let AssayerController = class AssayerController {
             data: attrs,
         };
     }
+    async transitionLifecycle(id, dto, req) {
+        const assayer = await this.assayerService.transitionLifecycle(id, dto.targetStatus, req.user.id, dto.reason);
+        return { success: true, data: assayer };
+    }
+    async addGovernmentDocument(assayerId, dto, req) {
+        const doc = await this.assayerService.addGovernmentDocument(assayerId, dto, req.user.id);
+        return { success: true, data: doc };
+    }
+    async updateGovernmentDocument(id, dto, req) {
+        const doc = await this.assayerService.updateGovernmentDocument(id, dto, req.user.id);
+        return { success: true, data: doc };
+    }
+    async getGovernmentDocuments(assayerId) {
+        const docs = await this.assayerService.getGovernmentDocuments(assayerId);
+        return { success: true, data: docs };
+    }
+    async removeGovernmentDocument(id, req) {
+        await this.assayerService.removeGovernmentDocument(id, req.user.id);
+    }
+    async addAssayerDocument(assayerId, dto, req) {
+        const doc = await this.assayerService.addAssayerDocument(assayerId, dto, req.user.id);
+        return { success: true, data: doc };
+    }
+    async updateAssayerDocument(assayerId, docId, dto, req) {
+        const doc = await this.assayerService.updateAssayerDocument(docId, dto, req.user.id);
+        return { success: true, data: doc };
+    }
+    async getAssayerDocuments(assayerId) {
+        const docs = await this.assayerService.getAssayerDocuments(assayerId);
+        return { success: true, data: docs };
+    }
+    async removeAssayerDocument(id, req) {
+        await this.assayerService.removeAssayerDocument(id, req.user.id);
+    }
+    async addRemark(assayerId, dto, req) {
+        const remark = await this.assayerService.addRemark(assayerId, dto, req.user.id, req.user.name || req.user.email);
+        return { success: true, data: remark };
+    }
+    async updateRemark(assayerId, remarkId, dto, req) {
+        const remark = await this.assayerService.updateRemark(remarkId, dto, req.user.id);
+        return { success: true, data: remark };
+    }
+    async removeRemark(assayerId, remarkId, req) {
+        await this.assayerService.removeRemark(remarkId, req.user.id);
+    }
+    async getRemarks(assayerId, visibility, page = 1, limit = 20) {
+        const { remarks, total } = await this.assayerService.getRemarks(assayerId, visibility, page, limit);
+        return {
+            success: true,
+            data: remarks,
+            meta: {
+                pagination: {
+                    page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit),
+                    hasNext: page * limit < total,
+                    hasPrevious: page > 1,
+                },
+            },
+        };
+    }
+    async getActivityTimeline(assayerId, page = 1, limit = 20) {
+        const { activities, total } = await this.assayerService.getActivityTimeline(assayerId, page, limit);
+        return {
+            success: true,
+            data: activities,
+            meta: {
+                pagination: {
+                    page,
+                    limit,
+                    total,
+                    totalPages: Math.ceil(total / limit),
+                    hasNext: page * limit < total,
+                    hasPrevious: page > 1,
+                },
+            },
+        };
+    }
 };
 exports.AssayerController = AssayerController;
 __decorate([
     (0, common_1.Post)(),
+    (0, common_1.HttpCode)(201),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Register a new field assayer' }),
     __param(0, (0, common_1.Body)()),
@@ -694,6 +1121,7 @@ __decorate([
 ], AssayerController.prototype, "update", null);
 __decorate([
     (0, common_1.Delete)(':id'),
+    (0, common_1.HttpCode)(204),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete assayer profile' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
@@ -704,6 +1132,7 @@ __decorate([
 ], AssayerController.prototype, "remove", null);
 __decorate([
     (0, common_1.Post)(':assayerId/commercial'),
+    (0, common_1.HttpCode)(201),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Create a commercial profile for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -743,6 +1172,7 @@ __decorate([
 ], AssayerController.prototype, "getActiveCommercial", null);
 __decorate([
     (0, common_1.Post)(':assayerId/workforce-attribute'),
+    (0, common_1.HttpCode)(201),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Add a skill, certification, or language to an assayer profile' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -782,6 +1212,162 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "getWorkforceAttributes", null);
+__decorate([
+    (0, common_1.Post)(':id/lifecycle'),
+    (0, common_1.HttpCode)(201),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Transition assayer lifecycle status' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, TransitionLifecycleDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "transitionLifecycle", null);
+__decorate([
+    (0, common_1.Post)(':assayerId/government-document'),
+    (0, common_1.HttpCode)(201),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Add a government document to an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, CreateGovernmentDocumentRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "addGovernmentDocument", null);
+__decorate([
+    (0, common_1.Put)('government-document/:id'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Update a government document verification status' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, UpdateGovernmentDocumentRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "updateGovernmentDocument", null);
+__decorate([
+    (0, common_1.Get)(':assayerId/government-document'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'List government documents for an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "getGovernmentDocuments", null);
+__decorate([
+    (0, common_1.Delete)('government-document/:id'),
+    (0, common_1.HttpCode)(204),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Soft delete a government document' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "removeGovernmentDocument", null);
+__decorate([
+    (0, common_1.Post)(':assayerId/document'),
+    (0, common_1.HttpCode)(201),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Upload a new versioned document for an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, CreateAssayerDocumentRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "addAssayerDocument", null);
+__decorate([
+    (0, common_1.Put)(':assayerId/document/:docId'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Update document metadata' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Param)('docId', common_1.ParseUUIDPipe)),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, UpdateAssayerDocumentRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "updateAssayerDocument", null);
+__decorate([
+    (0, common_1.Get)(':assayerId/document'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'List documents for an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "getAssayerDocuments", null);
+__decorate([
+    (0, common_1.Delete)('document/:id'),
+    (0, common_1.HttpCode)(204),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Soft delete an assayer document' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "removeAssayerDocument", null);
+__decorate([
+    (0, common_1.Post)(':assayerId/remark'),
+    (0, common_1.HttpCode)(201),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Add a remark to an assayer profile' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, CreateRemarkRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "addRemark", null);
+__decorate([
+    (0, common_1.Put)(':assayerId/remark/:remarkId'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Update a remark' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Param)('remarkId', common_1.ParseUUIDPipe)),
+    __param(2, (0, common_1.Body)()),
+    __param(3, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, UpdateRemarkRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "updateRemark", null);
+__decorate([
+    (0, common_1.Delete)(':assayerId/remark/:remarkId'),
+    (0, common_1.HttpCode)(204),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Delete a remark' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Param)('remarkId', common_1.ParseUUIDPipe)),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "removeRemark", null);
+__decorate([
+    (0, common_1.Get)(':assayerId/remark'),
+    (0, swagger_1.ApiOperation)({ summary: 'List remarks for an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Query)('visibility')),
+    __param(2, (0, common_1.Query)('page')),
+    __param(3, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "getRemarks", null);
+__decorate([
+    (0, common_1.Get)(':assayerId/activity'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get activity timeline for an assayer' }),
+    __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Query)('page')),
+    __param(2, (0, common_1.Query)('limit')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "getActivityTimeline", null);
 exports.AssayerController = AssayerController = __decorate([
     (0, swagger_1.ApiTags)('Assayers'),
     (0, swagger_1.ApiBearerAuth)(),

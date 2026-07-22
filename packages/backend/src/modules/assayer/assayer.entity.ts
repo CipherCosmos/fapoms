@@ -1,21 +1,24 @@
-/**
- * FAPOMS — Assayer Entity
- *
- * Represents an independent assayer/auditor in the field (Part 2 §6, Part 5 §5).
- * Contains contact information, banking details, primary state, and PostGIS location.
- */
-
-import { Entity, Column, Index } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
-import { AssayerStatus } from '@fapoms/shared';
+import { AssayerStatus, AssayerLifecycleStatus } from '@fapoms/shared';
 
 @Entity('assayers')
 @Index(['assayerCode'])
+@Index(['employeeId'])
 @Index(['status'])
+@Index(['lifecycleStatus'])
 @Index(['state'])
+@Index(['organizationId'])
+@Index(['managerId'])
 export class AssayerEntity extends BaseEntity {
   @Column({ name: 'assayer_code', unique: true, length: 50 })
   assayerCode: string;
+
+  @Column({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true })
+  employeeId: string | null;
+
+  @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })
+  employeeCode: string | null;
 
   @Column({ name: 'first_name', length: 100 })
   firstName: string;
@@ -56,23 +59,18 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   longitude: number | null;
 
-  // PostGIS spatial point for proximity queries
-  @Column({
-    type: 'geometry',
-    spatialFeatureType: 'Point',
-    srid: 4326,
-    nullable: true,
-  })
+  @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true })
   @Index({ spatial: true })
   location: any | null;
 
-  @Column({
-    type: 'varchar',
-    length: 50,
-    default: AssayerStatus.REGISTERED,
-    comment: 'Assayer status: REGISTERED, ACTIVE, INACTIVE, BUSY, SUSPENDED',
-  })
+  @Column({ type: 'varchar', length: 50, default: AssayerStatus.ACTIVE })
   status: string;
+
+  @Column({ name: 'lifecycle_status', type: 'varchar', length: 50, default: AssayerLifecycleStatus.INVITED })
+  lifecycleStatus: string;
+
+  @Column({ name: 'organization_id', type: 'uuid', nullable: true })
+  organizationId: string | null;
 
   @Column({ name: 'pan_number', type: 'varchar', length: 20, nullable: true })
   panNumber: string | null;
@@ -88,6 +86,36 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ name: 'employment_type', type: 'varchar', length: 50, default: 'INTERNAL' })
   employmentType: string;
+
+  @Column({ name: 'joining_date', type: 'date', nullable: true })
+  joiningDate: Date | null;
+
+  @Column({ name: 'exit_date', type: 'date', nullable: true })
+  exitDate: Date | null;
+
+  @Column({ name: 'termination_date', type: 'date', nullable: true })
+  terminationDate: Date | null;
+
+  @Column({ name: 'manager_id', type: 'uuid', nullable: true })
+  managerId: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  department: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  region: string | null;
+
+  @Column({ name: 'emergency_contact_name', type: 'varchar', length: 200, nullable: true })
+  emergencyContactName: string | null;
+
+  @Column({ name: 'emergency_contact_phone', type: 'varchar', length: 20, nullable: true })
+  emergencyContactPhone: string | null;
+
+  @Column({ name: 'emergency_contact_relation', type: 'varchar', length: 100, nullable: true })
+  emergencyContactRelation: string | null;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  photograph: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
   skills: string[] | null;

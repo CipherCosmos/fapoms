@@ -26,7 +26,7 @@ let ProjectBranchEntity = class ProjectBranchEntity extends base_entity_1.BaseEn
     remarks;
     project;
     branch;
-    assignment;
+    assignments;
 };
 exports.ProjectBranchEntity = ProjectBranchEntity;
 __decorate([
@@ -76,9 +76,9 @@ __decorate([
     __metadata("design:type", branch_entity_1.BranchEntity)
 ], ProjectBranchEntity.prototype, "branch", void 0);
 __decorate([
-    (0, typeorm_1.OneToOne)(() => assignment_entity_1.AssignmentEntity, (a) => a.projectBranch, { nullable: true }),
-    __metadata("design:type", Object)
-], ProjectBranchEntity.prototype, "assignment", void 0);
+    (0, typeorm_1.OneToMany)(() => assignment_entity_1.AssignmentEntity, (a) => a.projectBranch),
+    __metadata("design:type", Array)
+], ProjectBranchEntity.prototype, "assignments", void 0);
 exports.ProjectBranchEntity = ProjectBranchEntity = __decorate([
     (0, typeorm_1.Entity)('project_branches'),
     (0, typeorm_1.Index)(['projectId']),

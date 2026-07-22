@@ -19,6 +19,7 @@ import { AuditModule } from './core/audit/audit.module';
 import { PlatformModule } from './modules/platform/platform.module';
 
 // Business modules
+import { OrganizationModule } from './modules/organization/organization.module';
 import { ClientModule } from './modules/client/client.module';
 import { BranchModule } from './modules/branch/branch.module';
 import { AssayerModule } from './modules/assayer/assayer.module';
@@ -34,6 +35,7 @@ import { DocumentModule } from './modules/document/document.module';
 import { ValidationModule } from './modules/validation/validation.module';
 import { OcrModule } from './infrastructure/ocr/ocr.module';
 import { GeoModule } from './modules/geo/geo.module';
+import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 
 @Module({
   imports: [
@@ -57,6 +59,7 @@ import { GeoModule } from './modules/geo/geo.module';
     PlatformModule,
 
     // Business modules
+    OrganizationModule,
     ClientModule,
     BranchModule,
     AssayerModule,
@@ -73,5 +76,6 @@ import { GeoModule } from './modules/geo/geo.module';
     OcrModule,
     GeoModule,
   ],
+  providers: [SlaScannerWorker],
 })
 export class AppModule {}

@@ -26,6 +26,8 @@ export interface AssayerRecommendation {
   city: string;
   distanceKm: number | null;
   score?: number;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface CreateBusinessRuleDto {
@@ -91,6 +93,8 @@ export class PlanningService {
         city: r.assayer.city,
         distanceKm,
         score: r.score,
+        latitude: r.assayer.latitude,
+        longitude: r.assayer.longitude,
       });
     }
 

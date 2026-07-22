@@ -20,6 +20,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ user }) => {
   const menuItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+    { name: 'Executive Command Room', path: '/executive-map', icon: Map },
     { name: 'Projects', path: '/projects', icon: FolderKanban },
     { name: 'Branches', path: '/branches', icon: GitMerge },
     { name: 'Assignment Planning', path: '/planning', icon: Map },

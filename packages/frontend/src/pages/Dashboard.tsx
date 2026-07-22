@@ -4,7 +4,8 @@ import {
   Users, 
   Percent, 
   ArrowUpRight, 
-  Clock 
+  AlertTriangle,
+  CheckCircle2
 } from 'lucide-react';
 
 interface DashboardMetrics {
@@ -22,8 +23,17 @@ interface DashboardMetrics {
   }>;
 }
 
+interface SlaSummary {
+  statusCounts: Record<string, number>;
+  slaCounts: {
+    COMPLIANT: number;
+    BREACHED: number;
+  };
+}
+
 export const Dashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -33,14 +43,22 @@ export const Dashboard: React.FC = () => {
   const loadMetrics = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/v1/system-dashboard/metrics', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
-        }
-      });
-      const resData = await response.json();
-      if (response.ok && resData.success) {
-        setMetrics(resData.data);
+      const token = localStorage.getItem('fapoms_token');
+      const headers = { 'Authorization': `Bearer ${token}` };
+
+      const [metricsRes, slaRes] = await Promise.all([
+        fetch('/api/v1/system-dashboard/metrics', { headers }),
+        fetch('/api/v1/assignments/dashboard/summary', { headers })
+      ]);
+
+      const metricsData = await metricsRes.json();
+      const slaData = await slaRes.json();
+
+      if (metricsRes.ok && metricsData.success) {
+        setMetrics(metricsData.data);
+      }
+      if (slaRes.ok && slaData.success) {
+        setSlaSummary(slaData.data);
       }
     } catch (err) {
       console.error('Failed to fetch dashboard metrics');
@@ -51,11 +69,18 @@ export const Dashboard: React.FC = () => {
 
   const getMetricCards = () => {
     if (!metrics) return [];
+    const breachCount = slaSummary?.slaCounts?.BREACHED ?? 0;
     return [
       { name: 'Total Clients', value: String(metrics.clients), icon: Building2, change: 'Master profiles registered', color: 'var(--accent-primary)' },
       { name: 'Active Users', value: String(metrics.users), icon: Users, change: 'System staff accounts', color: 'var(--accent-secondary)' },
       { name: 'Total Branch Audits', value: String(metrics.branches), icon: Percent, change: 'Master branch directory', color: 'var(--status-active)' },
-      { name: 'Active Project Allocations', value: String(metrics.activeBranches), icon: Clock, change: 'Confirmed branch queue links', color: 'var(--status-pending)' },
+      { 
+        name: 'SLA Breaches', 
+        value: String(breachCount), 
+        icon: AlertTriangle, 
+        change: 'Overdue assignment offers', 
+        color: breachCount > 0 ? '#ef4444' : 'var(--text-muted)' 
+      },
     ];
   };
 
@@ -113,17 +138,39 @@ export const Dashboard: React.FC = () => {
           {/* Main Grid split */}
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '32px' }}>
             
-            {/* Projects Overview panel */}
+            {/* Status Breakdown Panel */}
             <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h4 style={{ fontSize: '18px', fontWeight: 600 }}>Active Projects Summary</h4>
+                <h4 style={{ fontSize: '18px', fontWeight: 600 }}>Active Projects & Assignments</h4>
                 <button onClick={loadMetrics} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>
                   Refresh <ArrowUpRight size={14} />
                 </button>
               </div>
               
-              <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                Total Active Projects: <b>{metrics?.projects}</b> | Target Branches: <b>{metrics?.branches}</b>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '8px', fontWeight: 700 }}>ASSIGNMENT STATUS COUNTS</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {slaSummary?.statusCounts && Object.entries(slaSummary.statusCounts).map(([status, count]) => (
+                      <div key={status} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>{status.replace(/_/g, ' ')}</span>
+                        <span><b>{count}</b></span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', justifyItems: 'center', justifyContent: 'center', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 700 }}>SLA COMPLIANCE</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <CheckCircle2 size={18} style={{ color: 'var(--status-active)' }} />
+                    <span style={{ fontSize: '14px' }}>Compliant: <b>{slaSummary?.slaCounts?.COMPLIANT ?? 0}</b></span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <AlertTriangle size={18} style={{ color: '#ef4444' }} />
+                    <span style={{ fontSize: '14px' }}>Breached: <b>{slaSummary?.slaCounts?.BREACHED ?? 0}</b></span>
+                  </div>
+                </div>
               </div>
             </div>
 

@@ -109,15 +109,31 @@ export enum ValidationStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Assayer Lifecycle (Part 6 §9)
+// Assayer Operational Status
 // ---------------------------------------------------------------------------
 
 export enum AssayerStatus {
-  REGISTERED = 'REGISTERED',
   ACTIVE = 'ACTIVE',
   INACTIVE = 'INACTIVE',
-  BUSY = 'BUSY',
   SUSPENDED = 'SUSPENDED',
+}
+
+// ---------------------------------------------------------------------------
+// Assayer Enterprise Lifecycle
+// ---------------------------------------------------------------------------
+
+export enum AssayerLifecycleStatus {
+  INVITED = 'INVITED',
+  DOCUMENT_VERIFICATION = 'DOCUMENT_VERIFICATION',
+  BACKGROUND_VERIFICATION = 'BACKGROUND_VERIFICATION',
+  TRAINING = 'TRAINING',
+  ACTIVE = 'ACTIVE',
+  ON_LEAVE = 'ON_LEAVE',
+  SUSPENDED = 'SUSPENDED',
+  INACTIVE = 'INACTIVE',
+  RESIGNED = 'RESIGNED',
+  TERMINATED = 'TERMINATED',
+  ARCHIVED = 'ARCHIVED',
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +265,39 @@ export enum EventCategory {
   USER = 'USER',
   WORKFLOW = 'WORKFLOW',
   SYSTEM = 'SYSTEM',
+}
+
+// ---------------------------------------------------------------------------
+// Client Lifecycle (Enterprise)
+// ---------------------------------------------------------------------------
+
+export enum ClientLifecycleStatus {
+  PROSPECT = 'PROSPECT',
+  ONBOARDING = 'ONBOARDING',
+  ACTIVE = 'ACTIVE',
+  SUSPENDED = 'SUSPENDED',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  INACTIVE = 'INACTIVE',
+  TERMINATED = 'TERMINATED',
+  ARCHIVED = 'ARCHIVED',
+}
+
+export enum ClientType {
+  BANK = 'BANK',
+  NBFC = 'NBFC',
+  MICROFINANCE = 'MICROFINANCE',
+  INSURANCE = 'INSURANCE',
+  CORPORATE = 'CORPORATE',
+  GOVERNMENT = 'GOVERNMENT',
+  OTHER = 'OTHER',
+}
+
+export enum ContractStatus {
+  DRAFT = 'DRAFT',
+  ACTIVE = 'ACTIVE',
+  EXPIRED = 'EXPIRED',
+  TERMINATED = 'TERMINATED',
+  RENEWED = 'RENEWED',
 }
 
 // ---------------------------------------------------------------------------

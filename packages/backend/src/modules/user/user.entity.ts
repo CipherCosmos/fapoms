@@ -38,6 +38,9 @@ export class UserEntity extends BaseEntity {
   })
   status: string;
 
+  @Column({ name: 'organization_id', type: 'uuid', nullable: true })
+  organizationId: string | null;
+
   @Column({ name: 'department_id', type: 'uuid', nullable: true })
   departmentId: string | null;
 

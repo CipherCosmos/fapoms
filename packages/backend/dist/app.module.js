@@ -15,6 +15,7 @@ const auth_module_1 = require("./modules/auth/auth.module");
 const user_module_1 = require("./modules/user/user.module");
 const audit_module_1 = require("./core/audit/audit.module");
 const platform_module_1 = require("./modules/platform/platform.module");
+const organization_module_1 = require("./modules/organization/organization.module");
 const client_module_1 = require("./modules/client/client.module");
 const branch_module_1 = require("./modules/branch/branch.module");
 const assayer_module_1 = require("./modules/assayer/assayer.module");
@@ -30,6 +31,7 @@ const document_module_1 = require("./modules/document/document.module");
 const validation_module_1 = require("./modules/validation/validation.module");
 const ocr_module_1 = require("./infrastructure/ocr/ocr.module");
 const geo_module_1 = require("./modules/geo/geo.module");
+const sla_scanner_worker_1 = require("./infrastructure/scheduler/sla-scanner.worker");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -49,6 +51,7 @@ exports.AppModule = AppModule = __decorate([
             auth_module_1.AuthModule,
             user_module_1.UserModule,
             platform_module_1.PlatformModule,
+            organization_module_1.OrganizationModule,
             client_module_1.ClientModule,
             branch_module_1.BranchModule,
             assayer_module_1.AssayerModule,
@@ -65,6 +68,7 @@ exports.AppModule = AppModule = __decorate([
             ocr_module_1.OcrModule,
             geo_module_1.GeoModule,
         ],
+        providers: [sla_scanner_worker_1.SlaScannerWorker],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map

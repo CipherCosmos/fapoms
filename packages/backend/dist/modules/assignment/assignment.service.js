@@ -19,6 +19,9 @@ const typeorm_2 = require("typeorm");
 const typeorm_3 = require("@nestjs/typeorm");
 const assignment_entity_1 = require("./assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const assayer_entity_1 = require("../assayer/assayer.entity");
+const assignment_comment_entity_1 = require("./assignment-comment.entity");
+const notification_service_1 = require("../notifications/notification.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
@@ -26,13 +29,17 @@ const shared_1 = require("@fapoms/shared");
 let AssignmentService = class AssignmentService {
     assignmentRepository;
     projectBranchRepository;
+    assayerRepository;
+    notificationService;
     holidayService;
     auditService;
     workflowEngine;
     dataSource;
-    constructor(assignmentRepository, projectBranchRepository, holidayService, auditService, workflowEngine, dataSource) {
+    constructor(assignmentRepository, projectBranchRepository, assayerRepository, notificationService, holidayService, auditService, workflowEngine, dataSource) {
         this.assignmentRepository = assignmentRepository;
         this.projectBranchRepository = projectBranchRepository;
+        this.assayerRepository = assayerRepository;
+        this.notificationService = notificationService;
         this.holidayService = holidayService;
         this.auditService = auditService;
         this.workflowEngine = workflowEngine;
@@ -138,22 +145,49 @@ let AssignmentService = class AssignmentService {
     async create(dto, userId) {
         const projectBranch = await this.projectBranchRepository.findOne({
             where: { id: dto.projectBranchId, isActive: true },
-            relations: ['branch'],
+            relations: ['branch', 'project', 'project.client'],
         });
         if (!projectBranch) {
             throw new common_1.NotFoundException(`Project branch link ${dto.projectBranchId} not found.`);
         }
-        const existingAssignment = await this.assignmentRepository.findOne({
-            where: { projectBranchId: projectBranch.id },
+        const assayer = await this.assayerRepository.findOne({
+            where: { id: dto.assayerId, isActive: true },
         });
-        if (existingAssignment) {
-            if (existingAssignment.status === shared_1.AssignmentStatus.CANCELLED ||
-                existingAssignment.status === shared_1.AssignmentStatus.REJECTED) {
-                await this.assignmentRepository.remove(existingAssignment);
+        if (!assayer) {
+            throw new common_1.NotFoundException(`Assayer ${dto.assayerId} not found.`);
+        }
+        if (projectBranch.project && projectBranch.project.requiredSkills && projectBranch.project.requiredSkills.length > 0) {
+            const assayerSkills = assayer.skills || [];
+            const missingSkills = projectBranch.project.requiredSkills.filter((skill) => !assayerSkills.includes(skill));
+            if (missingSkills.length > 0) {
+                throw new common_1.BadRequestException(`Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`);
             }
-            else {
-                throw new common_1.ConflictException(`Branch Busy: An active assignment (${existingAssignment.assignmentNumber}) already exists for this branch.`);
+        }
+        if (projectBranch.project && projectBranch.project.requiredCertifications && projectBranch.project.requiredCertifications.length > 0) {
+            const assayerCerts = (assayer.certifications || []).map((c) => c.name);
+            const missingCerts = projectBranch.project.requiredCertifications.filter((cert) => !assayerCerts.includes(cert));
+            if (missingCerts.length > 0) {
+                throw new common_1.BadRequestException(`Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`);
             }
+        }
+        const activeAssignment = await this.assignmentRepository.findOne({
+            where: {
+                projectBranchId: projectBranch.id,
+                status: (0, typeorm_2.In)([
+                    shared_1.AssignmentStatus.CREATED,
+                    shared_1.AssignmentStatus.CANDIDATE_SELECTED,
+                    shared_1.AssignmentStatus.CONTACT_INITIATED,
+                    shared_1.AssignmentStatus.NEGOTIATION,
+                    shared_1.AssignmentStatus.ACCEPTED,
+                    shared_1.AssignmentStatus.SCHEDULED,
+                    shared_1.AssignmentStatus.AUDIT_COMPLETED,
+                    shared_1.AssignmentStatus.CLOSED,
+                ]),
+                isActive: true,
+            },
+        });
+        if (activeAssignment) {
+            throw new common_1.ConflictException(`Branch Busy: An active assignment (${activeAssignment.assignmentNumber}) already exists for this branch.`);
         }
         const scheduledDateObj = new Date(dto.scheduledDate);
         const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, projectBranch.branch.state);
@@ -173,15 +207,24 @@ let AssignmentService = class AssignmentService {
         }
         const randomSuffix = Math.floor(1000 + Math.random() * 9000);
         const assignmentNumber = `ASN-${new Date().getFullYear()}-${randomSuffix}`;
+        let maxResponseTimeHours = 24;
+        if (projectBranch.project?.client?.configuration?.maxResponseTimeHours) {
+            maxResponseTimeHours = Number(projectBranch.project.client.configuration.maxResponseTimeHours);
+        }
+        const slaDueDate = new Date();
+        slaDueDate.setHours(slaDueDate.getHours() + maxResponseTimeHours);
         const assignment = this.assignmentRepository.create({
             assignmentNumber,
             projectBranchId: projectBranch.id,
             projectId: projectBranch.projectId,
             assayerId: dto.assayerId,
             status: shared_1.AssignmentStatus.CREATED,
+            priority: projectBranch.priority,
             proposedFee: dto.proposedFee,
             agreedFee: null,
             scheduledDate: scheduledDateObj,
+            slaDueDate,
+            slaStatus: 'COMPLIANT',
             remarks: dto.remarks ?? null,
             createdBy: userId,
             updatedBy: userId,
@@ -281,6 +324,25 @@ let AssignmentService = class AssignmentService {
                 userId,
                 remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
             });
+            try {
+                if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
+                    await this.notificationService.create({
+                        userId: saved.createdBy,
+                        title: `Assignment Accepted`,
+                        message: `Assignment offer ${saved.assignmentNumber} has been accepted by the assayer.`,
+                    }, userId);
+                }
+                else if (targetStatus === shared_1.AssignmentStatus.REJECTED) {
+                    await this.notificationService.create({
+                        userId: saved.createdBy,
+                        title: `Assignment Rejected`,
+                        message: `Assignment offer ${saved.assignmentNumber} was rejected. Reason: ${reason ?? remarks ?? 'None'}.`,
+                    }, userId);
+                }
+            }
+            catch (err) {
+                console.error('Failed to dispatch transition notification', err);
+            }
             return saved;
         });
     }
@@ -294,15 +356,121 @@ let AssignmentService = class AssignmentService {
         });
         return { assignments, total };
     }
+    async addComment(assignmentId, comment, userId, userName) {
+        const assignment = await this.findOne(assignmentId);
+        const commentRecord = this.dataSource.getRepository(assignment_comment_entity_1.AssignmentCommentEntity).create({
+            assignmentId: assignment.id,
+            userId,
+            userName,
+            comment,
+            createdBy: userId,
+            updatedBy: userId,
+        });
+        return this.dataSource.getRepository(assignment_comment_entity_1.AssignmentCommentEntity).save(commentRecord);
+    }
+    async getTimeline(assignmentId) {
+        const assignment = await this.findOne(assignmentId);
+        const { events } = await this.auditService.getEntityHistory('ASSIGNMENT', assignment.id, 100);
+        const comments = await this.dataSource.getRepository(assignment_comment_entity_1.AssignmentCommentEntity).find({
+            where: { assignmentId: assignment.id, isActive: true },
+            order: { createdAt: 'ASC' },
+        });
+        const timelineEvents = [];
+        for (const e of events) {
+            timelineEvents.push({
+                id: e.id,
+                type: 'SYSTEM_EVENT',
+                title: e.eventType,
+                description: e.remarks,
+                timestamp: e.occurredAt,
+                user: e.userDisplayName || e.userId,
+            });
+        }
+        for (const c of comments) {
+            timelineEvents.push({
+                id: c.id,
+                type: 'COMMENT',
+                title: `Comment by ${c.userName}`,
+                description: c.comment,
+                timestamp: c.createdAt,
+                user: c.userName,
+            });
+        }
+        return timelineEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+    async checkSlaBreaches() {
+        const now = new Date();
+        const overdueAssignments = await this.assignmentRepository.find({
+            where: {
+                slaStatus: 'COMPLIANT',
+                status: (0, typeorm_2.In)([
+                    shared_1.AssignmentStatus.CREATED,
+                    shared_1.AssignmentStatus.CANDIDATE_SELECTED,
+                    shared_1.AssignmentStatus.CONTACT_INITIATED,
+                    shared_1.AssignmentStatus.NEGOTIATION,
+                    shared_1.AssignmentStatus.ACCEPTED,
+                    shared_1.AssignmentStatus.SCHEDULED,
+                ]),
+                isActive: true,
+            },
+        });
+        let breachedCount = 0;
+        for (const assignment of overdueAssignments) {
+            if (assignment.slaDueDate && assignment.slaDueDate < now) {
+                assignment.slaStatus = 'BREACHED';
+                await this.assignmentRepository.save(assignment);
+                await this.auditService.recordEvent({
+                    category: shared_1.EventCategory.SYSTEM,
+                    eventType: 'ASSIGNMENT_SLA_BREACHED',
+                    entityType: 'ASSIGNMENT',
+                    entityId: assignment.id,
+                    remarks: `SLA breach detected: Assignment ${assignment.assignmentNumber} exceeded response time deadline of ${assignment.slaDueDate}.`,
+                });
+                breachedCount++;
+            }
+        }
+        return breachedCount;
+    }
+    async getDashboardSummary() {
+        const counts = await this.assignmentRepository
+            .createQueryBuilder('assignment')
+            .select('assignment.status', 'status')
+            .addSelect('COUNT(assignment.id)', 'count')
+            .where('assignment.isActive = :isActive', { isActive: true })
+            .groupBy('assignment.status')
+            .getRawMany();
+        const slaCounts = await this.assignmentRepository
+            .createQueryBuilder('assignment')
+            .select('assignment.slaStatus', 'slaStatus')
+            .addSelect('COUNT(assignment.id)', 'count')
+            .where('assignment.isActive = :isActive', { isActive: true })
+            .groupBy('assignment.slaStatus')
+            .getRawMany();
+        const summary = {};
+        for (const c of counts) {
+            summary[c.status] = Number(c.count);
+        }
+        const slaSummary = {};
+        for (const s of slaCounts) {
+            slaSummary[s.slaStatus] = Number(s.count);
+        }
+        return {
+            statusCounts: summary,
+            slaCounts: slaSummary,
+        };
+    }
 };
 exports.AssignmentService = AssignmentService;
 exports.AssignmentService = AssignmentService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
-    __param(5, (0, typeorm_3.InjectDataSource)()),
+    __param(2, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(7, (0, typeorm_3.InjectDataSource)()),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
+        typeorm_2.Repository,
+        notification_service_1.NotificationService,
         holiday_service_1.HolidayService,
         audit_service_1.AuditService,
         workflow_engine_1.WorkflowEngine,

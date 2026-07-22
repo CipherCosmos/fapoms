@@ -68,6 +68,30 @@ describe('SchedulingService', () => {
             mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-01' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
+        it('should throw BadRequestException if assayer is on leave', async () => {
+            const mockAsn = {
+                id: 'asn-1',
+                status: shared_1.AssignmentStatus.ACCEPTED,
+                assayer: {
+                    leaves: [{ startDate: '2026-08-01', endDate: '2026-08-05' }],
+                },
+            };
+            mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+            await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
+        });
+        it('should throw BadRequestException if scheduled date is outside project timeline', async () => {
+            const mockAsn = {
+                id: 'asn-1',
+                status: shared_1.AssignmentStatus.ACCEPTED,
+                assayer: { leaves: [] },
+                project: {
+                    startDate: '2026-08-05',
+                    endDate: '2026-08-10',
+                },
+            };
+            mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+            await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
+        });
     });
 });
 //# sourceMappingURL=scheduling.service.spec.js.map

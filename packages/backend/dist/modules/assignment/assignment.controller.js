@@ -44,6 +44,13 @@ let AssignmentController = class AssignmentController {
             },
         };
     }
+    async getDashboardSummary() {
+        const summary = await this.assignmentService.getDashboardSummary();
+        return {
+            success: true,
+            data: summary,
+        };
+    }
     async findOne(id) {
         const assignment = await this.assignmentService.findOne(id);
         return {
@@ -63,6 +70,21 @@ let AssignmentController = class AssignmentController {
         return {
             success: true,
             data: assignment,
+        };
+    }
+    async getTimeline(id) {
+        const timeline = await this.assignmentService.getTimeline(id);
+        return {
+            success: true,
+            data: timeline,
+        };
+    }
+    async addComment(id, body, req) {
+        const userName = req.user.displayName || req.user.email || 'System User';
+        const comment = await this.assignmentService.addComment(id, body.comment, req.user.id, userName);
+        return {
+            success: true,
+            data: comment,
         };
     }
 };
@@ -86,6 +108,13 @@ __decorate([
     __metadata("design:paramtypes", [Number, Number]),
     __metadata("design:returntype", Promise)
 ], AssignmentController.prototype, "findAll", null);
+__decorate([
+    (0, common_1.Get)('dashboard/summary'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get assignment status and SLA statistics summary' }),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "getDashboardSummary", null);
 __decorate([
     (0, common_1.Get)(':id'),
     (0, swagger_1.ApiOperation)({ summary: 'Get details for a single assignment by ID' }),
@@ -116,6 +145,24 @@ __decorate([
     __metadata("design:paramtypes", [String, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AssignmentController.prototype, "transition", null);
+__decorate([
+    (0, common_1.Get)(':id/timeline'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get unified activity timeline for an assignment' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "getTimeline", null);
+__decorate([
+    (0, common_1.Post)(':id/comments'),
+    (0, swagger_1.ApiOperation)({ summary: 'Post a comment to an assignment' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "addComment", null);
 exports.AssignmentController = AssignmentController = __decorate([
     (0, swagger_1.ApiTags)('Assignments'),
     (0, swagger_1.ApiBearerAuth)(),

@@ -21,6 +21,19 @@ export interface RoutingProvider {
         latitude: number;
         longitude: number;
     }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    optimizeRoute(origin: {
+        latitude: number;
+        longitude: number;
+    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+        optimizedSequence: string[];
+        totalDistanceKm: number;
+        totalDurationMinutes: number;
+        steps: {
+            destinationId: string;
+            distanceKm: number;
+            durationMinutes: number;
+        }[];
+    }>;
 }
 export declare class PostGISRoutingProvider implements RoutingProvider {
     private readonly dataSource;
@@ -36,6 +49,19 @@ export declare class PostGISRoutingProvider implements RoutingProvider {
         latitude: number;
         longitude: number;
     }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    optimizeRoute(origin: {
+        latitude: number;
+        longitude: number;
+    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+        optimizedSequence: string[];
+        totalDistanceKm: number;
+        totalDurationMinutes: number;
+        steps: {
+            destinationId: string;
+            distanceKm: number;
+            durationMinutes: number;
+        }[];
+    }>;
 }
 export declare class OSRMRoutingProvider implements RoutingProvider {
     private readonly configService;
@@ -53,6 +79,19 @@ export declare class OSRMRoutingProvider implements RoutingProvider {
         latitude: number;
         longitude: number;
     }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    optimizeRoute(origin: {
+        latitude: number;
+        longitude: number;
+    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+        optimizedSequence: string[];
+        totalDistanceKm: number;
+        totalDurationMinutes: number;
+        steps: {
+            destinationId: string;
+            distanceKm: number;
+            durationMinutes: number;
+        }[];
+    }>;
 }
 export declare class RoutingService {
     private readonly configService;
@@ -71,4 +110,17 @@ export declare class RoutingService {
         latitude: number;
         longitude: number;
     }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    optimizeRoute(origin: {
+        latitude: number;
+        longitude: number;
+    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+        optimizedSequence: string[];
+        totalDistanceKm: number;
+        totalDurationMinutes: number;
+        steps: {
+            destinationId: string;
+            distanceKm: number;
+            durationMinutes: number;
+        }[];
+    }>;
 }

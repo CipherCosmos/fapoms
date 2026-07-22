@@ -15,6 +15,8 @@ export interface AssayerRecommendation {
     city: string;
     distanceKm: number | null;
     score?: number;
+    latitude?: number | null;
+    longitude?: number | null;
 }
 export interface CreateBusinessRuleDto {
     name: string;

@@ -81,7 +81,7 @@ export class AuthService {
         { username: usernameOrEmail },
         { email: usernameOrEmail },
       ],
-      relations: ['roles', 'roles.permissions'],
+      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
 
     if (!user) {
@@ -169,7 +169,7 @@ export class AuthService {
     // Load user with roles
     const user = await this.userRepository.findOne({
       where: { id: storedToken.userId },
-      relations: ['roles', 'roles.permissions'],
+      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
 
     if (!user || user.status !== UserStatus.ACTIVE) {
@@ -216,7 +216,7 @@ export class AuthService {
   async validateJwtPayload(payload: JwtPayload): Promise<UserEntity | null> {
     const user = await this.userRepository.findOne({
       where: { id: payload.sub, status: UserStatus.ACTIVE },
-      relations: ['roles', 'roles.permissions'],
+      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
     return user ?? null;
   }
@@ -232,9 +232,16 @@ export class AuthService {
   ): Promise<TokenPair> {
     // Build JWT payload
     const roles = user.roles.map((r) => r.name);
-    const permissions = user.roles
-      .flatMap((r) => r.permissions)
-      .map((p) => `${p.resource}:${p.action}:${p.scope}`);
+
+    // Flatten permissions from both direct role permissions and responsibilities
+    const directPerms = user.roles.flatMap((r) => r.permissions || []);
+    const responsibilityPerms = user.roles.flatMap((r) =>
+      (r.responsibilities || []).flatMap((resp) =>
+        (resp.capabilities || []).flatMap((cap) => cap.permissions || []),
+      ),
+    );
+    const allPerms = [...directPerms, ...responsibilityPerms];
+    const permissions = allPerms.map((p) => `${p.resource}:${p.action}:${p.scope}`);
 
     const payload: JwtPayload = {
       sub: user.id,

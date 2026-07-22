@@ -13,17 +13,21 @@ const assignment_service_1 = require("./assignment.service");
 const assignment_controller_1 = require("./assignment.controller");
 const assignment_entity_1 = require("./assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const assayer_entity_1 = require("../assayer/assayer.entity");
+const assignment_comment_entity_1 = require("./assignment-comment.entity");
 const holiday_module_1 = require("../holiday/holiday.module");
 const platform_module_1 = require("../platform/platform.module");
+const notifications_module_1 = require("../notifications/notifications.module");
 let AssignmentModule = class AssignmentModule {
 };
 exports.AssignmentModule = AssignmentModule;
 exports.AssignmentModule = AssignmentModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([assignment_entity_1.AssignmentEntity, project_branch_entity_1.ProjectBranchEntity]),
+            typeorm_1.TypeOrmModule.forFeature([assignment_entity_1.AssignmentEntity, project_branch_entity_1.ProjectBranchEntity, assayer_entity_1.AssayerEntity, assignment_comment_entity_1.AssignmentCommentEntity]),
             holiday_module_1.HolidayModule,
             platform_module_1.PlatformModule,
+            notifications_module_1.NotificationsModule,
         ],
         controllers: [assignment_controller_1.AssignmentController],
         providers: [assignment_service_1.AssignmentService],

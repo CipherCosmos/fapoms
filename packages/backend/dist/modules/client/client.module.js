@@ -11,6 +11,9 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const client_entity_1 = require("./client.entity");
 const client_configuration_entity_1 = require("./client-configuration.entity");
+const client_contact_entity_1 = require("./client-contact.entity");
+const client_contract_entity_1 = require("./client-contract.entity");
+const client_billing_entity_1 = require("./client-billing.entity");
 const client_service_1 = require("./client.service");
 const client_controller_1 = require("./client.controller");
 let ClientModule = class ClientModule {
@@ -19,7 +22,13 @@ exports.ClientModule = ClientModule;
 exports.ClientModule = ClientModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([client_entity_1.ClientEntity, client_configuration_entity_1.ClientConfigurationEntity]),
+            typeorm_1.TypeOrmModule.forFeature([
+                client_entity_1.ClientEntity,
+                client_configuration_entity_1.ClientConfigurationEntity,
+                client_contact_entity_1.ClientContactEntity,
+                client_contract_entity_1.ClientContractEntity,
+                client_billing_entity_1.ClientBillingEntity,
+            ]),
         ],
         controllers: [client_controller_1.ClientController],
         providers: [client_service_1.ClientService],

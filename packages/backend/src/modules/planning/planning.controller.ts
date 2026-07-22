@@ -15,6 +15,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsObject } from 'class-validator';
 
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
+import { PlanningOrchestratorService } from './planning-orchestrator.service';
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
@@ -63,7 +64,20 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('planning')
 export class PlanningController {
-  constructor(private readonly planningService: PlanningService) {}
+  constructor(
+    private readonly planningService: PlanningService,
+    private readonly planningOrchestratorService: PlanningOrchestratorService,
+  ) {}
+
+  @Get('projects/:projectId/coverage')
+  @ApiOperation({ summary: 'Get project planning coverage and metrics summary' })
+  async getProjectCoverage(@Param('projectId', ParseUUIDPipe) projectId: string) {
+    const coverage = await this.planningOrchestratorService.getProjectCoverage(projectId);
+    return {
+      success: true,
+      data: coverage,
+    };
+  }
 
   @Get('recommendations')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)

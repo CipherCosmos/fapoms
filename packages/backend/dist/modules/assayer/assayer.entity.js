@@ -15,6 +15,8 @@ const base_entity_1 = require("../../core/entities/base.entity");
 const shared_1 = require("@fapoms/shared");
 let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     assayerCode;
+    employeeId;
+    employeeCode;
     firstName;
     lastName;
     displayName;
@@ -30,11 +32,23 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     longitude;
     location;
     status;
+    lifecycleStatus;
+    organizationId;
     panNumber;
     bankAccountNumber;
     ifscCode;
     notes;
     employmentType;
+    joiningDate;
+    exitDate;
+    terminationDate;
+    managerId;
+    department;
+    region;
+    emergencyContactName;
+    emergencyContactPhone;
+    emergencyContactRelation;
+    photograph;
     skills;
     certifications;
     languages;
@@ -52,6 +66,14 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'assayer_code', unique: true, length: 50 }),
     __metadata("design:type", String)
 ], AssayerEntity.prototype, "assayerCode", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "employeeId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'employee_code', type: 'varchar', length: 50, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "employeeCode", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'first_name', length: 100 }),
     __metadata("design:type", String)
@@ -105,24 +127,22 @@ __decorate([
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "longitude", void 0);
 __decorate([
-    (0, typeorm_1.Column)({
-        type: 'geometry',
-        spatialFeatureType: 'Point',
-        srid: 4326,
-        nullable: true,
-    }),
+    (0, typeorm_1.Column)({ type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true }),
     (0, typeorm_1.Index)({ spatial: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "location", void 0);
 __decorate([
-    (0, typeorm_1.Column)({
-        type: 'varchar',
-        length: 50,
-        default: shared_1.AssayerStatus.REGISTERED,
-        comment: 'Assayer status: REGISTERED, ACTIVE, INACTIVE, BUSY, SUSPENDED',
-    }),
+    (0, typeorm_1.Column)({ type: 'varchar', length: 50, default: shared_1.AssayerStatus.ACTIVE }),
     __metadata("design:type", String)
 ], AssayerEntity.prototype, "status", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'lifecycle_status', type: 'varchar', length: 50, default: shared_1.AssayerLifecycleStatus.INVITED }),
+    __metadata("design:type", String)
+], AssayerEntity.prototype, "lifecycleStatus", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'organization_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "organizationId", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'pan_number', type: 'varchar', length: 20, nullable: true }),
     __metadata("design:type", Object)
@@ -143,6 +163,46 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'employment_type', type: 'varchar', length: 50, default: 'INTERNAL' }),
     __metadata("design:type", String)
 ], AssayerEntity.prototype, "employmentType", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'joining_date', type: 'date', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "joiningDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'exit_date', type: 'date', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "exitDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'termination_date', type: 'date', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "terminationDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'manager_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "managerId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "department", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "region", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'emergency_contact_name', type: 'varchar', length: 200, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "emergencyContactName", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'emergency_contact_phone', type: 'varchar', length: 20, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "emergencyContactPhone", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'emergency_contact_relation', type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "emergencyContactRelation", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 500, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "photograph", void 0);
 __decorate([
     (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
     __metadata("design:type", Object)
@@ -190,7 +250,11 @@ __decorate([
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),
+    (0, typeorm_1.Index)(['employeeId']),
     (0, typeorm_1.Index)(['status']),
-    (0, typeorm_1.Index)(['state'])
+    (0, typeorm_1.Index)(['lifecycleStatus']),
+    (0, typeorm_1.Index)(['state']),
+    (0, typeorm_1.Index)(['organizationId']),
+    (0, typeorm_1.Index)(['managerId'])
 ], AssayerEntity);
 //# sourceMappingURL=assayer.entity.js.map

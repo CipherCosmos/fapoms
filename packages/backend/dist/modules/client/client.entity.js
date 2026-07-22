@@ -16,11 +16,21 @@ let ClientEntity = class ClientEntity extends base_entity_1.BaseEntity {
     clientCode;
     name;
     displayName;
+    website;
+    industry;
+    clientType;
+    registrationNumber;
+    taxId;
+    lifecycleStatus;
+    organizationId;
     contactPerson;
     contactEmail;
     contactPhone;
     address;
     configuration;
+    contacts;
+    contracts;
+    billing;
     priority;
     budget;
     preferredAssayers;
@@ -41,6 +51,34 @@ __decorate([
     __metadata("design:type", String)
 ], ClientEntity.prototype, "displayName", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 500, nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "website", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "industry", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'client_type', length: 50, default: 'OTHER' }),
+    __metadata("design:type", String)
+], ClientEntity.prototype, "clientType", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'registration_number', type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "registrationNumber", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'tax_id', type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "taxId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'lifecycle_status', length: 50, default: 'PROSPECT' }),
+    __metadata("design:type", String)
+], ClientEntity.prototype, "lifecycleStatus", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'organization_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], ClientEntity.prototype, "organizationId", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'contact_person', type: 'varchar', length: 200, nullable: true }),
     __metadata("design:type", Object)
 ], ClientEntity.prototype, "contactPerson", void 0);
@@ -60,6 +98,18 @@ __decorate([
     (0, typeorm_1.OneToOne)('ClientConfigurationEntity', 'client', { cascade: true, eager: true }),
     __metadata("design:type", Object)
 ], ClientEntity.prototype, "configuration", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)('ClientContactEntity', 'client', { cascade: true }),
+    __metadata("design:type", Array)
+], ClientEntity.prototype, "contacts", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)('ClientContractEntity', 'client', { cascade: true }),
+    __metadata("design:type", Array)
+], ClientEntity.prototype, "contracts", void 0);
+__decorate([
+    (0, typeorm_1.OneToOne)('ClientBillingEntity', 'client', { cascade: true }),
+    __metadata("design:type", Function)
+], ClientEntity.prototype, "billing", void 0);
 __decorate([
     (0, typeorm_1.Column)({ type: 'varchar', length: 50, default: 'MEDIUM' }),
     __metadata("design:type", String)

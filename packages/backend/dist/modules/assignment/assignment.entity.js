@@ -22,11 +22,14 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     projectId;
     assayerId;
     status;
+    priority;
     proposedFee;
     agreedFee;
     scheduledDate;
     completionDate;
     remarks;
+    slaDueDate;
+    slaStatus;
     cancelReason;
     rejectReason;
     projectBranch;
@@ -59,6 +62,14 @@ __decorate([
     __metadata("design:type", String)
 ], AssignmentEntity.prototype, "status", void 0);
 __decorate([
+    (0, typeorm_1.Column)({
+        type: 'enum',
+        enum: shared_1.Priority,
+        default: shared_1.Priority.MEDIUM,
+    }),
+    __metadata("design:type", String)
+], AssignmentEntity.prototype, "priority", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'proposed_fee', type: 'decimal', precision: 12, scale: 2, nullable: true }),
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "proposedFee", void 0);
@@ -79,6 +90,14 @@ __decorate([
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "remarks", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'sla_due_date', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], AssignmentEntity.prototype, "slaDueDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'sla_status', type: 'varchar', length: 50, default: 'COMPLIANT' }),
+    __metadata("design:type", String)
+], AssignmentEntity.prototype, "slaStatus", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'cancel_reason', type: 'text', nullable: true }),
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "cancelReason", void 0);
@@ -87,7 +106,7 @@ __decorate([
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "rejectReason", void 0);
 __decorate([
-    (0, typeorm_1.OneToOne)(() => project_branch_entity_1.ProjectBranchEntity, (pb) => pb.assignment, { onDelete: 'CASCADE' }),
+    (0, typeorm_1.ManyToOne)(() => project_branch_entity_1.ProjectBranchEntity, (pb) => pb.assignments, { onDelete: 'CASCADE' }),
     (0, typeorm_1.JoinColumn)({ name: 'project_branch_id' }),
     __metadata("design:type", project_branch_entity_1.ProjectBranchEntity)
 ], AssignmentEntity.prototype, "projectBranch", void 0);

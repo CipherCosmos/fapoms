@@ -5,6 +5,8 @@ import { Repository, DataSource } from 'typeorm';
 import { AssignmentService } from './assignment.service';
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
+import { NotificationService } from '../notifications/notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
@@ -29,8 +31,16 @@ describe('AssignmentService', () => {
     save: jest.fn(),
   };
 
+  const mockAssayerRepo = {
+    findOne: jest.fn(),
+  };
+
   const mockHolidayService = {
     isHoliday: jest.fn(),
+  };
+
+  const mockNotificationService = {
+    create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
   };
 
   const mockAuditService = {
@@ -100,8 +110,16 @@ describe('AssignmentService', () => {
           useValue: mockProjectBranchRepo,
         },
         {
+          provide: getRepositoryToken(AssayerEntity),
+          useValue: mockAssayerRepo,
+        },
+        {
           provide: HolidayService,
           useValue: mockHolidayService,
+        },
+        {
+          provide: NotificationService,
+          useValue: mockNotificationService,
         },
         {
           provide: AuditService,
@@ -144,9 +162,79 @@ describe('AssignmentService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw BadRequestException if date is a holiday', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' } };
+    it('should throw NotFoundException if assayer does not exist', async () => {
+      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
       mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.create(
+          {
+            projectBranchId: 'pb-1',
+            assayerId: 'as-1',
+            proposedFee: 500,
+            scheduledDate: '2026-08-01',
+          },
+          'user-1',
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw BadRequestException if assayer lacks required skills', async () => {
+      const mockBranch = {
+        id: 'pb-1',
+        branch: { state: 'MH' },
+        project: { requiredSkills: ['Expert Appraiser'] },
+      };
+      const mockAssayer = { id: 'as-1', skills: ['Junior Valuer'] };
+      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
+
+      await expect(
+        service.create(
+          {
+            projectBranchId: 'pb-1',
+            assayerId: 'as-1',
+            proposedFee: 500,
+            scheduledDate: '2026-08-01',
+          },
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException if assayer lacks required certifications', async () => {
+      const mockBranch = {
+        id: 'pb-1',
+        branch: { state: 'MH' },
+        project: { requiredSkills: [], requiredCertifications: ['Gold Appraiser Cert'] },
+      };
+      const mockAssayer = {
+        id: 'as-1',
+        skills: [],
+        certifications: [{ name: 'Basic Valuer Cert', expiryDate: '2027-01-01' }],
+      };
+      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
+
+      await expect(
+        service.create(
+          {
+            projectBranchId: 'pb-1',
+            assayerId: 'as-1',
+            proposedFee: 500,
+            scheduledDate: '2026-08-01',
+          },
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException if date is a holiday', async () => {
+      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
+      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
+      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
       mockHolidayService.isHoliday.mockResolvedValue(true);
 
       await expect(
@@ -163,8 +251,10 @@ describe('AssignmentService', () => {
     });
 
     it('should throw ConflictException if assayer is double-booked', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' } };
+      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
+      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
       mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
       mockHolidayService.isHoliday.mockResolvedValue(false);
       mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing-asn' });
 
@@ -182,8 +272,10 @@ describe('AssignmentService', () => {
     });
 
     it('should successfully create an assignment in CREATED status', async () => {
-      const mockBranch = { id: 'pb-1', projectId: 'p-1', branch: { name: 'Branch 1', state: 'MH' } };
+      const mockBranch = { id: 'pb-1', projectId: 'p-1', branch: { name: 'Branch 1', state: 'MH' }, project: {} };
+      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
       mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
       mockHolidayService.isHoliday.mockResolvedValue(false);
       mockAssignmentRepo.findOne.mockResolvedValue(null);
 
@@ -251,6 +343,72 @@ describe('AssignmentService', () => {
       await expect(
         service.update('asn-123', { proposedFee: 600 }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('SLA and Notifications validation', () => {
+    it('should calculate SLA due date based on client configuration in create', async () => {
+      const mockBranch = {
+        id: 'pb-1',
+        projectId: 'p-1',
+        branch: { name: 'Branch 1', state: 'MH' },
+        project: {
+          client: {
+            configuration: {
+              maxResponseTimeHours: 48,
+            },
+          },
+        },
+      };
+      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
+      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
+      mockHolidayService.isHoliday.mockResolvedValue(false);
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+
+      const mockCreatedAssignment = {
+        id: 'asn-123',
+        assignmentNumber: 'ASN-2026-1234',
+        status: AssignmentStatus.CREATED,
+      };
+      mockAssignmentRepo.create.mockImplementation((arg) => ({ ...mockCreatedAssignment, ...arg }));
+      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
+
+      const result = await service.create(
+        {
+          projectBranchId: 'pb-1',
+          assayerId: 'as-1',
+          proposedFee: 500,
+          scheduledDate: '2026-08-01',
+        },
+        'user-1',
+      );
+
+      expect(result.slaDueDate).toBeDefined();
+      const expectedTime = new Date().getTime() + 48 * 60 * 60 * 1000;
+      expect(Math.abs(result.slaDueDate!.getTime() - expectedTime)).toBeLessThan(5000);
+    });
+
+    it('should trigger notification when transitioning to ACCEPTED status', async () => {
+      const mockAssignment = {
+        id: 'asn-123',
+        assignmentNumber: 'ASN-2026-1234',
+        status: AssignmentStatus.CREATED,
+        createdBy: 'creator-user',
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
+      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
+
+      await service.transition('asn-123', AssignmentStatus.ACCEPTED, 'user-1');
+
+      expect(mockNotificationService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'creator-user',
+          title: 'Assignment Accepted',
+        }),
+        'user-1',
+      );
     });
   });
 });

@@ -1,6 +1,8 @@
 import { BaseEntity } from '../../core/entities/base.entity';
 export declare class AssayerEntity extends BaseEntity {
     assayerCode: string;
+    employeeId: string | null;
+    employeeCode: string | null;
     firstName: string;
     lastName: string;
     displayName: string;
@@ -16,11 +18,23 @@ export declare class AssayerEntity extends BaseEntity {
     longitude: number | null;
     location: any | null;
     status: string;
+    lifecycleStatus: string;
+    organizationId: string | null;
     panNumber: string | null;
     bankAccountNumber: string | null;
     ifscCode: string | null;
     notes: string | null;
     employmentType: string;
+    joiningDate: Date | null;
+    exitDate: Date | null;
+    terminationDate: Date | null;
+    managerId: string | null;
+    department: string | null;
+    region: string | null;
+    emergencyContactName: string | null;
+    emergencyContactPhone: string | null;
+    emergencyContactRelation: string | null;
+    photograph: string | null;
     skills: string[] | null;
     certifications: {
         name: string;

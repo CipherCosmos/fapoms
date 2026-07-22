@@ -47,7 +47,7 @@ let AuthService = class AuthService {
                 { username: usernameOrEmail },
                 { email: usernameOrEmail },
             ],
-            relations: ['roles', 'roles.permissions'],
+            relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
         });
         if (!user) {
             throw new common_1.UnauthorizedException('Invalid credentials');
@@ -107,7 +107,7 @@ let AuthService = class AuthService {
         }
         const user = await this.userRepository.findOne({
             where: { id: storedToken.userId },
-            relations: ['roles', 'roles.permissions'],
+            relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
         });
         if (!user || user.status !== shared_1.UserStatus.ACTIVE) {
             throw new common_1.UnauthorizedException('User account is not active');
@@ -134,15 +134,16 @@ let AuthService = class AuthService {
     async validateJwtPayload(payload) {
         const user = await this.userRepository.findOne({
             where: { id: payload.sub, status: shared_1.UserStatus.ACTIVE },
-            relations: ['roles', 'roles.permissions'],
+            relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
         });
         return user ?? null;
     }
     async generateTokenPair(user, ipAddress, userAgent) {
         const roles = user.roles.map((r) => r.name);
-        const permissions = user.roles
-            .flatMap((r) => r.permissions)
-            .map((p) => `${p.resource}:${p.action}:${p.scope}`);
+        const directPerms = user.roles.flatMap((r) => r.permissions || []);
+        const responsibilityPerms = user.roles.flatMap((r) => (r.responsibilities || []).flatMap((resp) => (resp.capabilities || []).flatMap((cap) => cap.permissions || [])));
+        const allPerms = [...directPerms, ...responsibilityPerms];
+        const permissions = allPerms.map((p) => `${p.resource}:${p.action}:${p.scope}`);
         const payload = {
             sub: user.id,
             username: user.username,

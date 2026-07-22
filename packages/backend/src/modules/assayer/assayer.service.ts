@@ -1,19 +1,39 @@
-/**
- * FAPOMS — Assayer Service
- *
- * Manages the assayer profiles and geographic settings (Part 2 §6, Part 5 §5).
- */
-
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-
+import { Repository, LessThanOrEqual } from 'typeorm';
 import { AssayerEntity } from './assayer.entity';
+import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
+import { WorkforceAttributeEntity } from './workforce-attribute.entity';
+import { AssayerGovernmentDocumentEntity } from './assayer-government-document.entity';
+import { AssayerDocumentEntity } from './assayer-document.entity';
+import { AssayerRemarkEntity } from './assayer-remark.entity';
+import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory, AssayerStatus } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
+
+const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
+  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
+  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.INACTIVE],
+  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [AssayerLifecycleStatus.TRAINING, AssayerLifecycleStatus.INACTIVE],
+  [AssayerLifecycleStatus.TRAINING]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.INACTIVE],
+  [AssayerLifecycleStatus.ACTIVE]: [AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.INACTIVE, AssayerLifecycleStatus.RESIGNED],
+  [AssayerLifecycleStatus.ON_LEAVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.INACTIVE],
+  [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
+  [AssayerLifecycleStatus.INACTIVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ARCHIVED],
+  [AssayerLifecycleStatus.RESIGNED]: [AssayerLifecycleStatus.ARCHIVED],
+  [AssayerLifecycleStatus.TERMINATED]: [AssayerLifecycleStatus.ARCHIVED],
+};
+
+function mapLifecycleToOperationalStatus(lifecycle: string): string {
+  if (lifecycle === AssayerLifecycleStatus.ACTIVE || lifecycle === AssayerLifecycleStatus.ON_LEAVE) return 'ACTIVE';
+  if (lifecycle === AssayerLifecycleStatus.SUSPENDED) return 'SUSPENDED';
+  return 'INACTIVE';
+}
 
 export interface CreateAssayerDto {
   assayerCode: string;
+  employeeId?: string;
+  employeeCode?: string;
   firstName: string;
   lastName: string;
   email?: string;
@@ -26,11 +46,20 @@ export interface CreateAssayerDto {
   pincode?: string;
   latitude?: number;
   longitude?: number;
+  organizationId?: string;
   panNumber?: string;
   bankAccountNumber?: string;
   ifscCode?: string;
   notes?: string;
   employmentType?: string;
+  joiningDate?: string;
+  managerId?: string;
+  department?: string;
+  region?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyContactRelation?: string;
+  photograph?: string;
   skills?: string[];
   certifications?: { name: string; expiryDate: string }[];
   languages?: string[];
@@ -57,12 +86,22 @@ export interface UpdateAssayerDto {
   pincode?: string;
   latitude?: number;
   longitude?: number;
-  status?: AssayerStatus;
+  organizationId?: string;
   panNumber?: string;
   bankAccountNumber?: string;
   ifscCode?: string;
   notes?: string;
   employmentType?: string;
+  joiningDate?: string;
+  exitDate?: string;
+  terminationDate?: string;
+  managerId?: string;
+  department?: string;
+  region?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyContactRelation?: string;
+  photograph?: string;
   skills?: string[];
   certifications?: { name: string; expiryDate: string }[];
   languages?: string[];
@@ -76,48 +115,55 @@ export interface UpdateAssayerDto {
   maxWeeklyWorkload?: number;
 }
 
-export interface CreateCommercialProfileDto {
-  baseFee: number;
-  hourlyRate: number;
-  dailyRate: number;
-  travelReimbursement: number;
-  accommodationAllowance: number;
-  mealAllowance: number;
-  currency?: string;
-  effectiveStartDate: string;
-  effectiveEndDate?: string | null;
-}
-
-export interface UpdateCommercialProfileDto {
-  baseFee?: number;
-  hourlyRate?: number;
-  dailyRate?: number;
-  travelReimbursement?: number;
-  accommodationAllowance?: number;
-  mealAllowance?: number;
-  currency?: string;
-  effectiveStartDate?: string;
-  effectiveEndDate?: string | null;
-}
-
-export interface CreateWorkforceAttributeDto {
-  type: string;
-  name: string;
-  level?: string;
+export interface CreateGovernmentDocumentDto {
+  documentType: string;
+  documentNumber: string;
   expiryDate?: string;
-  metadata?: Record<string, any>;
+  filePaths?: string[];
+  remarks?: string;
 }
 
-export interface UpdateWorkforceAttributeDto {
-  name?: string;
-  level?: string;
+export interface UpdateGovernmentDocumentDto {
+  documentNumber?: string;
   expiryDate?: string | null;
-  metadata?: Record<string, any>;
+  verificationStatus?: string;
+  verifiedBy?: string;
+  filePaths?: string[];
+  remarks?: string;
 }
 
-import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
-import { WorkforceAttributeEntity } from './workforce-attribute.entity';
-import { LessThanOrEqual, MoreThanOrEqual, IsNull } from 'typeorm';
+export interface CreateAssayerDocumentDto {
+  documentType: string;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  mimeType?: string;
+  parentDocumentId?: string;
+  remarks?: string;
+}
+
+export interface CreateRemarkDto {
+  content: string;
+  category: string;
+  visibility: string;
+  attachmentPaths?: string[];
+}
+
+export interface UpdateRemarkDto {
+  content?: string;
+  category?: string;
+  visibility?: string;
+  attachmentPaths?: string[];
+}
+
+export interface UpdateAssayerDocumentDto {
+  documentType?: string;
+  fileName?: string;
+  filePath?: string;
+  fileSize?: number;
+  mimeType?: string;
+  remarks?: string;
+}
 
 @Injectable()
 export class AssayerService {
@@ -128,6 +174,14 @@ export class AssayerService {
     private readonly commercialRepository: Repository<AssayerCommercialProfileEntity>,
     @InjectRepository(WorkforceAttributeEntity)
     private readonly workforceAttributeRepository: Repository<WorkforceAttributeEntity>,
+    @InjectRepository(AssayerGovernmentDocumentEntity)
+    private readonly govDocRepository: Repository<AssayerGovernmentDocumentEntity>,
+    @InjectRepository(AssayerDocumentEntity)
+    private readonly assayerDocRepository: Repository<AssayerDocumentEntity>,
+    @InjectRepository(AssayerRemarkEntity)
+    private readonly remarkRepository: Repository<AssayerRemarkEntity>,
+    @InjectRepository(AssayerActivityEntity)
+    private readonly activityRepository: Repository<AssayerActivityEntity>,
     private readonly auditService: AuditService,
   ) {}
 
@@ -142,42 +196,33 @@ export class AssayerService {
   }
 
   async findOne(id: string): Promise<AssayerEntity> {
-    const assayer = await this.assayerRepository.findOne({
-      where: { id, isActive: true },
-    });
-    if (!assayer) {
-      throw new NotFoundException(`Assayer ${id} not found.`);
-    }
+    const assayer = await this.assayerRepository.findOne({ where: { id, isActive: true } });
+    if (!assayer) throw new NotFoundException(`Assayer ${id} not found.`);
     return assayer;
   }
 
   async create(dto: CreateAssayerDto, userId: string): Promise<AssayerEntity> {
-    const existing = await this.assayerRepository.findOne({
-      where: { assayerCode: dto.assayerCode },
-    });
-    if (existing) {
-      throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
-    }
+    const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
+    if (existing) throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
 
     let location = null;
     if (dto.latitude && dto.longitude) {
-      location = {
-        type: 'Point',
-        coordinates: [dto.longitude, dto.latitude],
-      };
+      location = { type: 'Point', coordinates: [dto.longitude, dto.latitude] };
     }
 
     const assayer = this.assayerRepository.create({
       ...dto,
+      joiningDate: dto.joiningDate ? new Date(dto.joiningDate) : null,
       displayName: `${dto.firstName} ${dto.lastName}`,
       location,
-      status: AssayerStatus.REGISTERED,
+      lifecycleStatus: AssayerLifecycleStatus.INVITED,
+      status: 'INACTIVE',
       createdBy: userId,
       updatedBy: userId,
     });
 
     const saved = await this.assayerRepository.save(assayer);
-
+    await this.recordActivity(saved.id, 'ASSAYER_CREATED', null, AssayerLifecycleStatus.INVITED, userId, 'Assayer profile created');
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_CREATED',
@@ -186,33 +231,26 @@ export class AssayerService {
       userId,
       remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
     });
-
     return saved;
   }
 
   async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
     const assayer = await this.findOne(id);
-
     Object.keys(dto).forEach((key) => {
-      if ((dto as any)[key] !== undefined) {
-        (assayer as any)[key] = (dto as any)[key];
-      }
+      if ((dto as any)[key] !== undefined) (assayer as any)[key] = (dto as any)[key];
     });
-
     if (dto.firstName || dto.lastName) {
       assayer.displayName = `${dto.firstName ?? assayer.firstName} ${dto.lastName ?? assayer.lastName}`;
     }
-
+    if (dto.joiningDate) assayer.joiningDate = new Date(dto.joiningDate);
+    if (dto.exitDate) assayer.exitDate = new Date(dto.exitDate);
+    if (dto.terminationDate) assayer.terminationDate = new Date(dto.terminationDate);
     if (dto.latitude && dto.longitude) {
-      (assayer as any).location = {
-        type: 'Point',
-        coordinates: [dto.longitude, dto.latitude],
-      };
+      (assayer as any).location = { type: 'Point', coordinates: [dto.longitude, dto.latitude] };
     }
-
     assayer.updatedBy = userId;
     const saved = await this.assayerRepository.save(assayer);
-
+    await this.recordActivity(saved.id, 'ASSAYER_UPDATED', null, null, userId, 'Profile updated');
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_UPDATED',
@@ -221,7 +259,6 @@ export class AssayerService {
       userId,
       remarks: `Updated assayer profile: ${saved.displayName}`,
     });
-
     return saved;
   }
 
@@ -230,7 +267,6 @@ export class AssayerService {
     assayer.isActive = false;
     assayer.updatedBy = userId;
     await this.assayerRepository.save(assayer);
-
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_DELETED',
@@ -241,14 +277,297 @@ export class AssayerService {
     });
   }
 
-  // Commercial Profile methods
-  async createCommercialProfile(
-    assayerId: string,
-    dto: CreateCommercialProfileDto,
-    userId: string,
-  ): Promise<AssayerCommercialProfileEntity> {
-    await this.findOne(assayerId); // Verify assayer exists
+  async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const assayer = await this.findOne(id);
+    const currentStatus = assayer.lifecycleStatus;
+    const allowed = LIFECYCLE_TRANSITIONS[currentStatus];
+    if (!allowed || !allowed.includes(targetStatus)) {
+      throw new BadRequestException(`Invalid lifecycle transition from '${currentStatus}' to '${targetStatus}'`);
+    }
+    assayer.lifecycleStatus = targetStatus;
+    assayer.status = mapLifecycleToOperationalStatus(targetStatus);
+    assayer.updatedBy = userId;
+    if (targetStatus === AssayerLifecycleStatus.ARCHIVED) assayer.isActive = false;
+    const saved = await this.assayerRepository.save(assayer);
+    await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
+      entityType: 'ASSAYER',
+      entityId: saved.id,
+      previousState: currentStatus,
+      newState: targetStatus,
+      userId,
+      remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+    });
+    return saved;
+  }
 
+  // ---- Government Documents ----
+
+  async addGovernmentDocument(assayerId: string, dto: CreateGovernmentDocumentDto, userId: string): Promise<AssayerGovernmentDocumentEntity> {
+    await this.findOne(assayerId);
+    const existing = await this.govDocRepository.findOne({ where: { assayerId, documentType: dto.documentType, isActive: true } });
+    if (existing) throw new ConflictException(`Active ${dto.documentType} document already exists for this assayer. Remove the existing document before adding a new one.`);
+    const doc = this.govDocRepository.create({
+      assayerId,
+      ...dto,
+      expiryDate: dto.expiryDate ? new Date(dto.expiryDate) : null,
+      filePaths: dto.filePaths || [],
+      verificationStatus: 'PENDING',
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    const saved = await this.govDocRepository.save(doc);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'GOVERNMENT_DOCUMENT_ADDED',
+      entityType: 'ASSAYER_GOVERNMENT_DOCUMENT',
+      entityId: saved.id,
+      userId,
+      remarks: `Added ${dto.documentType} document for assayer ${assayerId}`,
+    });
+    await this.recordActivity(assayerId, 'GOVERNMENT_DOCUMENT_ADDED', null, null, userId, `Added ${dto.documentType} document`);
+    return saved;
+  }
+
+  async updateGovernmentDocument(docId: string, dto: UpdateGovernmentDocumentDto, userId: string): Promise<AssayerGovernmentDocumentEntity> {
+    const doc = await this.govDocRepository.findOne({ where: { id: docId, isActive: true } });
+    if (!doc) throw new NotFoundException(`Government document ${docId} not found.`);
+    if (dto.documentNumber !== undefined) doc.documentNumber = dto.documentNumber;
+    if (dto.expiryDate !== undefined) doc.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
+    if (dto.verificationStatus !== undefined) {
+      doc.verificationStatus = dto.verificationStatus;
+      if (dto.verificationStatus === 'VERIFIED' || dto.verificationStatus === 'REJECTED') {
+        doc.verifiedAt = new Date();
+        doc.verifiedBy = dto.verifiedBy || userId;
+      }
+    }
+    if (dto.filePaths !== undefined) doc.filePaths = dto.filePaths;
+    if (dto.remarks !== undefined) doc.remarks = dto.remarks;
+    doc.updatedBy = userId;
+    const saved = await this.govDocRepository.save(doc);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'GOVERNMENT_DOCUMENT_UPDATED',
+      entityType: 'ASSAYER_GOVERNMENT_DOCUMENT',
+      entityId: saved.id,
+      userId,
+      remarks: `Updated ${doc.documentType} document status: ${doc.verificationStatus}`,
+    });
+    await this.recordActivity(doc.assayerId, 'GOVERNMENT_DOCUMENT_UPDATED', null, null, userId, `Updated ${doc.documentType} document`);
+    return saved;
+  }
+
+  async getGovernmentDocuments(assayerId: string): Promise<AssayerGovernmentDocumentEntity[]> {
+    return this.govDocRepository.find({
+      where: { assayerId, isActive: true },
+      order: { documentType: 'ASC' },
+    });
+  }
+
+  async removeGovernmentDocument(docId: string, userId: string): Promise<void> {
+    const doc = await this.govDocRepository.findOne({ where: { id: docId, isActive: true } });
+    if (!doc) throw new NotFoundException(`Government document ${docId} not found.`);
+    doc.isActive = false;
+    doc.updatedBy = userId;
+    await this.govDocRepository.save(doc);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'GOVERNMENT_DOCUMENT_REMOVED',
+      entityType: 'ASSAYER_GOVERNMENT_DOCUMENT',
+      entityId: docId,
+      userId,
+      remarks: `Removed ${doc.documentType} document`,
+    });
+    await this.recordActivity(doc.assayerId, 'GOVERNMENT_DOCUMENT_REMOVED', null, null, userId, `Removed ${doc.documentType} document`);
+  }
+
+  // ---- Assayer Documents ----
+
+  async addAssayerDocument(assayerId: string, dto: CreateAssayerDocumentDto, userId: string): Promise<AssayerDocumentEntity> {
+    await this.findOne(assayerId);
+    let docVersion = 1;
+    if (dto.parentDocumentId) {
+      const parent = await this.assayerDocRepository.findOne({ where: { id: dto.parentDocumentId } });
+      if (parent) docVersion = parent.docVersion + 1;
+    }
+    const doc = this.assayerDocRepository.create({
+      assayerId,
+      ...dto,
+      docVersion,
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    const saved = await this.assayerDocRepository.save(doc);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_DOCUMENT_ADDED',
+      entityType: 'ASSAYER_DOCUMENT',
+      entityId: saved.id,
+      userId,
+      remarks: `Added ${dto.documentType} (v${docVersion}) for assayer ${assayerId}`,
+    });
+    await this.recordActivity(assayerId, 'ASSAYER_DOCUMENT_ADDED', null, null, userId, `Added ${dto.documentType} (v${docVersion})`);
+    return saved;
+  }
+
+  async getAssayerDocuments(assayerId: string): Promise<AssayerDocumentEntity[]> {
+    return this.assayerDocRepository.find({
+      where: { assayerId, isActive: true },
+      order: { documentType: 'ASC', docVersion: 'DESC' },
+    });
+  }
+
+  async updateAssayerDocument(docId: string, dto: UpdateAssayerDocumentDto, userId: string): Promise<AssayerDocumentEntity> {
+    const doc = await this.assayerDocRepository.findOne({ where: { id: docId, isActive: true } });
+    if (!doc) throw new NotFoundException(`Assayer document ${docId} not found.`);
+    if (dto.documentType !== undefined) doc.documentType = dto.documentType;
+    if (dto.fileName !== undefined) doc.fileName = dto.fileName;
+    if (dto.filePath !== undefined) doc.filePath = dto.filePath;
+    if (dto.fileSize !== undefined) doc.fileSize = dto.fileSize;
+    if (dto.mimeType !== undefined) doc.mimeType = dto.mimeType;
+    if (dto.remarks !== undefined) doc.remarks = dto.remarks;
+    doc.updatedBy = userId;
+    const saved = await this.assayerDocRepository.save(doc);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_DOCUMENT_UPDATED',
+      entityType: 'ASSAYER_DOCUMENT',
+      entityId: docId,
+      userId,
+      remarks: `Updated ${doc.documentType} document (v${doc.docVersion})`,
+    });
+    await this.recordActivity(doc.assayerId, 'ASSAYER_DOCUMENT_UPDATED', null, null, userId, `Updated ${doc.documentType} document`);
+    return saved;
+  }
+
+  async removeAssayerDocument(docId: string, userId: string): Promise<void> {
+    const doc = await this.assayerDocRepository.findOne({ where: { id: docId, isActive: true } });
+    if (!doc) throw new NotFoundException(`Assayer document ${docId} not found.`);
+    doc.isActive = false;
+    doc.updatedBy = userId;
+    await this.assayerDocRepository.save(doc);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_DOCUMENT_REMOVED',
+      entityType: 'ASSAYER_DOCUMENT',
+      entityId: docId,
+      userId,
+      remarks: `Removed ${doc.documentType} document (v${doc.docVersion})`,
+    });
+    await this.recordActivity(doc.assayerId, 'ASSAYER_DOCUMENT_REMOVED', null, null, userId, `Removed ${doc.documentType} document`);
+  }
+
+  // ---- Remarks ----
+
+  async addRemark(assayerId: string, dto: CreateRemarkDto, userId: string, userName: string): Promise<AssayerRemarkEntity> {
+    await this.findOne(assayerId);
+    const remark = this.remarkRepository.create({
+      assayerId,
+      authorId: userId,
+      authorName: userName,
+      content: dto.content,
+      category: dto.category,
+      visibility: dto.visibility,
+      attachmentPaths: dto.attachmentPaths || [],
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    const saved = await this.remarkRepository.save(remark);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_REMARK_ADDED',
+      entityType: 'ASSAYER_REMARK',
+      entityId: saved.id,
+      userId,
+      remarks: `Remark added for assayer ${assayerId} (${dto.category})`,
+    });
+    await this.recordActivity(assayerId, 'ASSAYER_REMARK_ADDED', null, null, userId, `Remark added (${dto.category})`);
+    return saved;
+  }
+
+  async updateRemark(remarkId: string, dto: UpdateRemarkDto, userId: string): Promise<AssayerRemarkEntity> {
+    const remark = await this.remarkRepository.findOne({ where: { id: remarkId, isActive: true } });
+    if (!remark) throw new NotFoundException(`Remark ${remarkId} not found.`);
+    if (dto.content !== undefined) remark.content = dto.content;
+    if (dto.category !== undefined) remark.category = dto.category;
+    if (dto.visibility !== undefined) remark.visibility = dto.visibility;
+    if (dto.attachmentPaths !== undefined) remark.attachmentPaths = dto.attachmentPaths;
+    remark.updatedBy = userId;
+    const saved = await this.remarkRepository.save(remark);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_REMARK_UPDATED',
+      entityType: 'ASSAYER_REMARK',
+      entityId: remarkId,
+      userId,
+      remarks: `Remark updated for assayer ${remark.assayerId}`,
+    });
+    await this.recordActivity(remark.assayerId, 'ASSAYER_REMARK_UPDATED', null, null, userId, `Remark updated`);
+    return saved;
+  }
+
+  async removeRemark(remarkId: string, userId: string): Promise<void> {
+    const remark = await this.remarkRepository.findOne({ where: { id: remarkId, isActive: true } });
+    if (!remark) throw new NotFoundException(`Remark ${remarkId} not found.`);
+    remark.isActive = false;
+    remark.updatedBy = userId;
+    await this.remarkRepository.save(remark);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_REMARK_REMOVED',
+      entityType: 'ASSAYER_REMARK',
+      entityId: remarkId,
+      userId,
+      remarks: `Remark removed for assayer ${remark.assayerId}`,
+    });
+    await this.recordActivity(remark.assayerId, 'ASSAYER_REMARK_REMOVED', null, null, userId, `Remark removed`);
+  }
+
+  async getRemarks(assayerId: string, visibility?: string, page = 1, limit = 20): Promise<{ remarks: AssayerRemarkEntity[]; total: number }> {
+    const where: any = { assayerId, isActive: true };
+    if (visibility) where.visibility = visibility;
+    const [remarks, total] = await this.remarkRepository.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { remarks, total };
+  }
+
+  // ---- Activity Timeline ----
+
+  private async recordActivity(assayerId: string, eventType: string, previousState: string | null, newState: string | null, userId: string, remarks: string | null): Promise<void> {
+    const activity = this.activityRepository.create({
+      assayerId,
+      eventType,
+      previousState,
+      newState,
+      performedBy: userId,
+      performedByName: null,
+      remarks,
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    await this.activityRepository.save(activity);
+  }
+
+  async getActivityTimeline(assayerId: string, page = 1, limit = 20): Promise<{ activities: AssayerActivityEntity[]; total: number }> {
+    const [activities, total] = await this.activityRepository.findAndCount({
+      where: { assayerId },
+      order: { occurredAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { activities, total };
+  }
+
+  // ---- Commercial Profiles ----
+
+  async createCommercialProfile(assayerId: string, dto: any, userId: string): Promise<AssayerCommercialProfileEntity> {
+    await this.findOne(assayerId);
     const profile = this.commercialRepository.create({
       ...dto,
       assayerId,
@@ -257,9 +576,7 @@ export class AssayerService {
       createdBy: userId,
       updatedBy: userId,
     });
-
-    const saved = await this.commercialRepository.save(profile);
-
+    const saved = await this.commercialRepository.save(profile) as unknown as AssayerCommercialProfileEntity;
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_COMMERCIAL_PROFILE_CREATED',
@@ -268,23 +585,13 @@ export class AssayerService {
       userId,
       remarks: `Created commercial profile for assayer ${assayerId} with base fee ₹${dto.baseFee}`,
     });
-
+    await this.recordActivity(assayerId, 'COMMERCIAL_PROFILE_CREATED', null, null, userId, `Commercial profile created with base fee ₹${dto.baseFee}`);
     return saved;
   }
 
-  async updateCommercialProfile(
-    profileId: string,
-    dto: UpdateCommercialProfileDto,
-    userId: string,
-  ): Promise<AssayerCommercialProfileEntity> {
-    const profile = await this.commercialRepository.findOne({
-      where: { id: profileId, isActive: true },
-    });
-
-    if (!profile) {
-      throw new NotFoundException(`Commercial profile ${profileId} not found.`);
-    }
-
+  async updateCommercialProfile(profileId: string, dto: any, userId: string): Promise<AssayerCommercialProfileEntity> {
+    const profile = await this.commercialRepository.findOne({ where: { id: profileId, isActive: true } });
+    if (!profile) throw new NotFoundException(`Commercial profile ${profileId} not found.`);
     if (dto.baseFee !== undefined) profile.baseFee = dto.baseFee;
     if (dto.hourlyRate !== undefined) profile.hourlyRate = dto.hourlyRate;
     if (dto.dailyRate !== undefined) profile.dailyRate = dto.dailyRate;
@@ -293,13 +600,9 @@ export class AssayerService {
     if (dto.mealAllowance !== undefined) profile.mealAllowance = dto.mealAllowance;
     if (dto.currency !== undefined) profile.currency = dto.currency;
     if (dto.effectiveStartDate !== undefined) profile.effectiveStartDate = new Date(dto.effectiveStartDate);
-    if (dto.effectiveEndDate !== undefined) {
-      profile.effectiveEndDate = dto.effectiveEndDate ? new Date(dto.effectiveEndDate) : null;
-    }
-
+    if (dto.effectiveEndDate !== undefined) profile.effectiveEndDate = dto.effectiveEndDate ? new Date(dto.effectiveEndDate) : null;
     profile.updatedBy = userId;
-    const saved = await this.commercialRepository.save(profile);
-
+    const saved = await this.commercialRepository.save(profile) as unknown as AssayerCommercialProfileEntity;
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_COMMERCIAL_PROFILE_UPDATED',
@@ -308,7 +611,7 @@ export class AssayerService {
       userId,
       remarks: `Updated commercial profile ${profileId}`,
     });
-
+    await this.recordActivity(profile.assayerId, 'COMMERCIAL_PROFILE_UPDATED', null, null, userId, `Commercial profile updated`);
     return saved;
   }
 
@@ -319,35 +622,21 @@ export class AssayerService {
     });
   }
 
-  async getActiveCommercialProfile(
-    assayerId: string,
-    date: Date = new Date(),
-  ): Promise<AssayerCommercialProfileEntity | null> {
+  async getActiveCommercialProfile(assayerId: string, date: Date = new Date()): Promise<AssayerCommercialProfileEntity | null> {
     const profiles = await this.commercialRepository.find({
-      where: {
-        assayerId,
-        isActive: true,
-        effectiveStartDate: LessThanOrEqual(date),
-      },
+      where: { assayerId, isActive: true, effectiveStartDate: LessThanOrEqual(date) },
       order: { effectiveStartDate: 'DESC' },
     });
-
     for (const p of profiles) {
-      if (!p.effectiveEndDate || p.effectiveEndDate >= date) {
-        return p;
-      }
+      if (!p.effectiveEndDate || p.effectiveEndDate >= date) return p;
     }
     return null;
   }
 
-  // Workforce Attribute methods
-  async addWorkforceAttribute(
-    assayerId: string,
-    dto: CreateWorkforceAttributeDto,
-    userId: string,
-  ): Promise<WorkforceAttributeEntity> {
-    await this.findOne(assayerId);
+  // ---- Workforce Attributes ----
 
+  async addWorkforceAttribute(assayerId: string, dto: any, userId: string): Promise<WorkforceAttributeEntity> {
+    await this.findOne(assayerId);
     const attr = this.workforceAttributeRepository.create({
       ...dto,
       assayerId,
@@ -355,9 +644,7 @@ export class AssayerService {
       createdBy: userId,
       updatedBy: userId,
     });
-
-    const saved = await this.workforceAttributeRepository.save(attr);
-
+    const saved = await this.workforceAttributeRepository.save(attr) as unknown as WorkforceAttributeEntity;
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'WORKFORCE_ATTRIBUTE_CREATED',
@@ -366,31 +653,19 @@ export class AssayerService {
       userId,
       remarks: `Added ${dto.type} '${dto.name}' to assayer ${assayerId}`,
     });
-
+    await this.recordActivity(assayerId, 'WORKFORCE_ATTRIBUTE_CREATED', null, null, userId, `Added ${dto.type} '${dto.name}'`);
     return saved;
   }
 
-  async updateWorkforceAttribute(
-    attributeId: string,
-    dto: UpdateWorkforceAttributeDto,
-    userId: string,
-  ): Promise<WorkforceAttributeEntity> {
-    const attr = await this.workforceAttributeRepository.findOne({
-      where: { id: attributeId, isActive: true },
-    });
-
-    if (!attr) {
-      throw new NotFoundException(`Workforce attribute ${attributeId} not found.`);
-    }
-
+  async updateWorkforceAttribute(attributeId: string, dto: any, userId: string): Promise<WorkforceAttributeEntity> {
+    const attr = await this.workforceAttributeRepository.findOne({ where: { id: attributeId, isActive: true } });
+    if (!attr) throw new NotFoundException(`Workforce attribute ${attributeId} not found.`);
     if (dto.name !== undefined) attr.name = dto.name;
     if (dto.level !== undefined) attr.level = dto.level;
     if (dto.expiryDate !== undefined) attr.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
     if (dto.metadata !== undefined) attr.metadata = dto.metadata;
     attr.updatedBy = userId;
-
-    const saved = await this.workforceAttributeRepository.save(attr);
-
+    const saved = await this.workforceAttributeRepository.save(attr) as unknown as WorkforceAttributeEntity;
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'WORKFORCE_ATTRIBUTE_UPDATED',
@@ -399,23 +674,16 @@ export class AssayerService {
       userId,
       remarks: `Updated workforce attribute ${attributeId}`,
     });
-
+    await this.recordActivity(attr.assayerId, 'WORKFORCE_ATTRIBUTE_UPDATED', null, null, userId, `Updated workforce attribute '${attr.name}'`);
     return saved;
   }
 
   async removeWorkforceAttribute(attributeId: string, userId: string): Promise<void> {
-    const attr = await this.workforceAttributeRepository.findOne({
-      where: { id: attributeId, isActive: true },
-    });
-
-    if (!attr) {
-      throw new NotFoundException(`Workforce attribute ${attributeId} not found.`);
-    }
-
+    const attr = await this.workforceAttributeRepository.findOne({ where: { id: attributeId, isActive: true } });
+    if (!attr) throw new NotFoundException(`Workforce attribute ${attributeId} not found.`);
     attr.isActive = false;
     attr.updatedBy = userId;
     await this.workforceAttributeRepository.save(attr);
-
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'WORKFORCE_ATTRIBUTE_DELETED',
@@ -424,18 +692,12 @@ export class AssayerService {
       userId,
       remarks: `Removed workforce attribute '${attr.name}' from assayer ${attr.assayerId}`,
     });
+    await this.recordActivity(attr.assayerId, 'WORKFORCE_ATTRIBUTE_REMOVED', null, null, userId, `Removed workforce attribute '${attr.name}'`);
   }
 
-  async getWorkforceAttributes(
-    assayerId: string,
-    type?: string,
-  ): Promise<WorkforceAttributeEntity[]> {
+  async getWorkforceAttributes(assayerId: string, type?: string): Promise<WorkforceAttributeEntity[]> {
     const where: any = { assayerId, isActive: true };
     if (type) where.type = type;
-
-    return this.workforceAttributeRepository.find({
-      where,
-      order: { type: 'ASC', name: 'ASC' },
-    });
+    return this.workforceAttributeRepository.find({ where, order: { type: 'ASC', name: 'ASC' } });
   }
 }

@@ -60,6 +60,16 @@ export class AssignmentController {
     };
   }
 
+  @Get('dashboard/summary')
+  @ApiOperation({ summary: 'Get assignment status and SLA statistics summary' })
+  async getDashboardSummary() {
+    const summary = await this.assignmentService.getDashboardSummary();
+    return {
+      success: true,
+      data: summary,
+    };
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -97,6 +107,31 @@ export class AssignmentController {
     return {
       success: true,
       data: assignment,
+    };
+  }
+
+  @Get(':id/timeline')
+  @ApiOperation({ summary: 'Get unified activity timeline for an assignment' })
+  async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
+    const timeline = await this.assignmentService.getTimeline(id);
+    return {
+      success: true,
+      data: timeline,
+    };
+  }
+
+  @Post(':id/comments')
+  @ApiOperation({ summary: 'Post a comment to an assignment' })
+  async addComment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { comment: string },
+    @Req() req: any,
+  ) {
+    const userName = req.user.displayName || req.user.email || 'System User';
+    const comment = await this.assignmentService.addComment(id, body.comment, req.user.id, userName);
+    return {
+      success: true,
+      data: comment,
     };
   }
 }

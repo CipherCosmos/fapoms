@@ -19,6 +19,10 @@ let ClientConfigurationEntity = class ClientConfigurationEntity extends base_ent
     workingDays;
     defaultRadius;
     slaRules;
+    serviceLevel;
+    maxResponseTimeHours;
+    penaltyRate;
+    serviceHours;
     effectiveFrom;
     effectiveTo;
 };
@@ -37,7 +41,7 @@ __decorate([
         name: 'import_mapping',
         type: 'jsonb',
         nullable: true,
-        comment: 'Custom mapping of Excel columns to FAPOMS schema fields'
+        comment: 'Custom mapping of Excel columns to FAPOMS schema fields',
     }),
     __metadata("design:type", Object)
 ], ClientConfigurationEntity.prototype, "importMapping", void 0);
@@ -46,7 +50,7 @@ __decorate([
         name: 'working_days',
         type: 'jsonb',
         nullable: true,
-        comment: 'List of working days (0=Sunday, 1=Monday, ..., 6=Saturday)'
+        comment: 'List of working days (0=Sunday, 1=Monday, ..., 6=Saturday)',
     }),
     __metadata("design:type", Object)
 ], ClientConfigurationEntity.prototype, "workingDays", void 0);
@@ -57,7 +61,7 @@ __decorate([
         precision: 5,
         scale: 2,
         default: 50.00,
-        comment: 'Default assignment search radius in kilometers'
+        comment: 'Default assignment search radius in kilometers',
     }),
     __metadata("design:type", Number)
 ], ClientConfigurationEntity.prototype, "defaultRadius", void 0);
@@ -66,10 +70,26 @@ __decorate([
         name: 'sla_rules',
         type: 'jsonb',
         nullable: true,
-        comment: 'SLA parameters such as maximum response time, scheduling windows'
+        comment: 'SLA parameters such as maximum response time, scheduling windows',
     }),
     __metadata("design:type", Object)
 ], ClientConfigurationEntity.prototype, "slaRules", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'service_level', type: 'varchar', length: 50, nullable: true, comment: 'SLA tier: PREMIUM, STANDARD, BASIC' }),
+    __metadata("design:type", Object)
+], ClientConfigurationEntity.prototype, "serviceLevel", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'max_response_time_hours', type: 'int', nullable: true, comment: 'Maximum response time in hours' }),
+    __metadata("design:type", Object)
+], ClientConfigurationEntity.prototype, "maxResponseTimeHours", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'penalty_rate', type: 'decimal', precision: 5, scale: 2, nullable: true, comment: 'Penalty rate for SLA breaches (%)' }),
+    __metadata("design:type", Object)
+], ClientConfigurationEntity.prototype, "penaltyRate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'service_hours', type: 'jsonb', nullable: true, comment: 'Service hours configuration' }),
+    __metadata("design:type", Object)
+], ClientConfigurationEntity.prototype, "serviceHours", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'effective_from', type: 'timestamptz' }),
     __metadata("design:type", Date)

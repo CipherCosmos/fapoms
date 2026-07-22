@@ -19,11 +19,20 @@ let ProjectEntity = class ProjectEntity extends base_entity_1.BaseEntity {
     projectNumber;
     name;
     description;
+    organizationId;
     clientId;
     status;
     priority;
     startDate;
     endDate;
+    budget;
+    scope;
+    requiredSkills;
+    requiredCertifications;
+    sla;
+    risks;
+    milestones;
+    dependencies;
     client;
     projectBranches;
 };
@@ -40,6 +49,10 @@ __decorate([
     (0, typeorm_1.Column)({ type: 'text', nullable: true }),
     __metadata("design:type", Object)
 ], ProjectEntity.prototype, "description", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'organization_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "organizationId", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'client_id', type: 'uuid' }),
     __metadata("design:type", String)
@@ -68,6 +81,38 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'end_date', type: 'date', nullable: true }),
     __metadata("design:type", Object)
 ], ProjectEntity.prototype, "endDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'decimal', precision: 12, scale: 2, nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "budget", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'text', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "scope", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'required_skills', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "requiredSkills", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'required_certifications', type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "requiredCertifications", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "sla", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "risks", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "milestones", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
+    __metadata("design:type", Object)
+], ProjectEntity.prototype, "dependencies", void 0);
 __decorate([
     (0, typeorm_1.ManyToOne)(() => client_entity_1.ClientEntity, { onDelete: 'CASCADE' }),
     (0, typeorm_1.JoinColumn)({ name: 'client_id' }),

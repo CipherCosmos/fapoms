@@ -2,6 +2,9 @@ import { OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssignmentCommentEntity } from './assignment-comment.entity';
+import { NotificationService } from '../notifications/notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
@@ -29,11 +32,13 @@ export interface TransitionAssignmentDto {
 export declare class AssignmentService implements OnModuleInit {
     private readonly assignmentRepository;
     private readonly projectBranchRepository;
+    private readonly assayerRepository;
+    private readonly notificationService;
     private readonly holidayService;
     private readonly auditService;
     private readonly workflowEngine;
     private readonly dataSource;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, holidayService: HolidayService, auditService: AuditService, workflowEngine: WorkflowEngine, dataSource: DataSource);
+    constructor(assignmentRepository: Repository<AssignmentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, assayerRepository: Repository<AssayerEntity>, notificationService: NotificationService, holidayService: HolidayService, auditService: AuditService, workflowEngine: WorkflowEngine, dataSource: DataSource);
     onModuleInit(): void;
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
@@ -43,4 +48,8 @@ export declare class AssignmentService implements OnModuleInit {
         assignments: AssignmentEntity[];
         total: number;
     }>;
+    addComment(assignmentId: string, comment: string, userId: string, userName: string): Promise<AssignmentCommentEntity>;
+    getTimeline(assignmentId: string): Promise<any[]>;
+    checkSlaBreaches(): Promise<number>;
+    getDashboardSummary(): Promise<any>;
 }
