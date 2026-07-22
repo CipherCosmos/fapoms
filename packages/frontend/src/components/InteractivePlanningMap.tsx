@@ -33,7 +33,7 @@ const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lo
   return R * c;
 };
 
-export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
+export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
   branches,
   selectedBranchId,
   onSelectBranch,
@@ -482,10 +482,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
       }
     }
 
-    // Zoom map to cover bounds automatically, or zoom to selected branch
+    // Zoom map to cover bounds automatically, or zoom to show the full radius circle
     if (bounds.length > 0 && !selectedAssayerForRouting) {
       if (selectedBranchId && selectedBranchLatLng) {
-        map.setView(selectedBranchLatLng, 12, { animate: true });
+        const radiusMeters = radiusKm * 1000;
+        const circleBounds = L.latLng(selectedBranchLatLng).toBounds(radiusMeters);
+        map.fitBounds(circleBounds, { padding: [40, 40] });
       } else {
         map.fitBounds(bounds, { padding: [30, 30] });
       }
@@ -683,4 +685,4 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = ({
       </div>
     </div>
   );
-};
+});

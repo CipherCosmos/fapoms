@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Sidebar } from './Sidebar';
+import { SearchOverlay } from './SearchOverlay';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -16,6 +17,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
       <main className="main-area">
         {children}
       </main>
+      <SearchOverlay />
     </div>
   );
 };

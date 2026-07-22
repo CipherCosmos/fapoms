@@ -313,8 +313,7 @@ export const Users: React.FC = () => {
                           <span key={r.id} style={{ fontSize: '10px', background: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
                             {r.name.replace(/_/g, ' ')}
                           </span>
-                ))}
-                )}  
+                        ))}
                         {u.roles.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No roles assigned</span>}
                       </div>
                     </td>
@@ -343,8 +342,8 @@ export const Users: React.FC = () => {
                         Edit / Map
                       </button>
                     </td>
-                  </tr>
-                ))}
+                    </tr>
+                )))}
               </tbody>
             </table>
           )}

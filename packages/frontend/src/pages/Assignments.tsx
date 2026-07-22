@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ClipboardList, AlertCircle, RefreshCw, Calendar, IndianRupee, MessageSquare, Clock, Send, Search, Filter, CheckCircle, XCircle, ExternalLink } from 'lucide-react';
 import { AssignmentStatus } from '@fapoms/shared';
 import { api } from '../services/api';
@@ -27,6 +27,8 @@ interface TimelineEvent {
 
 export const Assignments: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const assignmentIdParam = searchParams.get('id');
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [selectedAsnId, setSelectedAsnId] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
@@ -45,6 +47,13 @@ export const Assignments: React.FC = () => {
   useEffect(() => {
     loadAssignments();
   }, [page]);
+
+  useEffect(() => {
+    if (assignmentIdParam && assignments.length > 0) {
+      const found = assignments.find(a => a.id === assignmentIdParam);
+      if (found) setSelectedAsnId(assignmentIdParam);
+    }
+  }, [assignmentIdParam, assignments]);
 
   useEffect(() => {
     if (selectedAsnId) {
@@ -210,7 +219,7 @@ export const Assignments: React.FC = () => {
               </thead>
               <tbody>
                 {filteredAssignments.map((asn) => (
-                  <tr key={asn.id} onClick={() => setSelectedAsnId(asn.id)} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
+                  <tr key={asn.id} onClick={() => { setSelectedAsnId(asn.id); navigate(`/assignments?id=${asn.id}`, { replace: true }); }} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
                     <td style={{ padding: '16px 24px', fontWeight: 600 }}>{asn.assignmentNumber}</td>
                     <td style={{ padding: '16px 24px' }}>
                       <div><b>{asn.projectBranch?.branch?.name}</b></div>

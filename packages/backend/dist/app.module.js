@@ -31,6 +31,7 @@ const document_module_1 = require("./modules/document/document.module");
 const validation_module_1 = require("./modules/validation/validation.module");
 const ocr_module_1 = require("./infrastructure/ocr/ocr.module");
 const geo_module_1 = require("./modules/geo/geo.module");
+const search_module_1 = require("./modules/search/search.module");
 const sla_scanner_worker_1 = require("./infrastructure/scheduler/sla-scanner.worker");
 let AppModule = class AppModule {
 };
@@ -67,6 +68,7 @@ exports.AppModule = AppModule = __decorate([
             validation_module_1.ValidationModule,
             ocr_module_1.OcrModule,
             geo_module_1.GeoModule,
+            search_module_1.SearchModule,
         ],
         providers: [sla_scanner_worker_1.SlaScannerWorker],
     })

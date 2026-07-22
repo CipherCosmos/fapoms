@@ -16,6 +16,7 @@ import {
   ChevronRight,
   LogOut,
 } from 'lucide-react';
+import { GlobalSearch } from './GlobalSearch';
 
 interface SidebarProps {
   user?: { displayName: string; email: string };
@@ -180,6 +181,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
           {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
+
+      {/* Global Search */}
+      {!collapsed && (
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
+          <GlobalSearch />
+        </div>
+      )}
 
       {/* Navigation Menu */}
       <nav style={{ flex: 1, padding: collapsed ? '16px 10px' : '20px 16px', display: 'flex', flexDirection: 'column', gap: '2px', overflowY: 'auto' }}>

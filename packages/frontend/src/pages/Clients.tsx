@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Building2, Plus, Search, Mail, Phone, User, X } from 'lucide-react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ClientLifecycleStatus } from '@fapoms/shared';
 import { api } from '../services/api';
 
@@ -75,6 +76,9 @@ const LIFECYCLE_OPTIONS: Record<string, string[]> = {
 };
 
 export const Clients: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const clientIdParam = searchParams.get('id');
   const [clients, setClients] = useState<Client[]>([]);
   const [selectedClient, setSelectedClient] = useState<ClientDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -92,6 +96,13 @@ export const Clients: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'contacts' | 'contracts' | 'billing'>('contacts');
 
   useEffect(() => { loadClients(); }, []);
+
+  useEffect(() => {
+    if (clientIdParam && clients.length > 0) {
+      const found = clients.find(c => c.id === clientIdParam);
+      if (found) selectClient(found);
+    }
+  }, [clientIdParam, clients]);
 
   const loadClients = async () => {
     setIsLoading(true);
@@ -179,7 +190,7 @@ export const Clients: React.FC = () => {
             ) : filteredClients.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '13px' }}>No clients found.</div>
             ) : filteredClients.map(c => (
-              <div key={c.id} onClick={() => selectClient(c)}
+              <div key={c.id} onClick={() => { selectClient(c); navigate(`/clients?id=${c.id}`, { replace: true }); }}
                 style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer', marginBottom: '4px',
                   background: selectedClient?.id === c.id ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
                   border: selectedClient?.id === c.id ? '1px solid var(--accent-primary)' : '1px solid transparent' }}>

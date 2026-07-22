@@ -499,17 +499,17 @@ let AssayerService = class AssayerService {
         const mgr = this.assayerRepository.manager;
         const total = await mgr.count('assignments', { where: { assayer_id: assayerId, is_active: true } });
         const completed = await mgr.count('assignments', {
-            where: { assayer_id: assayerId, status: 7, is_active: true },
+            where: { assayer_id: assayerId, status: shared_1.AssignmentStatus.CLOSED, is_active: true },
         });
         const cancelled = await mgr.count('assignments', {
-            where: { assayer_id: assayerId, status: 8, is_active: true },
+            where: { assayer_id: assayerId, status: shared_1.AssignmentStatus.CANCELLED, is_active: true },
         });
         const onTimeResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
        WHERE a.assayer_id = $1 AND a.status = $2
        AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
-       AND a.completion_date <= a.scheduled_date`, [assayerId, 6]);
+       AND a.completion_date <= a.scheduled_date`, [assayerId, shared_1.AssignmentStatus.AUDIT_COMPLETED]);
         const earningsResult = await mgr.query(`SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`, [assayerId, 6, 7]);
+       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`, [assayerId, shared_1.AssignmentStatus.AUDIT_COMPLETED, shared_1.AssignmentStatus.CLOSED]);
         const lastAssignment = await mgr.query(`SELECT updated_at FROM assignments a
        WHERE a.assayer_id = $1 AND a.is_active = true
        ORDER BY a.updated_at DESC LIMIT 1`, [assayerId]);

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Search, Upload, AlertCircle, CheckCircle, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -142,9 +143,19 @@ export const Branches: React.FC = () => {
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [branchDetail, setBranchDetail] = useState<BranchDetail | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const branchIdParam = searchParams.get('id');
 
   useEffect(() => { loadClients(); loadBranches(); }, []);
   useEffect(() => { loadBranches(selectedClientId); }, [selectedClientId]);
+
+  useEffect(() => {
+    if (branchIdParam && branches.length > 0) {
+      const found = branches.find(b => b.id === branchIdParam);
+      if (found) loadBranchDetail(found);
+    }
+  }, [branchIdParam, branches]);
 
   const loadClients = async () => {
     try {
@@ -338,7 +349,7 @@ export const Branches: React.FC = () => {
                     <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches found.</td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.branchCode}
-                      onClick={() => loadBranchDetail(b)}
+                      onClick={() => { loadBranchDetail(b); navigate(`/branches?id=${b.id}`, { replace: true }); }}
                       style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(99, 102, 241, 0.08)' : undefined }}>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.branchCode}</td>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>

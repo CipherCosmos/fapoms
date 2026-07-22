@@ -584,21 +584,21 @@ export class AssignmentService implements OnModuleInit {
     const mgr = this.dataSource.manager;
 
     const total = await mgr.count('assignments', { where: { assayer_id: assayerId, is_active: true } });
-    const completed = await mgr.count('assignments', { where: { assayer_id: assayerId, status: 7, is_active: true } });
-    const cancelled = await mgr.count('assignments', { where: { assayer_id: assayerId, status: 8, is_active: true } });
+    const completed = await mgr.count('assignments', { where: { assayer_id: assayerId, status: AssignmentStatus.CLOSED, is_active: true } });
+    const cancelled = await mgr.count('assignments', { where: { assayer_id: assayerId, status: AssignmentStatus.CANCELLED, is_active: true } });
 
     const onTimeResult = await mgr.query(
       `SELECT COUNT(*) as cnt FROM assignments a
        WHERE a.assayer_id = $1 AND a.status = $2
        AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
        AND a.completion_date <= a.scheduled_date`,
-      [assayerId, 6],
+      [assayerId, AssignmentStatus.AUDIT_COMPLETED],
     );
 
     const earningsResult = await mgr.query(
       `SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
        WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`,
-      [assayerId, 6, 7],
+      [assayerId, AssignmentStatus.AUDIT_COMPLETED, AssignmentStatus.CLOSED],
     );
 
     const lastAssignment = await mgr.query(

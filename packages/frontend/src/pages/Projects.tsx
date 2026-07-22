@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
@@ -129,6 +129,8 @@ const statusBadge = (status: ProjectStatus) => {
 
 export const Projects: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const projectIdParam = searchParams.get('id');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -155,6 +157,12 @@ export const Projects: React.FC = () => {
     loadProjects();
     loadClients();
   }, []);
+
+  useEffect(() => {
+    if (projectIdParam && projects.length > 0) {
+      setSelectedId(projectIdParam);
+    }
+  }, [projectIdParam, projects]);
 
   useEffect(() => {
     if (selectedId) {
@@ -589,7 +597,7 @@ export const Projects: React.FC = () => {
                   </td></tr>
                 ) : (
                   filteredProjects.map((p) => (
-                    <tr key={p.id} onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                    <tr key={p.id} onClick={() => { setSelectedId(selectedId === p.id ? null : p.id); navigate(`/projects?id=${p.id}`, { replace: true }); }}
                       style={{ cursor: 'pointer', background: selectedId === p.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedId === p.id ? '3px solid var(--accent-primary)' : '3px solid transparent', transition: 'background 0.15s' }}>
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}>
                         <ChevronRight size={14} style={{ color: selectedId === p.id ? 'var(--accent-primary)' : 'var(--text-muted)', opacity: selectedId === p.id ? 1 : 0.3 }} />

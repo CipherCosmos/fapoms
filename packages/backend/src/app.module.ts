@@ -35,6 +35,7 @@ import { DocumentModule } from './modules/document/document.module';
 import { ValidationModule } from './modules/validation/validation.module';
 import { OcrModule } from './infrastructure/ocr/ocr.module';
 import { GeoModule } from './modules/geo/geo.module';
+import { SearchModule } from './modules/search/search.module';
 import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 
 @Module({
@@ -75,6 +76,7 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
     ValidationModule,
     OcrModule,
     GeoModule,
+    SearchModule,
   ],
   providers: [SlaScannerWorker],
 })

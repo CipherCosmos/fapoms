@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
-import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star, ExternalLink, Search } from 'lucide-react';
+import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star, ExternalLink, Search, Phone, DollarSign, TrendingUp, CheckCircle, X } from 'lucide-react';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
 interface Assayer {
@@ -53,6 +53,41 @@ interface Assayer {
   maxWeeklyWorkload: number;
 }
 
+interface AssayerProfile {
+  id: string;
+  assayerCode: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string;
+  address: string;
+  state: string;
+  district: string;
+  city: string;
+  pincode: string | null;
+  status: string;
+  lifecycleStatus: string;
+  employmentType: string;
+  joiningDate: string | null;
+  department: string | null;
+  region: string | null;
+  skills: string[] | null;
+  certifications: { name: string; expiryDate: string }[] | null;
+  languages: string[] | null;
+  specializations: string[] | null;
+  experienceYears: number;
+  performanceRating: number;
+  totalAssignments: number;
+  completedAssignments: number;
+  cancelledAssignments: number;
+  onTimeCompletions: number;
+  totalEarnings: number;
+  lastAssignmentDate: string | null;
+  averageRating: number;
+  notes: string | null;
+}
+
 interface CommercialProfile {
   id: string;
   baseFee: number;
@@ -93,10 +128,29 @@ const STATUS_COLORS: Record<string, string> = {
   [AssayerLifecycleStatus.ARCHIVED]: '#9ca3af',
 };
 
+const INITIALS_BG = ['#6366f1', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6'];
+
+function getInitialsBg(id: string) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  return INITIALS_BG[Math.abs(hash) % INITIALS_BG.length];
+}
+
+function highlightText(text: string, query: string) {
+  if (!query || !text) return text;
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase()
+      ? <span key={i} style={{ background: 'rgba(99,102,241,0.3)', color: '#fff', borderRadius: '2px', padding: '0 1px' }}>{part}</span>
+      : part
+  );
+}
+
 export const Assayers: React.FC = () => {
   const navigate = useNavigate();
   const [assayers, setAssayers] = useState<Assayer[]>([]);
   const [selectedAssayer, setSelectedAssayer] = useState<Assayer | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<AssayerProfile | null>(null);
   const [commercials, setCommercials] = useState<CommercialProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -107,7 +161,6 @@ export const Assayers: React.FC = () => {
   const [targetLifecycle, setTargetLifecycle] = useState('');
   const [activeTab, setActiveTab] = useState<'profile' | 'commercial'>('profile');
 
-  // Filters
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [filterCity, setFilterCity] = useState('');
@@ -156,9 +209,14 @@ export const Assayers: React.FC = () => {
   const selectAssayer = async (assayer: Assayer) => {
     setSelectedAssayer(assayer);
     setActiveTab('profile');
+    setSelectedProfile(null);
     try {
-      const data = await api.request<CommercialProfile[]>(`/assayers/${assayer.id}/commercial`);
-      setCommercials(data);
+      const [profile, commercial] = await Promise.all([
+        api.request<AssayerProfile>(`/assayers/${assayer.id}/profile`, { method: 'GET' }).catch(() => null),
+        api.request<CommercialProfile[]>(`/assayers/${assayer.id}/commercial`).catch(() => [] as CommercialProfile[]),
+      ]);
+      setSelectedProfile(profile);
+      setCommercials(commercial);
     } catch (e) { console.error(e); }
   };
 
@@ -166,7 +224,7 @@ export const Assayers: React.FC = () => {
     if (!confirm('Delete this assayer profile?')) return;
     try {
       await api.request(`/assayers/${id}`, { method: 'DELETE' });
-      if (selectedAssayer?.id === id) setSelectedAssayer(null);
+      if (selectedAssayer?.id === id) { setSelectedAssayer(null); setSelectedProfile(null); }
       fetchAssayers();
     } catch (e) { alert(e instanceof Error ? e.message : 'Failed to delete'); }
   };
@@ -206,12 +264,18 @@ export const Assayers: React.FC = () => {
   };
 
   const totalAssayers = assayers.length;
-  const activeAssayers = assayers.filter(a => a.status === AssayerLifecycleStatus.ACTIVE).length;
-  const onLeaveAssayers = assayers.filter(a => a.status === AssayerLifecycleStatus.ON_LEAVE).length;
-  const inactiveAssayers = assayers.filter(a => ![AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ON_LEAVE].includes(a.status as any)).length;
+  const activeAssayers = assayers.filter(a => a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE).length;
+  const onLeaveAssayers = assayers.filter(a => a.lifecycleStatus === AssayerLifecycleStatus.ON_LEAVE).length;
+  const inactiveAssayers = assayers.filter(a => ![AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ON_LEAVE].includes(a.lifecycleStatus as any)).length;
+
+  const completionRate = selectedProfile && selectedProfile.totalAssignments > 0
+    ? Math.round((selectedProfile.completedAssignments / selectedProfile.totalAssignments) * 100) : 0;
+  const onTimeRate = selectedProfile && selectedProfile.completedAssignments > 0
+    ? Math.round((selectedProfile.onTimeCompletions / selectedProfile.completedAssignments) * 100) : 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* ── Header ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Assayers Workforce</h2>
@@ -224,6 +288,7 @@ export const Assayers: React.FC = () => {
         </button>
       </div>
 
+      {/* ── KPI Dashboard ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-md)', padding: '10px', color: 'var(--accent-primary)' }}><Users size={20} /></div>
@@ -243,32 +308,35 @@ export const Assayers: React.FC = () => {
         </div>
       </div>
 
+      {/* ── Filters ── */}
       <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', zIndex: 1 }} />
             <input type="text" placeholder="Search by name, code, email, phone..." value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px 8px 34px', fontSize: '13px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}
+              style={{ width: '100%', padding: '8px 12px 8px 34px', fontSize: '13px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', boxSizing: 'border-box' }}
             />
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           </div>
-          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-            <option value="ALL">All Status</option>
-            {Object.values(AssayerLifecycleStatus).map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-          </select>
-          <select value={filterEmployment} onChange={(e) => setFilterEmployment(e.target.value)}
-            style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-            <option value="ALL">All Employment</option>
-            <option value="INTERNAL">Internal</option>
-            <option value="EXTERNAL">External</option>
-            <option value="CONTRACT">Contract</option>
-          </select>
-          <button type="button" onClick={() => setFiltersExpanded(!filtersExpanded)}
-            style={{ padding: '8px 12px', fontSize: '12px', background: 'none', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            {filtersExpanded ? 'Fewer Filters −' : 'More Filters +'}
-          </button>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredAssayers.length} of {assayers.length} assayers</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
+              style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+              <option value="ALL">All Status</option>
+              {Object.values(AssayerLifecycleStatus).map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+            </select>
+            <select value={filterEmployment} onChange={(e) => setFilterEmployment(e.target.value)}
+              style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+              <option value="ALL">All Employment</option>
+              <option value="INTERNAL">Internal</option>
+              <option value="EXTERNAL">External</option>
+              <option value="CONTRACT">Contract</option>
+            </select>
+            <button onClick={() => setFiltersExpanded(!filtersExpanded)}
+              style={{ padding: '8px 12px', fontSize: '12px', background: filtersExpanded ? 'rgba(99,102,241,0.1)' : 'none', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: filtersExpanded ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              {filtersExpanded ? 'Fewer Filters −' : 'More Filters +'}
+            </button>
+          </div>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{filteredAssayers.length} of {assayers.length} assayers</span>
         </div>
         {filtersExpanded && (
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', paddingTop: '8px', borderTop: '1px solid var(--border-color)' }}>
@@ -289,80 +357,217 @@ export const Assayers: React.FC = () => {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', gap: '24px', height: 'calc(100vh - 480px)' }}>
+      {/* ── Main Content ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '24px', minHeight: 'calc(100vh - 480px)' }}>
+        {/* ── List Panel ── */}
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>Assayers Directory</h2>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h2 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>Assayers Directory</h2>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--bg-primary)', padding: '2px 8px', borderRadius: '10px' }}>{filteredAssayers.length}</span>
           </div>
-              <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-                {loading ? (
-                  <div style={{ textAlign: 'center', padding: '20px' }}>Loading...</div>
-                ) : filteredAssayers.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>No assayers match filters.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {filteredAssayers.map((a) => (
-                  <div key={a.id} onClick={() => selectAssayer(a)}
-                    style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer',
-                      background: selectedAssayer?.id === a.id ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
-                      border: selectedAssayer?.id === a.id ? '1px solid var(--accent-primary)' : '1px solid transparent' }}>
-                    <div style={{ fontWeight: 600, fontSize: '14px' }}>{a.displayName}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.assayerCode} • {a.city}, {a.state}</div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+            {loading ? (
+              <div style={{ padding: '24px' }}>
+                {[1, 2, 3, 4, 5].map(i => (
+                  <div key={i} style={{ padding: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '12px', animation: 'pulse 1.5s infinite' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'var(--border-color)' }} />
+                    <div style={{ flex: 1 }}><div style={{ height: '14px', width: '60%', background: 'var(--border-color)', borderRadius: '4px', marginBottom: '6px' }} /><div style={{ height: '10px', width: '40%', background: 'var(--border-color)', borderRadius: '4px' }} /></div>
                   </div>
                 ))}
+              </div>
+            ) : filteredAssayers.length === 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                <Search size={32} style={{ opacity: 0.4, marginBottom: '12px' }} />
+                <div style={{ fontSize: '14px', fontWeight: 600 }}>No assayers found</div>
+                <div style={{ fontSize: '12px', marginTop: '4px' }}>Try adjusting your filters</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {filteredAssayers.map((a) => {
+                  const isSelected = selectedAssayer?.id === a.id;
+                  const sc = STATUS_COLORS[a.lifecycleStatus || a.status] || '#6b7280';
+                  const initialsBg = getInitialsBg(a.id);
+                  return (
+                    <div key={a.id} onClick={() => selectAssayer(a)}
+                      style={{
+                        padding: '10px 14px', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                        background: isSelected ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
+                        border: isSelected ? '1px solid rgba(99, 102, 241, 0.3)' : '1px solid transparent',
+                        transition: 'all 0.15s', position: 'relative',
+                      }}
+                      onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; }}
+                      onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: initialsBg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '14px', fontWeight: 700, flexShrink: 0 }}>
+                          {a.displayName.charAt(0).toUpperCase()}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {highlightText(a.displayName, searchText)}
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: sc, flexShrink: 0 }} />
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'monospace', fontSize: '10px' }}>{a.assayerCode}</span>
+                            <span>•</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '2px' }}><MapPin size={9} /> {a.city}</span>
+                            <span>•</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '2px' }}><Briefcase size={9} /> {a.experienceYears}y</span>
+                          </div>
+                          {a.skills && a.skills.length > 0 && (
+                            <div style={{ display: 'flex', gap: '3px', marginTop: '4px', flexWrap: 'wrap' }}>
+                              {a.skills.slice(0, 3).map(s => (
+                                <span key={s} style={{ padding: '1px 5px', background: 'rgba(99,102,241,0.08)', color: 'var(--accent-primary)', borderRadius: '4px', fontSize: '9px', fontWeight: 500 }}>{s}</span>
+                              ))}
+                              {a.skills.length > 3 && (
+                                <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>+{a.skills.length - 3}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'none', gap: '2px', flexShrink: 0 }} className="assayer-actions">
+                          <button onClick={e => { e.stopPropagation(); navigate(`/assayers/${a.id}`); }}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}
+                            title="Full Profile"><ExternalLink size={13} /></button>
+                          <button onClick={e => { e.stopPropagation(); setSelectedAssayer(a); setShowEditModal(true); }}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}
+                            title="Edit"><Edit2 size={13} /></button>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <div style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: '3px', height: '24px', background: 'var(--accent-primary)', borderRadius: '0 2px 2px 0' }} />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
 
+        {/* ── Detail Panel ── */}
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {selectedAssayer ? (
             <>
-              <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h2 style={{ fontSize: '22px', fontWeight: 700, margin: 0 }}>{selectedAssayer.displayName}</h2>
-                  <span className="badge" style={{ marginTop: '4px', padding: '4px 10px', fontSize: '12px',
-                    background: `${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}20`,
-                    color: STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280',
-                    border: `1px solid ${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}40` }}>
-                    {selectedAssayer.lifecycleStatus || selectedAssayer.status}
-                  </span>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    {selectedAssayer.employmentType} • {selectedAssayer.department || 'No Dept'} • {selectedAssayer.experienceYears}y exp
+              {/* Profile Header */}
+              <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: getInitialsBg(selectedAssayer.id), display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '18px', fontWeight: 700, flexShrink: 0 }}>
+                      {selectedAssayer.displayName.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0 }}>{selectedAssayer.displayName}</h2>
+                        <span style={{ padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: 600,
+                          background: `${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}20`,
+                          color: STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280',
+                          border: `1px solid ${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}40` }}>
+                          {selectedAssayer.lifecycleStatus || selectedAssayer.status}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)' }}>{selectedAssayer.assayerCode}</span>
+                        <span>•</span>
+                        <span>{selectedAssayer.employmentType}</span>
+                        <span>•</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}><Briefcase size={11} /> {selectedAssayer.experienceYears}y exp</span>
+                        {selectedAssayer.department && <><span>•</span><span>{selectedAssayer.department}</span></>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button onClick={() => navigate(`/assayers/${selectedAssayer.id}`)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <ExternalLink size={12} /> Full Profile
+                    </button>
+                    <button onClick={() => setShowEditModal(true)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Edit2 size={12} /> Edit
+                    </button>
+                    {LIFECYCLE_TRANSITIONS[selectedAssayer.lifecycleStatus || selectedAssayer.status]?.length > 0 && (
+                      <button onClick={() => setShowLifecycleModal(true)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px' }}>
+                        Transition
+                      </button>
+                    )}
+                    <button onClick={() => handleDelete(selectedAssayer.id)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Trash2 size={12} /> Delete
+                    </button>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => navigate(`/assayers/${selectedAssayer.id}`)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <ExternalLink size={12} /> Full Profile
-                  </button>
-                  <button onClick={() => setShowEditModal(true)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Edit2 size={12} /> Edit
-                  </button>
-                  {LIFECYCLE_TRANSITIONS[selectedAssayer.lifecycleStatus || selectedAssayer.status]?.length > 0 && (
-                    <button onClick={() => setShowLifecycleModal(true)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>
-                      Transition
-                    </button>
-                  )}
-                  <button onClick={() => handleDelete(selectedAssayer.id)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Trash2 size={12} /> Delete
-                  </button>
-                </div>
+
+                {/* Quick Stats Row */}
+                {selectedProfile && (
+                  <div style={{ display: 'flex', gap: '16px', marginTop: '14px', paddingTop: '14px', borderTop: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', padding: '6px', color: 'var(--accent-primary)' }}><Briefcase size={13} /></div>
+                      <div><div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600 }}>ASSIGNMENTS</div><div style={{ fontSize: '15px', fontWeight: 700 }}>{selectedProfile.totalAssignments}</div></div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ background: 'rgba(16,185,129,0.1)', borderRadius: 'var(--radius-sm)', padding: '6px', color: 'var(--status-active)' }}><CheckCircle size={13} /></div>
+                      <div><div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600 }}>COMPLETED</div><div style={{ fontSize: '15px', fontWeight: 700 }}>{selectedProfile.completedAssignments} <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>({completionRate}%)</span></div></div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ background: 'rgba(245,158,11,0.1)', borderRadius: 'var(--radius-sm)', padding: '6px', color: '#f59e0b' }}><DollarSign size={13} /></div>
+                      <div><div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600 }}>EARNINGS</div><div style={{ fontSize: '15px', fontWeight: 700 }}>₹{Number(selectedProfile.totalEarnings).toLocaleString()}</div></div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ background: 'rgba(139,92,246,0.1)', borderRadius: 'var(--radius-sm)', padding: '6px', color: '#8b5cf6' }}><Star size={13} /></div>
+                      <div><div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600 }}>RATING</div><div style={{ fontSize: '15px', fontWeight: 700 }}>{Number(selectedProfile.averageRating) > 0 ? Number(selectedProfile.averageRating).toFixed(1) : '—'} <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>/ 5</span></div></div>
+                    </div>
+                    {selectedProfile.lastAssignmentDate && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ background: 'rgba(59,130,246,0.1)', borderRadius: 'var(--radius-sm)', padding: '6px', color: '#3b82f6' }}><Calendar size={13} /></div>
+                        <div><div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600 }}>LAST JOB</div><div style={{ fontSize: '13px', fontWeight: 600 }}>{new Date(selectedProfile.lastAssignmentDate).toLocaleDateString()}</div></div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
+              {/* Tabs */}
               <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
                 {(['profile', 'commercial'] as const).map(tab => (
                   <button key={tab} onClick={() => setActiveTab(tab)}
                     style={{ flex: 1, padding: '12px', background: 'transparent', border: 'none',
                       borderBottom: activeTab === tab ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                      color: activeTab === tab ? '#fff' : 'var(--text-muted)', fontWeight: 600, fontSize: '13px', cursor: 'pointer', textTransform: 'uppercase' }}>
+                      color: activeTab === tab ? '#fff' : 'var(--text-muted)', fontWeight: 600, fontSize: '13px', cursor: 'pointer', textTransform: 'uppercase', transition: 'all 0.15s' }}>
                     {tab === 'profile' ? 'Profile' : 'Commercial'}
                   </button>
                 ))}
               </div>
 
+              {/* Tab Content */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
                 {activeTab === 'profile' ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* Performance & Stats (from selectedProfile) */}
+                    {selectedProfile && (
+                      <Section title="Performance & Statistics" icon={<TrendingUp size={14} />}>
+                        <Row label="Total Assignments" value={String(selectedProfile.totalAssignments)} />
+                        <Row label="Completed" value={`${selectedProfile.completedAssignments} (${completionRate}%)`} />
+                        <Row label="Cancelled" value={String(selectedProfile.cancelledAssignments)} />
+                        <Row label="On-Time Deliveries" value={`${selectedProfile.onTimeCompletions} (${onTimeRate}%)`} />
+                        <Row label="Total Earnings" value={`₹${Number(selectedProfile.totalEarnings).toLocaleString()}`} />
+                        <Row label="Average Rating" value={Number(selectedProfile.averageRating) > 0 ? `${Number(selectedProfile.averageRating).toFixed(1)} / 5` : '—'} />
+                        <Row label="Performance Rating" value={selectedProfile.performanceRating ? `${selectedProfile.performanceRating} / 5` : '—'} />
+                        {selectedProfile.lastAssignmentDate && <Row label="Last Assignment" value={new Date(selectedProfile.lastAssignmentDate).toLocaleDateString()} />}
+                        {/* On-Time & Completion bars */}
+                        <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '4px' }}>
+                          <div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' }}>COMPLETION RATE</div>
+                            <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${completionRate}%`, background: completionRate >= 80 ? 'var(--status-active)' : completionRate >= 50 ? '#f59e0b' : '#ef4444', borderRadius: '3px', transition: 'width 0.3s' }} />
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' }}>ON-TIME DELIVERY</div>
+                            <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${onTimeRate}%`, background: onTimeRate >= 80 ? 'var(--status-active)' : onTimeRate >= 50 ? '#f59e0b' : '#ef4444', borderRadius: '3px', transition: 'width 0.3s' }} />
+                            </div>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+
                     <Section title="Contact Information" icon={<User size={14} />}>
                       <Row label="Code" value={selectedAssayer.assayerCode} code />
                       <Row label="Display Name" value={selectedAssayer.displayName} />
@@ -407,7 +612,7 @@ export const Assayers: React.FC = () => {
                       <Row label="IFSC Code" value={selectedAssayer.ifscCode || '-'} />
                     </Section>
 
-                    <Section title="Skills & Experience" icon={<Award size={14} />}>
+                    <Section title="Skills & Qualifications" icon={<Award size={14} />}>
                       <Row label="Experience" value={`${selectedAssayer.experienceYears} years`} />
                       <Row label="Performance" value={selectedAssayer.performanceRating ? `${selectedAssayer.performanceRating}/5` : '-'} />
                       <Row label="Skills" value={selectedAssayer.skills?.join(', ') || '-'} />
@@ -423,7 +628,7 @@ export const Assayers: React.FC = () => {
                       <Row label="Working Hours" value={selectedAssayer.workingHours ? `${selectedAssayer.workingHours.start} - ${selectedAssayer.workingHours.end}` : '-'} />
                     </Section>
 
-                    <Section title="Emergency Contact" icon={<AlertTriangle size={14} />}>
+                    <Section title="Emergency Contact" icon={<Phone size={14} />}>
                       <Row label="Name" value={selectedAssayer.emergencyContactName || '-'} />
                       <Row label="Phone" value={selectedAssayer.emergencyContactPhone || '-'} />
                       <Row label="Relation" value={selectedAssayer.emergencyContactRelation || '-'} />
@@ -468,8 +673,9 @@ export const Assayers: React.FC = () => {
             </>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-              <Users size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
-              Select an assayer to view details
+              <Users size={48} style={{ marginBottom: '16px', opacity: 0.3 }} />
+              <div style={{ fontSize: '15px', fontWeight: 600 }}>Select an assayer</div>
+              <div style={{ fontSize: '12px', marginTop: '4px' }}>Choose from the directory to view details</div>
             </div>
           )}
         </div>
@@ -480,14 +686,17 @@ export const Assayers: React.FC = () => {
       {showLifecycleModal && selectedAssayer && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowLifecycleModal(false)}>
           <div className="glass-card" style={{ width: '400px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-            <h4 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>Transition Lifecycle Status</h4>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Transition Lifecycle</h4>
+              <button onClick={() => setShowLifecycleModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px' }}>&times;</button>
+            </div>
             <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
               {selectedAssayer.displayName} — Current: <b>{selectedAssayer.lifecycleStatus || selectedAssayer.status}</b>
             </p>
             <select value={targetLifecycle} onChange={(e) => setTargetLifecycle(e.target.value)}
               style={{ width: '100%', padding: '10px', marginBottom: '16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
               <option value="">-- Select target status --</option>
-              {LIFECYCLE_TRANSITIONS[selectedAssayer.lifecycleStatus || selectedAssayer.status]?.map(s => <option key={s} value={s}>{s}</option>)}
+              {LIFECYCLE_TRANSITIONS[selectedAssayer.lifecycleStatus || selectedAssayer.status]?.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
             </select>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowLifecycleModal(false)} className="btn btn-secondary">Cancel</button>
@@ -499,7 +708,10 @@ export const Assayers: React.FC = () => {
       {showProfileModal && selectedAssayer && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowProfileModal(false)}>
           <div className="glass-card" style={{ width: '550px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '20px' }}>Configure Assayer Rates</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 600 }}>Configure Assayer Rates</h3>
+              <button onClick={() => setShowProfileModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>&times;</button>
+            </div>
             <form onSubmit={handleSaveProfile}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 {[{ label: 'Base Fee (₹)', val: baseFee, set: setBaseFee }, { label: 'Hourly Rate (₹)', val: hourlyRate, set: setHourlyRate }, { label: 'Daily Rate (₹)', val: dailyRate, set: setDailyRate }, { label: 'Travel/km (₹)', val: travelReimbursement, set: setTravelReimbursement }, { label: 'Accommodation (₹)', val: accommodationAllowance, set: setAccommodationAllowance }, { label: 'Meal Allowance (₹)', val: mealAllowance, set: setMealAllowance }].map(f => (
@@ -528,7 +740,7 @@ const Section: React.FC<{ title: string; icon: React.ReactNode; children: React.
     <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', letterSpacing: '0.5px' }}>
       {icon} {title}
     </h4>
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 20px', padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 20px', padding: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
       {children}
     </div>
   </div>
@@ -541,9 +753,15 @@ const Row: React.FC<{ label: string; value: React.ReactNode; code?: boolean; ful
   </div>
 );
 
-const inputStyle = { width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' };
-const labelStyle = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' };
-const selectStyle = { width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', cursor: 'pointer' };
+const labelStyle = { display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
+const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
+const formSelectStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff', width: '100%', boxSizing: 'border-box' as const, outline: 'none', cursor: 'pointer', fontSize: '13px' };
+
+const FIELD_TEXTAREA = new Set(['address', 'notes']);
+const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'bankAccountNumber', 'ifscCode']);
+const FIELD_TEL = new Set(['phone', 'alternatePhone', 'emergencyContactPhone']);
+const FIELD_NUM = new Set(['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']);
+const FIELD_TIME = new Set(['workingHoursStart', 'workingHoursEnd']);
 
 const INDIAN_STATES: { value: string; label: string }[] = [
   { value: 'Andhra Pradesh', label: 'Andhra Pradesh' }, { value: 'Arunachal Pradesh', label: 'Arunachal Pradesh' },
@@ -597,17 +815,17 @@ const PERFORMANCE_RATINGS: { value: string; label: string }[] = [
 interface FieldDef { key: string; label: string; required?: boolean; type?: string; full?: boolean; placeholder?: string; options?: { value: string; label: string }[] }
 
 const CREATE_FIELDS: FieldDef[] = [
-  { key: 'assayerCode', label: 'Assayer Code *', required: true },
-  { key: 'firstName', label: 'First Name *', required: true },
-  { key: 'lastName', label: 'Last Name *', required: true },
+  { key: 'assayerCode', label: 'Assayer Code', required: true },
+  { key: 'firstName', label: 'First Name', required: true },
+  { key: 'lastName', label: 'Last Name', required: true },
   { key: 'displayName', label: 'Display Name' },
   { key: 'email', label: 'Email', type: 'email' },
-  { key: 'phone', label: 'Phone *', required: true },
+  { key: 'phone', label: 'Phone', required: true },
   { key: 'alternatePhone', label: 'Alternate Phone' },
-  { key: 'address', label: 'Address *', required: true, full: true },
-  { key: 'state', label: 'State *', required: true, options: INDIAN_STATES },
-  { key: 'district', label: 'District *', required: true },
-  { key: 'city', label: 'City *', required: true },
+  { key: 'address', label: 'Address', required: true, full: true },
+  { key: 'state', label: 'State', required: true, options: INDIAN_STATES },
+  { key: 'district', label: 'District', required: true },
+  { key: 'city', label: 'City', required: true },
   { key: 'pincode', label: 'Pincode' },
   { key: 'region', label: 'Region' },
   { key: 'employeeId', label: 'Employee ID' },
@@ -622,12 +840,21 @@ const CREATE_FIELDS: FieldDef[] = [
   { key: 'notes', label: 'Notes', full: true },
 ];
 
+const CREATE_FIELD_GROUPS: FieldGroup[] = [
+  { title: 'Personal', icon: <User size={13} />, fields: ['assayerCode', 'firstName', 'lastName', 'displayName', 'email', 'phone', 'alternatePhone'] },
+  { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
+  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate'] },
+  { title: 'Financial', icon: <CreditCard size={13} />, fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+  { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears'] },
+  { title: 'Other', icon: <Clock size={13} />, fields: ['notes'] },
+];
+
 const EDIT_FIELDS: FieldDef[] = [
-  { key: 'firstName', label: 'First Name *', required: true },
-  { key: 'lastName', label: 'Last Name *', required: true },
+  { key: 'firstName', label: 'First Name', required: true },
+  { key: 'lastName', label: 'Last Name', required: true },
   { key: 'displayName', label: 'Display Name' },
   { key: 'email', label: 'Email', type: 'email' },
-  { key: 'phone', label: 'Phone *', required: true },
+  { key: 'phone', label: 'Phone', required: true },
   { key: 'alternatePhone', label: 'Alternate Phone' },
   { key: 'address', label: 'Address', full: true },
   { key: 'state', label: 'State', options: INDIAN_STATES },
@@ -658,41 +885,68 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'notes', label: 'Notes', full: true },
 ];
 
-const renderField = (field: FieldDef, form: any, setForm: (v: any) => void) => (
-  <div key={field.key} style={field.full ? { gridColumn: '1 / -1' } : {}}>
-    <label style={labelStyle}>{field.label}</label>
-    {field.options ? (
-      <select value={form[field.key] || ''} onChange={(e) => setForm({ ...form, [field.key]: e.target.value })} required={field.required} style={selectStyle}>
-        <option value="">Select...</option>
-        {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    ) : (
-      <input type={field.type || 'text'} value={form[field.key] || ''} onChange={(e) => setForm({ ...form, [field.key]: e.target.value })} required={field.required} placeholder={field.placeholder}
-        style={inputStyle} />
-    )}
-  </div>
-);
+const renderFormField = (field: FieldDef, form: Record<string, string>, setForm: (v: Record<string, string>) => void) => {
+  const val = form[field.key] || '';
+  const isTextarea = FIELD_TEXTAREA.has(field.key);
+  const isMono = FIELD_MONO.has(field.key);
+  const isTel = FIELD_TEL.has(field.key);
+  const isNum = FIELD_NUM.has(field.key);
+  const isTime = FIELD_TIME.has(field.key);
 
-const ModalShell: React.FC<{ title: string; icon: React.ReactNode; onClose: () => void; onSubmit: (e: React.FormEvent) => void; submitting: boolean; submitLabel: string; children: React.ReactNode; wide?: boolean }> = ({ title, icon, onClose, onSubmit, submitting, submitLabel, children, wide }) => (
-  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
-    <div className="glass-card" style={{ width: wide ? '700px' : '520px', padding: '24px', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h3 style={{ fontSize: '18px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>{icon} {title}</h3>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>&times;</button>
-      </div>
-      <form onSubmit={onSubmit}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>{children}</div>
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-          <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
-          <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : submitLabel}</button>
+  const handleChange = (v: string) => {
+    if (field.key === 'panNumber' || field.key === 'ifscCode') {
+      setForm({ ...form, [field.key]: v.toUpperCase() });
+    } else {
+      setForm({ ...form, [field.key]: v });
+    }
+  };
+
+  return (
+    <div key={field.key} style={field.full ? { gridColumn: '1 / -1' } : {}}>
+      <label style={labelStyle}>
+        {field.label}{field.required && <span style={{ color: '#ef4444', marginLeft: '2px' }}>*</span>}
+      </label>
+      {field.options ? (
+        <select value={val} onChange={(e) => setForm({ ...form, [field.key]: e.target.value })} required={field.required} style={formSelectStyle}>
+          <option value="">-- Select {field.label.replace(' *', '')} --</option>
+          {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      ) : isTextarea ? (
+        <textarea value={val} onChange={(e) => handleChange(e.target.value)} placeholder={field.placeholder || `Enter ${field.label.toLowerCase().replace(' *', '')}`}
+          rows={3} style={{ ...formFieldStyle, resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }} />
+      ) : (
+        <div style={{ position: 'relative' }}>
+          {isTel && <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>}
+          <input
+            type={isTime ? 'time' : isTel ? 'tel' : isNum ? 'number' : field.type || 'text'}
+            value={val}
+            onChange={(e) => handleChange(e.target.value)}
+            required={field.required}
+            placeholder={
+              field.placeholder ||
+              (isTel ? '9876543210' : field.key === 'pincode' ? '6-digit pincode' : field.key === 'email' ? 'name@example.com' : field.key === 'panNumber' ? 'ABCDE1234F' : field.key === 'ifscCode' ? 'HDFC0001234' : field.key === 'bankAccountNumber' ? 'Account number' : field.key === 'managerId' ? 'Manager UUID' : `Enter ${field.label.toLowerCase().replace(' *', '')}`)
+            }
+            inputMode={isNum || field.key === 'pincode' || isTel ? 'numeric' : field.key === 'email' ? 'email' : 'text'}
+            maxLength={field.key === 'pincode' ? 6 : field.key === 'panNumber' ? 10 : field.key === 'ifscCode' ? 11 : undefined}
+            min={isNum ? 0 : undefined}
+            step={isNum ? '1' : undefined}
+            autoComplete="off"
+            style={{
+              ...formFieldStyle,
+              fontFamily: isMono ? 'monospace' : 'inherit',
+              textTransform: (field.key === 'panNumber' || field.key === 'ifscCode') ? 'uppercase' : 'none',
+              letterSpacing: isMono ? '0.5px' : 'normal',
+              ...(isTel ? { paddingLeft: '42px' } : {}),
+            }} />
         </div>
-      </form>
+      )}
     </div>
-  </div>
-);
+  );
+};
 
 const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void }> = ({ onClose, onCreated }) => {
   const [form, setForm] = useState<Record<string, string>>({});
+  const [activeTab, setActiveTab] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -713,12 +967,85 @@ const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void 
     finally { setSubmitting(false); }
   };
 
+  const fieldsMap = new Map(CREATE_FIELDS.map(f => [f.key, f]));
+  const currentGroup = CREATE_FIELD_GROUPS[activeTab];
+
   return (
-    <ModalShell title="Add Assayer" icon={<User size={18} />} onClose={onClose} onSubmit={handleSubmit} submitting={submitting} submitLabel="Create Assayer" wide>
-      {CREATE_FIELDS.map(f => renderField(f, form, setForm))}
-    </ModalShell>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
+      <div className="glass-card" style={{ width: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ padding: '20px 24px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <User size={18} style={{ color: 'var(--accent-primary)' }} /> Add Assayer
+          </h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}><X size={18} /></button>
+        </div>
+        <div style={{ display: 'flex', gap: '0', padding: '16px 24px 0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
+          {CREATE_FIELD_GROUPS.map((group, i) => (
+            <button key={group.title} onClick={() => setActiveTab(i)}
+              style={{
+                padding: '8px 14px', background: 'transparent', border: 'none',
+                borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                color: activeTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
+                fontWeight: activeTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+                transition: 'all 0.15s', opacity: activeTab === i ? 1 : 0.6,
+              }}>
+              {group.icon} {group.title}
+            </button>
+          ))}
+        </div>
+        <form onSubmit={handleSubmit} style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              {currentGroup.fields.map(key => {
+                const field = fieldsMap.get(key);
+                return field ? renderFormField(field, form, setForm) : null;
+              })}
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '20px' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {activeTab > 0 && (
+                <button type="button" onClick={() => setActiveTab(activeTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  ← Previous
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
+              {activeTab < CREATE_FIELD_GROUPS.length - 1 ? (
+                <button type="button" onClick={() => setActiveTab(activeTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Next →
+                </button>
+              ) : (
+                <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {submitting ? 'Saving...' : <><CheckCircle size={14} /> Create Assayer</>}
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 };
+
+interface FieldGroup {
+  title: string;
+  icon: React.ReactNode;
+  fields: string[];
+}
+
+const EDIT_FIELD_GROUPS: FieldGroup[] = [
+  { title: 'Personal', icon: <User size={13} />, fields: ['firstName', 'lastName', 'displayName', 'email', 'phone', 'alternatePhone'] },
+  { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
+  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate', 'exitDate', 'terminationDate', 'managerId'] },
+  { title: 'Financial', icon: <CreditCard size={13} />, fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+  { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload'] },
+  { title: 'Emergency', icon: <Phone size={13} />, fields: ['emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation'] },
+  { title: 'Other', icon: <Clock size={13} />, fields: ['workingHoursStart', 'workingHoursEnd', 'notes'] },
+];
 
 const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void; onUpdated: () => void }> = ({ assayer, onClose, onUpdated }) => {
   const [form, setForm] = useState<Record<string, string>>(() => {
@@ -734,6 +1061,7 @@ const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void; onUpda
     });
     return f;
   });
+  const [activeEditTab, setActiveEditTab] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -756,9 +1084,87 @@ const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void; onUpda
     finally { setSubmitting(false); }
   };
 
+  const statusColor = STATUS_COLORS[assayer.lifecycleStatus || assayer.status] || '#6b7280';
+
+  const fieldsMap = new Map(EDIT_FIELDS.map(f => [f.key, f]));
+  const currentGroup = EDIT_FIELD_GROUPS[activeEditTab];
+
   return (
-    <ModalShell title="Edit Assayer" icon={<Edit2 size={18} />} onClose={onClose} onSubmit={handleSubmit} submitting={submitting} submitLabel="Save Changes" wide>
-      {EDIT_FIELDS.map(f => renderField(f, form, setForm))}
-    </ModalShell>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
+      <div className="glass-card" style={{ width: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ padding: '20px 24px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Edit2 size={18} style={{ color: 'var(--accent-primary)' }} /> Edit Assayer
+            </h3>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontFamily: 'monospace' }}>{assayer.assayerCode}</span>
+              <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: statusColor }} />
+                {assayer.lifecycleStatus || assayer.status}
+              </span>
+              <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
+              <span>{assayer.displayName}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}><X size={18} /></button>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display: 'flex', gap: '0', padding: '16px 24px 0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
+          {EDIT_FIELD_GROUPS.map((group, i) => (
+            <button key={group.title} onClick={() => setActiveEditTab(i)}
+              style={{
+                padding: '8px 14px', background: 'transparent', border: 'none',
+                borderBottom: activeEditTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                color: activeEditTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
+                fontWeight: activeEditTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+                transition: 'all 0.15s', opacity: activeEditTab === i ? 1 : 0.6,
+              }}>
+              {group.icon} {group.title}
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+          {/* Tab content */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              {currentGroup.fields.map(key => {
+                const field = fieldsMap.get(key);
+                return field ? renderFormField(field, form, setForm) : null;
+              })}
+            </div>
+          </div>
+
+          {/* Navigation + Submit */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '20px' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {activeEditTab > 0 && (
+                <button type="button" onClick={() => setActiveEditTab(activeEditTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  ← Previous
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
+              {activeEditTab < EDIT_FIELD_GROUPS.length - 1 ? (
+                <button type="button" onClick={() => setActiveEditTab(activeEditTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Next →
+                </button>
+              ) : (
+                <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 };

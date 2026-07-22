@@ -160,13 +160,13 @@ export const AssayerProfile: React.FC = () => {
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '28px', fontWeight: 700, color: assayer.averageRating >= 4 ? 'var(--status-active)' : assayer.averageRating >= 3 ? '#f59e0b' : '#ef4444' }}>
-                {assayer.averageRating > 0 ? assayer.averageRating.toFixed(1) : '—'}
+                {Number(assayer.averageRating) > 0 ? Number(assayer.averageRating).toFixed(1) : '—'}
               </div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>Avg Rating</div>
             </div>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--accent-primary)' }}>
-                {assayer.performanceRating.toFixed(1)}
+                {Number(assayer.performanceRating).toFixed(1)}
               </div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>Perf. Rating</div>
             </div>
