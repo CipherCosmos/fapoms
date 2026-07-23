@@ -3,10 +3,10 @@ class ApiClient {
 
   async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     let token = localStorage.getItem('fapoms_token');
-    const headers = {
-      'Content-Type': 'application/json',
+    const headers: Record<string, string> = {
+      ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options?.headers || {}),
+      ...(options?.headers as Record<string, string> || {}),
     };
 
     let response = await fetch(`/api/v1${endpoint}`, {

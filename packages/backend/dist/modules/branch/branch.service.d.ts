@@ -119,4 +119,6 @@ export declare class BranchService {
         errors: string[];
     }>;
     private validateGeography;
+    registerImportedBranch(dto: Partial<BranchEntity>, userId: string): Promise<BranchEntity>;
+    findOrCreateZone(name: string, clientId: string, states: string[]): Promise<ZoneEntity>;
 }

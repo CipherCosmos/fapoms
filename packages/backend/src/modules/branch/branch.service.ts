@@ -617,4 +617,27 @@ export class BranchService {
       throw new BadRequestException(`City '${city}' not found under district '${district}'.`);
     }
   }
+
+  async registerImportedBranch(dto: Partial<BranchEntity>, userId: string): Promise<BranchEntity> {
+    const branch = this.branchRepository.create({
+      ...dto,
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    return this.branchRepository.save(branch);
+  }
+
+  async findOrCreateZone(name: string, clientId: string, states: string[]): Promise<ZoneEntity> {
+    let zone = await this.zoneRepository.findOne({ where: { name, clientId, isActive: true } });
+    if (!zone) {
+      zone = this.zoneRepository.create({
+        name,
+        clientId,
+        states,
+        districts: []
+      });
+      zone = await this.zoneRepository.save(zone);
+    }
+    return zone;
+  }
 }

@@ -16,28 +16,26 @@ exports.PlanningService = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
-const branch_entity_1 = require("../branch/branch.entity");
 const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
-const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
+const branch_query_service_1 = require("../branch/branch-query.service");
+const assayer_service_1 = require("../assayer/assayer.service");
 const recommendation_engine_1 = require("./recommendation.engine");
 const routing_provider_1 = require("../geo/routing.provider");
 let PlanningService = class PlanningService {
-    branchRepository;
+    branchQueryService;
     ruleRepository;
-    commercialRepository;
+    assayerService;
     recommendationEngine;
     routingService;
-    constructor(branchRepository, ruleRepository, commercialRepository, recommendationEngine, routingService) {
-        this.branchRepository = branchRepository;
+    constructor(branchQueryService, ruleRepository, assayerService, recommendationEngine, routingService) {
+        this.branchQueryService = branchQueryService;
         this.ruleRepository = ruleRepository;
-        this.commercialRepository = commercialRepository;
+        this.assayerService = assayerService;
         this.recommendationEngine = recommendationEngine;
         this.routingService = routingService;
     }
     async getRecommendedCandidates(branchId) {
-        const branch = await this.branchRepository.findOne({
-            where: { id: branchId, isActive: true },
-        });
+        const branch = await this.branchQueryService.findOne(branchId);
         if (!branch) {
             throw new common_1.NotFoundException(`Branch ${branchId} not found.`);
         }
@@ -49,10 +47,7 @@ let PlanningService = class PlanningService {
                 const route = await this.routingService.calculateRoute({ latitude: branch.latitude, longitude: branch.longitude }, { latitude: r.assayer.latitude, longitude: r.assayer.longitude });
                 distanceKm = route.distanceKm;
             }
-            const profile = await this.commercialRepository.findOne({
-                where: { assayerId: r.assayer.id, isActive: true },
-                order: { effectiveStartDate: 'DESC' },
-            });
+            const profile = await this.assayerService.getActiveCommercialProfile(r.assayer.id);
             const baseFee = profile ? Number(profile.baseFee) : 1500;
             recommendations.push({
                 id: r.assayer.id,
@@ -117,12 +112,10 @@ let PlanningService = class PlanningService {
 exports.PlanningService = PlanningService;
 exports.PlanningService = PlanningService = __decorate([
     (0, common_1.Injectable)(),
-    __param(0, (0, typeorm_1.InjectRepository)(branch_entity_1.BranchEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(business_rule_entity_1.BusinessRuleEntity)),
-    __param(2, (0, typeorm_1.InjectRepository)(assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity)),
-    __metadata("design:paramtypes", [typeorm_2.Repository,
+    __metadata("design:paramtypes", [branch_query_service_1.BranchQueryService,
         typeorm_2.Repository,
-        typeorm_2.Repository,
+        assayer_service_1.AssayerService,
         recommendation_engine_1.RecommendationEngine,
         routing_provider_1.RoutingService])
 ], PlanningService);

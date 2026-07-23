@@ -11,11 +11,14 @@ import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { ProjectService } from '../project/project.service';
+import { ProjectQueryService } from '../project/project-query.service';
+import { AssayerService } from '../assayer/assayer.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
   let assignmentRepo: Repository<AssignmentEntity>;
-  let projectBranchRepo: Repository<ProjectBranchEntity>;
   let holidayService: HolidayService;
   let auditService: AuditService;
 
@@ -35,6 +38,24 @@ describe('AssignmentService', () => {
     findOne: jest.fn(),
   };
 
+  const mockProjectService = {
+    transitionProjectBranchStatus: jest.fn(),
+    initiateBranchPlanning: jest.fn(),
+    confirmBranchAssignment: jest.fn(),
+    scheduleBranchAudit: jest.fn(),
+    completeBranchAudit: jest.fn(),
+    closeBranchProject: jest.fn(),
+  };
+
+  const mockProjectQueryService = {
+    findProjectBranchById: mockProjectBranchRepo.findOne,
+  };
+
+  const mockAssayerService = {
+    findOne: mockAssayerRepo.findOne,
+    updateAssayerStats: jest.fn(),
+  };
+
   const mockHolidayService = {
     isHoliday: jest.fn(),
   };
@@ -45,6 +66,10 @@ describe('AssignmentService', () => {
 
   const mockAuditService = {
     recordEvent: jest.fn(),
+  };
+
+  const mockDomainEventPublisher = {
+    publish: jest.fn(),
   };
 
   const mockDataSource = {
@@ -106,12 +131,16 @@ describe('AssignmentService', () => {
           useValue: mockAssignmentRepo,
         },
         {
-          provide: getRepositoryToken(ProjectBranchEntity),
-          useValue: mockProjectBranchRepo,
+          provide: ProjectQueryService,
+          useValue: mockProjectQueryService,
         },
         {
-          provide: getRepositoryToken(AssayerEntity),
-          useValue: mockAssayerRepo,
+          provide: ProjectService,
+          useValue: mockProjectService,
+        },
+        {
+          provide: AssayerService,
+          useValue: mockAssayerService,
         },
         {
           provide: HolidayService,
@@ -130,6 +159,10 @@ describe('AssignmentService', () => {
           useValue: mockWorkflowEngine,
         },
         {
+          provide: DomainEventPublisher,
+          useValue: mockDomainEventPublisher,
+        },
+        {
           provide: DataSource,
           useValue: mockDataSource,
         },
@@ -138,7 +171,6 @@ describe('AssignmentService', () => {
 
     service = module.get<AssignmentService>(AssignmentService);
     assignmentRepo = module.get<Repository<AssignmentEntity>>(getRepositoryToken(AssignmentEntity));
-    projectBranchRepo = module.get<Repository<ProjectBranchEntity>>(getRepositoryToken(ProjectBranchEntity));
     holidayService = module.get<HolidayService>(HolidayService);
     auditService = module.get<AuditService>(AuditService);
 

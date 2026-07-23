@@ -487,6 +487,27 @@ let BranchService = class BranchService {
             throw new common_1.BadRequestException(`City '${city}' not found under district '${district}'.`);
         }
     }
+    async registerImportedBranch(dto, userId) {
+        const branch = this.branchRepository.create({
+            ...dto,
+            createdBy: userId,
+            updatedBy: userId,
+        });
+        return this.branchRepository.save(branch);
+    }
+    async findOrCreateZone(name, clientId, states) {
+        let zone = await this.zoneRepository.findOne({ where: { name, clientId, isActive: true } });
+        if (!zone) {
+            zone = this.zoneRepository.create({
+                name,
+                clientId,
+                states,
+                districts: []
+            });
+            zone = await this.zoneRepository.save(zone);
+        }
+        return zone;
+    }
 };
 exports.BranchService = BranchService;
 exports.BranchService = BranchService = __decorate([

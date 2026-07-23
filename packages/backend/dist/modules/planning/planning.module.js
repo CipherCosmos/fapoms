@@ -17,6 +17,8 @@ const assayer_entity_1 = require("../assayer/assayer.entity");
 const assignment_entity_1 = require("../assignment/assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
 const geo_module_1 = require("../geo/geo.module");
+const branch_module_1 = require("../branch/branch.module");
+const assayer_module_1 = require("../assayer/assayer.module");
 const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
 const client_entity_1 = require("../client/client.entity");
@@ -37,6 +39,8 @@ exports.PlanningModule = PlanningModule = __decorate([
                 client_entity_1.ClientEntity,
             ]),
             geo_module_1.GeoModule,
+            branch_module_1.BranchModule,
+            assayer_module_1.AssayerModule,
         ],
         controllers: [planning_controller_1.PlanningController],
         providers: [

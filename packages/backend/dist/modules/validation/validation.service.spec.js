@@ -5,13 +5,14 @@ const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
 const validation_service_1 = require("./validation.service");
 const validation_case_entity_1 = require("./validation-case.entity");
-const project_branch_entity_1 = require("../project/project-branch.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
+const project_service_1 = require("../project/project.service");
+const project_query_service_1 = require("../project/project-query.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 describe('ValidationService', () => {
     let service;
     let validationCaseRepo;
-    let projectBranchRepo;
     const mockValidationCaseRepo = {
         create: jest.fn(),
         save: jest.fn(),
@@ -22,8 +23,20 @@ describe('ValidationService', () => {
         findOne: jest.fn(),
         save: jest.fn(),
     };
+    const mockProjectService = {
+        transitionProjectBranchStatus: jest.fn(),
+        completeBranchValidation: jest.fn(),
+        closeBranchProject: jest.fn(),
+        initiateBranchPlanning: jest.fn(),
+    };
+    const mockProjectQueryService = {
+        findProjectBranchById: mockProjectBranchRepo.findOne,
+    };
     const mockAuditService = {
         recordEvent: jest.fn(),
+    };
+    const mockDomainEventPublisher = {
+        publish: jest.fn(),
     };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
@@ -34,18 +47,25 @@ describe('ValidationService', () => {
                     useValue: mockValidationCaseRepo,
                 },
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
-                    useValue: mockProjectBranchRepo,
+                    provide: project_query_service_1.ProjectQueryService,
+                    useValue: mockProjectQueryService,
+                },
+                {
+                    provide: project_service_1.ProjectService,
+                    useValue: mockProjectService,
                 },
                 {
                     provide: audit_service_1.AuditService,
                     useValue: mockAuditService,
                 },
+                {
+                    provide: domain_event_publisher_1.DomainEventPublisher,
+                    useValue: mockDomainEventPublisher,
+                },
             ],
         }).compile();
         service = module.get(validation_service_1.ValidationService);
         validationCaseRepo = module.get((0, typeorm_1.getRepositoryToken)(validation_case_entity_1.ValidationCaseEntity));
-        projectBranchRepo = module.get((0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity));
         jest.clearAllMocks();
     });
     describe('create', () => {

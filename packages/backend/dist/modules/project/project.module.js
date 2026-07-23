@@ -10,23 +10,25 @@ exports.ProjectModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const project_service_1 = require("./project.service");
+const project_query_service_1 = require("./project-query.service");
 const project_controller_1 = require("./project.controller");
 const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
-const branch_entity_1 = require("../branch/branch.entity");
 const platform_module_1 = require("../platform/platform.module");
+const branch_module_1 = require("../branch/branch.module");
 let ProjectModule = class ProjectModule {
 };
 exports.ProjectModule = ProjectModule;
 exports.ProjectModule = ProjectModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([project_entity_1.ProjectEntity, project_branch_entity_1.ProjectBranchEntity, branch_entity_1.BranchEntity]),
+            typeorm_1.TypeOrmModule.forFeature([project_entity_1.ProjectEntity, project_branch_entity_1.ProjectBranchEntity]),
             platform_module_1.PlatformModule,
+            branch_module_1.BranchModule,
         ],
         controllers: [project_controller_1.ProjectController],
-        providers: [project_service_1.ProjectService],
-        exports: [project_service_1.ProjectService],
+        providers: [project_service_1.ProjectService, project_query_service_1.ProjectQueryService],
+        exports: [project_service_1.ProjectService, project_query_service_1.ProjectQueryService],
     })
 ], ProjectModule);
 //# sourceMappingURL=project.module.js.map

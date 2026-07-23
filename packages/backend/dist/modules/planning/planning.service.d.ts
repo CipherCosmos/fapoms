@@ -1,7 +1,7 @@
 import { Repository } from 'typeorm';
-import { BranchEntity } from '../branch/branch.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
+import { BranchQueryService } from '../branch/branch-query.service';
+import { AssayerService } from '../assayer/assayer.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
 export interface AssayerRecommendation {
@@ -37,12 +37,12 @@ export interface UpdateBusinessRuleDto {
     actions?: Record<string, any> | null;
 }
 export declare class PlanningService {
-    private readonly branchRepository;
+    private readonly branchQueryService;
     private readonly ruleRepository;
-    private readonly commercialRepository;
+    private readonly assayerService;
     private readonly recommendationEngine;
     private readonly routingService;
-    constructor(branchRepository: Repository<BranchEntity>, ruleRepository: Repository<BusinessRuleEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, recommendationEngine: RecommendationEngine, routingService: RoutingService);
+    constructor(branchQueryService: BranchQueryService, ruleRepository: Repository<BusinessRuleEntity>, assayerService: AssayerService, recommendationEngine: RecommendationEngine, routingService: RoutingService);
     getRecommendedCandidates(branchId: string): Promise<AssayerRecommendation[]>;
     createRule(dto: CreateBusinessRuleDto, userId: string): Promise<BusinessRuleEntity>;
     updateRule(id: string, dto: UpdateBusinessRuleDto, userId: string): Promise<BusinessRuleEntity>;

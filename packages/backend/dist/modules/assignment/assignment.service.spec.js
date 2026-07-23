@@ -6,17 +6,18 @@ const common_1 = require("@nestjs/common");
 const typeorm_2 = require("typeorm");
 const assignment_service_1 = require("./assignment.service");
 const assignment_entity_1 = require("./assignment.entity");
-const project_branch_entity_1 = require("../project/project-branch.entity");
-const assayer_entity_1 = require("../assayer/assayer.entity");
 const notification_service_1 = require("../notifications/notification.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
+const project_service_1 = require("../project/project.service");
+const project_query_service_1 = require("../project/project-query.service");
+const assayer_service_1 = require("../assayer/assayer.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 describe('AssignmentService', () => {
     let service;
     let assignmentRepo;
-    let projectBranchRepo;
     let holidayService;
     let auditService;
     const mockAssignmentRepo = {
@@ -32,6 +33,21 @@ describe('AssignmentService', () => {
     const mockAssayerRepo = {
         findOne: jest.fn(),
     };
+    const mockProjectService = {
+        transitionProjectBranchStatus: jest.fn(),
+        initiateBranchPlanning: jest.fn(),
+        confirmBranchAssignment: jest.fn(),
+        scheduleBranchAudit: jest.fn(),
+        completeBranchAudit: jest.fn(),
+        closeBranchProject: jest.fn(),
+    };
+    const mockProjectQueryService = {
+        findProjectBranchById: mockProjectBranchRepo.findOne,
+    };
+    const mockAssayerService = {
+        findOne: mockAssayerRepo.findOne,
+        updateAssayerStats: jest.fn(),
+    };
     const mockHolidayService = {
         isHoliday: jest.fn(),
     };
@@ -40,6 +56,9 @@ describe('AssignmentService', () => {
     };
     const mockAuditService = {
         recordEvent: jest.fn(),
+    };
+    const mockDomainEventPublisher = {
+        publish: jest.fn(),
     };
     const mockDataSource = {
         transaction: jest.fn((cb) => cb({
@@ -96,12 +115,16 @@ describe('AssignmentService', () => {
                     useValue: mockAssignmentRepo,
                 },
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
-                    useValue: mockProjectBranchRepo,
+                    provide: project_query_service_1.ProjectQueryService,
+                    useValue: mockProjectQueryService,
                 },
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(assayer_entity_1.AssayerEntity),
-                    useValue: mockAssayerRepo,
+                    provide: project_service_1.ProjectService,
+                    useValue: mockProjectService,
+                },
+                {
+                    provide: assayer_service_1.AssayerService,
+                    useValue: mockAssayerService,
                 },
                 {
                     provide: holiday_service_1.HolidayService,
@@ -120,6 +143,10 @@ describe('AssignmentService', () => {
                     useValue: mockWorkflowEngine,
                 },
                 {
+                    provide: domain_event_publisher_1.DomainEventPublisher,
+                    useValue: mockDomainEventPublisher,
+                },
+                {
                     provide: typeorm_2.DataSource,
                     useValue: mockDataSource,
                 },
@@ -127,7 +154,6 @@ describe('AssignmentService', () => {
         }).compile();
         service = module.get(assignment_service_1.AssignmentService);
         assignmentRepo = module.get((0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity));
-        projectBranchRepo = module.get((0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity));
         holidayService = module.get(holiday_service_1.HolidayService);
         auditService = module.get(audit_service_1.AuditService);
         jest.clearAllMocks();

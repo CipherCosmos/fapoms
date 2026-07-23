@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldAlert, AlertCircle, RefreshCw, Check, X, ClipboardList, Info, Search, FileCheck, FileX, Clock } from 'lucide-react';
 import { ValidationStatus } from '@fapoms/shared';
+import { api } from '../services/api';
 
 interface ValidationCase {
   id: string;
@@ -39,29 +40,28 @@ export const Validation: React.FC = () => {
   const loadCases = async () => {
     setIsLoading(true); setError(null);
     try {
-      const token = localStorage.getItem('fapoms_token');
-      const response = await fetch('/api/v1/validation', { headers: { 'Authorization': `Bearer ${token}` } });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setCases(data.data);
-        if (data.data.length > 0 && !selectedCaseId) selectCase(data.data[0].id);
-      } else setError(data.message || 'Failed to fetch validation queue');
-    } catch { setError('Network connection error while fetching validation cases.'); }
-    finally { setIsLoading(false); }
+      const data = await api.request<ValidationCase[]>('/validation');
+      setCases(data);
+      if (data.length > 0 && !selectedCaseId) selectCase(data[0].id);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch validation queue');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleAction = async (id: string, targetStatus: ValidationStatus) => {
     try {
-      const token = localStorage.getItem('fapoms_token');
-      const response = await fetch(`/api/v1/validation/${id}/transition`, {
+      await api.request(`/validation/${id}/transition`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ targetStatus, remarks: remarksInput || `Processed via validation workspace review`, notes: notesInput })
       });
-      const data = await response.json();
-      if (response.ok && data.success) { setRemarksInput(''); setNotesInput(''); loadCases(); }
-      else alert(data.message || 'Action failed.');
-    } catch { alert('Network communication error during processing.'); }
+      setRemarksInput('');
+      setNotesInput('');
+      loadCases();
+    } catch (err: any) {
+      alert(err.message || 'Action failed.');
+    }
   };
 
   const selectedCase = cases.find(c => c.id === selectedCaseId);

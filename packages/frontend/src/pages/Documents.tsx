@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Files, AlertCircle, RefreshCw, Upload, FileText, Download, Search, Clock, CheckCircle, XCircle } from 'lucide-react';
 import type { DocumentStatus } from '@fapoms/shared';
+import { api } from '../services/api';
 
 interface Document {
   id: string;
@@ -35,23 +36,22 @@ export const Documents: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const token = localStorage.getItem('fapoms_token');
-      const response = await fetch('/api/v1/projects', { headers: { 'Authorization': `Bearer ${token}` } });
-      const data = await response.json();
-      if (response.ok && data.success && data.data.length > 0) {
-        const pId = data.data[0].id;
-        const bResp = await fetch(`/api/v1/projects/${pId}/branches`, { headers: { 'Authorization': `Bearer ${token}` } });
-        const bData = await bResp.json();
-        if (bResp.ok && bData.success && bData.data.length > 0) {
-          const pbId = bData.data[0].id;
+      const projects = await api.request<any[]>('/projects');
+      if (projects && projects.length > 0) {
+        const pId = projects[0].id;
+        const branches = await api.request<any[]>(`/projects/${pId}/branches`);
+        if (branches && branches.length > 0) {
+          const pbId = branches[0].id;
           setProjectBranchId(pbId);
-          const dResp = await fetch(`/api/v1/documents/project-branch/${pbId}`, { headers: { 'Authorization': `Bearer ${token}` } });
-          const dData = await dResp.json();
-          if (dResp.ok && dData.success) setDocuments(dData.data);
+          const docs = await api.request<Document[]>(`/documents/project-branch/${pbId}`);
+          setDocuments(docs);
         }
       }
-    } catch { setError('Network connection error while fetching documents.'); }
-    finally { setIsLoading(false); }
+    } catch (err: any) {
+      setError(err.message || 'Network connection error while fetching documents.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
@@ -60,21 +60,21 @@ export const Documents: React.FC = () => {
     setIsUploading(true);
     setError(null);
     try {
-      const token = localStorage.getItem('fapoms_token');
       const formData = new FormData();
       formData.append('file', selectedFile);
-      const response = await fetch(`/api/v1/documents/upload?projectBranchId=${projectBranchId}&type=${docType}`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData
+      await api.request(`/documents/upload?projectBranchId=${projectBranchId}&type=${docType}`, {
+        method: 'POST',
+        body: formData
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setSelectedFile(null);
-        const fileInput = document.getElementById('file-upload-input') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
-        loadDocuments();
-      } else setError(data.message || 'Upload registration failed.');
-    } catch { setError('Network connection failed during upload.'); }
-    finally { setIsUploading(false); }
+      setSelectedFile(null);
+      const fileInput = document.getElementById('file-upload-input') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+      loadDocuments();
+    } catch (err: any) {
+      setError(err.message || 'Upload registration failed.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const filtered = documents.filter(d =>

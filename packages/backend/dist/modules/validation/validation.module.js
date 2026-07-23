@@ -12,14 +12,15 @@ const typeorm_1 = require("@nestjs/typeorm");
 const validation_service_1 = require("./validation.service");
 const validation_controller_1 = require("./validation.controller");
 const validation_case_entity_1 = require("./validation-case.entity");
-const project_branch_entity_1 = require("../project/project-branch.entity");
+const project_module_1 = require("../project/project.module");
 let ValidationModule = class ValidationModule {
 };
 exports.ValidationModule = ValidationModule;
 exports.ValidationModule = ValidationModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([validation_case_entity_1.ValidationCaseEntity, project_branch_entity_1.ProjectBranchEntity]),
+            typeorm_1.TypeOrmModule.forFeature([validation_case_entity_1.ValidationCaseEntity]),
+            project_module_1.ProjectModule,
         ],
         controllers: [validation_controller_1.ValidationController],
         providers: [validation_service_1.ValidationService],

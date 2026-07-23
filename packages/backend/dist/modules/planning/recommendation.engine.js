@@ -25,16 +25,6 @@ const client_entity_1 = require("../client/client.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
 const project_branch_entity_1 = require("../project/project-branch.entity");
-function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-}
 let AvailabilityFilter = class AvailabilityFilter {
     assignmentRepository;
     name = 'availability';
@@ -298,7 +288,7 @@ let ClientPreferenceScoreCalculator = class ClientPreferenceScoreCalculator {
         }
         const preferences = context.client?.planningPreferences || {};
         if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
-            const distance = calculateHaversineDistance(Number(context.branch.latitude), Number(context.branch.longitude), Number(assayer.latitude), Number(assayer.longitude));
+            const distance = (0, shared_1.calculateHaversineDistance)(Number(context.branch.latitude), Number(context.branch.longitude), Number(assayer.latitude), Number(assayer.longitude));
             const minDistance = Number(preferences.minDistanceKm);
             const maxDistance = Number(preferences.maxDistanceKm);
             if (!isNaN(minDistance) && distance < minDistance) {
@@ -379,7 +369,7 @@ let BranchFamiliarityScoreCalculator = class BranchFamiliarityScoreCalculator {
             for (const assign of sameDayAssignments) {
                 const otherBranch = assign.projectBranch?.branch;
                 if (otherBranch && otherBranch.latitude && otherBranch.longitude && context.branch.latitude && context.branch.longitude) {
-                    const dist = calculateHaversineDistance(Number(context.branch.latitude), Number(context.branch.longitude), Number(otherBranch.latitude), Number(otherBranch.longitude));
+                    const dist = (0, shared_1.calculateHaversineDistance)(Number(context.branch.latitude), Number(context.branch.longitude), Number(otherBranch.latitude), Number(otherBranch.longitude));
                     if (dist <= 60) {
                         hasNearbyGrouping = true;
                         break;

@@ -13,6 +13,7 @@ const branch_entity_1 = require("./branch.entity");
 const branch_contact_entity_1 = require("./branch-contact.entity");
 const branch_document_entity_1 = require("./branch-document.entity");
 const branch_service_1 = require("./branch.service");
+const branch_query_service_1 = require("./branch-query.service");
 const branch_controller_1 = require("./branch.controller");
 const client_module_1 = require("../client/client.module");
 const zone_entity_1 = require("../zone/zone.entity");
@@ -35,8 +36,8 @@ exports.BranchModule = BranchModule = __decorate([
             client_module_1.ClientModule,
         ],
         controllers: [branch_controller_1.BranchController],
-        providers: [branch_service_1.BranchService],
-        exports: [branch_service_1.BranchService],
+        providers: [branch_service_1.BranchService, branch_query_service_1.BranchQueryService],
+        exports: [branch_service_1.BranchService, branch_query_service_1.BranchQueryService],
     })
 ], BranchModule);
 //# sourceMappingURL=branch.module.js.map

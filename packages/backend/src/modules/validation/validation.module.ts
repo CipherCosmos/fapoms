@@ -3,11 +3,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ValidationService } from './validation.service';
 import { ValidationController } from './validation.controller';
 import { ValidationCaseEntity } from './validation-case.entity';
-import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ProjectModule } from '../project/project.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ValidationCaseEntity, ProjectBranchEntity]),
+    TypeOrmModule.forFeature([ValidationCaseEntity]),
+    ProjectModule,
   ],
   controllers: [ValidationController],
   providers: [ValidationService],
