@@ -10,6 +10,7 @@ const shared_1 = require("@fapoms/shared");
 const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 describe('ValidationService', () => {
     let service;
     let validationCaseRepo;
@@ -38,6 +39,10 @@ describe('ValidationService', () => {
     const mockDomainEventPublisher = {
         publish: jest.fn(),
     };
+    const mockWorkflowEngine = {
+        registerWorkflow: jest.fn(),
+        executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
@@ -61,6 +66,10 @@ describe('ValidationService', () => {
                 {
                     provide: domain_event_publisher_1.DomainEventPublisher,
                     useValue: mockDomainEventPublisher,
+                },
+                {
+                    provide: workflow_engine_1.WorkflowEngine,
+                    useValue: mockWorkflowEngine,
                 },
             ],
         }).compile();

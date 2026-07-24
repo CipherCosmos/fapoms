@@ -120,6 +120,7 @@ export class ValidationService implements OnModuleInit {
     remarks?: string,
     notes?: string,
     ocrResult?: any,
+    role = SystemRole.SUPER_ADMINISTRATOR,
   ): Promise<{ saved: ValidationCaseEntity; event: any }> {
     const validationCase = await this.findOne(id);
     const prevStatus = validationCase.status;
@@ -127,33 +128,49 @@ export class ValidationService implements OnModuleInit {
     let event: any;
     if (targetStatus === ValidationStatus.APPROVED) {
       event = ValidationStateMachine.approveValidation(validationCase, userId, remarks, notes, ocrResult);
-      await this.projectService.completeBranchValidation(validationCase.projectBranch.id, userId);
     } else if (targetStatus === ValidationStatus.SUBMITTED) {
       event = ValidationStateMachine.submitValidation(validationCase, userId, remarks, notes, ocrResult);
-      await this.projectService.closeBranchProject(validationCase.projectBranch.id, userId);
     } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
       event = ValidationStateMachine.requestCorrection(validationCase, userId, remarks, notes, ocrResult);
-      await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
     } else {
       throw new BadRequestException(`Invalid validation status: ${targetStatus}`);
     }
 
-    validationCase.updatedBy = userId;
-
-    const saved = await this.validationCaseRepository.save(validationCase);
-
-    await this.auditService.recordEvent({
-      category: EventCategory.WORKFLOW,
-      eventType: `VALIDATION_${targetStatus}`,
-      entityType: 'VALIDATION',
-      entityId: saved.id,
-      previousState: prevStatus,
-      newState: targetStatus,
+    return this.workflowEngine.executeCommand(
+      'validation',
+      validationCase.id,
+      `${targetStatus}_Command`,
+      prevStatus,
+      targetStatus,
       userId,
-      remarks: remarks ?? `Transitioned validation case to ${targetStatus}`,
-    });
+      role,
+      [],
+      async () => {
+        if (targetStatus === ValidationStatus.APPROVED) {
+          await this.projectService.completeBranchValidation(validationCase.projectBranch.id, userId);
+        } else if (targetStatus === ValidationStatus.SUBMITTED) {
+          await this.projectService.closeBranchProject(validationCase.projectBranch.id, userId);
+        } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
+          await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
+        }
 
-    return { saved, event };
+        validationCase.updatedBy = userId;
+        const saved = await this.validationCaseRepository.save(validationCase);
+
+        await this.auditService.recordEvent({
+          category: EventCategory.WORKFLOW,
+          eventType: `VALIDATION_${targetStatus}`,
+          entityType: 'VALIDATION',
+          entityId: saved.id,
+          previousState: prevStatus,
+          newState: targetStatus,
+          userId,
+          remarks: remarks ?? `Transitioned validation case to ${targetStatus}`,
+        });
+
+        return { saved, event };
+      }
+    );
   }
 
   async transition(

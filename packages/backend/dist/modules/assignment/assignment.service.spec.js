@@ -105,6 +105,29 @@ describe('AssignmentService', () => {
                 ctx.payload.assignment.projectBranch.status = 'CLOSED';
             }
         }),
+        executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => {
+            const mockCtx = {
+                userId: uid,
+                payload: {
+                    assignment: {
+                        id,
+                        status: from,
+                        proposedFee: 1000,
+                        projectBranch: {
+                            id: 'pb-1',
+                            status: 'PLANNING',
+                            branch: { state: 'Karnataka' }
+                        }
+                    }
+                }
+            };
+            try {
+                await mockWorkflowEngine.executeTransition(key, id, from, to, mockCtx);
+            }
+            catch (err) {
+            }
+            return action();
+        }),
     };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({

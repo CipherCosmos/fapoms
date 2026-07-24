@@ -6,10 +6,13 @@ import { ScheduleEntity } from './schedule.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { HolidayModule } from '../holiday/holiday.module';
 
+import { AssignmentModule } from '../assignment/assignment.module';
+
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ScheduleEntity, AssignmentEntity]),
+    TypeOrmModule.forFeature([ScheduleEntity]),
     HolidayModule,
+    AssignmentModule,
   ],
   controllers: [SchedulingController],
   providers: [SchedulingService],

@@ -4,7 +4,7 @@ export declare class BranchQueryService {
     private readonly branchRepository;
     constructor(branchRepository: Repository<BranchEntity>);
     findOne(id: string): Promise<BranchEntity>;
-    findAll(page?: number, limit?: number, clientId?: string): Promise<{
+    findAll(page?: number, limit?: number, clientId?: string, region?: string, zoneId?: string): Promise<{
         branches: BranchEntity[];
         total: number;
     }>;

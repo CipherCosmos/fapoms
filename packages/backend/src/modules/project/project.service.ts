@@ -12,6 +12,7 @@ import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
 import { BranchService } from '../branch/branch.service';
+import { ProjectQueryService } from './project-query.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
@@ -140,6 +141,7 @@ export class ProjectService implements OnModuleInit {
      private readonly auditService: AuditService,
      private readonly workflowEngine: WorkflowEngine,
      private readonly eventPublisher: DomainEventPublisher,
+     private readonly projectQueryService: ProjectQueryService,
    ) {}
 
   onModuleInit() {
@@ -208,26 +210,11 @@ export class ProjectService implements OnModuleInit {
   }
 
   async findAll(page = 1, limit = 50): Promise<{ projects: ProjectEntity[]; total: number }> {
-    const [projects, total] = await this.projectRepository.findAndCount({
-      where: { isActive: true },
-      relations: ['client'],
-      order: { createdAt: 'DESC' },
-      take: limit,
-      skip: (page - 1) * limit,
-    });
-
-    return { projects, total };
+    return this.projectQueryService.findAll(page, limit);
   }
 
   async findOne(id: string): Promise<ProjectEntity> {
-    const project = await this.projectRepository.findOne({
-      where: { id, isActive: true },
-      relations: ['client'],
-    });
-    if (!project) {
-      throw new NotFoundException(`Project ${id} not found.`);
-    }
-    return project;
+    return this.projectQueryService.findOne(id);
   }
 
   async update(id: string, dto: CreateProjectDto, userId: string): Promise<ProjectEntity> {
@@ -300,10 +287,7 @@ export class ProjectService implements OnModuleInit {
   }
 
   async findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]> {
-    return this.projectBranchRepository.find({
-      where: { projectId, isActive: true },
-      relations: ['branch'],
-    });
+    return this.projectQueryService.findProjectBranches(projectId);
   }
 
   async associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]> {

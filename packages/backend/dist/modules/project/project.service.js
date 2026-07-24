@@ -20,6 +20,7 @@ const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
 const project_state_machine_1 = require("./project.state-machine");
 const branch_service_1 = require("../branch/branch.service");
+const project_query_service_1 = require("./project-query.service");
 const branch_query_service_1 = require("../branch/branch-query.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
@@ -114,7 +115,8 @@ let ProjectService = class ProjectService {
     auditService;
     workflowEngine;
     eventPublisher;
-    constructor(projectRepository, projectBranchRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher) {
+    projectQueryService;
+    constructor(projectRepository, projectBranchRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
         this.projectRepository = projectRepository;
         this.projectBranchRepository = projectBranchRepository;
         this.branchQueryService = branchQueryService;
@@ -122,6 +124,7 @@ let ProjectService = class ProjectService {
         this.auditService = auditService;
         this.workflowEngine = workflowEngine;
         this.eventPublisher = eventPublisher;
+        this.projectQueryService = projectQueryService;
     }
     onModuleInit() {
         this.workflowEngine.registerWorkflow('project', [
@@ -184,24 +187,10 @@ let ProjectService = class ProjectService {
         return saved;
     }
     async findAll(page = 1, limit = 50) {
-        const [projects, total] = await this.projectRepository.findAndCount({
-            where: { isActive: true },
-            relations: ['client'],
-            order: { createdAt: 'DESC' },
-            take: limit,
-            skip: (page - 1) * limit,
-        });
-        return { projects, total };
+        return this.projectQueryService.findAll(page, limit);
     }
     async findOne(id) {
-        const project = await this.projectRepository.findOne({
-            where: { id, isActive: true },
-            relations: ['client'],
-        });
-        if (!project) {
-            throw new common_1.NotFoundException(`Project ${id} not found.`);
-        }
-        return project;
+        return this.projectQueryService.findOne(id);
     }
     async update(id, dto, userId) {
         const project = await this.findOne(id);
@@ -282,10 +271,7 @@ let ProjectService = class ProjectService {
         });
     }
     async findProjectBranches(projectId) {
-        return this.projectBranchRepository.find({
-            where: { projectId, isActive: true },
-            relations: ['branch'],
-        });
+        return this.projectQueryService.findProjectBranches(projectId);
     }
     async associateBranches(projectId, branchIds, userId) {
         const project = await this.findOne(projectId);
@@ -576,6 +562,7 @@ exports.ProjectService = ProjectService = __decorate([
         branch_service_1.BranchService,
         audit_service_1.AuditService,
         workflow_engine_1.WorkflowEngine,
-        domain_event_publisher_1.DomainEventPublisher])
+        domain_event_publisher_1.DomainEventPublisher,
+        project_query_service_1.ProjectQueryService])
 ], ProjectService);
 //# sourceMappingURL=project.service.js.map

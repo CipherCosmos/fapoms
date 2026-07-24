@@ -12,6 +12,7 @@ import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 
 describe('AssayerService', () => {
@@ -22,6 +23,7 @@ describe('AssayerService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     findAndCount: jest.fn(),
+    find: jest.fn(),
   };
 
   const mockCommercialRepo = {
@@ -29,14 +31,12 @@ describe('AssayerService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
-    findAndCount: jest.fn(),
   };
 
   const mockWorkforceRepo = {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
-    findAndCount: jest.fn(),
     find: jest.fn(),
   };
 
@@ -77,6 +77,11 @@ describe('AssayerService', () => {
     publish: jest.fn(),
   };
 
+  const mockWorkflowEngine = {
+    registerWorkflow: jest.fn(),
+    executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
+  };
+
   function setupModule() {
     return Test.createTestingModule({
       providers: [
@@ -90,6 +95,7 @@ describe('AssayerService', () => {
         { provide: getRepositoryToken(AssayerActivityEntity), useValue: mockActivityRepo },
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
+        { provide: WorkflowEngine, useValue: mockWorkflowEngine },
       ],
     }).compile();
   }

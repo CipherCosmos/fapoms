@@ -13,6 +13,7 @@ const assayer_remark_entity_1 = require("./assayer-remark.entity");
 const assayer_activity_entity_1 = require("./assayer-activity.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
 describe('AssayerService', () => {
     let service;
@@ -21,19 +22,18 @@ describe('AssayerService', () => {
         save: jest.fn(),
         findOne: jest.fn(),
         findAndCount: jest.fn(),
+        find: jest.fn(),
     };
     const mockCommercialRepo = {
         create: jest.fn(),
         save: jest.fn(),
         findOne: jest.fn(),
         find: jest.fn(),
-        findAndCount: jest.fn(),
     };
     const mockWorkforceRepo = {
         create: jest.fn(),
         save: jest.fn(),
         findOne: jest.fn(),
-        findAndCount: jest.fn(),
         find: jest.fn(),
     };
     const mockGovDocRepo = {
@@ -67,6 +67,10 @@ describe('AssayerService', () => {
     const mockDomainEventPublisher = {
         publish: jest.fn(),
     };
+    const mockWorkflowEngine = {
+        registerWorkflow: jest.fn(),
+        executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
+    };
     function setupModule() {
         return testing_1.Test.createTestingModule({
             providers: [
@@ -80,6 +84,7 @@ describe('AssayerService', () => {
                 { provide: (0, typeorm_1.getRepositoryToken)(assayer_activity_entity_1.AssayerActivityEntity), useValue: mockActivityRepo },
                 { provide: audit_service_1.AuditService, useValue: mockAuditService },
                 { provide: domain_event_publisher_1.DomainEventPublisher, useValue: mockDomainEventPublisher },
+                { provide: workflow_engine_1.WorkflowEngine, useValue: mockWorkflowEngine },
             ],
         }).compile();
     }

@@ -26,6 +26,7 @@ const assayer_activity_entity_1 = require("./assayer-activity.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const assayer_state_machine_1 = require("./assayer.state-machine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
 async function geocodeAddress(address, city, district, state) {
     const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -86,7 +87,8 @@ let AssayerService = class AssayerService {
     activityRepository;
     auditService;
     eventPublisher;
-    constructor(assayerRepository, commercialRepository, workforceAttributeRepository, govDocRepository, assayerDocRepository, remarkRepository, activityRepository, auditService, eventPublisher) {
+    workflowEngine;
+    constructor(assayerRepository, commercialRepository, workforceAttributeRepository, govDocRepository, assayerDocRepository, remarkRepository, activityRepository, auditService, eventPublisher, workflowEngine) {
         this.assayerRepository = assayerRepository;
         this.commercialRepository = commercialRepository;
         this.workforceAttributeRepository = workforceAttributeRepository;
@@ -96,6 +98,30 @@ let AssayerService = class AssayerService {
         this.activityRepository = activityRepository;
         this.auditService = auditService;
         this.eventPublisher = eventPublisher;
+        this.workflowEngine = workflowEngine;
+    }
+    onModuleInit() {
+        this.workflowEngine.registerWorkflow('assayer', [
+            { from: [shared_1.AssayerLifecycleStatus.INVITED], to: shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION },
+            { from: [shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION },
+            { from: [shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: shared_1.AssayerLifecycleStatus.TRAINING },
+            { from: [shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.TRAINING], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.TRAINING], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.ON_LEAVE },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.SUSPENDED },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.RESIGNED },
+            { from: [shared_1.AssayerLifecycleStatus.ON_LEAVE], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.ON_LEAVE], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.SUSPENDED], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.SUSPENDED], to: shared_1.AssayerLifecycleStatus.TERMINATED },
+            { from: [shared_1.AssayerLifecycleStatus.INACTIVE], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.INACTIVE], to: shared_1.AssayerLifecycleStatus.ARCHIVED },
+            { from: [shared_1.AssayerLifecycleStatus.RESIGNED], to: shared_1.AssayerLifecycleStatus.ARCHIVED },
+            { from: [shared_1.AssayerLifecycleStatus.TERMINATED], to: shared_1.AssayerLifecycleStatus.ARCHIVED },
+        ]);
     }
     async findAll(page = 1, limit = 50) {
         const [assayers, total] = await this.assayerRepository.findAndCount({
@@ -249,7 +275,7 @@ let AssayerService = class AssayerService {
             throw new common_1.BadRequestException(`Invalid target status: ${targetStatus}`);
         }
     }
-    async doTransitionLifecycle(id, targetStatus, userId, reason) {
+    async doTransitionLifecycle(id, targetStatus, userId, reason, role = shared_1.SystemRole.SUPER_ADMINISTRATOR) {
         const assayer = await this.findOne(id);
         const currentStatus = assayer.lifecycleStatus;
         let event;
@@ -286,19 +312,21 @@ let AssayerService = class AssayerService {
         else {
             throw new common_1.BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
         }
-        const saved = await this.assayerRepository.save(assayer);
-        await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
-        await this.auditService.recordEvent({
-            category: shared_1.EventCategory.OPERATIONAL,
-            eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
-            entityType: 'ASSAYER',
-            entityId: saved.id,
-            previousState: currentStatus,
-            newState: targetStatus,
-            userId,
-            remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+        return this.workflowEngine.executeCommand('assayer', assayer.id, `${targetStatus}_Command`, currentStatus, targetStatus, userId, role, [], async () => {
+            const saved = await this.assayerRepository.save(assayer);
+            await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.OPERATIONAL,
+                eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
+                entityType: 'ASSAYER',
+                entityId: saved.id,
+                previousState: currentStatus,
+                newState: targetStatus,
+                userId,
+                remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+            });
+            return { saved, event };
         });
-        return { saved, event };
     }
     async verifyDocuments(id, userId, reason) {
         const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION, userId, reason);
@@ -839,6 +867,7 @@ exports.AssayerService = AssayerService = __decorate([
         typeorm_2.Repository,
         typeorm_2.Repository,
         audit_service_1.AuditService,
-        domain_event_publisher_1.DomainEventPublisher])
+        domain_event_publisher_1.DomainEventPublisher,
+        workflow_engine_1.WorkflowEngine])
 ], AssayerService);
 //# sourceMappingURL=assayer.service.js.map

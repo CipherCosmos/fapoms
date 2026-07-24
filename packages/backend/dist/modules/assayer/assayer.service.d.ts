@@ -1,3 +1,4 @@
+import { OnModuleInit } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
@@ -8,6 +9,7 @@ import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 export interface CreateAssayerDto {
     assayerCode: string;
     employeeId?: string;
@@ -157,7 +159,7 @@ export interface UpdateAssayerDocumentDto {
     mimeType?: string;
     remarks?: string;
 }
-export declare class AssayerService {
+export declare class AssayerService implements OnModuleInit {
     private readonly assayerRepository;
     private readonly commercialRepository;
     private readonly workforceAttributeRepository;
@@ -167,7 +169,9 @@ export declare class AssayerService {
     private readonly activityRepository;
     private readonly auditService;
     private readonly eventPublisher;
-    constructor(assayerRepository: Repository<AssayerEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, workforceAttributeRepository: Repository<WorkforceAttributeEntity>, govDocRepository: Repository<AssayerGovernmentDocumentEntity>, assayerDocRepository: Repository<AssayerDocumentEntity>, remarkRepository: Repository<AssayerRemarkEntity>, activityRepository: Repository<AssayerActivityEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
+    private readonly workflowEngine;
+    constructor(assayerRepository: Repository<AssayerEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, workforceAttributeRepository: Repository<WorkforceAttributeEntity>, govDocRepository: Repository<AssayerGovernmentDocumentEntity>, assayerDocRepository: Repository<AssayerDocumentEntity>, remarkRepository: Repository<AssayerRemarkEntity>, activityRepository: Repository<AssayerActivityEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher, workflowEngine: WorkflowEngine);
+    onModuleInit(): void;
     findAll(page?: number, limit?: number): Promise<{
         assayers: AssayerEntity[];
         total: number;

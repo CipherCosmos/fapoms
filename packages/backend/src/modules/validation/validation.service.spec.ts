@@ -9,6 +9,7 @@ import { ValidationStatus } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 
 describe('ValidationService', () => {
   let service: ValidationService;
@@ -45,6 +46,11 @@ describe('ValidationService', () => {
     publish: jest.fn(),
   };
 
+  const mockWorkflowEngine = {
+    registerWorkflow: jest.fn(),
+    executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -68,6 +74,10 @@ describe('ValidationService', () => {
         {
           provide: DomainEventPublisher,
           useValue: mockDomainEventPublisher,
+        },
+        {
+          provide: WorkflowEngine,
+          useValue: mockWorkflowEngine,
         },
       ],
     }).compile();

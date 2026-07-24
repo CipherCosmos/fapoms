@@ -25,14 +25,16 @@ export class BranchQueryService {
     page = 1,
     limit = 50,
     clientId?: string,
+    region?: string,
+    zoneId?: string,
   ): Promise<{ branches: BranchEntity[]; total: number }> {
     const query = this.branchRepository.createQueryBuilder('branch')
       .leftJoinAndSelect('branch.contacts', 'contacts')
       .where('branch.is_active = :isActive', { isActive: true });
 
-    if (clientId) {
-      query.andWhere('branch.client_id = :clientId', { clientId });
-    }
+    if (clientId) query.andWhere('branch.client_id = :clientId', { clientId });
+    if (region) query.andWhere('branch.region = :region', { region });
+    if (zoneId) query.andWhere('branch.zone_id = :zoneId', { zoneId });
 
     const [branches, total] = await query
       .orderBy('branch.name', 'ASC')

@@ -12,6 +12,7 @@ const shared_1 = require("@fapoms/shared");
 const branch_service_1 = require("../branch/branch.service");
 const branch_query_service_1 = require("../branch/branch-query.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const project_query_service_1 = require("./project-query.service");
 describe('ProjectService', () => {
     let service;
     let projectRepo;
@@ -39,12 +40,23 @@ describe('ProjectService', () => {
         findOne: mockBranchRepo.findOne,
         findOneByCode: jest.fn(),
     };
+    const mockProjectQueryService = {
+        findOne: jest.fn().mockImplementation((id) => {
+            if (id === 'non-existent-id' || id === 'p-missing') {
+                throw new common_1.NotFoundException(`Project ${id} not found.`);
+            }
+            return Promise.resolve({ id, status: shared_1.ProjectStatus.DRAFT, name: 'Project 1' });
+        }),
+        findAll: jest.fn().mockResolvedValue({ projects: [], total: 0 }),
+        findProjectBranches: jest.fn().mockResolvedValue([]),
+    };
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
     const mockWorkflowEngine = {
         registerWorkflow: jest.fn(),
         executeTransition: jest.fn(),
+        executeCommand: jest.fn().mockImplementation((key, id, cmd, from, to, uid, role, roles, action) => action()),
     };
     const mockDomainEventPublisher = {
         publish: jest.fn(),
@@ -80,6 +92,10 @@ describe('ProjectService', () => {
                 {
                     provide: domain_event_publisher_1.DomainEventPublisher,
                     useValue: mockDomainEventPublisher,
+                },
+                {
+                    provide: project_query_service_1.ProjectQueryService,
+                    useValue: mockProjectQueryService,
                 },
             ],
         }).compile();

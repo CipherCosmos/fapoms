@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual } from 'typeorm';
 import { AssayerEntity } from './assayer.entity';
@@ -11,7 +11,8 @@ import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, AssayerLifecycleStatus, AssignmentStatus } from '@fapoms/shared';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { EventCategory, AssayerLifecycleStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
   const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -202,7 +203,7 @@ export interface UpdateAssayerDocumentDto {
 }
 
 @Injectable()
-export class AssayerService {
+export class AssayerService implements OnModuleInit {
   constructor(
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
@@ -220,7 +221,32 @@ export class AssayerService {
     private readonly activityRepository: Repository<AssayerActivityEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly workflowEngine: WorkflowEngine,
   ) {}
+
+  onModuleInit() {
+    this.workflowEngine.registerWorkflow('assayer', [
+      { from: [AssayerLifecycleStatus.INVITED], to: AssayerLifecycleStatus.DOCUMENT_VERIFICATION },
+      { from: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: AssayerLifecycleStatus.BACKGROUND_VERIFICATION },
+      { from: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: AssayerLifecycleStatus.TRAINING },
+      { from: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.TRAINING], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.TRAINING], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.ON_LEAVE },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.SUSPENDED },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.RESIGNED },
+      { from: [AssayerLifecycleStatus.ON_LEAVE], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.ON_LEAVE], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.SUSPENDED], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.SUSPENDED], to: AssayerLifecycleStatus.TERMINATED },
+      { from: [AssayerLifecycleStatus.INACTIVE], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.INACTIVE], to: AssayerLifecycleStatus.ARCHIVED },
+      { from: [AssayerLifecycleStatus.RESIGNED], to: AssayerLifecycleStatus.ARCHIVED },
+      { from: [AssayerLifecycleStatus.TERMINATED], to: AssayerLifecycleStatus.ARCHIVED },
+    ]);
+  }
 
   async findAll(page = 1, limit = 50): Promise<{ assayers: AssayerEntity[]; total: number }> {
     const [assayers, total] = await this.assayerRepository.findAndCount({
@@ -374,7 +400,13 @@ export class AssayerService {
     }
   }
 
-  private async doTransitionLifecycle(id: string, targetStatus: AssayerLifecycleStatus, userId: string, reason?: string): Promise<{ saved: AssayerEntity; event: any }> {
+  private async doTransitionLifecycle(
+    id: string,
+    targetStatus: AssayerLifecycleStatus,
+    userId: string,
+    reason?: string,
+    role = SystemRole.SUPER_ADMINISTRATOR,
+  ): Promise<{ saved: AssayerEntity; event: any }> {
     const assayer = await this.findOne(id);
     const currentStatus = assayer.lifecycleStatus;
 
@@ -403,19 +435,31 @@ export class AssayerService {
       throw new BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
     }
 
-    const saved = await this.assayerRepository.save(assayer);
-    await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
-      entityType: 'ASSAYER',
-      entityId: saved.id,
-      previousState: currentStatus,
-      newState: targetStatus,
+    return this.workflowEngine.executeCommand(
+      'assayer',
+      assayer.id,
+      `${targetStatus}_Command`,
+      currentStatus,
+      targetStatus,
       userId,
-      remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
-    });
-    return { saved, event };
+      role,
+      [],
+      async () => {
+        const saved = await this.assayerRepository.save(assayer);
+        await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+        await this.auditService.recordEvent({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
+          entityType: 'ASSAYER',
+          entityId: saved.id,
+          previousState: currentStatus,
+          newState: targetStatus,
+          userId,
+          remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+        });
+        return { saved, event };
+      }
+    );
   }
 
   async verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity> {

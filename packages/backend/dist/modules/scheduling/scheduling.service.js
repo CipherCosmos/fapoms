@@ -17,26 +17,23 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const schedule_entity_1 = require("./schedule.entity");
-const assignment_entity_1 = require("../assignment/assignment.entity");
+const assignment_service_1 = require("../assignment/assignment.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
 let SchedulingService = class SchedulingService {
     scheduleRepository;
-    assignmentRepository;
+    assignmentService;
     holidayService;
     auditService;
-    constructor(scheduleRepository, assignmentRepository, holidayService, auditService) {
+    constructor(scheduleRepository, assignmentService, holidayService, auditService) {
         this.scheduleRepository = scheduleRepository;
-        this.assignmentRepository = assignmentRepository;
+        this.assignmentService = assignmentService;
         this.holidayService = holidayService;
         this.auditService = auditService;
     }
     async create(dto, userId) {
-        const assignment = await this.assignmentRepository.findOne({
-            where: { id: dto.assignmentId, isActive: true },
-            relations: ['projectBranch', 'projectBranch.branch', 'project', 'assayer'],
-        });
+        const assignment = await this.assignmentService.findOne(dto.assignmentId);
         if (!assignment) {
             throw new common_1.NotFoundException(`Assignment ${dto.assignmentId} not found.`);
         }
@@ -96,11 +93,7 @@ let SchedulingService = class SchedulingService {
             updatedBy: userId,
         });
         const saved = await this.scheduleRepository.save(schedule);
-        assignment.status = shared_1.AssignmentStatus.SCHEDULED;
-        assignment.scheduledDate = scheduledDateObj;
-        assignment.projectBranch.status = shared_1.ProjectBranchStatus.SCHEDULED;
-        assignment.projectBranch.scheduledDate = scheduledDateObj;
-        await this.assignmentRepository.save(assignment);
+        await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate);
         await this.auditService.recordEvent({
             category: shared_1.EventCategory.OPERATIONAL,
             eventType: 'SCHEDULE_CONFIRMED',
@@ -143,11 +136,7 @@ let SchedulingService = class SchedulingService {
         if (newScheduledDate) {
             schedule.scheduledDate = new Date(newScheduledDate);
             if (schedule.assignmentId) {
-                const assignment = await this.assignmentRepository.findOne({ where: { id: schedule.assignmentId } });
-                if (assignment) {
-                    assignment.scheduledDate = new Date(newScheduledDate);
-                    await this.assignmentRepository.save(assignment);
-                }
+                await this.assignmentService.scheduleAudit(schedule.assignmentId, userId, newScheduledDate);
             }
         }
         schedule.updatedBy = userId;
@@ -185,9 +174,8 @@ exports.SchedulingService = SchedulingService;
 exports.SchedulingService = SchedulingService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(schedule_entity_1.ScheduleEntity)),
-    __param(1, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        typeorm_2.Repository,
+        assignment_service_1.AssignmentService,
         holiday_service_1.HolidayService,
         audit_service_1.AuditService])
 ], SchedulingService);

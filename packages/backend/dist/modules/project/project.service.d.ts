@@ -3,6 +3,7 @@ import { Repository } from 'typeorm';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 import { BranchService } from '../branch/branch.service';
+import { ProjectQueryService } from './project-query.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
@@ -34,7 +35,8 @@ export declare class ProjectService implements OnModuleInit {
     private readonly auditService;
     private readonly workflowEngine;
     private readonly eventPublisher;
-    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher);
+    private readonly projectQueryService;
+    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
     onModuleInit(): void;
     create(dto: CreateProjectDto, userId: string): Promise<ProjectEntity>;
     findAll(page?: number, limit?: number): Promise<{
