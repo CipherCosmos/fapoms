@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { Map, Flag, CheckCircle, ExternalLink, ShieldAlert } from 'lucide-react';
+import { api } from '../services/api';
 
 interface Branch {
   id: string;
@@ -33,38 +34,31 @@ export const ExecutiveMap: React.FC = () => {
   const loadBranches = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/v1/projects', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
+      const data = await api.request<any[]>('/projects');
+      const allBranches: Branch[] = [];
+      data.forEach((proj: any) => {
+        if (proj.projectBranches) {
+          proj.projectBranches.forEach((pb: any) => {
+            if (pb.branch) {
+              allBranches.push({
+                id: pb.branch.id,
+                name: pb.branch.name,
+                latitude: pb.branch.latitude,
+                longitude: pb.branch.longitude,
+                status: pb.status || 'PLANNING',
+                state: pb.branch.state || 'MH',
+                city: pb.branch.city,
+                branchCode: pb.branch.branchCode,
+                projectId: proj.id,
+                client: proj.client
+              });
+            }
+          });
         }
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        const allBranches: Branch[] = [];
-        data.data.forEach((proj: any) => {
-          if (proj.projectBranches) {
-            proj.projectBranches.forEach((pb: any) => {
-              if (pb.branch) {
-                allBranches.push({
-                  id: pb.branch.id,
-                  name: pb.branch.name,
-                  latitude: pb.branch.latitude,
-                  longitude: pb.branch.longitude,
-                  status: pb.status || 'PLANNING',
-                  state: pb.branch.state || 'MH',
-                  city: pb.branch.city,
-                  branchCode: pb.branch.branchCode,
-                  projectId: proj.id,
-                  client: proj.client
-                });
-              }
-            });
-          }
-        });
-        setBranches(allBranches);
-      }
+      setBranches(allBranches);
     } catch (err) {
-      console.error('Failed to load branches for executive map');
+      console.error('Failed to load branches for executive map', err);
     } finally {
       setIsLoading(false);
     }

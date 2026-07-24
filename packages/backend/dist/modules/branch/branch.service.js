@@ -24,6 +24,7 @@ const client_service_1 = require("../client/client.service");
 const zone_entity_1 = require("../zone/zone.entity");
 const geo_entities_1 = require("../geo/geo.entities");
 const audit_service_1 = require("../../core/audit/audit.service");
+const branch_query_service_1 = require("./branch-query.service");
 const shared_1 = require("@fapoms/shared");
 async function geocodeAddress(address, city, district, state) {
     const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -65,7 +66,8 @@ let BranchService = class BranchService {
     cityRepository;
     clientService;
     auditService;
-    constructor(branchRepository, contactRepository, documentRepository, zoneRepository, stateRepository, districtRepository, cityRepository, clientService, auditService) {
+    branchQueryService;
+    constructor(branchRepository, contactRepository, documentRepository, zoneRepository, stateRepository, districtRepository, cityRepository, clientService, auditService, branchQueryService) {
         this.branchRepository = branchRepository;
         this.contactRepository = contactRepository;
         this.documentRepository = documentRepository;
@@ -75,6 +77,7 @@ let BranchService = class BranchService {
         this.cityRepository = cityRepository;
         this.clientService = clientService;
         this.auditService = auditService;
+        this.branchQueryService = branchQueryService;
     }
     async create(dto, userId) {
         await this.validateGeography(dto.state, dto.district, dto.city);
@@ -141,30 +144,10 @@ let BranchService = class BranchService {
         return saved;
     }
     async findOne(id) {
-        const branch = await this.branchRepository.findOne({
-            where: { id, isActive: true },
-            relations: ['contacts', 'documents'],
-        });
-        if (!branch) {
-            throw new common_1.NotFoundException(`Branch ${id} not found.`);
-        }
-        return branch;
+        return this.branchQueryService.findOne(id);
     }
     async findAll(page = 1, limit = 20, clientId, region, zoneId) {
-        const query = this.branchRepository.createQueryBuilder('branch')
-            .where('branch.is_active = :isActive', { isActive: true });
-        if (clientId)
-            query.andWhere('branch.client_id = :clientId', { clientId });
-        if (region)
-            query.andWhere('branch.region = :region', { region });
-        if (zoneId)
-            query.andWhere('branch.zone_id = :zoneId', { zoneId });
-        const [branches, total] = await query
-            .orderBy('branch.name', 'ASC')
-            .take(limit)
-            .skip((page - 1) * limit)
-            .getManyAndCount();
-        return { branches, total };
+        return this.branchQueryService.findAll(page, limit, clientId, region, zoneId);
     }
     async update(id, dto, userId) {
         const branch = await this.findOne(id);
@@ -487,6 +470,27 @@ let BranchService = class BranchService {
             throw new common_1.BadRequestException(`City '${city}' not found under district '${district}'.`);
         }
     }
+    async registerImportedBranch(dto, userId) {
+        const branch = this.branchRepository.create({
+            ...dto,
+            createdBy: userId,
+            updatedBy: userId,
+        });
+        return this.branchRepository.save(branch);
+    }
+    async findOrCreateZone(name, clientId, states) {
+        let zone = await this.zoneRepository.findOne({ where: { name, clientId, isActive: true } });
+        if (!zone) {
+            zone = this.zoneRepository.create({
+                name,
+                clientId,
+                states,
+                districts: []
+            });
+            zone = await this.zoneRepository.save(zone);
+        }
+        return zone;
+    }
 };
 exports.BranchService = BranchService;
 exports.BranchService = BranchService = __decorate([
@@ -506,6 +510,7 @@ exports.BranchService = BranchService = __decorate([
         typeorm_2.Repository,
         typeorm_2.Repository,
         client_service_1.ClientService,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        branch_query_service_1.BranchQueryService])
 ], BranchService);
 //# sourceMappingURL=branch.service.js.map

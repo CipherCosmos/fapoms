@@ -1,29 +1,42 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
-import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ProjectService } from '../project/project.service';
+import { ProjectQueryService } from '../project/project-query.service';
+import { ValidationStateMachine } from './validation.state-machine';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory, ValidationStatus, ProjectBranchStatus, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { EventCategory, ValidationStatus, ProjectBranchStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 
 export interface CreateValidationCaseDto {
   projectBranchId: string;
 }
 
 @Injectable()
-export class ValidationService {
+export class ValidationService implements OnModuleInit {
   constructor(
     @InjectRepository(ValidationCaseEntity)
     private readonly validationCaseRepository: Repository<ValidationCaseEntity>,
-    @InjectRepository(ProjectBranchEntity)
-    private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+    private readonly projectQueryService: ProjectQueryService,
+    private readonly projectService: ProjectService,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
+    private readonly workflowEngine: WorkflowEngine,
   ) {}
 
+  onModuleInit() {
+    this.workflowEngine.registerWorkflow('validation', [
+      { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.APPROVED },
+      { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.CORRECTION_REQUIRED },
+      { from: [ValidationStatus.CORRECTION_REQUIRED], to: ValidationStatus.HUMAN_REVIEW },
+      { from: [ValidationStatus.APPROVED], to: ValidationStatus.SUBMITTED },
+    ]);
+  }
+
   async create(dto: CreateValidationCaseDto, userId: string): Promise<ValidationCaseEntity> {
-    const projectBranch = await this.projectBranchRepository.findOne({
-      where: { id: dto.projectBranchId, isActive: true },
-    });
+    const projectBranch = await this.projectQueryService.findProjectBranchById(dto.projectBranchId);
 
     if (!projectBranch) {
       throw new NotFoundException(`ProjectBranch ${dto.projectBranchId} not found.`);
@@ -100,42 +113,100 @@ export class ValidationService {
     return saved;
   }
 
-  async transition(id: string, targetStatus: ValidationStatus, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity> {
+  private async executeValidationTransition(
+    id: string,
+    targetStatus: ValidationStatus,
+    userId: string,
+    remarks?: string,
+    notes?: string,
+    ocrResult?: any,
+    role = SystemRole.SUPER_ADMINISTRATOR,
+  ): Promise<{ saved: ValidationCaseEntity; event: any }> {
     const validationCase = await this.findOne(id);
     const prevStatus = validationCase.status;
 
-    if (!isValidTransition(VALIDATION_TRANSITIONS, prevStatus, targetStatus)) {
-      throw new BadRequestException(`Invalid Transition: Cannot transition validation case from ${prevStatus} to ${targetStatus}.`);
-    }
-
-    validationCase.status = targetStatus;
-    if (remarks) validationCase.remarks = remarks;
-    if (notes) validationCase.correctionNotes = notes;
-    if (ocrResult) validationCase.ocrResult = ocrResult;
-    validationCase.updatedBy = userId;
-
+    let event: any;
     if (targetStatus === ValidationStatus.APPROVED) {
-      validationCase.reviewedAt = new Date();
-      validationCase.projectBranch.status = ProjectBranchStatus.VALIDATION_COMPLETED;
-      await this.projectBranchRepository.save(validationCase.projectBranch);
+      event = ValidationStateMachine.approveValidation(validationCase, userId, remarks, notes, ocrResult);
     } else if (targetStatus === ValidationStatus.SUBMITTED) {
-      validationCase.projectBranch.status = ProjectBranchStatus.CLOSED;
-      await this.projectBranchRepository.save(validationCase.projectBranch);
+      event = ValidationStateMachine.submitValidation(validationCase, userId, remarks, notes, ocrResult);
+    } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
+      event = ValidationStateMachine.requestCorrection(validationCase, userId, remarks, notes, ocrResult);
+    } else {
+      throw new BadRequestException(`Invalid validation status: ${targetStatus}`);
     }
 
-    const saved = await this.validationCaseRepository.save(validationCase);
-
-    await this.auditService.recordEvent({
-      category: EventCategory.WORKFLOW,
-      eventType: `VALIDATION_${targetStatus}`,
-      entityType: 'VALIDATION',
-      entityId: saved.id,
-      previousState: prevStatus,
-      newState: targetStatus,
+    return this.workflowEngine.executeCommand(
+      'validation',
+      validationCase.id,
+      `${targetStatus}_Command`,
+      prevStatus,
+      targetStatus,
       userId,
-      remarks: remarks ?? `Transitioned validation case to ${targetStatus}`,
-    });
+      role,
+      [],
+      async () => {
+        if (targetStatus === ValidationStatus.APPROVED) {
+          await this.projectService.completeBranchValidation(validationCase.projectBranch.id, userId);
+        } else if (targetStatus === ValidationStatus.SUBMITTED) {
+          await this.projectService.closeBranchProject(validationCase.projectBranch.id, userId);
+        } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
+          await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
+        }
 
+        validationCase.updatedBy = userId;
+        const saved = await this.validationCaseRepository.save(validationCase);
+
+        await this.auditService.recordEvent({
+          category: EventCategory.WORKFLOW,
+          eventType: `VALIDATION_${targetStatus}`,
+          entityType: 'VALIDATION',
+          entityId: saved.id,
+          previousState: prevStatus,
+          newState: targetStatus,
+          userId,
+          remarks: remarks ?? `Transitioned validation case to ${targetStatus}`,
+        });
+
+        return { saved, event };
+      }
+    );
+  }
+
+  async transition(
+    id: string,
+    targetStatus: ValidationStatus,
+    userId: string,
+    remarks?: string,
+    notes?: string,
+    ocrResult?: any,
+  ): Promise<ValidationCaseEntity> {
+    if (targetStatus === ValidationStatus.APPROVED) {
+      return this.approveValidation(id, userId, remarks, notes, ocrResult);
+    } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
+      return this.requestCorrection(id, userId, remarks, notes, ocrResult);
+    } else if (targetStatus === ValidationStatus.SUBMITTED) {
+      return this.submitValidation(id, userId, remarks, notes, ocrResult);
+    } else {
+      throw new BadRequestException(`Invalid validation status transition to ${targetStatus}`);
+    }
+  }
+
+  async approveValidation(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity> {
+    const { saved, event } = await this.executeValidationTransition(id, ValidationStatus.APPROVED, userId, remarks, notes, ocrResult);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async requestCorrection(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity> {
+    const { saved, event } = await this.executeValidationTransition(id, ValidationStatus.CORRECTION_REQUIRED, userId, remarks, notes, ocrResult);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async submitValidation(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity> {
+    const { saved, event } = await this.executeValidationTransition(id, ValidationStatus.SUBMITTED, userId, remarks, notes, ocrResult);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
 }

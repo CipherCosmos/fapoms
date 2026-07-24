@@ -8,6 +8,7 @@ import {
   ArrowRight,
   TrendingUp
 } from 'lucide-react';
+import { api } from '../services/api';
 
 interface DashboardMetrics {
   clients: number;
@@ -26,10 +27,7 @@ interface DashboardMetrics {
 
 interface SlaSummary {
   statusCounts: Record<string, number>;
-  slaCounts: {
-    COMPLIANT: number;
-    BREACHED: number;
-  };
+  slaCounts: Record<string, number>;
 }
 
 export const Dashboard: React.FC = () => {
@@ -46,28 +44,15 @@ export const Dashboard: React.FC = () => {
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const token = localStorage.getItem('fapoms_token');
-      const headers = { 'Authorization': `Bearer ${token}` };
-
-      const [metricsRes, slaRes, projectsRes] = await Promise.all([
-        fetch('/api/v1/system-dashboard/metrics', { headers }),
-        fetch('/api/v1/assignments/dashboard/summary', { headers }),
-        fetch('/api/v1/projects', { headers })
+      const [metricsData, slaData, projectsData] = await Promise.all([
+        api.request<DashboardMetrics>('/system-dashboard/metrics'),
+        api.request<SlaSummary>('/assignments/dashboard/summary'),
+        api.request<any[]>('/projects')
       ]);
 
-      const metricsData = await metricsRes.json();
-      const slaData = await slaRes.json();
-      const projectsData = await projectsRes.json();
-
-      if (metricsRes.ok && metricsData.success) {
-        setMetrics(metricsData.data);
-      }
-      if (slaRes.ok && slaData.success) {
-        setSlaSummary(slaData.data);
-      }
-      if (projectsRes.ok && projectsData.success) {
-        setProjects(projectsData.data || []);
-      }
+      setMetrics(metricsData);
+      setSlaSummary(slaData);
+      setProjects(projectsData || []);
     } catch (err) {
       console.error('Failed to fetch dashboard metrics', err);
     } finally {

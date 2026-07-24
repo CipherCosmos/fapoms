@@ -9,6 +9,7 @@ import { ClientService } from '../client/client.service';
 import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
+import { BranchQueryService } from './branch-query.service';
 import { EventCategory } from '@fapoms/shared';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
@@ -147,6 +148,7 @@ export class BranchService {
     private readonly cityRepository: Repository<GeoCityEntity>,
     private readonly clientService: ClientService,
     private readonly auditService: AuditService,
+    private readonly branchQueryService: BranchQueryService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -224,14 +226,7 @@ export class BranchService {
   }
 
   async findOne(id: string): Promise<BranchEntity> {
-    const branch = await this.branchRepository.findOne({
-      where: { id, isActive: true },
-      relations: ['contacts', 'documents'],
-    });
-    if (!branch) {
-      throw new NotFoundException(`Branch ${id} not found.`);
-    }
-    return branch;
+    return this.branchQueryService.findOne(id);
   }
 
   async findAll(
@@ -241,20 +236,7 @@ export class BranchService {
     region?: string,
     zoneId?: string,
   ): Promise<{ branches: BranchEntity[]; total: number }> {
-    const query = this.branchRepository.createQueryBuilder('branch')
-      .where('branch.is_active = :isActive', { isActive: true });
-
-    if (clientId) query.andWhere('branch.client_id = :clientId', { clientId });
-    if (region) query.andWhere('branch.region = :region', { region });
-    if (zoneId) query.andWhere('branch.zone_id = :zoneId', { zoneId });
-
-    const [branches, total] = await query
-      .orderBy('branch.name', 'ASC')
-      .take(limit)
-      .skip((page - 1) * limit)
-      .getManyAndCount();
-
-    return { branches, total };
+    return this.branchQueryService.findAll(page, limit, clientId, region, zoneId);
   }
 
   async update(id: string, dto: UpdateBranchDto, userId: string): Promise<BranchEntity> {
@@ -616,5 +598,28 @@ export class BranchService {
     if (!cityEntity) {
       throw new BadRequestException(`City '${city}' not found under district '${district}'.`);
     }
+  }
+
+  async registerImportedBranch(dto: Partial<BranchEntity>, userId: string): Promise<BranchEntity> {
+    const branch = this.branchRepository.create({
+      ...dto,
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    return this.branchRepository.save(branch);
+  }
+
+  async findOrCreateZone(name: string, clientId: string, states: string[]): Promise<ZoneEntity> {
+    let zone = await this.zoneRepository.findOne({ where: { name, clientId, isActive: true } });
+    if (!zone) {
+      zone = this.zoneRepository.create({
+        name,
+        clientId,
+        states,
+        districts: []
+      });
+      zone = await this.zoneRepository.save(zone);
+    }
+    return zone;
   }
 }

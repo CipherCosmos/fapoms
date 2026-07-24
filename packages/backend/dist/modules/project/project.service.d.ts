@@ -2,9 +2,13 @@ import { OnModuleInit } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
-import { BranchEntity } from '../branch/branch.entity';
+import { BranchService } from '../branch/branch.service';
+import { ProjectQueryService } from './project-query.service';
+import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { SystemRole } from '@fapoms/shared';
 export interface CreateProjectDto {
     name: string;
     projectNumber: string;
@@ -26,10 +30,13 @@ export interface CreateProjectDto {
 export declare class ProjectService implements OnModuleInit {
     private readonly projectRepository;
     private readonly projectBranchRepository;
-    private readonly branchRepository;
+    private readonly branchQueryService;
+    private readonly branchService;
     private readonly auditService;
     private readonly workflowEngine;
-    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, branchRepository: Repository<BranchEntity>, auditService: AuditService, workflowEngine: WorkflowEngine);
+    private readonly eventPublisher;
+    private readonly projectQueryService;
+    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
     onModuleInit(): void;
     create(dto: CreateProjectDto, userId: string): Promise<ProjectEntity>;
     findAll(page?: number, limit?: number): Promise<{
@@ -43,4 +50,16 @@ export declare class ProjectService implements OnModuleInit {
     associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]>;
     uploadBranchesFromExcel(projectId: string, fileBuffer: Buffer, userId: string): Promise<ProjectBranchEntity[]>;
     removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]>;
+    startProjectPlanning(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    readyProjectForScheduling(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    startProjectExecution(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    startProjectValidation(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    completeProject(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    cancelProject(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    initiateBranchPlanning(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
+    confirmBranchAssignment(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
+    scheduleBranchAudit(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
+    completeBranchAudit(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
+    completeBranchValidation(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
+    closeBranchProject(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
 }

@@ -13,6 +13,8 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { GeoModule } from '../geo/geo.module';
+import { BranchModule } from '../branch/branch.module';
+import { AssayerModule } from '../assayer/assayer.module';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -48,6 +50,8 @@ import {
       ClientEntity,
     ]),
     GeoModule,
+    BranchModule,
+    AssayerModule,
   ],
   controllers: [PlanningController],
   providers: [

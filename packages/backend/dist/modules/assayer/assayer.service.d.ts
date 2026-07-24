@@ -1,3 +1,4 @@
+import { OnModuleInit } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
@@ -7,6 +8,8 @@ import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 export interface CreateAssayerDto {
     assayerCode: string;
     employeeId?: string;
@@ -156,7 +159,7 @@ export interface UpdateAssayerDocumentDto {
     mimeType?: string;
     remarks?: string;
 }
-export declare class AssayerService {
+export declare class AssayerService implements OnModuleInit {
     private readonly assayerRepository;
     private readonly commercialRepository;
     private readonly workforceAttributeRepository;
@@ -165,7 +168,10 @@ export declare class AssayerService {
     private readonly remarkRepository;
     private readonly activityRepository;
     private readonly auditService;
-    constructor(assayerRepository: Repository<AssayerEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, workforceAttributeRepository: Repository<WorkforceAttributeEntity>, govDocRepository: Repository<AssayerGovernmentDocumentEntity>, assayerDocRepository: Repository<AssayerDocumentEntity>, remarkRepository: Repository<AssayerRemarkEntity>, activityRepository: Repository<AssayerActivityEntity>, auditService: AuditService);
+    private readonly eventPublisher;
+    private readonly workflowEngine;
+    constructor(assayerRepository: Repository<AssayerEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, workforceAttributeRepository: Repository<WorkforceAttributeEntity>, govDocRepository: Repository<AssayerGovernmentDocumentEntity>, assayerDocRepository: Repository<AssayerDocumentEntity>, remarkRepository: Repository<AssayerRemarkEntity>, activityRepository: Repository<AssayerActivityEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher, workflowEngine: WorkflowEngine);
+    onModuleInit(): void;
     findAll(page?: number, limit?: number): Promise<{
         assayers: AssayerEntity[];
         total: number;
@@ -175,6 +181,17 @@ export declare class AssayerService {
     update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity>;
     remove(id: string, userId: string): Promise<void>;
     transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    private doTransitionLifecycle;
+    verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    initiateBackgroundCheck(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    startTraining(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    activateAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    putOnLeave(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    suspendAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    deactivateAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    acceptResignation(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    terminateAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    archiveAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
     addGovernmentDocument(assayerId: string, dto: CreateGovernmentDocumentDto, userId: string): Promise<AssayerGovernmentDocumentEntity>;
     updateGovernmentDocument(docId: string, dto: UpdateGovernmentDocumentDto, userId: string): Promise<AssayerGovernmentDocumentEntity>;
     getGovernmentDocuments(assayerId: string): Promise<AssayerGovernmentDocumentEntity[]>;

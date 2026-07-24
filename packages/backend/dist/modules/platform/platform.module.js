@@ -10,18 +10,20 @@ exports.PlatformModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const business_rule_entity_1 = require("./rules/business-rule.entity");
+const workflow_history_entity_1 = require("./workflow/workflow-history.entity");
 const rule_engine_1 = require("./rules/rule.engine");
 const workflow_engine_1 = require("./workflow/workflow.engine");
 const configuration_resolver_1 = require("./configuration/configuration.resolver");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 let PlatformModule = class PlatformModule {
 };
 exports.PlatformModule = PlatformModule;
 exports.PlatformModule = PlatformModule = __decorate([
     (0, common_1.Global)(),
     (0, common_1.Module)({
-        imports: [typeorm_1.TypeOrmModule.forFeature([business_rule_entity_1.BusinessRuleEntity])],
-        providers: [rule_engine_1.RuleEngine, workflow_engine_1.WorkflowEngine, configuration_resolver_1.ConfigurationResolver],
-        exports: [typeorm_1.TypeOrmModule, rule_engine_1.RuleEngine, workflow_engine_1.WorkflowEngine, configuration_resolver_1.ConfigurationResolver],
+        imports: [typeorm_1.TypeOrmModule.forFeature([business_rule_entity_1.BusinessRuleEntity, workflow_history_entity_1.WorkflowHistoryEntity])],
+        providers: [rule_engine_1.RuleEngine, workflow_engine_1.WorkflowEngine, configuration_resolver_1.ConfigurationResolver, domain_event_publisher_1.DomainEventPublisher],
+        exports: [typeorm_1.TypeOrmModule, rule_engine_1.RuleEngine, workflow_engine_1.WorkflowEngine, configuration_resolver_1.ConfigurationResolver, domain_event_publisher_1.DomainEventPublisher],
     })
 ], PlatformModule);
 //# sourceMappingURL=platform.module.js.map

@@ -5,14 +5,14 @@ const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
 const scheduling_service_1 = require("./scheduling.service");
 const schedule_entity_1 = require("./schedule.entity");
-const assignment_entity_1 = require("../assignment/assignment.entity");
+const assignment_service_1 = require("../assignment/assignment.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
 describe('SchedulingService', () => {
     let service;
     let scheduleRepo;
-    let assignmentRepo;
+    let assignmentService;
     let holidayService;
     const mockScheduleRepo = {
         create: jest.fn(),
@@ -20,9 +20,9 @@ describe('SchedulingService', () => {
         findOne: jest.fn(),
         findAndCount: jest.fn(),
     };
-    const mockAssignmentRepo = {
+    const mockAssignmentService = {
         findOne: jest.fn(),
-        save: jest.fn(),
+        scheduleAudit: jest.fn().mockResolvedValue(undefined),
     };
     const mockHolidayService = {
         isHoliday: jest.fn(),
@@ -39,8 +39,8 @@ describe('SchedulingService', () => {
                     useValue: mockScheduleRepo,
                 },
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity),
-                    useValue: mockAssignmentRepo,
+                    provide: assignment_service_1.AssignmentService,
+                    useValue: mockAssignmentService,
                 },
                 {
                     provide: holiday_service_1.HolidayService,
@@ -54,18 +54,18 @@ describe('SchedulingService', () => {
         }).compile();
         service = module.get(scheduling_service_1.SchedulingService);
         scheduleRepo = module.get((0, typeorm_1.getRepositoryToken)(schedule_entity_1.ScheduleEntity));
-        assignmentRepo = module.get((0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity));
+        assignmentService = module.get(assignment_service_1.AssignmentService);
         holidayService = module.get(holiday_service_1.HolidayService);
         jest.clearAllMocks();
     });
     describe('create', () => {
         it('should throw NotFoundException if assignment is missing', async () => {
-            mockAssignmentRepo.findOne.mockResolvedValue(null);
+            mockAssignmentService.findOne.mockResolvedValue(null);
             await expect(service.create({ assignmentId: 'asn-missing', scheduledDate: '2026-08-01' }, 'user-1')).rejects.toThrow(common_1.NotFoundException);
         });
         it('should throw BadRequestException if assignment status is not ACCEPTED', async () => {
             const mockAsn = { id: 'asn-1', status: shared_1.AssignmentStatus.CREATED };
-            mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+            mockAssignmentService.findOne.mockResolvedValue(mockAsn);
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-01' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
         it('should throw BadRequestException if assayer is on leave', async () => {
@@ -76,7 +76,7 @@ describe('SchedulingService', () => {
                     leaves: [{ startDate: '2026-08-01', endDate: '2026-08-05' }],
                 },
             };
-            mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+            mockAssignmentService.findOne.mockResolvedValue(mockAsn);
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
         it('should throw BadRequestException if scheduled date is outside project timeline', async () => {
@@ -89,7 +89,7 @@ describe('SchedulingService', () => {
                     endDate: '2026-08-10',
                 },
             };
-            mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+            mockAssignmentService.findOne.mockResolvedValue(mockAsn);
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
     });

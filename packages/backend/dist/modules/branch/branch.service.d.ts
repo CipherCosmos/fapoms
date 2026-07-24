@@ -6,6 +6,7 @@ import { ClientService } from '../client/client.service';
 import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
+import { BranchQueryService } from './branch-query.service';
 export interface CreateBranchDto {
     branchCode: string;
     solId?: string;
@@ -98,7 +99,8 @@ export declare class BranchService {
     private readonly cityRepository;
     private readonly clientService;
     private readonly auditService;
-    constructor(branchRepository: Repository<BranchEntity>, contactRepository: Repository<BranchContactEntity>, documentRepository: Repository<BranchDocumentEntity>, zoneRepository: Repository<ZoneEntity>, stateRepository: Repository<GeoStateEntity>, districtRepository: Repository<GeoDistrictEntity>, cityRepository: Repository<GeoCityEntity>, clientService: ClientService, auditService: AuditService);
+    private readonly branchQueryService;
+    constructor(branchRepository: Repository<BranchEntity>, contactRepository: Repository<BranchContactEntity>, documentRepository: Repository<BranchDocumentEntity>, zoneRepository: Repository<ZoneEntity>, stateRepository: Repository<GeoStateEntity>, districtRepository: Repository<GeoDistrictEntity>, cityRepository: Repository<GeoCityEntity>, clientService: ClientService, auditService: AuditService, branchQueryService: BranchQueryService);
     create(dto: CreateBranchDto, userId: string): Promise<BranchEntity>;
     findOne(id: string): Promise<BranchEntity>;
     findAll(page?: number, limit?: number, clientId?: string, region?: string, zoneId?: string): Promise<{
@@ -119,4 +121,6 @@ export declare class BranchService {
         errors: string[];
     }>;
     private validateGeography;
+    registerImportedBranch(dto: Partial<BranchEntity>, userId: string): Promise<BranchEntity>;
+    findOrCreateZone(name: string, clientId: string, states: string[]): Promise<ZoneEntity>;
 }

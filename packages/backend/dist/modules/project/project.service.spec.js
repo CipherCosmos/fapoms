@@ -6,10 +6,13 @@ const common_1 = require("@nestjs/common");
 const project_service_1 = require("./project.service");
 const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
-const branch_entity_1 = require("../branch/branch.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
+const branch_service_1 = require("../branch/branch.service");
+const branch_query_service_1 = require("../branch/branch-query.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const project_query_service_1 = require("./project-query.service");
 describe('ProjectService', () => {
     let service;
     let projectRepo;
@@ -29,12 +32,34 @@ describe('ProjectService', () => {
     const mockBranchRepo = {
         findOne: jest.fn(),
     };
+    const mockBranchService = {
+        registerImportedBranch: jest.fn(),
+        findOrCreateZone: jest.fn(),
+    };
+    const mockBranchQueryService = {
+        findOne: mockBranchRepo.findOne,
+        findOneByCode: jest.fn(),
+    };
+    const mockProjectQueryService = {
+        findOne: jest.fn().mockImplementation((id) => {
+            if (id === 'non-existent-id' || id === 'p-missing') {
+                throw new common_1.NotFoundException(`Project ${id} not found.`);
+            }
+            return Promise.resolve({ id, status: shared_1.ProjectStatus.DRAFT, name: 'Project 1' });
+        }),
+        findAll: jest.fn().mockResolvedValue({ projects: [], total: 0 }),
+        findProjectBranches: jest.fn().mockResolvedValue([]),
+    };
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
     const mockWorkflowEngine = {
         registerWorkflow: jest.fn(),
         executeTransition: jest.fn(),
+        executeCommand: jest.fn().mockImplementation((key, id, cmd, from, to, uid, role, roles, action) => action()),
+    };
+    const mockDomainEventPublisher = {
+        publish: jest.fn(),
     };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
@@ -49,8 +74,12 @@ describe('ProjectService', () => {
                     useValue: mockProjectBranchRepo,
                 },
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(branch_entity_1.BranchEntity),
-                    useValue: mockBranchRepo,
+                    provide: branch_query_service_1.BranchQueryService,
+                    useValue: mockBranchQueryService,
+                },
+                {
+                    provide: branch_service_1.BranchService,
+                    useValue: mockBranchService,
                 },
                 {
                     provide: audit_service_1.AuditService,
@@ -59,6 +88,14 @@ describe('ProjectService', () => {
                 {
                     provide: workflow_engine_1.WorkflowEngine,
                     useValue: mockWorkflowEngine,
+                },
+                {
+                    provide: domain_event_publisher_1.DomainEventPublisher,
+                    useValue: mockDomainEventPublisher,
+                },
+                {
+                    provide: project_query_service_1.ProjectQueryService,
+                    useValue: mockProjectQueryService,
                 },
             ],
         }).compile();

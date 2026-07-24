@@ -1,6 +1,6 @@
 import { Repository } from 'typeorm';
 import { ScheduleEntity } from './schedule.entity';
-import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ScheduleStatus } from '@fapoms/shared';
@@ -15,10 +15,10 @@ export interface UpdateScheduleDto {
 }
 export declare class SchedulingService {
     private readonly scheduleRepository;
-    private readonly assignmentRepository;
+    private readonly assignmentService;
     private readonly holidayService;
     private readonly auditService;
-    constructor(scheduleRepository: Repository<ScheduleEntity>, assignmentRepository: Repository<AssignmentEntity>, holidayService: HolidayService, auditService: AuditService);
+    constructor(scheduleRepository: Repository<ScheduleEntity>, assignmentService: AssignmentService, holidayService: HolidayService, auditService: AuditService);
     create(dto: CreateScheduleDto, userId: string): Promise<ScheduleEntity>;
     findOne(id: string): Promise<ScheduleEntity>;
     findAll(page?: number, limit?: number): Promise<{

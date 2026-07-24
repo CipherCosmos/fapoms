@@ -4,14 +4,16 @@ import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ValidationService } from './validation.service';
 import { ValidationCaseEntity } from './validation-case.entity';
-import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { ValidationStatus } from '@fapoms/shared';
+import { ProjectService } from '../project/project.service';
+import { ProjectQueryService } from '../project/project-query.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 
 describe('ValidationService', () => {
   let service: ValidationService;
   let validationCaseRepo: Repository<ValidationCaseEntity>;
-  let projectBranchRepo: Repository<ProjectBranchEntity>;
 
   const mockValidationCaseRepo = {
     create: jest.fn(),
@@ -25,8 +27,28 @@ describe('ValidationService', () => {
     save: jest.fn(),
   };
 
+  const mockProjectService = {
+    transitionProjectBranchStatus: jest.fn(),
+    completeBranchValidation: jest.fn(),
+    closeBranchProject: jest.fn(),
+    initiateBranchPlanning: jest.fn(),
+  };
+
+  const mockProjectQueryService = {
+    findProjectBranchById: mockProjectBranchRepo.findOne,
+  };
+
   const mockAuditService = {
     recordEvent: jest.fn(),
+  };
+
+  const mockDomainEventPublisher = {
+    publish: jest.fn(),
+  };
+
+  const mockWorkflowEngine = {
+    registerWorkflow: jest.fn(),
+    executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
   };
 
   beforeEach(async () => {
@@ -38,19 +60,30 @@ describe('ValidationService', () => {
           useValue: mockValidationCaseRepo,
         },
         {
-          provide: getRepositoryToken(ProjectBranchEntity),
-          useValue: mockProjectBranchRepo,
+          provide: ProjectQueryService,
+          useValue: mockProjectQueryService,
+        },
+        {
+          provide: ProjectService,
+          useValue: mockProjectService,
         },
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: DomainEventPublisher,
+          useValue: mockDomainEventPublisher,
+        },
+        {
+          provide: WorkflowEngine,
+          useValue: mockWorkflowEngine,
         },
       ],
     }).compile();
 
     service = module.get<ValidationService>(ValidationService);
     validationCaseRepo = module.get<Repository<ValidationCaseEntity>>(getRepositoryToken(ValidationCaseEntity));
-    projectBranchRepo = module.get<Repository<ProjectBranchEntity>>(getRepositoryToken(ProjectBranchEntity));
 
     jest.clearAllMocks();
   });

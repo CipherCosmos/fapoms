@@ -9,6 +9,10 @@ import { BranchEntity } from '../branch/branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { ProjectStatus, Priority } from '@fapoms/shared';
+import { BranchService } from '../branch/branch.service';
+import { BranchQueryService } from '../branch/branch-query.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { ProjectQueryService } from './project-query.service';
 
 describe('ProjectService', () => {
   let service: ProjectService;
@@ -33,6 +37,27 @@ describe('ProjectService', () => {
     findOne: jest.fn(),
   };
 
+  const mockBranchService = {
+    registerImportedBranch: jest.fn(),
+    findOrCreateZone: jest.fn(),
+  };
+
+  const mockBranchQueryService = {
+    findOne: mockBranchRepo.findOne,
+    findOneByCode: jest.fn(),
+  };
+
+  const mockProjectQueryService = {
+    findOne: jest.fn().mockImplementation((id) => {
+      if (id === 'non-existent-id' || id === 'p-missing') {
+        throw new NotFoundException(`Project ${id} not found.`);
+      }
+      return Promise.resolve({ id, status: ProjectStatus.DRAFT, name: 'Project 1' });
+    }),
+    findAll: jest.fn().mockResolvedValue({ projects: [], total: 0 }),
+    findProjectBranches: jest.fn().mockResolvedValue([]),
+  };
+
   const mockAuditService = {
     recordEvent: jest.fn(),
   };
@@ -40,6 +65,11 @@ describe('ProjectService', () => {
   const mockWorkflowEngine = {
     registerWorkflow: jest.fn(),
     executeTransition: jest.fn(),
+    executeCommand: jest.fn().mockImplementation((key, id, cmd, from, to, uid, role, roles, action) => action()),
+  };
+
+  const mockDomainEventPublisher = {
+    publish: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -55,8 +85,12 @@ describe('ProjectService', () => {
           useValue: mockProjectBranchRepo,
         },
         {
-          provide: getRepositoryToken(BranchEntity),
-          useValue: mockBranchRepo,
+          provide: BranchQueryService,
+          useValue: mockBranchQueryService,
+        },
+        {
+          provide: BranchService,
+          useValue: mockBranchService,
         },
         {
           provide: AuditService,
@@ -65,6 +99,14 @@ describe('ProjectService', () => {
         {
           provide: WorkflowEngine,
           useValue: mockWorkflowEngine,
+        },
+        {
+          provide: DomainEventPublisher,
+          useValue: mockDomainEventPublisher,
+        },
+        {
+          provide: ProjectQueryService,
+          useValue: mockProjectQueryService,
         },
       ],
     }).compile();

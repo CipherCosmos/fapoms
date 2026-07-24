@@ -4,7 +4,7 @@ import { NotFoundException, BadRequestException, ConflictException } from '@nest
 import { Repository } from 'typeorm';
 import { SchedulingService } from './scheduling.service';
 import { ScheduleEntity } from './schedule.entity';
-import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ScheduleStatus, AssignmentStatus } from '@fapoms/shared';
@@ -12,7 +12,7 @@ import { ScheduleStatus, AssignmentStatus } from '@fapoms/shared';
 describe('SchedulingService', () => {
   let service: SchedulingService;
   let scheduleRepo: Repository<ScheduleEntity>;
-  let assignmentRepo: Repository<AssignmentEntity>;
+  let assignmentService: AssignmentService;
   let holidayService: HolidayService;
 
   const mockScheduleRepo = {
@@ -22,9 +22,9 @@ describe('SchedulingService', () => {
     findAndCount: jest.fn(),
   };
 
-  const mockAssignmentRepo = {
+  const mockAssignmentService = {
     findOne: jest.fn(),
-    save: jest.fn(),
+    scheduleAudit: jest.fn().mockResolvedValue(undefined),
   };
 
   const mockHolidayService = {
@@ -44,8 +44,8 @@ describe('SchedulingService', () => {
           useValue: mockScheduleRepo,
         },
         {
-          provide: getRepositoryToken(AssignmentEntity),
-          useValue: mockAssignmentRepo,
+          provide: AssignmentService,
+          useValue: mockAssignmentService,
         },
         {
           provide: HolidayService,
@@ -60,7 +60,7 @@ describe('SchedulingService', () => {
 
     service = module.get<SchedulingService>(SchedulingService);
     scheduleRepo = module.get<Repository<ScheduleEntity>>(getRepositoryToken(ScheduleEntity));
-    assignmentRepo = module.get<Repository<AssignmentEntity>>(getRepositoryToken(AssignmentEntity));
+    assignmentService = module.get<AssignmentService>(AssignmentService);
     holidayService = module.get<HolidayService>(HolidayService);
 
     jest.clearAllMocks();
@@ -68,7 +68,7 @@ describe('SchedulingService', () => {
 
   describe('create', () => {
     it('should throw NotFoundException if assignment is missing', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockAssignmentService.findOne.mockResolvedValue(null);
 
       await expect(
         service.create({ assignmentId: 'asn-missing', scheduledDate: '2026-08-01' }, 'user-1'),
@@ -77,7 +77,7 @@ describe('SchedulingService', () => {
 
     it('should throw BadRequestException if assignment status is not ACCEPTED', async () => {
       const mockAsn = { id: 'asn-1', status: AssignmentStatus.CREATED };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+      mockAssignmentService.findOne.mockResolvedValue(mockAsn);
 
       await expect(
         service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-01' }, 'user-1'),
@@ -92,7 +92,7 @@ describe('SchedulingService', () => {
           leaves: [{ startDate: '2026-08-01', endDate: '2026-08-05' }],
         },
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+      mockAssignmentService.findOne.mockResolvedValue(mockAsn);
 
       await expect(
         service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1'),
@@ -109,7 +109,7 @@ describe('SchedulingService', () => {
           endDate: '2026-08-10',
         },
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAsn);
+      mockAssignmentService.findOne.mockResolvedValue(mockAsn);
 
       await expect(
         service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1'),

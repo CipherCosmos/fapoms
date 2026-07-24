@@ -11,6 +11,8 @@ import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 
 describe('AssayerService', () => {
@@ -21,6 +23,7 @@ describe('AssayerService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     findAndCount: jest.fn(),
+    find: jest.fn(),
   };
 
   const mockCommercialRepo = {
@@ -28,14 +31,12 @@ describe('AssayerService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
-    findAndCount: jest.fn(),
   };
 
   const mockWorkforceRepo = {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
-    findAndCount: jest.fn(),
     find: jest.fn(),
   };
 
@@ -72,6 +73,15 @@ describe('AssayerService', () => {
     recordEvent: jest.fn(),
   };
 
+  const mockDomainEventPublisher = {
+    publish: jest.fn(),
+  };
+
+  const mockWorkflowEngine = {
+    registerWorkflow: jest.fn(),
+    executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
+  };
+
   function setupModule() {
     return Test.createTestingModule({
       providers: [
@@ -84,6 +94,8 @@ describe('AssayerService', () => {
         { provide: getRepositoryToken(AssayerRemarkEntity), useValue: mockRemarkRepo },
         { provide: getRepositoryToken(AssayerActivityEntity), useValue: mockActivityRepo },
         { provide: AuditService, useValue: mockAuditService },
+        { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
+        { provide: WorkflowEngine, useValue: mockWorkflowEngine },
       ],
     }).compile();
   }
@@ -144,7 +156,7 @@ describe('AssayerService', () => {
       mockAssayerRepo.findOne.mockResolvedValue({ ...assayer });
       mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
 
-      const result = await service.transitionLifecycle('asr-1', AssayerLifecycleStatus.DOCUMENT_VERIFICATION, 'user-1');
+      const result = await service.verifyDocuments('asr-1', 'user-1');
 
       expect(result.lifecycleStatus).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
@@ -154,7 +166,7 @@ describe('AssayerService', () => {
       mockAssayerRepo.findOne.mockResolvedValue({ ...assayer });
 
       await expect(
-        service.transitionLifecycle('asr-1', AssayerLifecycleStatus.ACTIVE, 'user-1'),
+        service.activateAssayer('asr-1', 'user-1'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -163,7 +175,7 @@ describe('AssayerService', () => {
       mockAssayerRepo.findOne.mockResolvedValue(activeAssayer);
       mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
 
-      const result = await service.transitionLifecycle('asr-1', AssayerLifecycleStatus.ARCHIVED, 'user-1');
+      const result = await service.archiveAssayer('asr-1', 'user-1');
 
       expect(result.isActive).toBe(false);
     });
@@ -173,7 +185,7 @@ describe('AssayerService', () => {
       mockAssayerRepo.findOne.mockResolvedValue(testAssayer);
       mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
 
-      const result = await service.transitionLifecycle('asr-1', AssayerLifecycleStatus.ACTIVE, 'user-1');
+      const result = await service.activateAssayer('asr-1', 'user-1');
 
       expect(result.status).toBe('ACTIVE');
     });

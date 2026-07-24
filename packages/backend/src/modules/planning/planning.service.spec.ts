@@ -2,11 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { PlanningService } from './planning.service';
-import { BranchEntity } from '../branch/branch.entity';
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
+import { BranchQueryService } from '../branch/branch-query.service';
+import { AssayerService } from '../assayer/assayer.service';
 
 describe('PlanningService', () => {
   let service: PlanningService;
@@ -14,6 +14,10 @@ describe('PlanningService', () => {
 
   const mockBranchRepository = {
     findOne: jest.fn(),
+  };
+
+  const mockBranchQueryService = {
+    findOne: mockBranchRepository.findOne,
   };
 
   const mockRecommendationEngine = {
@@ -35,21 +39,25 @@ describe('PlanningService', () => {
     findOne: jest.fn(),
   };
 
+  const mockAssayerService = {
+    getActiveCommercialProfile: mockCommercialRepo.findOne,
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanningService,
         {
-          provide: getRepositoryToken(BranchEntity),
-          useValue: mockBranchRepository,
+          provide: BranchQueryService,
+          useValue: mockBranchQueryService,
         },
         {
           provide: getRepositoryToken(BusinessRuleEntity),
           useValue: mockRuleRepository,
         },
         {
-          provide: getRepositoryToken(AssayerCommercialProfileEntity),
-          useValue: mockCommercialRepo,
+          provide: AssayerService,
+          useValue: mockAssayerService,
         },
         {
           provide: RecommendationEngine,

@@ -8,9 +8,9 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { BranchEntity } from '../branch/branch.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
+import { BranchQueryService } from '../branch/branch-query.service';
+import { AssayerService } from '../assayer/assayer.service';
 
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
@@ -53,20 +53,16 @@ export interface UpdateBusinessRuleDto {
 @Injectable()
 export class PlanningService {
   constructor(
-    @InjectRepository(BranchEntity)
-    private readonly branchRepository: Repository<BranchEntity>,
+    private readonly branchQueryService: BranchQueryService,
     @InjectRepository(BusinessRuleEntity)
     private readonly ruleRepository: Repository<BusinessRuleEntity>,
-    @InjectRepository(AssayerCommercialProfileEntity)
-    private readonly commercialRepository: Repository<AssayerCommercialProfileEntity>,
+    private readonly assayerService: AssayerService,
     private readonly recommendationEngine: RecommendationEngine,
     private readonly routingService: RoutingService,
   ) {}
 
   async getRecommendedCandidates(branchId: string): Promise<AssayerRecommendation[]> {
-    const branch = await this.branchRepository.findOne({
-      where: { id: branchId, isActive: true },
-    });
+    const branch = await this.branchQueryService.findOne(branchId);
 
     if (!branch) {
       throw new NotFoundException(`Branch ${branchId} not found.`);
@@ -85,10 +81,7 @@ export class PlanningService {
         distanceKm = route.distanceKm;
       }
 
-      const profile = await this.commercialRepository.findOne({
-        where: { assayerId: r.assayer.id, isActive: true },
-        order: { effectiveStartDate: 'DESC' },
-      });
+      const profile = await this.assayerService.getActiveCommercialProfile(r.assayer.id);
       const baseFee = profile ? Number(profile.baseFee) : 1500;
 
       recommendations.push({

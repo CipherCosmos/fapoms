@@ -11,6 +11,7 @@ const client_service_1 = require("../client/client.service");
 const zone_entity_1 = require("../zone/zone.entity");
 const geo_entities_1 = require("../geo/geo.entities");
 const audit_service_1 = require("../../core/audit/audit.service");
+const branch_query_service_1 = require("./branch-query.service");
 describe('BranchService', () => {
     let service;
     const mockBranchRepo = {
@@ -40,6 +41,10 @@ describe('BranchService', () => {
     const mockCityRepo = { findOne: jest.fn() };
     const mockClientService = { findOne: jest.fn() };
     const mockAuditService = { recordEvent: jest.fn() };
+    const mockBranchQueryService = {
+        findOne: jest.fn().mockImplementation((id) => Promise.resolve({ id, name: 'Branch 1' })),
+        findAll: jest.fn().mockResolvedValue({ branches: [], total: 0 }),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
@@ -53,6 +58,7 @@ describe('BranchService', () => {
                 { provide: (0, typeorm_1.getRepositoryToken)(geo_entities_1.GeoCityEntity), useValue: mockCityRepo },
                 { provide: client_service_1.ClientService, useValue: mockClientService },
                 { provide: audit_service_1.AuditService, useValue: mockAuditService },
+                { provide: branch_query_service_1.BranchQueryService, useValue: mockBranchQueryService },
             ],
         }).compile();
         service = module.get(branch_service_1.BranchService);
@@ -96,7 +102,7 @@ describe('BranchService', () => {
     });
     describe('findOne', () => {
         it('should throw NotFoundException if branch does not exist', async () => {
-            mockBranchRepo.findOne.mockResolvedValue(null);
+            mockBranchQueryService.findOne.mockRejectedValueOnce(new common_1.NotFoundException('Branch non-existent-id not found.'));
             await expect(service.findOne('non-existent-id')).rejects.toThrow(common_1.NotFoundException);
         });
     });

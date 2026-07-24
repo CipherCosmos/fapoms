@@ -12,6 +12,8 @@ const assayer_document_entity_1 = require("./assayer-document.entity");
 const assayer_remark_entity_1 = require("./assayer-remark.entity");
 const assayer_activity_entity_1 = require("./assayer-activity.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
 describe('AssayerService', () => {
     let service;
@@ -20,19 +22,18 @@ describe('AssayerService', () => {
         save: jest.fn(),
         findOne: jest.fn(),
         findAndCount: jest.fn(),
+        find: jest.fn(),
     };
     const mockCommercialRepo = {
         create: jest.fn(),
         save: jest.fn(),
         findOne: jest.fn(),
         find: jest.fn(),
-        findAndCount: jest.fn(),
     };
     const mockWorkforceRepo = {
         create: jest.fn(),
         save: jest.fn(),
         findOne: jest.fn(),
-        findAndCount: jest.fn(),
         find: jest.fn(),
     };
     const mockGovDocRepo = {
@@ -63,6 +64,13 @@ describe('AssayerService', () => {
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
+    const mockDomainEventPublisher = {
+        publish: jest.fn(),
+    };
+    const mockWorkflowEngine = {
+        registerWorkflow: jest.fn(),
+        executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
+    };
     function setupModule() {
         return testing_1.Test.createTestingModule({
             providers: [
@@ -75,6 +83,8 @@ describe('AssayerService', () => {
                 { provide: (0, typeorm_1.getRepositoryToken)(assayer_remark_entity_1.AssayerRemarkEntity), useValue: mockRemarkRepo },
                 { provide: (0, typeorm_1.getRepositoryToken)(assayer_activity_entity_1.AssayerActivityEntity), useValue: mockActivityRepo },
                 { provide: audit_service_1.AuditService, useValue: mockAuditService },
+                { provide: domain_event_publisher_1.DomainEventPublisher, useValue: mockDomainEventPublisher },
+                { provide: workflow_engine_1.WorkflowEngine, useValue: mockWorkflowEngine },
             ],
         }).compile();
     }
@@ -117,26 +127,26 @@ describe('AssayerService', () => {
         it('should transition from INVITED to DOCUMENT_VERIFICATION', async () => {
             mockAssayerRepo.findOne.mockResolvedValue({ ...assayer });
             mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
-            const result = await service.transitionLifecycle('asr-1', shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION, 'user-1');
+            const result = await service.verifyDocuments('asr-1', 'user-1');
             expect(result.lifecycleStatus).toBe(shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
             expect(mockAuditService.recordEvent).toHaveBeenCalled();
         });
         it('should reject invalid transition from INVITED to ACTIVE', async () => {
             mockAssayerRepo.findOne.mockResolvedValue({ ...assayer });
-            await expect(service.transitionLifecycle('asr-1', shared_1.AssayerLifecycleStatus.ACTIVE, 'user-1')).rejects.toThrow(common_1.BadRequestException);
+            await expect(service.activateAssayer('asr-1', 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
         it('should set isActive false when transitioning to ARCHIVED', async () => {
             const activeAssayer = { ...assayer, lifecycleStatus: shared_1.AssayerLifecycleStatus.RESIGNED };
             mockAssayerRepo.findOne.mockResolvedValue(activeAssayer);
             mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
-            const result = await service.transitionLifecycle('asr-1', shared_1.AssayerLifecycleStatus.ARCHIVED, 'user-1');
+            const result = await service.archiveAssayer('asr-1', 'user-1');
             expect(result.isActive).toBe(false);
         });
         it('should sync operational status on transition', async () => {
             const testAssayer = { ...assayer, lifecycleStatus: shared_1.AssayerLifecycleStatus.TRAINING };
             mockAssayerRepo.findOne.mockResolvedValue(testAssayer);
             mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
-            const result = await service.transitionLifecycle('asr-1', shared_1.AssayerLifecycleStatus.ACTIVE, 'user-1');
+            const result = await service.activateAssayer('asr-1', 'user-1');
             expect(result.status).toBe('ACTIVE');
         });
     });

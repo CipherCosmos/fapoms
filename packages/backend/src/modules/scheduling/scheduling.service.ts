@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ConflictException }
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ScheduleEntity } from './schedule.entity';
-import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
@@ -23,17 +23,13 @@ export class SchedulingService {
   constructor(
     @InjectRepository(ScheduleEntity)
     private readonly scheduleRepository: Repository<ScheduleEntity>,
-    @InjectRepository(AssignmentEntity)
-    private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly assignmentService: AssignmentService,
     private readonly holidayService: HolidayService,
     private readonly auditService: AuditService,
   ) {}
 
   async create(dto: CreateScheduleDto, userId: string): Promise<ScheduleEntity> {
-    const assignment = await this.assignmentRepository.findOne({
-      where: { id: dto.assignmentId, isActive: true },
-      relations: ['projectBranch', 'projectBranch.branch', 'project', 'assayer'],
-    });
+    const assignment = await this.assignmentService.findOne(dto.assignmentId);
 
     if (!assignment) {
       throw new NotFoundException(`Assignment ${dto.assignmentId} not found.`);
@@ -108,13 +104,8 @@ export class SchedulingService {
 
     const saved = await this.scheduleRepository.save(schedule);
 
-    // Transition parent assignment and branch states
-    assignment.status = AssignmentStatus.SCHEDULED;
-    assignment.scheduledDate = scheduledDateObj;
-    assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
-    assignment.projectBranch.scheduledDate = scheduledDateObj;
-
-    await this.assignmentRepository.save(assignment);
+    // Transition parent assignment and branch states via the canonical service
+    await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate);
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -163,11 +154,7 @@ export class SchedulingService {
     if (newScheduledDate) {
       schedule.scheduledDate = new Date(newScheduledDate);
       if (schedule.assignmentId) {
-        const assignment = await this.assignmentRepository.findOne({ where: { id: schedule.assignmentId } });
-        if (assignment) {
-          assignment.scheduledDate = new Date(newScheduledDate);
-          await this.assignmentRepository.save(assignment);
-        }
+        await this.assignmentService.scheduleAudit(schedule.assignmentId, userId, newScheduledDate);
       }
     }
     schedule.updatedBy = userId;

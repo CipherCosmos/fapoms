@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
+import { calculateHaversineDistance } from '@fapoms/shared';
+import { api } from '../services/api';
 import { MapLayerControls } from './MapLayerControls';
 
 interface MapBranch {
@@ -19,19 +21,6 @@ interface InteractivePlanningMapProps {
   fillContainer?: boolean;
   selectedAssayerFromParent?: any | null;
 }
-
-// Haversine straight-line distance helper for fast checks
-const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371; // km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-};
 
 export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
   branches,
@@ -147,18 +136,11 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
   // Fetch assayers on mount
   useEffect(() => {
-    fetch('/api/v1/assayers?limit=100', {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}`
-      }
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.success) {
-        setRealAssayers(data.data);
-      }
-    })
-    .catch(err => console.error("Failed to load assayers", err));
+    api.request<any[]>('/assayers?limit=100')
+      .then(data => {
+        setRealAssayers(data);
+      })
+      .catch(err => console.error("Failed to load assayers", err));
   }, []);
 
   // Fetch real-time OSRM driving route when an assayer is clicked

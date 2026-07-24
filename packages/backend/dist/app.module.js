@@ -32,6 +32,10 @@ const validation_module_1 = require("./modules/validation/validation.module");
 const ocr_module_1 = require("./infrastructure/ocr/ocr.module");
 const geo_module_1 = require("./modules/geo/geo.module");
 const search_module_1 = require("./modules/search/search.module");
+const audit_history_module_1 = require("./modules/audit-history/audit-history.module");
+const billing_module_1 = require("./modules/billing/billing.module");
+const ledger_module_1 = require("./modules/ledger/ledger.module");
+const audit_module_2 = require("./modules/audit/audit.module");
 const sla_scanner_worker_1 = require("./infrastructure/scheduler/sla-scanner.worker");
 let AppModule = class AppModule {
 };
@@ -69,6 +73,10 @@ exports.AppModule = AppModule = __decorate([
             ocr_module_1.OcrModule,
             geo_module_1.GeoModule,
             search_module_1.SearchModule,
+            audit_history_module_1.AuditHistoryModule,
+            billing_module_1.BillingModule,
+            ledger_module_1.LedgerModule,
+            audit_module_2.AuditPlatformModule,
         ],
         providers: [sla_scanner_worker_1.SlaScannerWorker],
     })

@@ -28,4 +28,6 @@ __exportStar(require("./interfaces"), exports);
 __exportStar(require("./api-contracts"), exports);
 // State machine definitions and validators
 __exportStar(require("./state-machines"), exports);
+// Shared utilities
+__exportStar(require("./utils"), exports);
 //# sourceMappingURL=index.js.map

@@ -24,6 +24,9 @@ const assayer_document_entity_1 = require("./assayer-document.entity");
 const assayer_remark_entity_1 = require("./assayer-remark.entity");
 const assayer_activity_entity_1 = require("./assayer-activity.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const assayer_state_machine_1 = require("./assayer.state-machine");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
 async function geocodeAddress(address, city, district, state) {
     const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -83,7 +86,9 @@ let AssayerService = class AssayerService {
     remarkRepository;
     activityRepository;
     auditService;
-    constructor(assayerRepository, commercialRepository, workforceAttributeRepository, govDocRepository, assayerDocRepository, remarkRepository, activityRepository, auditService) {
+    eventPublisher;
+    workflowEngine;
+    constructor(assayerRepository, commercialRepository, workforceAttributeRepository, govDocRepository, assayerDocRepository, remarkRepository, activityRepository, auditService, eventPublisher, workflowEngine) {
         this.assayerRepository = assayerRepository;
         this.commercialRepository = commercialRepository;
         this.workforceAttributeRepository = workforceAttributeRepository;
@@ -92,6 +97,31 @@ let AssayerService = class AssayerService {
         this.remarkRepository = remarkRepository;
         this.activityRepository = activityRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
+        this.workflowEngine = workflowEngine;
+    }
+    onModuleInit() {
+        this.workflowEngine.registerWorkflow('assayer', [
+            { from: [shared_1.AssayerLifecycleStatus.INVITED], to: shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION },
+            { from: [shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION },
+            { from: [shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: shared_1.AssayerLifecycleStatus.TRAINING },
+            { from: [shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.TRAINING], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.TRAINING], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.ON_LEAVE },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.SUSPENDED },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.ACTIVE], to: shared_1.AssayerLifecycleStatus.RESIGNED },
+            { from: [shared_1.AssayerLifecycleStatus.ON_LEAVE], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.ON_LEAVE], to: shared_1.AssayerLifecycleStatus.INACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.SUSPENDED], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.SUSPENDED], to: shared_1.AssayerLifecycleStatus.TERMINATED },
+            { from: [shared_1.AssayerLifecycleStatus.INACTIVE], to: shared_1.AssayerLifecycleStatus.ACTIVE },
+            { from: [shared_1.AssayerLifecycleStatus.INACTIVE], to: shared_1.AssayerLifecycleStatus.ARCHIVED },
+            { from: [shared_1.AssayerLifecycleStatus.RESIGNED], to: shared_1.AssayerLifecycleStatus.ARCHIVED },
+            { from: [shared_1.AssayerLifecycleStatus.TERMINATED], to: shared_1.AssayerLifecycleStatus.ARCHIVED },
+        ]);
     }
     async findAll(page = 1, limit = 50) {
         const [assayers, total] = await this.assayerRepository.findAndCount({
@@ -211,29 +241,151 @@ let AssayerService = class AssayerService {
         });
     }
     async transitionLifecycle(id, targetStatus, userId, reason) {
+        if (targetStatus === shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
+            return this.verifyDocuments(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
+            return this.initiateBackgroundCheck(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.TRAINING) {
+            return this.startTraining(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.ACTIVE) {
+            return this.activateAssayer(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.ON_LEAVE) {
+            return this.putOnLeave(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.SUSPENDED) {
+            return this.suspendAssayer(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.INACTIVE) {
+            return this.deactivateAssayer(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.RESIGNED) {
+            return this.acceptResignation(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.TERMINATED) {
+            return this.terminateAssayer(id, userId, reason);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.ARCHIVED) {
+            return this.archiveAssayer(id, userId, reason);
+        }
+        else {
+            throw new common_1.BadRequestException(`Invalid target status: ${targetStatus}`);
+        }
+    }
+    async doTransitionLifecycle(id, targetStatus, userId, reason, role = shared_1.SystemRole.SUPER_ADMINISTRATOR) {
         const assayer = await this.findOne(id);
         const currentStatus = assayer.lifecycleStatus;
-        const allowed = LIFECYCLE_TRANSITIONS[currentStatus];
-        if (!allowed || !allowed.includes(targetStatus)) {
-            throw new common_1.BadRequestException(`Invalid lifecycle transition from '${currentStatus}' to '${targetStatus}'`);
+        let event;
+        if (targetStatus === shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
+            event = assayer_state_machine_1.AssayerStateMachine.verifyDocuments(assayer, userId);
         }
-        assayer.lifecycleStatus = targetStatus;
-        assayer.status = mapLifecycleToOperationalStatus(targetStatus);
-        assayer.updatedBy = userId;
-        if (targetStatus === shared_1.AssayerLifecycleStatus.ARCHIVED)
-            assayer.isActive = false;
-        const saved = await this.assayerRepository.save(assayer);
-        await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
-        await this.auditService.recordEvent({
-            category: shared_1.EventCategory.OPERATIONAL,
-            eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
-            entityType: 'ASSAYER',
-            entityId: saved.id,
-            previousState: currentStatus,
-            newState: targetStatus,
-            userId,
-            remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
+            event = assayer_state_machine_1.AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.TRAINING) {
+            event = assayer_state_machine_1.AssayerStateMachine.startTraining(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.ACTIVE) {
+            event = assayer_state_machine_1.AssayerStateMachine.activate(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.ON_LEAVE) {
+            event = assayer_state_machine_1.AssayerStateMachine.putOnLeave(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.SUSPENDED) {
+            event = assayer_state_machine_1.AssayerStateMachine.suspend(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.INACTIVE) {
+            event = assayer_state_machine_1.AssayerStateMachine.deactivate(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.RESIGNED) {
+            event = assayer_state_machine_1.AssayerStateMachine.acceptResignation(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.TERMINATED) {
+            event = assayer_state_machine_1.AssayerStateMachine.terminate(assayer, userId);
+        }
+        else if (targetStatus === shared_1.AssayerLifecycleStatus.ARCHIVED) {
+            event = assayer_state_machine_1.AssayerStateMachine.archive(assayer, userId);
+        }
+        else {
+            throw new common_1.BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
+        }
+        return this.workflowEngine.executeCommand('assayer', assayer.id, `${targetStatus}_Command`, currentStatus, targetStatus, userId, role, [], async () => {
+            const saved = await this.assayerRepository.save(assayer);
+            await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.OPERATIONAL,
+                eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
+                entityType: 'ASSAYER',
+                entityId: saved.id,
+                previousState: currentStatus,
+                newState: targetStatus,
+                userId,
+                remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+            });
+            return { saved, event };
         });
+    }
+    async verifyDocuments(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async initiateBackgroundCheck(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.BACKGROUND_VERIFICATION, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async startTraining(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.TRAINING, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async activateAssayer(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.ACTIVE, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async putOnLeave(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.ON_LEAVE, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async suspendAssayer(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.SUSPENDED, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async deactivateAssayer(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.INACTIVE, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async acceptResignation(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.RESIGNED, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async terminateAssayer(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.TERMINATED, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async archiveAssayer(id, userId, reason) {
+        const { saved, event } = await this.doTransitionLifecycle(id, shared_1.AssayerLifecycleStatus.ARCHIVED, userId, reason);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
         return saved;
     }
     async addGovernmentDocument(assayerId, dto, userId) {
@@ -714,6 +866,8 @@ exports.AssayerService = AssayerService = __decorate([
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher,
+        workflow_engine_1.WorkflowEngine])
 ], AssayerService);
 //# sourceMappingURL=assayer.service.js.map

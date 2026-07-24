@@ -4,6 +4,7 @@ import { BranchEntity } from './branch.entity';
 import { BranchContactEntity } from './branch-contact.entity';
 import { BranchDocumentEntity } from './branch-document.entity';
 import { BranchService } from './branch.service';
+import { BranchQueryService } from './branch-query.service';
 import { BranchController } from './branch.controller';
 import { ClientModule } from '../client/client.module';
 import { ZoneEntity } from '../zone/zone.entity';
@@ -23,7 +24,7 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
     ClientModule,
   ],
   controllers: [BranchController],
-  providers: [BranchService],
-  exports: [BranchService],
+  providers: [BranchService, BranchQueryService],
+  exports: [BranchService, BranchQueryService],
 })
 export class BranchModule {}

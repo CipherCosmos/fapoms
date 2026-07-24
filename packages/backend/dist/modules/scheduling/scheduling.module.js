@@ -12,16 +12,17 @@ const typeorm_1 = require("@nestjs/typeorm");
 const scheduling_service_1 = require("./scheduling.service");
 const scheduling_controller_1 = require("./scheduling.controller");
 const schedule_entity_1 = require("./schedule.entity");
-const assignment_entity_1 = require("../assignment/assignment.entity");
 const holiday_module_1 = require("../holiday/holiday.module");
+const assignment_module_1 = require("../assignment/assignment.module");
 let SchedulingModule = class SchedulingModule {
 };
 exports.SchedulingModule = SchedulingModule;
 exports.SchedulingModule = SchedulingModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([schedule_entity_1.ScheduleEntity, assignment_entity_1.AssignmentEntity]),
+            typeorm_1.TypeOrmModule.forFeature([schedule_entity_1.ScheduleEntity]),
             holiday_module_1.HolidayModule,
+            assignment_module_1.AssignmentModule,
         ],
         controllers: [scheduling_controller_1.SchedulingController],
         providers: [scheduling_service_1.SchedulingService],

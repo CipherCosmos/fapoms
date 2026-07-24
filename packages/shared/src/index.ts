@@ -16,3 +16,6 @@ export * from './api-contracts';
 
 // State machine definitions and validators
 export * from './state-machines';
+
+// Shared utilities
+export * from './utils';

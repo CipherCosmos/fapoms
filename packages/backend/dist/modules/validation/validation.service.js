@@ -17,22 +17,38 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const validation_case_entity_1 = require("./validation-case.entity");
-const project_branch_entity_1 = require("../project/project-branch.entity");
+const project_service_1 = require("../project/project.service");
+const project_query_service_1 = require("../project/project-query.service");
+const validation_state_machine_1 = require("./validation.state-machine");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
+const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 let ValidationService = class ValidationService {
     validationCaseRepository;
-    projectBranchRepository;
+    projectQueryService;
+    projectService;
     auditService;
-    constructor(validationCaseRepository, projectBranchRepository, auditService) {
+    eventPublisher;
+    workflowEngine;
+    constructor(validationCaseRepository, projectQueryService, projectService, auditService, eventPublisher, workflowEngine) {
         this.validationCaseRepository = validationCaseRepository;
-        this.projectBranchRepository = projectBranchRepository;
+        this.projectQueryService = projectQueryService;
+        this.projectService = projectService;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
+        this.workflowEngine = workflowEngine;
+    }
+    onModuleInit() {
+        this.workflowEngine.registerWorkflow('validation', [
+            { from: [shared_1.ValidationStatus.HUMAN_REVIEW], to: shared_1.ValidationStatus.APPROVED },
+            { from: [shared_1.ValidationStatus.HUMAN_REVIEW], to: shared_1.ValidationStatus.CORRECTION_REQUIRED },
+            { from: [shared_1.ValidationStatus.CORRECTION_REQUIRED], to: shared_1.ValidationStatus.HUMAN_REVIEW },
+            { from: [shared_1.ValidationStatus.APPROVED], to: shared_1.ValidationStatus.SUBMITTED },
+        ]);
     }
     async create(dto, userId) {
-        const projectBranch = await this.projectBranchRepository.findOne({
-            where: { id: dto.projectBranchId, isActive: true },
-        });
+        const projectBranch = await this.projectQueryService.findProjectBranchById(dto.projectBranchId);
         if (!projectBranch) {
             throw new common_1.NotFoundException(`ProjectBranch ${dto.projectBranchId} not found.`);
         }
@@ -95,40 +111,77 @@ let ValidationService = class ValidationService {
         });
         return saved;
     }
-    async transition(id, targetStatus, userId, remarks, notes, ocrResult) {
+    async executeValidationTransition(id, targetStatus, userId, remarks, notes, ocrResult, role = shared_1.SystemRole.SUPER_ADMINISTRATOR) {
         const validationCase = await this.findOne(id);
         const prevStatus = validationCase.status;
-        if (!(0, shared_1.isValidTransition)(shared_1.VALIDATION_TRANSITIONS, prevStatus, targetStatus)) {
-            throw new common_1.BadRequestException(`Invalid Transition: Cannot transition validation case from ${prevStatus} to ${targetStatus}.`);
-        }
-        validationCase.status = targetStatus;
-        if (remarks)
-            validationCase.remarks = remarks;
-        if (notes)
-            validationCase.correctionNotes = notes;
-        if (ocrResult)
-            validationCase.ocrResult = ocrResult;
-        validationCase.updatedBy = userId;
+        let event;
         if (targetStatus === shared_1.ValidationStatus.APPROVED) {
-            validationCase.reviewedAt = new Date();
-            validationCase.projectBranch.status = shared_1.ProjectBranchStatus.VALIDATION_COMPLETED;
-            await this.projectBranchRepository.save(validationCase.projectBranch);
+            event = validation_state_machine_1.ValidationStateMachine.approveValidation(validationCase, userId, remarks, notes, ocrResult);
         }
         else if (targetStatus === shared_1.ValidationStatus.SUBMITTED) {
-            validationCase.projectBranch.status = shared_1.ProjectBranchStatus.CLOSED;
-            await this.projectBranchRepository.save(validationCase.projectBranch);
+            event = validation_state_machine_1.ValidationStateMachine.submitValidation(validationCase, userId, remarks, notes, ocrResult);
         }
-        const saved = await this.validationCaseRepository.save(validationCase);
-        await this.auditService.recordEvent({
-            category: shared_1.EventCategory.WORKFLOW,
-            eventType: `VALIDATION_${targetStatus}`,
-            entityType: 'VALIDATION',
-            entityId: saved.id,
-            previousState: prevStatus,
-            newState: targetStatus,
-            userId,
-            remarks: remarks ?? `Transitioned validation case to ${targetStatus}`,
+        else if (targetStatus === shared_1.ValidationStatus.CORRECTION_REQUIRED) {
+            event = validation_state_machine_1.ValidationStateMachine.requestCorrection(validationCase, userId, remarks, notes, ocrResult);
+        }
+        else {
+            throw new common_1.BadRequestException(`Invalid validation status: ${targetStatus}`);
+        }
+        return this.workflowEngine.executeCommand('validation', validationCase.id, `${targetStatus}_Command`, prevStatus, targetStatus, userId, role, [], async () => {
+            if (targetStatus === shared_1.ValidationStatus.APPROVED) {
+                await this.projectService.completeBranchValidation(validationCase.projectBranch.id, userId);
+            }
+            else if (targetStatus === shared_1.ValidationStatus.SUBMITTED) {
+                await this.projectService.closeBranchProject(validationCase.projectBranch.id, userId);
+            }
+            else if (targetStatus === shared_1.ValidationStatus.CORRECTION_REQUIRED) {
+                await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
+            }
+            validationCase.updatedBy = userId;
+            const saved = await this.validationCaseRepository.save(validationCase);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.WORKFLOW,
+                eventType: `VALIDATION_${targetStatus}`,
+                entityType: 'VALIDATION',
+                entityId: saved.id,
+                previousState: prevStatus,
+                newState: targetStatus,
+                userId,
+                remarks: remarks ?? `Transitioned validation case to ${targetStatus}`,
+            });
+            return { saved, event };
         });
+    }
+    async transition(id, targetStatus, userId, remarks, notes, ocrResult) {
+        if (targetStatus === shared_1.ValidationStatus.APPROVED) {
+            return this.approveValidation(id, userId, remarks, notes, ocrResult);
+        }
+        else if (targetStatus === shared_1.ValidationStatus.CORRECTION_REQUIRED) {
+            return this.requestCorrection(id, userId, remarks, notes, ocrResult);
+        }
+        else if (targetStatus === shared_1.ValidationStatus.SUBMITTED) {
+            return this.submitValidation(id, userId, remarks, notes, ocrResult);
+        }
+        else {
+            throw new common_1.BadRequestException(`Invalid validation status transition to ${targetStatus}`);
+        }
+    }
+    async approveValidation(id, userId, remarks, notes, ocrResult) {
+        const { saved, event } = await this.executeValidationTransition(id, shared_1.ValidationStatus.APPROVED, userId, remarks, notes, ocrResult);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async requestCorrection(id, userId, remarks, notes, ocrResult) {
+        const { saved, event } = await this.executeValidationTransition(id, shared_1.ValidationStatus.CORRECTION_REQUIRED, userId, remarks, notes, ocrResult);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+    }
+    async submitValidation(id, userId, remarks, notes, ocrResult) {
+        const { saved, event } = await this.executeValidationTransition(id, shared_1.ValidationStatus.SUBMITTED, userId, remarks, notes, ocrResult);
+        if (event)
+            this.eventPublisher.publish(event.constructor.name, event);
         return saved;
     }
 };
@@ -136,9 +189,11 @@ exports.ValidationService = ValidationService;
 exports.ValidationService = ValidationService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(validation_case_entity_1.ValidationCaseEntity)),
-    __param(1, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        typeorm_2.Repository,
-        audit_service_1.AuditService])
+        project_query_service_1.ProjectQueryService,
+        project_service_1.ProjectService,
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher,
+        workflow_engine_1.WorkflowEngine])
 ], ValidationService);
 //# sourceMappingURL=validation.service.js.map

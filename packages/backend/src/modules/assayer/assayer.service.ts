@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual } from 'typeorm';
 import { AssayerEntity } from './assayer.entity';
@@ -9,7 +9,10 @@ import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory, AssayerLifecycleStatus, AssignmentStatus } from '@fapoms/shared';
+import { AssayerStateMachine } from './assayer.state-machine';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { EventCategory, AssayerLifecycleStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
   const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -200,7 +203,7 @@ export interface UpdateAssayerDocumentDto {
 }
 
 @Injectable()
-export class AssayerService {
+export class AssayerService implements OnModuleInit {
   constructor(
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
@@ -217,7 +220,33 @@ export class AssayerService {
     @InjectRepository(AssayerActivityEntity)
     private readonly activityRepository: Repository<AssayerActivityEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
+    private readonly workflowEngine: WorkflowEngine,
   ) {}
+
+  onModuleInit() {
+    this.workflowEngine.registerWorkflow('assayer', [
+      { from: [AssayerLifecycleStatus.INVITED], to: AssayerLifecycleStatus.DOCUMENT_VERIFICATION },
+      { from: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: AssayerLifecycleStatus.BACKGROUND_VERIFICATION },
+      { from: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: AssayerLifecycleStatus.TRAINING },
+      { from: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.TRAINING], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.TRAINING], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.ON_LEAVE },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.SUSPENDED },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.RESIGNED },
+      { from: [AssayerLifecycleStatus.ON_LEAVE], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.ON_LEAVE], to: AssayerLifecycleStatus.INACTIVE },
+      { from: [AssayerLifecycleStatus.SUSPENDED], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.SUSPENDED], to: AssayerLifecycleStatus.TERMINATED },
+      { from: [AssayerLifecycleStatus.INACTIVE], to: AssayerLifecycleStatus.ACTIVE },
+      { from: [AssayerLifecycleStatus.INACTIVE], to: AssayerLifecycleStatus.ARCHIVED },
+      { from: [AssayerLifecycleStatus.RESIGNED], to: AssayerLifecycleStatus.ARCHIVED },
+      { from: [AssayerLifecycleStatus.TERMINATED], to: AssayerLifecycleStatus.ARCHIVED },
+    ]);
+  }
 
   async findAll(page = 1, limit = 50): Promise<{ assayers: AssayerEntity[]; total: number }> {
     const [assayers, total] = await this.assayerRepository.findAndCount({
@@ -346,28 +375,150 @@ export class AssayerService {
   }
 
   async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
+      return this.verifyDocuments(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
+      return this.initiateBackgroundCheck(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
+      return this.startTraining(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
+      return this.activateAssayer(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
+      return this.putOnLeave(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
+      return this.suspendAssayer(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
+      return this.deactivateAssayer(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.RESIGNED) {
+      return this.acceptResignation(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.TERMINATED) {
+      return this.terminateAssayer(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
+      return this.archiveAssayer(id, userId, reason);
+    } else {
+      throw new BadRequestException(`Invalid target status: ${targetStatus}`);
+    }
+  }
+
+  private async doTransitionLifecycle(
+    id: string,
+    targetStatus: AssayerLifecycleStatus,
+    userId: string,
+    reason?: string,
+    role = SystemRole.SUPER_ADMINISTRATOR,
+  ): Promise<{ saved: AssayerEntity; event: any }> {
     const assayer = await this.findOne(id);
     const currentStatus = assayer.lifecycleStatus;
-    const allowed = LIFECYCLE_TRANSITIONS[currentStatus];
-    if (!allowed || !allowed.includes(targetStatus)) {
-      throw new BadRequestException(`Invalid lifecycle transition from '${currentStatus}' to '${targetStatus}'`);
+
+    let event: any;
+    if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
+      event = AssayerStateMachine.verifyDocuments(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
+      event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
+      event = AssayerStateMachine.startTraining(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
+      event = AssayerStateMachine.activate(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
+      event = AssayerStateMachine.putOnLeave(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
+      event = AssayerStateMachine.suspend(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
+      event = AssayerStateMachine.deactivate(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.RESIGNED) {
+      event = AssayerStateMachine.acceptResignation(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.TERMINATED) {
+      event = AssayerStateMachine.terminate(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
+      event = AssayerStateMachine.archive(assayer, userId);
+    } else {
+      throw new BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
     }
-    assayer.lifecycleStatus = targetStatus;
-    assayer.status = mapLifecycleToOperationalStatus(targetStatus);
-    assayer.updatedBy = userId;
-    if (targetStatus === AssayerLifecycleStatus.ARCHIVED) assayer.isActive = false;
-    const saved = await this.assayerRepository.save(assayer);
-    await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
-      entityType: 'ASSAYER',
-      entityId: saved.id,
-      previousState: currentStatus,
-      newState: targetStatus,
+
+    return this.workflowEngine.executeCommand(
+      'assayer',
+      assayer.id,
+      `${targetStatus}_Command`,
+      currentStatus,
+      targetStatus,
       userId,
-      remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
-    });
+      role,
+      [],
+      async () => {
+        const saved = await this.assayerRepository.save(assayer);
+        await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+        await this.auditService.recordEvent({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
+          entityType: 'ASSAYER',
+          entityId: saved.id,
+          previousState: currentStatus,
+          newState: targetStatus,
+          userId,
+          remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+        });
+        return { saved, event };
+      }
+    );
+  }
+
+  async verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.DOCUMENT_VERIFICATION, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async initiateBackgroundCheck(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.BACKGROUND_VERIFICATION, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async startTraining(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.TRAINING, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async activateAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.ACTIVE, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async putOnLeave(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.ON_LEAVE, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async suspendAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.SUSPENDED, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async deactivateAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.INACTIVE, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async acceptResignation(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.RESIGNED, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async terminateAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.TERMINATED, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async archiveAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.ARCHIVED, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
 

@@ -4,17 +4,20 @@
  * Handles CRUD and lifecycle state transitions for projects and project branches (Part 3 Module 2, Part 5 §3).
  */
 
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
-import { BranchEntity } from '../branch/branch.entity';
-import { ZoneEntity } from '../zone/zone.entity';
+import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
+import { BranchService } from '../branch/branch.service';
+import { ProjectQueryService } from './project-query.service';
+import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
-import { EventCategory, ProjectStatus, ProjectBranchStatus } from '@fapoms/shared';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -129,15 +132,17 @@ export interface CreateProjectDto {
 @Injectable()
 export class ProjectService implements OnModuleInit {
   constructor(
-    @InjectRepository(ProjectEntity)
-    private readonly projectRepository: Repository<ProjectEntity>,
-    @InjectRepository(ProjectBranchEntity)
-    private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
-    @InjectRepository(BranchEntity)
-    private readonly branchRepository: Repository<BranchEntity>,
-    private readonly auditService: AuditService,
-    private readonly workflowEngine: WorkflowEngine,
-  ) {}
+     @InjectRepository(ProjectEntity)
+     private readonly projectRepository: Repository<ProjectEntity>,
+     @InjectRepository(ProjectBranchEntity)
+     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+     private readonly branchQueryService: BranchQueryService,
+     private readonly branchService: BranchService,
+     private readonly auditService: AuditService,
+     private readonly workflowEngine: WorkflowEngine,
+     private readonly eventPublisher: DomainEventPublisher,
+     private readonly projectQueryService: ProjectQueryService,
+   ) {}
 
   onModuleInit() {
     this.workflowEngine.registerWorkflow('project', [
@@ -205,26 +210,11 @@ export class ProjectService implements OnModuleInit {
   }
 
   async findAll(page = 1, limit = 50): Promise<{ projects: ProjectEntity[]; total: number }> {
-    const [projects, total] = await this.projectRepository.findAndCount({
-      where: { isActive: true },
-      relations: ['client'],
-      order: { createdAt: 'DESC' },
-      take: limit,
-      skip: (page - 1) * limit,
-    });
-
-    return { projects, total };
+    return this.projectQueryService.findAll(page, limit);
   }
 
   async findOne(id: string): Promise<ProjectEntity> {
-    const project = await this.projectRepository.findOne({
-      where: { id, isActive: true },
-      relations: ['client'],
-    });
-    if (!project) {
-      throw new NotFoundException(`Project ${id} not found.`);
-    }
-    return project;
+    return this.projectQueryService.findOne(id);
   }
 
   async update(id: string, dto: CreateProjectDto, userId: string): Promise<ProjectEntity> {
@@ -246,14 +236,23 @@ export class ProjectService implements OnModuleInit {
     if (dto.milestones !== undefined) project.milestones = dto.milestones;
     if (dto.dependencies !== undefined) project.dependencies = dto.dependencies;
     if (dto.status !== undefined && dto.status !== project.status) {
-      await this.workflowEngine.executeTransition(
-        'project',
-        project.id,
-        project.status,
-        dto.status,
-        { userId }
-      );
-      project.status = dto.status as any;
+      if (dto.status === ProjectStatus.PLANNING) {
+        await this.startProjectPlanning(project.id, userId);
+      } else if (dto.status === ProjectStatus.SCHEDULING) {
+        await this.readyProjectForScheduling(project.id, userId);
+      } else if (dto.status === ProjectStatus.EXECUTION) {
+        await this.startProjectExecution(project.id, userId);
+      } else if (dto.status === ProjectStatus.VALIDATION) {
+        await this.startProjectValidation(project.id, userId);
+      } else if (dto.status === ProjectStatus.COMPLETED) {
+        await this.completeProject(project.id, userId);
+      } else if (dto.status === ProjectStatus.CANCELLED) {
+        await this.cancelProject(project.id, userId);
+      } else {
+        throw new BadRequestException(`Invalid project status transition to ${dto.status}`);
+      }
+      const updatedProject = await this.findOne(id);
+      project.status = updatedProject.status;
     }
     project.updatedBy = userId;
 
@@ -287,22 +286,10 @@ export class ProjectService implements OnModuleInit {
     });
   }
 
-  /**
-   * Fetch branches belonging to this project (with full Branch details).
-   */
   async findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]> {
-    const project = await this.findOne(projectId);
-    
-    return this.projectBranchRepository.find({
-      where: { projectId: project.id, isActive: true },
-      relations: ['branch', 'assignments', 'assignments.assayer'],
-      order: { createdAt: 'ASC' },
-    });
+    return this.projectQueryService.findProjectBranches(projectId);
   }
 
-  /**
-   * Associate branches with a project.
-   */
   async associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]> {
     const project = await this.findOne(projectId);
     const addedBranches: ProjectBranchEntity[] = [];
@@ -313,7 +300,7 @@ export class ProjectService implements OnModuleInit {
       });
 
       if (!pb) {
-        const branch = await this.branchRepository.findOne({ where: { id: branchId } });
+        const branch = await this.branchQueryService.findOne(branchId);
         if (branch) {
           pb = this.projectBranchRepository.create({
             projectId: project.id,
@@ -332,33 +319,28 @@ export class ProjectService implements OnModuleInit {
     if (addedBranches.length > 0) {
       await this.auditService.recordEvent({
         category: EventCategory.OPERATIONAL,
-        eventType: 'PROJECT_BRANCHES_ADDED',
+        eventType: 'PROJECT_BRANCHES_ASSOCIATED',
         entityType: 'PROJECT',
         entityId: project.id,
         userId,
-        remarks: `Added ${addedBranches.length} branches to project ${project.name}`,
+        remarks: `Associated ${addedBranches.length} branches with project ${project.name}`,
       });
     }
 
     return this.findProjectBranches(project.id);
   }
 
-  /**
-   * Upload branches from an Excel file buffer and associate them with the project.
-   * If a branch doesn't exist in the database, geocode and create it dynamically.
-   */
   async uploadBranchesFromExcel(projectId: string, fileBuffer: Buffer, userId: string): Promise<ProjectBranchEntity[]> {
     const project = await this.findOne(projectId);
     const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
-    
-    const sheetName = workbook.SheetNames.includes('Branch') ? 'Branch' : workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = xlsx.utils.sheet_to_json(sheet) as any[];
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json<any>(worksheet);
 
     const addedBranches: ProjectBranchEntity[] = [];
 
     for (const row of rows) {
-      const branchName = (row.BRANCH_NAME || '').toString().trim();
+      const branchName = (row['Branch Name'] || row.BRANCH_NAME || '').toString().trim();
       if (!branchName) continue;
 
       const branchCode = (row.BRANCH || '').toString().trim();
@@ -368,29 +350,19 @@ export class ProjectService implements OnModuleInit {
       const state = (row.STATE || '').toString().trim();
       const address = (row['Branch Address'] || '').toString().trim();
 
-      let branch = await this.branchRepository.findOne({ where: { branchCode } });
+      let branch = await this.branchQueryService.findOneByCode(branchCode);
       if (!branch) {
         const coords = await getRealCoordinates(address, branchName, district, state);
         const zoneName = getStateZone(state);
         
-        const zoneRepo = this.projectBranchRepository.manager.getRepository(ZoneEntity);
-        let zone = await zoneRepo.findOne({ where: { name: zoneName, clientId: project.clientId } });
-        if (!zone) {
-          zone = zoneRepo.create({
-            name: zoneName,
-            clientId: project.clientId,
-            states: [state.toUpperCase()],
-            districts: []
-          });
-          zone = await zoneRepo.save(zone);
-        }
+        const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
 
         const pincode = address.match(/\b\d{6}\b/)?.[0] || null;
         const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
         const managerName = INDIAN_NAMES[Math.floor(Math.random() * INDIAN_NAMES.length)];
         const phone = `+9144${Math.floor(10000000 + Math.random() * 90000000)}`;
 
-        branch = this.branchRepository.create({
+        branch = await this.branchService.registerImportedBranch({
           branchCode,
           solId: branchCode,
           name: branchName,
@@ -417,8 +389,7 @@ export class ProjectService implements OnModuleInit {
           estimatedDurationHours: 6.0,
           createdBy: userId,
           updatedBy: userId,
-        });
-        branch = await this.branchRepository.save(branch);
+        }, userId);
       }
 
       let pb = await this.projectBranchRepository.findOne({
@@ -439,23 +410,9 @@ export class ProjectService implements OnModuleInit {
       }
     }
 
-    if (addedBranches.length > 0) {
-      await this.auditService.recordEvent({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'PROJECT_BRANCHES_UPLOADED',
-        entityType: 'PROJECT',
-        entityId: project.id,
-        userId,
-        remarks: `Uploaded and associated ${addedBranches.length} branches to project ${project.name}`,
-      });
-    }
-
     return this.findProjectBranches(project.id);
   }
 
-  /**
-   * Remove a branch association link from a project.
-   */
   async removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]> {
     const pb = await this.projectBranchRepository.findOne({
       where: { id: projectBranchId, projectId, isActive: true },
@@ -475,5 +432,227 @@ export class ProjectService implements OnModuleInit {
       });
     }
     return this.findProjectBranches(projectId);
+  }
+
+  async startProjectPlanning(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.PLANNING;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'StartPlanningCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.startPlanning(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async readyProjectForScheduling(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.SCHEDULING;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'ReadyProjectForSchedulingCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.readyForScheduling(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async startProjectExecution(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.EXECUTION;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'StartProjectExecutionCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.startExecution(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async startProjectValidation(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.VALIDATION;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'StartProjectValidationCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.startValidation(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async completeProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.COMPLETED;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'CompleteProjectCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.completeProject(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async cancelProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.CANCELLED;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'CancelProjectCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.cancelProject(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async initiateBranchPlanning(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({
+      where: { id: projectBranchId, isActive: true },
+    });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const event = ProjectBranchStateMachine.initiatePlanning(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async confirmBranchAssignment(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({
+      where: { id: projectBranchId, isActive: true },
+    });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const event = ProjectBranchStateMachine.confirmAssignment(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async scheduleBranchAudit(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({
+      where: { id: projectBranchId, isActive: true },
+    });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const event = ProjectBranchStateMachine.scheduleAudit(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async completeBranchAudit(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({
+      where: { id: projectBranchId, isActive: true },
+    });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const event = ProjectBranchStateMachine.completeAudit(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async completeBranchValidation(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({
+      where: { id: projectBranchId, isActive: true },
+    });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const event = ProjectBranchStateMachine.completeValidation(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  async closeBranchProject(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({
+      where: { id: projectBranchId, isActive: true },
+    });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const event = ProjectBranchStateMachine.close(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
   }
 }

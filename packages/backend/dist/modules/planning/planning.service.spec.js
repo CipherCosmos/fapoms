@@ -4,16 +4,19 @@ const testing_1 = require("@nestjs/testing");
 const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
 const planning_service_1 = require("./planning.service");
-const branch_entity_1 = require("../branch/branch.entity");
 const recommendation_engine_1 = require("./recommendation.engine");
 const routing_provider_1 = require("../geo/routing.provider");
 const business_rule_entity_1 = require("../platform/rules/business-rule.entity");
-const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
+const branch_query_service_1 = require("../branch/branch-query.service");
+const assayer_service_1 = require("../assayer/assayer.service");
 describe('PlanningService', () => {
     let service;
     let recommendationEngine;
     const mockBranchRepository = {
         findOne: jest.fn(),
+    };
+    const mockBranchQueryService = {
+        findOne: mockBranchRepository.findOne,
     };
     const mockRecommendationEngine = {
         recommend: jest.fn(),
@@ -30,21 +33,24 @@ describe('PlanningService', () => {
     const mockCommercialRepo = {
         findOne: jest.fn(),
     };
+    const mockAssayerService = {
+        getActiveCommercialProfile: mockCommercialRepo.findOne,
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
                 planning_service_1.PlanningService,
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(branch_entity_1.BranchEntity),
-                    useValue: mockBranchRepository,
+                    provide: branch_query_service_1.BranchQueryService,
+                    useValue: mockBranchQueryService,
                 },
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(business_rule_entity_1.BusinessRuleEntity),
                     useValue: mockRuleRepository,
                 },
                 {
-                    provide: (0, typeorm_1.getRepositoryToken)(assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity),
-                    useValue: mockCommercialRepo,
+                    provide: assayer_service_1.AssayerService,
+                    useValue: mockAssayerService,
                 },
                 {
                     provide: recommendation_engine_1.RecommendationEngine,

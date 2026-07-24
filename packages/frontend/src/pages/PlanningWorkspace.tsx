@@ -205,23 +205,19 @@ export const PlanningWorkspace: React.FC = () => {
     setOptimizedSummary(null);
     setRoutePoints(undefined);
     try {
-      const response = await fetch('/api/v1/geo/route/optimize', {
+      const data = await api.request<any>('/geo/route/optimize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
         body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true })
       });
-      const resData = await response.json();
-      if (response.ok && resData.success) {
-        const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = resData.data;
-        const points = [{ latitude: originLat, longitude: originLng }];
-        for (const destId of optimizedSequence) {
-          const matchedBranch = assignedBranches.find(b => b.branch.id === destId);
-          if (matchedBranch?.branch.latitude && matchedBranch.branch.longitude) points.push({ latitude: matchedBranch.branch.latitude, longitude: matchedBranch.branch.longitude });
-        }
-        points.push({ latitude: originLat, longitude: originLng });
-        setRoutePoints(points);
-        setOptimizedSummary({ totalDistanceKm, totalDurationMinutes });
-      } else { alert(resData.message || 'Failed to calculate optimized route.'); }
+      const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = data;
+      const points = [{ latitude: originLat, longitude: originLng }];
+      for (const destId of optimizedSequence) {
+        const matchedBranch = assignedBranches.find(b => b.branch.id === destId);
+        if (matchedBranch?.branch.latitude && matchedBranch.branch.longitude) points.push({ latitude: matchedBranch.branch.latitude, longitude: matchedBranch.branch.longitude });
+      }
+      points.push({ latitude: originLat, longitude: originLng });
+      setRoutePoints(points);
+      setOptimizedSummary({ totalDistanceKm, totalDurationMinutes });
     } catch { alert('Network request failure while optimizing route.'); }
     finally { setIsOptimizing(false); }
   };
@@ -236,13 +232,8 @@ export const PlanningWorkspace: React.FC = () => {
 
   const loadZones = async () => {
     try {
-      const response = await fetch(`/api/v1/zones?limit=100`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` }
-      });
-      const resData = await response.json();
-      if (resData.success) {
-        setZones(resData.data || []);
-      }
+      const data = await api.request<{ id: string; name: string }[]>('/zones?limit=100');
+      setZones(data || []);
     } catch { console.error('Failed to load zones'); }
   };
 
@@ -250,14 +241,9 @@ export const PlanningWorkspace: React.FC = () => {
     setIsLoadingQueue(true);
     setMessage(null);
     try {
-      const response = await fetch(`/api/v1/projects/${projectId}/branches`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` }
-      });
-      const resData = await response.json();
-      if (response.ok && resData.success) {
-        setBranches(resData.data);
-        setSelectedBranchId(resData.data.length > 0 ? resData.data[0].id : null);
-      }
+      const data = await api.request<ProjectBranch[]>(`/projects/${projectId}/branches`);
+      setBranches(data);
+      setSelectedBranchId(data.length > 0 ? data[0].id : null);
     } catch { console.error('Failed to fetch project branches queue'); }
     finally { setIsLoadingQueue(false); }
   };
@@ -291,31 +277,29 @@ export const PlanningWorkspace: React.FC = () => {
     setMessage(null);
     setShowNegotiationModal(false);
     try {
-      const response = await fetch('/api/v1/assignments', {
+      await api.request('/assignments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
         body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee), scheduledDate: negotiatingDate })
       });
-      const resData = await response.json();
-      if (response.ok && resData.success) {
-        setMessage({ type: 'success', text: `Successfully assigned branch to ${selectedCandidate.displayName} on ${negotiatingDate}!` });
-        loadProjectBranches(selectedProjectId);
-      } else { setMessage({ type: 'error', text: resData.message || 'Scheduling failed due to validation rules.' }); }
-    } catch { setMessage({ type: 'error', text: 'Network connection failed while scheduling assignment.' }); }
+      setMessage({ type: 'success', text: `Successfully assigned branch to ${selectedCandidate.displayName} on ${negotiatingDate}!` });
+      loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
+    }
   };
 
   const handleCancelAssignment = async (assignmentId: string) => {
     setMessage(null);
     try {
-      const response = await fetch(`/api/v1/assignments/${assignmentId}/transition`, {
+      await api.request(`/assignments/${assignmentId}/transition`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
         body: JSON.stringify({ targetStatus: 'CANCELLED', remarks: 'Operational unassign from map planning workspace.' })
       });
-      const resData = await response.json();
-      if (response.ok && resData.success) { setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' }); loadProjectBranches(selectedProjectId); }
-      else { setMessage({ type: 'error', text: resData.message || 'Failed to unassign.' }); }
-    } catch { setMessage({ type: 'error', text: 'Network request failure during unassign.' }); }
+      setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' });
+      loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to unassign.' });
+    }
   };
 
   const statesList = Array.from(new Set(branches.map(b => b.branch?.state).filter(Boolean)));
