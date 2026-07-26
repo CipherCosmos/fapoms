@@ -76,6 +76,18 @@ export declare enum ValidationStatus {
     APPROVED = "APPROVED",
     SUBMITTED = "SUBMITTED"
 }
+export declare enum CustomerMasterStatus {
+    DRAFT = "DRAFT",
+    RECONCILED = "RECONCILED",
+    APPROVED = "APPROVED",
+    SUPERSEDED = "SUPERSEDED",
+    REJECTED = "REJECTED"
+}
+export declare enum ValidationQueryStatus {
+    OPEN = "OPEN",
+    RESPONDED = "RESPONDED",
+    RESOLVED = "RESOLVED"
+}
 export declare enum AssayerStatus {
     ACTIVE = "ACTIVE",
     INACTIVE = "INACTIVE",

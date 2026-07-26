@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
+import * as xlsx from 'xlsx';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 
@@ -370,6 +371,28 @@ export const PlanningWorkspace: React.FC = () => {
     }
   };
 
+  const handleExportCoverageReport = () => {
+    if (!selectedProjectId || branches.length === 0) return;
+
+    const data = branches.map((b) => ({
+      'Branch Code': b.branch?.branchCode || '',
+      'Branch Name': b.branch?.name || '',
+      'State': b.branch?.state || '',
+      'District': b.branch?.district || '',
+      'Status': b.status,
+      'Audit Coverage Possible': ['ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED'].includes(b.status) ? 'YES' : 'NO (Uncovered)',
+      'Assigned Assayer': b.assignment?.assayer?.displayName || 'Unassigned',
+      'Scheduled Date': b.scheduledDate || 'N/A',
+      'Fee': b.assignment?.proposedFee ? `₹${b.assignment.proposedFee}` : 'N/A',
+      'Remarks': b.remarks || '',
+    }));
+
+    const ws = xlsx.utils.json_to_sheet(data);
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Branch Coverage Schedule');
+    xlsx.writeFile(wb, `Branch_Coverage_Report_${selectedProjectId}.xlsx`);
+  };
+
   const handleCancelAssignment = async (assignmentId: string) => {
     setMessage(null);
     try {
@@ -535,7 +558,27 @@ export const PlanningWorkspace: React.FC = () => {
           <span style={{ color: 'var(--status-active)' }}>{coveragePct}%</span> confirmed
           <span style={{ color: '#f59e0b' }}>{totalCount - confirmedCount}</span> pending
         </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <button
+            onClick={handleExportCoverageReport}
+            title="Download Excel containing covered vs uncovered branches for bank confirmation"
+            style={{
+              background: 'rgba(16,185,129,0.15)',
+              border: '1px solid var(--status-active)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--status-active)',
+              cursor: 'pointer',
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              marginRight: '8px'
+            }}
+          >
+            📥 Export Coverage Excel
+          </button>
           {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only'], ['day-plans', '📋 Day Plans']].map(([k, lbl]) => (
             <button key={k} onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
               style={{ background: layout === k ? 'rgba(99,102,241,0.15)' : 'none', border: `1px solid ${layout === k ? 'var(--accent-primary)' : 'var(--border-color)'}`, borderRadius: 'var(--radius-sm)', color: layout === k ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', padding: '4px 8px', fontSize: '10px', fontWeight: layout === k ? 600 : 400 }}>

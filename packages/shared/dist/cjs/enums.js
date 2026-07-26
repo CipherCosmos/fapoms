@@ -9,7 +9,7 @@
  * Do not rename without explicit business specification approval.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
+exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
 // ---------------------------------------------------------------------------
 // Project Lifecycle (Part 6 §3)
 // ---------------------------------------------------------------------------
@@ -104,6 +104,26 @@ var ValidationStatus;
     ValidationStatus["APPROVED"] = "APPROVED";
     ValidationStatus["SUBMITTED"] = "SUBMITTED";
 })(ValidationStatus || (exports.ValidationStatus = ValidationStatus = {}));
+// ---------------------------------------------------------------------------
+// Customer Master Lifecycle (Sprint 1 Priority 1)
+// ---------------------------------------------------------------------------
+var CustomerMasterStatus;
+(function (CustomerMasterStatus) {
+    CustomerMasterStatus["DRAFT"] = "DRAFT";
+    CustomerMasterStatus["RECONCILED"] = "RECONCILED";
+    CustomerMasterStatus["APPROVED"] = "APPROVED";
+    CustomerMasterStatus["SUPERSEDED"] = "SUPERSEDED";
+    CustomerMasterStatus["REJECTED"] = "REJECTED";
+})(CustomerMasterStatus || (exports.CustomerMasterStatus = CustomerMasterStatus = {}));
+// ---------------------------------------------------------------------------
+// Validation Query Lifecycle (Sprint 1 Priority 2)
+// ---------------------------------------------------------------------------
+var ValidationQueryStatus;
+(function (ValidationQueryStatus) {
+    ValidationQueryStatus["OPEN"] = "OPEN";
+    ValidationQueryStatus["RESPONDED"] = "RESPONDED";
+    ValidationQueryStatus["RESOLVED"] = "RESOLVED";
+})(ValidationQueryStatus || (exports.ValidationQueryStatus = ValidationQueryStatus = {}));
 // ---------------------------------------------------------------------------
 // Assayer Operational Status
 // ---------------------------------------------------------------------------

@@ -29,6 +29,8 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     scheduledDate;
     completionDate;
     remarks;
+    syncToken;
+    entityVersion;
     slaDueDate;
     slaStatus;
     cancelReason;
@@ -92,6 +94,14 @@ __decorate([
     (0, typeorm_1.Column)({ type: 'text', nullable: true }),
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "remarks", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'sync_token', type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], AssignmentEntity.prototype, "syncToken", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'entity_version', type: 'integer', default: 1 }),
+    __metadata("design:type", Number)
+], AssignmentEntity.prototype, "entityVersion", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'sla_due_date', type: 'timestamptz', nullable: true }),
     __metadata("design:type", Object)

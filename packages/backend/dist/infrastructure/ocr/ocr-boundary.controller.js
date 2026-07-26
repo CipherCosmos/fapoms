@@ -48,6 +48,13 @@ let OcrBoundaryController = class OcrBoundaryController {
             data: job,
         };
     }
+    async retryJob(id, req) {
+        const job = await this.ocrProcessingService.retryJob(id, req.user.id);
+        return {
+            success: true,
+            data: job,
+        };
+    }
 };
 exports.OcrBoundaryController = OcrBoundaryController;
 __decorate([
@@ -79,6 +86,16 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], OcrBoundaryController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Post)('jobs/:id/retry'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE),
+    (0, swagger_1.ApiOperation)({ summary: 'Retry a failed OCR job request' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], OcrBoundaryController.prototype, "retryJob", null);
 exports.OcrBoundaryController = OcrBoundaryController = __decorate([
     (0, swagger_1.ApiTags)('OCR Integration Boundary'),
     (0, swagger_1.ApiBearerAuth)(),

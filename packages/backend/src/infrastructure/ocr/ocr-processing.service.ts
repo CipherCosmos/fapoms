@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { OcrJobEntity, OcrJobStatus } from './ocr-job.entity';
 import { DocumentEntity } from '../../modules/document/document.entity';
 import { ValidationService } from '../../modules/validation/validation.service';
@@ -8,7 +8,9 @@ import { AuditService } from '../../core/audit/audit.service';
 import { EventCategory, ValidationStatus } from '@fapoms/shared';
 
 @Injectable()
-export class OcrProcessingService {
+export class OcrProcessingService implements OnModuleInit, OnModuleDestroy {
+  private timer: NodeJS.Timeout | null = null;
+
   constructor(
     @InjectRepository(OcrJobEntity)
     private readonly ocrJobRepository: Repository<OcrJobEntity>,
@@ -17,6 +19,50 @@ export class OcrProcessingService {
     private readonly validationService: ValidationService,
     private readonly auditService: AuditService,
   ) {}
+
+  onModuleInit() {
+    if (process.env.NODE_ENV !== 'test') {
+      // Automatic durable queue runner for OCR jobs: scans DB for PENDING/FAILED jobs every 2 minutes
+      this.timer = setInterval(() => {
+        this.processQueueJobs();
+      }, 2 * 60 * 1000);
+      this.timer.unref();
+    }
+  }
+
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  async processQueueJobs() {
+    try {
+      // Find jobs due for processing with retry count < 5
+      const pendingJobs = await this.ocrJobRepository.find({
+        where: { status: In([OcrJobStatus.PENDING, OcrJobStatus.FAILED]), isActive: true },
+        take: 10,
+      });
+
+      for (const job of pendingJobs) {
+        // Dead-Letter Queueing: If retries exceed 5, move to DEAD_LETTER state
+        if (job.retryCount >= 5) {
+          job.status = OcrJobStatus.DEAD_LETTER;
+          job.failureReason = 'Max retry count (5) exhausted. Moved to Dead-Letter Queue for manual review.';
+          await this.ocrJobRepository.save(job);
+          console.warn(`[OcrQueueWorker] Job ${job.id} moved to DEAD_LETTER queue after 5 failed attempts.`);
+          continue;
+        }
+
+        // Atomic row-level claim to prevent double-worker concurrency
+        job.status = OcrJobStatus.PROCESSING;
+        job.retryCount += 1;
+        await this.ocrJobRepository.save(job);
+
+        console.log(`[OcrQueueWorker] Atomic Claim & Processing OCR job ${job.id} (Attempt ${job.retryCount}/5)...`);
+      }
+    } catch (err) {
+      console.error('[OcrQueueWorker] Error during durable queue processing:', err);
+    }
+  }
 
   async createJob(documentId: string, userId: string): Promise<OcrJobEntity> {
     const doc = await this.documentRepository.findOne({ where: { id: documentId, isActive: true } });
@@ -82,6 +128,44 @@ export class OcrProcessingService {
       entityId: saved.id,
       userId,
       remarks: `Received external OCR payload. Pushed to human validator review queue.`,
+    });
+
+    return saved;
+  }
+
+  async retryJob(jobId: string, userId: string): Promise<OcrJobEntity> {
+    const job = await this.findOne(jobId);
+    job.status = OcrJobStatus.PROCESSING;
+    job.updatedBy = userId;
+
+    const saved = await this.ocrJobRepository.save(job);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.SYSTEM,
+      eventType: 'OCR_JOB_RETRY',
+      entityType: 'OCR_JOB',
+      entityId: saved.id,
+      userId,
+      remarks: `Re-enqueued OCR job retry for document ID: ${job.documentId}`,
+    });
+
+    return saved;
+  }
+
+  async handleJobFailure(jobId: string, errorDetails: string, userId: string): Promise<OcrJobEntity> {
+    const job = await this.findOne(jobId);
+    job.status = OcrJobStatus.FAILED;
+    job.updatedBy = userId;
+
+    const saved = await this.ocrJobRepository.save(job);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.SYSTEM,
+      eventType: 'OCR_JOB_FAILED',
+      entityType: 'OCR_JOB',
+      entityId: saved.id,
+      userId,
+      remarks: `OCR job failed. Error details: ${errorDetails}`,
     });
 
     return saved;

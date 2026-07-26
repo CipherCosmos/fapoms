@@ -266,10 +266,13 @@ export class DayPlannerService {
         branchCode: pb.branch.branchCode,
         latitude: Number(pb.branch.latitude),
         longitude: Number(pb.branch.longitude),
+        packetCount: pb.packetCount || 40,
         estimatedDurationHours: Number(pb.branch.estimatedDurationHours) || 4, // default 4h
         district: pb.branch.district,
         city: pb.branch.city,
-      }));
+      }))
+      // Customer Throughput Optimization: Prioritize seeding clusters from high-volume customer packet branches
+      .sort((a, b) => b.packetCount - a.packetCount);
 
     const visited = new Set<string>();
     const clusters: BranchCluster[] = [];

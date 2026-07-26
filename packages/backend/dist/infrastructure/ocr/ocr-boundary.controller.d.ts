@@ -18,5 +18,9 @@ export declare class OcrBoundaryController {
         success: boolean;
         data: import("./ocr-job.entity").OcrJobEntity;
     }>;
+    retryJob(id: string, req: any): Promise<{
+        success: boolean;
+        data: import("./ocr-job.entity").OcrJobEntity;
+    }>;
 }
 export {};

@@ -2,6 +2,28 @@ import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto, Tra
 export declare class AssignmentController {
     private readonly assignmentService;
     constructor(assignmentService: AssignmentService);
+    findByAssayer(assayerId: string): Promise<{
+        success: boolean;
+        items: import("./assignment.entity").AssignmentEntity[];
+    }>;
+    checkIn(id: string, body: {
+        lat: number;
+        lng: number;
+        syncToken?: string;
+        timestamp?: string;
+    }): Promise<{
+        success: boolean;
+        error: string;
+        message: string;
+        syncToken?: undefined;
+        timestamp?: undefined;
+    } | {
+        success: boolean;
+        message: string;
+        syncToken: string;
+        timestamp: string;
+        error?: undefined;
+    }>;
     create(dto: CreateAssignmentDto, req: any): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;

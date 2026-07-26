@@ -4,18 +4,32 @@ import { ValidationService, CreateValidationCaseDto } from './validation.service
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
 import { SystemRole, ValidationStatus } from '@fapoms/shared';
 
+import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString } from 'class-validator';
+
 class CreateValidationCaseRequestDto implements CreateValidationCaseDto {
+  @IsUUID()
+  @IsNotEmpty()
   projectBranchId: string;
 }
 
 class AssignReviewerDto {
+  @IsUUID()
   reviewerId: string;
 }
 
 class TransitionValidationCaseDto {
+  @IsEnum(ValidationStatus)
   targetStatus: ValidationStatus;
+
+  @IsOptional()
+  @IsString()
   remarks?: string;
+
+  @IsOptional()
+  @IsString()
   notes?: string;
+
+  @IsOptional()
   ocrResult?: any;
 }
 

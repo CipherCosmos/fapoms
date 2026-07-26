@@ -1,6 +1,6 @@
 export declare class BillingRecord {
     id: string;
-    auditId: string;
+    auditId?: string;
     assayerId: string;
     baseFee: number;
     travelAllowance: number;

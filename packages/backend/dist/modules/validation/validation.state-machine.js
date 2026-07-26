@@ -7,8 +7,8 @@ const domain_events_1 = require("../../core/events/domain-events");
 class ValidationStateMachine {
     static validateTransition(current, target) {
         const validPaths = {
-            PENDING: [shared_1.ValidationStatus.ASSIGNED],
-            ASSIGNED: [shared_1.ValidationStatus.OCR_PROCESSING],
+            PENDING: [shared_1.ValidationStatus.ASSIGNED, shared_1.ValidationStatus.HUMAN_REVIEW],
+            ASSIGNED: [shared_1.ValidationStatus.OCR_PROCESSING, shared_1.ValidationStatus.HUMAN_REVIEW, shared_1.ValidationStatus.APPROVED],
             OCR_PROCESSING: [shared_1.ValidationStatus.HUMAN_REVIEW],
             HUMAN_REVIEW: [
                 shared_1.ValidationStatus.APPROVED,

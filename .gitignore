@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+
+# Build Outputs & Bundles
+dist/
+**/dist/
+build/
+**/build/
+.vite/
+**/.vite/
+out/
+.next/
+
+# Logs & Environment Files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE & OS Files
+.DS_Store
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Uploads & Temp Files
+uploads/
+**/uploads/
+tmp/
+**/tmp/
+temp/
+*.tmp
+
+# Test artifacts & Reports
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# Test spreadsheets & Excel dumps
+*.xlsx
+*.xls

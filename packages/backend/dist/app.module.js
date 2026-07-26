@@ -37,6 +37,8 @@ const audit_history_module_1 = require("./modules/audit-history/audit-history.mo
 const billing_module_1 = require("./modules/billing/billing.module");
 const ledger_module_1 = require("./modules/ledger/ledger.module");
 const audit_module_2 = require("./modules/audit/audit.module");
+const customer_master_module_1 = require("./modules/customer-master/customer-master.module");
+const validation_query_module_1 = require("./modules/validation-query/validation-query.module");
 const sla_scanner_worker_1 = require("./infrastructure/scheduler/sla-scanner.worker");
 let AppModule = class AppModule {
 };
@@ -79,6 +81,8 @@ exports.AppModule = AppModule = __decorate([
             billing_module_1.BillingModule,
             ledger_module_1.LedgerModule,
             audit_module_2.AuditPlatformModule,
+            customer_master_module_1.CustomerMasterModule,
+            validation_query_module_1.ValidationQueryModule,
         ],
         providers: [sla_scanner_worker_1.SlaScannerWorker],
     })

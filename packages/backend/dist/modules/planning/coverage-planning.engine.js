@@ -74,13 +74,13 @@ let CoveragePlanningEngine = class CoveragePlanningEngine {
             let assignedAssayerName = null;
             let highestScore = -1;
             let selectedAssayer = null;
-            const dummyBranch = {
+            const clusterCenterBranch = {
                 id: cluster.id,
                 latitude: cluster.centerLatitude,
                 longitude: cluster.centerLongitude,
                 clientId: project.clientId,
             };
-            const candidates = await this.recommendationEngine.recommend(dummyBranch, new Date());
+            const candidates = await this.recommendationEngine.recommend(clusterCenterBranch, new Date());
             const validCandidates = candidates.filter((c) => {
                 const remaining = (allocationMap[c.assayer.id] || 0) < (c.assayer.maxWeeklyWorkload || 15);
                 return remaining;

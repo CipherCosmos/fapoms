@@ -85,12 +85,16 @@ let AssignmentService = class AssignmentService {
                 },
             },
             {
-                from: [shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.NEGOTIATION],
+                from: [shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.NEGOTIATION, shared_1.AssignmentStatus.CANDIDATE_SELECTED, shared_1.AssignmentStatus.CONTACT_INITIATED],
                 to: shared_1.AssignmentStatus.REJECTED,
                 beforeTransition: async (ctx) => {
-                    const { assignment, reason, remarks } = ctx.payload;
+                    const { assignment, reason, remarks, userId } = ctx.payload;
                     assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+                    assignment.isActive = false;
+                    if (assignment.projectBranch) {
+                        assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+                        assignment.projectBranch.updatedBy = userId || 'SYSTEM';
+                    }
                 },
             },
             {
@@ -213,6 +217,7 @@ let AssignmentService = class AssignmentService {
             proposedFee: dto.proposedFee,
             agreedFee: null,
             scheduledDate: scheduledDateObj,
+            syncToken: `SYNC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
             slaDueDate,
             slaStatus: 'COMPLIANT',
             remarks: dto.remarks ?? null,
@@ -318,6 +323,7 @@ let AssignmentService = class AssignmentService {
         else {
             throw new common_1.BadRequestException(`Invalid assignment status: ${targetStatus}`);
         }
+        const payload = { assignment, fee, reason, remarks, userId };
         return this.workflowEngine.executeCommand('assignment', assignment.id, `${targetStatus}_Command`, prevStatus, targetStatus, userId, role, [], async () => {
             if (remarks)
                 assignment.remarks = remarks;
@@ -383,7 +389,7 @@ let AssignmentService = class AssignmentService {
                 return savedAssign;
             });
             return { saved, event };
-        });
+        }, payload);
     }
     async transition(id, targetStatus, userId, remarks, reason, fee, scheduledDate) {
         if (targetStatus === shared_1.AssignmentStatus.CANDIDATE_SELECTED) {

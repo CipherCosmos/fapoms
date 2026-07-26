@@ -2,6 +2,7 @@ import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, Pat
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
+import * as xlsx from 'xlsx';
 import { DocumentService } from './document.service';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
@@ -53,6 +54,63 @@ export class DocumentController {
     return {
       success: true,
       data: doc,
+    };
+  }
+
+  @Post('validate-customer-excel')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: 'Validate Customer Master Excel file and return structured Reconciliation Summary Report' })
+  async validateCustomerExcel(@UploadedFile() file: any) {
+    // Parse Excel workbook buffer
+    const workbook = xlsx.read(file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    let totalRows = rows.length;
+    let duplicateAccountsCount = 0;
+    let missingBranchesCount = 0;
+    const accountNumbersSeen = new Set<string>();
+    const branchCodesSeen = new Set<string>();
+
+    for (const row of rows) {
+      const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
+      const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim();
+
+      if (acc) {
+        if (accountNumbersSeen.has(acc)) {
+          duplicateAccountsCount++;
+        } else {
+          accountNumbersSeen.add(acc);
+        }
+      }
+
+      if (branchCode) {
+        branchCodesSeen.add(branchCode);
+      } else {
+        missingBranchesCount++;
+      }
+    }
+
+    const isReplacementUpload = totalRows > 1000;
+    const status = (duplicateAccountsCount > 50 || missingBranchesCount > 10) ? 'IMPORT_BLOCKED' : 'VALIDATED_READY_FOR_IMPORT';
+
+    return {
+      success: true,
+      data: {
+        summary: {
+          totalRowsProcessed: totalRows,
+          uniqueAccountsCount: accountNumbersSeen.size,
+          duplicateAccountsCount,
+          uniqueBranchesCount: branchCodesSeen.size,
+          missingBranchCodesCount: missingBranchesCount,
+          isReplacementUpload,
+          status,
+        },
+        recommendation: status === 'IMPORT_BLOCKED'
+          ? 'Reconciliation Blocked: Fix duplicate account numbers or missing branch codes in Excel sheet before proceeding.'
+          : 'Reconciliation Passed: Ready for OCR generation and assignment mapping.',
+      },
     };
   }
 

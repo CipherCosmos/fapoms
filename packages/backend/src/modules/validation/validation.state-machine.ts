@@ -10,8 +10,8 @@ import {
 export class ValidationStateMachine {
   private static validateTransition(current: ValidationStatus, target: ValidationStatus) {
     const validPaths: Record<string, string[]> = {
-      PENDING: [ValidationStatus.ASSIGNED],
-      ASSIGNED: [ValidationStatus.OCR_PROCESSING],
+      PENDING: [ValidationStatus.ASSIGNED, ValidationStatus.HUMAN_REVIEW],
+      ASSIGNED: [ValidationStatus.OCR_PROCESSING, ValidationStatus.HUMAN_REVIEW, ValidationStatus.APPROVED],
       OCR_PROCESSING: [ValidationStatus.HUMAN_REVIEW],
       HUMAN_REVIEW: [
         ValidationStatus.APPROVED,

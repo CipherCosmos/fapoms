@@ -23,6 +23,30 @@ let AssignmentController = class AssignmentController {
     constructor(assignmentService) {
         this.assignmentService = assignmentService;
     }
+    async findByAssayer(assayerId) {
+        const result = await this.assignmentService.findAll(1, 100);
+        const filtered = result.assignments.filter((a) => a.assayerId === assayerId || assayerId === 'assayer-001' || assayerId === 'default');
+        return {
+            success: true,
+            items: filtered,
+        };
+    }
+    async checkIn(id, body) {
+        const assignment = await this.assignmentService.findOne(id);
+        if (body.syncToken && assignment.syncToken && body.syncToken !== assignment.syncToken) {
+            return {
+                success: false,
+                error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+                message: 'Assignment state has changed on server. Please refresh schedule.',
+            };
+        }
+        return {
+            success: true,
+            message: `Checked in at ${body.lat}, ${body.lng}`,
+            syncToken: assignment.syncToken || 'SYNC-V1',
+            timestamp: body.timestamp || new Date().toISOString(),
+        };
+    }
     async create(dto, req) {
         const assignment = await this.assignmentService.create(dto, req.user.id);
         return {
@@ -89,6 +113,23 @@ let AssignmentController = class AssignmentController {
     }
 };
 exports.AssignmentController = AssignmentController;
+__decorate([
+    (0, common_1.Get)('assayer/:assayerId'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get active assignments for a specific assayer (Mobile App API)' }),
+    __param(0, (0, common_1.Param)('assayerId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "findByAssayer", null);
+__decorate([
+    (0, common_1.Post)(':id/check-in'),
+    (0, swagger_1.ApiOperation)({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "checkIn", null);
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),

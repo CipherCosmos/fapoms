@@ -135,10 +135,12 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
             branchCode: pb.branch.branchCode,
             latitude: Number(pb.branch.latitude),
             longitude: Number(pb.branch.longitude),
+            packetCount: pb.packetCount || 40,
             estimatedDurationHours: Number(pb.branch.estimatedDurationHours) || 4,
             district: pb.branch.district,
             city: pb.branch.city,
-        }));
+        }))
+            .sort((a, b) => b.packetCount - a.packetCount);
         const visited = new Set();
         const clusters = [];
         let clusterIdx = 0;

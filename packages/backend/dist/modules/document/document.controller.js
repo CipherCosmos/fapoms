@@ -16,6 +16,7 @@ exports.DocumentController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const platform_express_1 = require("@nestjs/platform-express");
+const xlsx = require("xlsx");
 const document_service_1 = require("./document.service");
 const local_storage_service_1 = require("../../infrastructure/storage/local-storage.service");
 const ocr_processing_service_1 = require("../../infrastructure/ocr/ocr-processing.service");
@@ -47,6 +48,53 @@ let DocumentController = class DocumentController {
         return {
             success: true,
             data: doc,
+        };
+    }
+    async validateCustomerExcel(file) {
+        const workbook = xlsx.read(file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        let totalRows = rows.length;
+        let duplicateAccountsCount = 0;
+        let missingBranchesCount = 0;
+        const accountNumbersSeen = new Set();
+        const branchCodesSeen = new Set();
+        for (const row of rows) {
+            const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
+            const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim();
+            if (acc) {
+                if (accountNumbersSeen.has(acc)) {
+                    duplicateAccountsCount++;
+                }
+                else {
+                    accountNumbersSeen.add(acc);
+                }
+            }
+            if (branchCode) {
+                branchCodesSeen.add(branchCode);
+            }
+            else {
+                missingBranchesCount++;
+            }
+        }
+        const isReplacementUpload = totalRows > 1000;
+        const status = (duplicateAccountsCount > 50 || missingBranchesCount > 10) ? 'IMPORT_BLOCKED' : 'VALIDATED_READY_FOR_IMPORT';
+        return {
+            success: true,
+            data: {
+                summary: {
+                    totalRowsProcessed: totalRows,
+                    uniqueAccountsCount: accountNumbersSeen.size,
+                    duplicateAccountsCount,
+                    uniqueBranchesCount: branchCodesSeen.size,
+                    missingBranchCodesCount: missingBranchesCount,
+                    isReplacementUpload,
+                    status,
+                },
+                recommendation: status === 'IMPORT_BLOCKED'
+                    ? 'Reconciliation Blocked: Fix duplicate account numbers or missing branch codes in Excel sheet before proceeding.'
+                    : 'Reconciliation Passed: Ready for OCR generation and assignment mapping.',
+            },
         };
     }
     async findOne(id) {
@@ -93,6 +141,16 @@ __decorate([
     __metadata("design:paramtypes", [Object, String, String, Object]),
     __metadata("design:returntype", Promise)
 ], DocumentController.prototype, "uploadFile", null);
+__decorate([
+    (0, common_1.Post)('validate-customer-excel'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    (0, swagger_1.ApiOperation)({ summary: 'Validate Customer Master Excel file and return structured Reconciliation Summary Report' }),
+    __param(0, (0, common_1.UploadedFile)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], DocumentController.prototype, "validateCustomerExcel", null);
 __decorate([
     (0, common_1.Get)(':id'),
     (0, swagger_1.ApiOperation)({ summary: 'Get details of a document metadata' }),

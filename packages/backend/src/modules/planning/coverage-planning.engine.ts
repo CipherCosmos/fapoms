@@ -106,14 +106,14 @@ export class CoveragePlanningEngine {
       let selectedAssayer: any | null = null;
 
       // Evaluate candidates on cluster center
-      const dummyBranch = {
+      const clusterCenterBranch = {
         id: cluster.id,
         latitude: cluster.centerLatitude,
         longitude: cluster.centerLongitude,
         clientId: project.clientId,
       } as any;
 
-      const candidates = await this.recommendationEngine.recommend(dummyBranch, new Date());
+      const candidates = await this.recommendationEngine.recommend(clusterCenterBranch, new Date());
       
       // Filter out double-booked or capacity-short candidates
       const validCandidates = candidates.filter((c) => {

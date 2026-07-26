@@ -866,14 +866,14 @@ export class AssayerService implements OnModuleInit {
   async updateAssayerStats(assayerId: string): Promise<void> {
     const mgr = this.assayerRepository.manager;
 
-    const total = await mgr.count('assignments', { where: { assayer_id: assayerId, is_active: true } });
+    const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
 
     const completed = await mgr.count('assignments', {
-      where: { assayer_id: assayerId, status: AssignmentStatus.CLOSED, is_active: true },
+      where: { assayerId, status: AssignmentStatus.CLOSED, isActive: true },
     });
 
     const cancelled = await mgr.count('assignments', {
-      where: { assayer_id: assayerId, status: AssignmentStatus.CANCELLED, is_active: true },
+      where: { assayerId, status: AssignmentStatus.CANCELLED, isActive: true },
     });
 
     const onTimeResult = await mgr.query(

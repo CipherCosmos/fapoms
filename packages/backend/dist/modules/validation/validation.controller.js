@@ -18,18 +18,46 @@ const swagger_1 = require("@nestjs/swagger");
 const validation_service_1 = require("./validation.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
+const class_validator_1 = require("class-validator");
 class CreateValidationCaseRequestDto {
     projectBranchId;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateValidationCaseRequestDto.prototype, "projectBranchId", void 0);
 class AssignReviewerDto {
     reviewerId;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    __metadata("design:type", String)
+], AssignReviewerDto.prototype, "reviewerId", void 0);
 class TransitionValidationCaseDto {
     targetStatus;
     remarks;
     notes;
     ocrResult;
 }
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.ValidationStatus),
+    __metadata("design:type", String)
+], TransitionValidationCaseDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TransitionValidationCaseDto.prototype, "remarks", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TransitionValidationCaseDto.prototype, "notes", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", Object)
+], TransitionValidationCaseDto.prototype, "ocrResult", void 0);
 let ValidationController = class ValidationController {
     validationService;
     constructor(validationService) {

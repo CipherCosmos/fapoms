@@ -63,4 +63,5 @@ export declare class AssayerEntity extends BaseEntity {
     totalEarnings: number;
     lastAssignmentDate: Date | null;
     averageRating: number;
+    runningBalance: number;
 }

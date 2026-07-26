@@ -109,6 +109,28 @@ export enum ValidationStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Customer Master Lifecycle (Sprint 1 Priority 1)
+// ---------------------------------------------------------------------------
+
+export enum CustomerMasterStatus {
+  DRAFT = 'DRAFT',
+  RECONCILED = 'RECONCILED',
+  APPROVED = 'APPROVED',
+  SUPERSEDED = 'SUPERSEDED',
+  REJECTED = 'REJECTED',
+}
+
+// ---------------------------------------------------------------------------
+// Validation Query Lifecycle (Sprint 1 Priority 2)
+// ---------------------------------------------------------------------------
+
+export enum ValidationQueryStatus {
+  OPEN = 'OPEN',
+  RESPONDED = 'RESPONDED',
+  RESOLVED = 'RESOLVED',
+}
+
+// ---------------------------------------------------------------------------
 // Assayer Operational Status
 // ---------------------------------------------------------------------------
 

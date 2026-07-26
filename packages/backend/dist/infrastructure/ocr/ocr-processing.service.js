@@ -26,11 +26,48 @@ let OcrProcessingService = class OcrProcessingService {
     documentRepository;
     validationService;
     auditService;
+    timer = null;
     constructor(ocrJobRepository, documentRepository, validationService, auditService) {
         this.ocrJobRepository = ocrJobRepository;
         this.documentRepository = documentRepository;
         this.validationService = validationService;
         this.auditService = auditService;
+    }
+    onModuleInit() {
+        if (process.env.NODE_ENV !== 'test') {
+            this.timer = setInterval(() => {
+                this.processQueueJobs();
+            }, 2 * 60 * 1000);
+            this.timer.unref();
+        }
+    }
+    onModuleDestroy() {
+        if (this.timer)
+            clearInterval(this.timer);
+    }
+    async processQueueJobs() {
+        try {
+            const pendingJobs = await this.ocrJobRepository.find({
+                where: { status: (0, typeorm_2.In)([ocr_job_entity_1.OcrJobStatus.PENDING, ocr_job_entity_1.OcrJobStatus.FAILED]), isActive: true },
+                take: 10,
+            });
+            for (const job of pendingJobs) {
+                if (job.retryCount >= 5) {
+                    job.status = ocr_job_entity_1.OcrJobStatus.DEAD_LETTER;
+                    job.failureReason = 'Max retry count (5) exhausted. Moved to Dead-Letter Queue for manual review.';
+                    await this.ocrJobRepository.save(job);
+                    console.warn(`[OcrQueueWorker] Job ${job.id} moved to DEAD_LETTER queue after 5 failed attempts.`);
+                    continue;
+                }
+                job.status = ocr_job_entity_1.OcrJobStatus.PROCESSING;
+                job.retryCount += 1;
+                await this.ocrJobRepository.save(job);
+                console.log(`[OcrQueueWorker] Atomic Claim & Processing OCR job ${job.id} (Attempt ${job.retryCount}/5)...`);
+            }
+        }
+        catch (err) {
+            console.error('[OcrQueueWorker] Error during durable queue processing:', err);
+        }
     }
     async createJob(documentId, userId) {
         const doc = await this.documentRepository.findOne({ where: { id: documentId, isActive: true } });
@@ -84,6 +121,36 @@ let OcrProcessingService = class OcrProcessingService {
             entityId: saved.id,
             userId,
             remarks: `Received external OCR payload. Pushed to human validator review queue.`,
+        });
+        return saved;
+    }
+    async retryJob(jobId, userId) {
+        const job = await this.findOne(jobId);
+        job.status = ocr_job_entity_1.OcrJobStatus.PROCESSING;
+        job.updatedBy = userId;
+        const saved = await this.ocrJobRepository.save(job);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.SYSTEM,
+            eventType: 'OCR_JOB_RETRY',
+            entityType: 'OCR_JOB',
+            entityId: saved.id,
+            userId,
+            remarks: `Re-enqueued OCR job retry for document ID: ${job.documentId}`,
+        });
+        return saved;
+    }
+    async handleJobFailure(jobId, errorDetails, userId) {
+        const job = await this.findOne(jobId);
+        job.status = ocr_job_entity_1.OcrJobStatus.FAILED;
+        job.updatedBy = userId;
+        const saved = await this.ocrJobRepository.save(job);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.SYSTEM,
+            eventType: 'OCR_JOB_FAILED',
+            entityType: 'OCR_JOB',
+            entityId: saved.id,
+            userId,
+            remarks: `OCR job failed. Error details: ${errorDetails}`,
         });
         return saved;
     }

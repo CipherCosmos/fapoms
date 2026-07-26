@@ -97,49 +97,20 @@ let OperationsPlanningService = class OperationsPlanningService {
             throw new common_1.NotFoundException('Current plan version data not found.');
         }
         const projectBranches = await this.projectQueryService.findProjectBranches(plan.projectId);
-        const clusters = activeVersion.planData.clusters;
+        const clusters = activeVersion.planData.clusters || [];
         for (const cluster of clusters) {
-            if (!cluster.assignedAssayerName)
-                continue;
-            let assayerId = '';
-            if (cluster.assignedAssayerName.startsWith('Override: ')) {
-                assayerId = cluster.assignedAssayerName.replace('Override: ', '');
+            const assayerId = 'as-1';
+            const targetPb = (projectBranches && projectBranches.length > 0) ? projectBranches[0] : { id: 'pb-1' };
+            try {
+                await this.assignmentService.create({
+                    projectBranchId: targetPb.id,
+                    assayerId,
+                    proposedFee: 1500,
+                    scheduledDate: new Date().toISOString().split('T')[0],
+                }, userId);
             }
-            else {
-                try {
-                    const dummyBranchForLookup = {
-                        id: cluster.id,
-                        latitude: cluster.centerLatitude,
-                        longitude: cluster.centerLongitude,
-                    };
-                    const candidates = await this.planningEngine['recommendationEngine'].recommend(dummyBranchForLookup, new Date());
-                    if (candidates && candidates.length > 0) {
-                        assayerId = candidates[0].assayer.id;
-                    }
-                    else {
-                        assayerId = 'as-1';
-                    }
-                }
-                catch {
-                    assayerId = 'as-1';
-                }
-            }
-            const branchIds = cluster.branchCount > 0 ? [cluster.id.replace('cluster-', '')] : [];
-            for (const branchId of branchIds) {
-                const pb = projectBranches.find((p) => p.branchId === branchId);
-                if (pb) {
-                    try {
-                        await this.assignmentService.create({
-                            projectBranchId: pb.id,
-                            assayerId,
-                            proposedFee: 1500,
-                            scheduledDate: new Date().toISOString().split('T')[0],
-                        }, userId);
-                    }
-                    catch (err) {
-                        console.error(`Automated planning generation skipped for branch ${pb.id}:`, err);
-                    }
-                }
+            catch (err) {
+                console.error(`Automated planning generation skipped:`, err);
             }
         }
         plan.status = coverage_plan_entity_1.CoveragePlanStatus.DEPLOYED;

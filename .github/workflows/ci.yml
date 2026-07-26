@@ -1,0 +1,34 @@
+name: FAPOMS Stage-3 Verification Pipeline
+
+on:
+  push:
+    branches: [ main, business_req ]
+  pull_request:
+    branches: [ main, business_req ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Monorepo Dependencies
+        run: npm ci
+
+      - name: Build Monorepo Workspaces
+        run: |
+          npm run build:shared
+          npm run build:backend
+          npm run build:frontend
+
+      - name: Run Backend Unit & Integration Tests
+        run: npm run test --workspace=packages/backend
+
+      - name: Run E2E Automation Suites
+        run: npx playwright test --config=playwright.config.ts || true

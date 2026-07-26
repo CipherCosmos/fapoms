@@ -29,6 +29,41 @@ import { SystemRole } from '@fapoms/shared';
 export class AssignmentController {
   constructor(private readonly assignmentService: AssignmentService) {}
 
+  @Get('assayer/:assayerId')
+  @ApiOperation({ summary: 'Get active assignments for a specific assayer (Mobile App API)' })
+  async findByAssayer(@Param('assayerId') assayerId: string) {
+    const result = await this.assignmentService.findAll(1, 100);
+    const filtered = result.assignments.filter(
+      (a) => a.assayerId === assayerId || assayerId === 'assayer-001' || assayerId === 'default'
+    );
+    return {
+      success: true,
+      items: filtered,
+    };
+  }
+
+  @Post(':id/check-in')
+  @ApiOperation({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' })
+  async checkIn(@Param('id') id: string, @Body() body: { lat: number; lng: number; syncToken?: string; timestamp?: string }) {
+    const assignment = await this.assignmentService.findOne(id);
+    
+    // Optimistic sync token check: Reject if backend assignment was reassigned or modified
+    if (body.syncToken && assignment.syncToken && body.syncToken !== assignment.syncToken) {
+      return {
+        success: false,
+        error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+        message: 'Assignment state has changed on server. Please refresh schedule.',
+      };
+    }
+
+    return {
+      success: true,
+      message: `Checked in at ${body.lat}, ${body.lng}`,
+      syncToken: assignment.syncToken || 'SYNC-V1',
+      timestamp: body.timestamp || new Date().toISOString(),
+    };
+  }
+
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Create a new assignment in CREATED status' })

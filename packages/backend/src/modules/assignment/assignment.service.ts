@@ -91,12 +91,17 @@ export class AssignmentService implements OnModuleInit {
         },
       },
       {
-        from: [AssignmentStatus.CREATED, AssignmentStatus.NEGOTIATION],
+        from: [AssignmentStatus.CREATED, AssignmentStatus.NEGOTIATION, AssignmentStatus.CANDIDATE_SELECTED, AssignmentStatus.CONTACT_INITIATED],
         to: AssignmentStatus.REJECTED,
         beforeTransition: async (ctx) => {
-          const { assignment, reason, remarks } = ctx.payload;
+          const { assignment, reason, remarks, userId } = ctx.payload;
           assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
-          assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
+          assignment.isActive = false; // Release assignment allocation
+          
+          if (assignment.projectBranch) {
+            assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
+            assignment.projectBranch.updatedBy = userId || 'SYSTEM';
+          }
         },
       },
       {
@@ -241,6 +246,7 @@ export class AssignmentService implements OnModuleInit {
       proposedFee: dto.proposedFee,
       agreedFee: null,
       scheduledDate: scheduledDateObj,
+      syncToken: `SYNC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
       slaDueDate,
       slaStatus: 'COMPLIANT',
       remarks: dto.remarks ?? null,
@@ -363,6 +369,7 @@ export class AssignmentService implements OnModuleInit {
       throw new BadRequestException(`Invalid assignment status: ${targetStatus}`);
     }
 
+    const payload = { assignment, fee, reason, remarks, userId };
     return this.workflowEngine.executeCommand(
       'assignment',
       assignment.id,
@@ -440,7 +447,8 @@ export class AssignmentService implements OnModuleInit {
         });
 
         return { saved, event };
-      }
+      },
+      payload,
     );
   }
 

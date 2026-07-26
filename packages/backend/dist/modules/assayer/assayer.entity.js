@@ -68,6 +68,7 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     totalEarnings;
     lastAssignmentDate;
     averageRating;
+    runningBalance;
 };
 exports.AssayerEntity = AssayerEntity;
 __decorate([
@@ -271,6 +272,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 }),
     __metadata("design:type", Number)
 ], AssayerEntity.prototype, "averageRating", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "runningBalance", void 0);
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),

@@ -41,6 +41,8 @@ import { AuditHistoryModule } from './modules/audit-history/audit-history.module
 import { BillingModule } from './modules/billing/billing.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
 import { AuditPlatformModule } from './modules/audit/audit.module';
+import { CustomerMasterModule } from './modules/customer-master/customer-master.module';
+import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
 import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 
 @Module({
@@ -87,6 +89,8 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
     BillingModule,
     LedgerModule,
     AuditPlatformModule,
+    CustomerMasterModule,
+    ValidationQueryModule,
   ],
   providers: [SlaScannerWorker],
 })

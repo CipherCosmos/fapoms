@@ -15,6 +15,21 @@ export declare class DocumentController {
         success: boolean;
         data: import("./document.entity").DocumentEntity;
     }>;
+    validateCustomerExcel(file: any): Promise<{
+        success: boolean;
+        data: {
+            summary: {
+                totalRowsProcessed: number;
+                uniqueAccountsCount: number;
+                duplicateAccountsCount: number;
+                uniqueBranchesCount: number;
+                missingBranchCodesCount: number;
+                isReplacementUpload: boolean;
+                status: string;
+            };
+            recommendation: string;
+        };
+    }>;
     findOne(id: string): Promise<{
         success: boolean;
         data: import("./document.entity").DocumentEntity;

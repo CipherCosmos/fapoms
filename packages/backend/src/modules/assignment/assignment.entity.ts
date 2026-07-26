@@ -59,6 +59,12 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
 
+  @Column({ name: 'sync_token', type: 'varchar', length: 100, nullable: true })
+  syncToken: string | null;
+
+  @Column({ name: 'entity_version', type: 'integer', default: 1 })
+  entityVersion: number;
+
   @Column({ name: 'sla_due_date', type: 'timestamptz', nullable: true })
   slaDueDate: Date | null;
 
