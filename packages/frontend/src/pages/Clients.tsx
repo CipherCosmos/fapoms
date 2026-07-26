@@ -559,6 +559,8 @@ const CreateClientModal: React.FC<{ onClose: () => void; onCreated: () => void }
   const [contactPerson, setContactPerson] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactPhone, setContactPhone] = useState('');
+  const [priority, setPriority] = useState('MEDIUM');
+  const [budget, setBudget] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -567,7 +569,14 @@ const CreateClientModal: React.FC<{ onClose: () => void; onCreated: () => void }
     try {
       await api.request('/clients', {
         method: 'POST',
-        body: JSON.stringify({ clientCode, name, displayName, contactPerson: contactPerson || undefined, contactEmail: contactEmail || undefined, contactPhone: contactPhone || undefined }),
+        body: JSON.stringify({
+          clientCode, name, displayName,
+          contactPerson: contactPerson || undefined,
+          contactEmail: contactEmail || undefined,
+          contactPhone: contactPhone || undefined,
+          priority,
+          budget: budget ? parseFloat(budget) : undefined,
+        }),
       });
       onCreated();
       onClose();
@@ -594,6 +603,15 @@ const CreateClientModal: React.FC<{ onClose: () => void; onCreated: () => void }
             <input placeholder="Contact Email" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)}
               style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
             <input placeholder="Contact Phone" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)}
+              style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+            <select value={priority} onChange={(e) => setPriority(e.target.value)}
+              style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+              <option value="LOW">LOW</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="HIGH">HIGH</option>
+              <option value="CRITICAL">CRITICAL</option>
+            </select>
+            <input placeholder="Budget" type="number" value={budget} onChange={(e) => setBudget(e.target.value)}
               style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
           </div>
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>

@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const assayer_entity_1 = require("../assayer/assayer.entity");
+const assayer_service_1 = require("../assayer/assayer.service");
 const routing_provider_1 = require("../geo/routing.provider");
 const assignment_entity_1 = require("../assignment/assignment.entity");
 const shared_1 = require("@fapoms/shared");
@@ -25,32 +26,32 @@ const client_entity_1 = require("../client/client.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const constraint_evaluator_1 = require("./constraint.evaluator");
 let AvailabilityFilter = class AvailabilityFilter {
-    assignmentRepository;
+    constraintEvaluator;
     name = 'availability';
-    constructor(assignmentRepository) {
-        this.assignmentRepository = assignmentRepository;
+    constructor(constraintEvaluator) {
+        this.constraintEvaluator = constraintEvaluator;
     }
     async evaluate(assayer, context) {
         if (assayer.status !== 'ACTIVE' || !assayer.isActive) {
             return false;
         }
-        const doubleBooked = await this.assignmentRepository.findOne({
-            where: {
-                assayerId: assayer.id,
-                scheduledDate: context.scheduledDate,
-                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.SCHEDULED]),
-                isActive: true,
-            },
-        });
-        return !doubleBooked;
+        const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
+        if (!dbResult.passed) {
+            return false;
+        }
+        const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
+        if (!leaveResult.passed) {
+            return false;
+        }
+        return true;
     }
 };
 exports.AvailabilityFilter = AvailabilityFilter;
 exports.AvailabilityFilter = AvailabilityFilter = __decorate([
     (0, common_1.Injectable)(),
-    __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
-    __metadata("design:paramtypes", [typeorm_2.Repository])
+    __metadata("design:paramtypes", [constraint_evaluator_1.ConstraintEvaluator])
 ], AvailabilityFilter);
 let ClientRestrictionFilter = class ClientRestrictionFilter {
     name = 'clientRestriction';
@@ -112,9 +113,11 @@ exports.RuleEngineEligibilityFilter = RuleEngineEligibilityFilter = __decorate([
 ], RuleEngineEligibilityFilter);
 let RequiredSkillsFilter = class RequiredSkillsFilter {
     projectBranchRepository;
+    constraintEvaluator;
     name = 'requiredSkills';
-    constructor(projectBranchRepository) {
+    constructor(projectBranchRepository, constraintEvaluator) {
         this.projectBranchRepository = projectBranchRepository;
+        this.constraintEvaluator = constraintEvaluator;
     }
     async evaluate(assayer, context) {
         const pb = await this.projectBranchRepository.findOne({
@@ -124,29 +127,16 @@ let RequiredSkillsFilter = class RequiredSkillsFilter {
         if (!pb || !pb.project) {
             return true;
         }
-        const project = pb.project;
-        if (project.requiredSkills && project.requiredSkills.length > 0) {
-            const assayerSkills = assayer.skills || [];
-            const hasAllSkills = project.requiredSkills.every((skill) => assayerSkills.some((s) => s.toLowerCase() === skill.toLowerCase()));
-            if (!hasAllSkills) {
-                return false;
-            }
-        }
-        if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-            const assayerCerts = (assayer.certifications || []).map((c) => c.name.toLowerCase());
-            const hasAllCerts = project.requiredCertifications.every((cert) => assayerCerts.includes(cert.toLowerCase()));
-            if (!hasAllCerts) {
-                return false;
-            }
-        }
-        return true;
+        const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project);
+        return checkResult.passed;
     }
 };
 exports.RequiredSkillsFilter = RequiredSkillsFilter;
 exports.RequiredSkillsFilter = RequiredSkillsFilter = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
-    __metadata("design:paramtypes", [typeorm_2.Repository])
+    __metadata("design:paramtypes", [typeorm_2.Repository,
+        constraint_evaluator_1.ConstraintEvaluator])
 ], RequiredSkillsFilter);
 let DistanceScoreCalculator = class DistanceScoreCalculator {
     routingService;
@@ -370,14 +360,14 @@ let BranchFamiliarityScoreCalculator = class BranchFamiliarityScoreCalculator {
                 const otherBranch = assign.projectBranch?.branch;
                 if (otherBranch && otherBranch.latitude && otherBranch.longitude && context.branch.latitude && context.branch.longitude) {
                     const dist = (0, shared_1.calculateHaversineDistance)(Number(context.branch.latitude), Number(context.branch.longitude), Number(otherBranch.latitude), Number(otherBranch.longitude));
-                    if (dist <= 60) {
+                    if (dist <= 30) {
                         hasNearbyGrouping = true;
                         break;
                     }
                 }
             }
             if (hasNearbyGrouping) {
-                score += 30;
+                score += 45;
             }
         }
         return Math.min(100, score);
@@ -466,9 +456,11 @@ let RecommendationEngine = class RecommendationEngine {
     configResolver;
     assayerRepository;
     clientRepository;
+    constraintEvaluator;
+    assayerService;
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository) {
+    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, constraintEvaluator, assayerService) {
         this.availabilityFilter = availabilityFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
         this.clientEligibilityFilter = clientEligibilityFilter;
@@ -488,6 +480,8 @@ let RecommendationEngine = class RecommendationEngine {
         this.configResolver = configResolver;
         this.assayerRepository = assayerRepository;
         this.clientRepository = clientRepository;
+        this.constraintEvaluator = constraintEvaluator;
+        this.assayerService = assayerService;
         this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter, this.requiredSkillsFilter);
         this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.profitabilityCalculator, this.riskCalculator);
     }
@@ -505,6 +499,7 @@ let RecommendationEngine = class RecommendationEngine {
         const assayers = await this.assayerRepository.find({
             where: { isActive: true, status: 'ACTIVE' },
         });
+        await this.assayerService.hydrateAllWorkforceAttributes(assayers);
         const candidates = [];
         for (const assayer of assayers) {
             let passed = true;
@@ -559,6 +554,8 @@ exports.RecommendationEngine = RecommendationEngine = __decorate([
         RiskScoreCalculator,
         configuration_resolver_1.ConfigurationResolver,
         typeorm_2.Repository,
-        typeorm_2.Repository])
+        typeorm_2.Repository,
+        constraint_evaluator_1.ConstraintEvaluator,
+        assayer_service_1.AssayerService])
 ], RecommendationEngine);
 //# sourceMappingURL=recommendation.engine.js.map

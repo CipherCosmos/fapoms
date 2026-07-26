@@ -18,6 +18,7 @@ const platform_module_1 = require("../platform/platform.module");
 const notifications_module_1 = require("../notifications/notifications.module");
 const assayer_module_1 = require("../assayer/assayer.module");
 const project_module_1 = require("../project/project.module");
+const planning_module_1 = require("../planning/planning.module");
 let AssignmentModule = class AssignmentModule {
 };
 exports.AssignmentModule = AssignmentModule;
@@ -30,6 +31,7 @@ exports.AssignmentModule = AssignmentModule = __decorate([
             notifications_module_1.NotificationsModule,
             assayer_module_1.AssayerModule,
             project_module_1.ProjectModule,
+            (0, common_1.forwardRef)(() => planning_module_1.PlanningModule),
         ],
         controllers: [assignment_controller_1.AssignmentController],
         providers: [assignment_service_1.AssignmentService],

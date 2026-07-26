@@ -35,13 +35,13 @@ export declare class AssayerEntity extends BaseEntity {
     emergencyContactPhone: string | null;
     emergencyContactRelation: string | null;
     photograph: string | null;
+    preferredRegions: string[] | null;
     skills: string[] | null;
     certifications: {
         name: string;
         expiryDate: string;
     }[] | null;
     languages: string[] | null;
-    preferredRegions: string[] | null;
     specializations: string[] | null;
     experienceYears: number;
     performanceRating: number;

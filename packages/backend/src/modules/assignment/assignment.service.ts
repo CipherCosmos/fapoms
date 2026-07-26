@@ -14,6 +14,7 @@ import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssignmentStateMachine } from './assignment.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { EventCategory, AssignmentStatus, ProjectBranchStatus, SystemRole, ASSIGNMENT_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 
 export interface CreateAssignmentDto {
@@ -52,6 +53,7 @@ export class AssignmentService implements OnModuleInit {
     private readonly auditService: AuditService,
     private readonly workflowEngine: WorkflowEngine,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly constraintEvaluator: ConstraintEvaluator,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -171,27 +173,11 @@ export class AssignmentService implements OnModuleInit {
       throw new NotFoundException(`Assayer ${dto.assayerId} not found.`);
     }
 
-    if (projectBranch.project && projectBranch.project.requiredSkills && projectBranch.project.requiredSkills.length > 0) {
-      const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
-      const missingSkills = projectBranch.project.requiredSkills.filter(
-        (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
-      );
-      if (missingSkills.length > 0) {
-        throw new BadRequestException(
-          `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`
-        );
-      }
-    }
-
-    if (projectBranch.project && projectBranch.project.requiredCertifications && projectBranch.project.requiredCertifications.length > 0) {
-      const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
-      const missingCerts = projectBranch.project.requiredCertifications.filter(
-        (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
-      );
-      if (missingCerts.length > 0) {
-        throw new BadRequestException(
-          `Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`
-        );
+    // Validate skills and certifications via ConstraintEvaluator
+    if (projectBranch.project) {
+      const skillsCheck = this.constraintEvaluator.checkSkillsAndCertifications(assayer, projectBranch.project);
+      if (!skillsCheck.passed) {
+        throw new BadRequestException(skillsCheck.reason);
       }
     }
 
@@ -221,28 +207,16 @@ export class AssignmentService implements OnModuleInit {
 
     const scheduledDateObj = new Date(dto.scheduledDate);
 
-    // Validate proposed date against Holiday calendar
-    const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, projectBranch.branch.state);
-    if (isHolidayConflict) {
-      throw new BadRequestException(
-        `Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${projectBranch.branch.state}.`
-      );
+    // Validate proposed date against Holiday calendar via ConstraintEvaluator
+    const holidayCheck = await this.constraintEvaluator.checkHoliday(projectBranch.branch.state, scheduledDateObj);
+    if (!holidayCheck.passed) {
+      throw new BadRequestException(holidayCheck.reason);
     }
 
-    // Validate Assayer availability and prevent double-booking
-    const isDoubleBooked = await this.assignmentRepository.findOne({
-      where: {
-        assayerId: dto.assayerId,
-        scheduledDate: scheduledDateObj,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
-        isActive: true,
-      },
-    });
-
-    if (isDoubleBooked) {
-      throw new ConflictException(
-        `Assayer Collision: Assayer is already assigned to branch audit on ${dto.scheduledDate}.`
-      );
+    // Validate Assayer availability and prevent double-booking via ConstraintEvaluator
+    const doubleBookingCheck = await this.constraintEvaluator.checkDoubleBooking(dto.assayerId, scheduledDateObj);
+    if (!doubleBookingCheck.passed) {
+      throw new ConflictException(doubleBookingCheck.reason);
     }
 
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);

@@ -150,6 +150,7 @@ let AuthService = class AuthService {
             email: user.email,
             roles,
             permissions: [...new Set(permissions)],
+            organizationId: user.organizationId ?? null,
         };
         const accessToken = this.jwtService.sign(payload, {
             expiresIn: this.accessExpiration,

@@ -159,15 +159,10 @@ export const Scheduling: React.FC = () => {
 
   const loadAcceptedAssignments = async () => {
     try {
-      const response = await fetch(`/api/v1/assignments?status=ACCEPTED&limit=100`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` }
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setAssignments(data.data);
-        if (data.data && data.data.length > 0) {
-          setSelectedAssignmentId(data.data[0].id);
-        }
+      const data = await api.request<AssignmentOption[]>(`/assignments?status=ACCEPTED&limit=100`);
+      setAssignments(data);
+      if (data && data.length > 0) {
+        setSelectedAssignmentId(data[0].id);
       }
     } catch (err) {
       console.error('Failed to load assignments');
@@ -208,14 +203,8 @@ export const Scheduling: React.FC = () => {
     e.preventDefault();
     if (!lookupDate) return;
     try {
-      const token = localStorage.getItem('fapoms_token');
-      const response = await fetch(`/api/v1/holidays/check?date=${lookupDate}&stateCode=${lookupState}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setLookupResult(data.data.isHoliday ? 'HOLIDAY_CONFLICT' : 'COMPLIANT');
-      }
+      const data = await api.request<{ isHoliday: boolean }>(`/holidays/check?date=${lookupDate}&stateCode=${lookupState}`);
+      setLookupResult(data.isHoliday ? 'HOLIDAY_CONFLICT' : 'COMPLIANT');
     } catch (err) {
       setLookupResult('ERROR');
     }

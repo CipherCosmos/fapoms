@@ -18,6 +18,7 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
+const client_entity_1 = require("../client/client.entity");
 const project_state_machine_1 = require("./project.state-machine");
 const branch_service_1 = require("../branch/branch.service");
 const project_query_service_1 = require("./project-query.service");
@@ -110,15 +111,17 @@ const INDIAN_NAMES = ['Aravind Swamy', 'Karthik Raja', 'Siddharth Rao', 'Vijay S
 let ProjectService = class ProjectService {
     projectRepository;
     projectBranchRepository;
+    clientRepository;
     branchQueryService;
     branchService;
     auditService;
     workflowEngine;
     eventPublisher;
     projectQueryService;
-    constructor(projectRepository, projectBranchRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
+    constructor(projectRepository, projectBranchRepository, clientRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
         this.projectRepository = projectRepository;
         this.projectBranchRepository = projectBranchRepository;
+        this.clientRepository = clientRepository;
         this.branchQueryService = branchQueryService;
         this.branchService = branchService;
         this.auditService = auditService;
@@ -154,7 +157,7 @@ let ProjectService = class ProjectService {
             },
         ]);
     }
-    async create(dto, userId) {
+    async create(dto, userId, organizationId) {
         const project = this.projectRepository.create({
             projectNumber: dto.projectNumber,
             name: dto.name,
@@ -172,6 +175,7 @@ let ProjectService = class ProjectService {
             risks: dto.risks ?? null,
             milestones: dto.milestones ?? null,
             dependencies: dto.dependencies ?? null,
+            organizationId: organizationId ?? null,
             createdBy: userId,
             updatedBy: userId,
         });
@@ -308,8 +312,60 @@ let ProjectService = class ProjectService {
         }
         return this.findProjectBranches(project.id);
     }
+    async generateBranchTemplate(projectId) {
+        const project = await this.findOne(projectId);
+        const client = project.clientId
+            ? await this.clientRepository.findOne({ where: { id: project.clientId } })
+            : null;
+        const headers = [
+            'Branch Code',
+            'Branch Name',
+            'Address',
+            'State',
+            'District',
+            'City',
+            'Pincode',
+            'Packets',
+        ];
+        const projectBranches = await this.projectBranchRepository.find({
+            where: { projectId, isActive: true },
+            relations: ['branch'],
+        });
+        const rows = projectBranches.map((pb) => ({
+            'Branch Code': pb.branch.branchCode,
+            'Branch Name': pb.branch.name,
+            Address: pb.branch.address || '',
+            State: pb.branch.state,
+            District: pb.branch.district,
+            City: pb.branch.city,
+            Pincode: pb.branch.pincode || '',
+            Packets: pb.packetCount ?? '',
+        }));
+        if (rows.length === 0) {
+            rows.push({
+                'Branch Code': '',
+                'Branch Name': '',
+                Address: '',
+                State: '',
+                District: '',
+                City: '',
+                Pincode: '',
+                Packets: '',
+            });
+        }
+        const ws = xlsx.utils.json_to_sheet(rows, { header: headers });
+        ws['!cols'] = headers.map(() => ({ wch: 20 }));
+        const wb = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(wb, ws, 'Branches');
+        return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    }
     async uploadBranchesFromExcel(projectId, fileBuffer, userId) {
         const project = await this.findOne(projectId);
+        const client = project.clientId
+            ? await this.clientRepository.findOne({ where: { id: project.clientId } })
+            : null;
+        const planningPrefs = client?.planningPreferences || {};
+        const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15;
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
@@ -319,18 +375,23 @@ let ProjectService = class ProjectService {
             const branchName = (row['Branch Name'] || row.BRANCH_NAME || '').toString().trim();
             if (!branchName)
                 continue;
-            const branchCode = (row.BRANCH || '').toString().trim();
+            const branchCode = (row.BRANCH || row['Branch Code'] || '').toString().trim();
             if (!branchCode)
                 continue;
             const district = (row.DISTRICT || '').toString().trim().toUpperCase();
             const state = (row.STATE || '').toString().trim();
-            const address = (row['Branch Address'] || '').toString().trim();
+            const address = (row['Branch Address'] || row.Address || '').toString().trim();
+            const pincodeStr = (row.Pincode || '').toString().trim();
+            const packetCount = parseInt(String(row.Packets ?? row.packet_count ?? ''), 10);
+            const calculatedHours = !isNaN(packetCount) && packetCount > 0
+                ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
+                : null;
             let branch = await this.branchQueryService.findOneByCode(branchCode);
             if (!branch) {
                 const coords = await getRealCoordinates(address, branchName, district, state);
                 const zoneName = getStateZone(state);
                 const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
-                const pincode = address.match(/\b\d{6}\b/)?.[0] || null;
+                const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
                 const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
                 const managerName = INDIAN_NAMES[Math.floor(Math.random() * INDIAN_NAMES.length)];
                 const phone = `+9144${Math.floor(10000000 + Math.random() * 90000000)}`;
@@ -358,10 +419,13 @@ let ProjectService = class ProjectService {
                     riskScore: 2.0,
                     riskCategory: 'LOW',
                     complexity: 'STANDARD',
-                    estimatedDurationHours: 6.0,
+                    estimatedDurationHours: calculatedHours ?? 6.0,
                     createdBy: userId,
                     updatedBy: userId,
                 }, userId);
+            }
+            else if (calculatedHours !== null) {
+                await this.branchService.update(branch.id, { estimatedDurationHours: calculatedHours }, userId);
             }
             let pb = await this.projectBranchRepository.findOne({
                 where: { projectId: project.id, branchId: branch.id, isActive: true },
@@ -372,11 +436,17 @@ let ProjectService = class ProjectService {
                     branchId: branch.id,
                     zoneId: branch.zoneId,
                     status: shared_1.ProjectBranchStatus.IMPORTED,
+                    packetCount: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
                     createdBy: userId,
                     updatedBy: userId,
                 });
                 const savedPb = await this.projectBranchRepository.save(pb);
                 addedBranches.push(savedPb);
+            }
+            else if (!isNaN(packetCount) && packetCount > 0) {
+                pb.packetCount = packetCount;
+                pb.updatedBy = userId;
+                await this.projectBranchRepository.save(pb);
             }
         }
         return this.findProjectBranches(project.id);
@@ -556,7 +626,9 @@ exports.ProjectService = ProjectService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(project_entity_1.ProjectEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
+    __param(2, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         branch_query_service_1.BranchQueryService,
         branch_service_1.BranchService,

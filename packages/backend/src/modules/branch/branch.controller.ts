@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
@@ -46,6 +46,7 @@ class CreateBranchRequestDto implements CreateBranchDto {
   @IsOptional() @IsString() complexity?: string;
   @IsOptional() @IsNumber() estimatedDurationHours?: number;
   @IsOptional() @IsString({ each: true }) requiredCompetencies?: string[];
+  @IsOptional() @IsObject() operatingHours?: Record<string, any>;
 }
 
 class UpdateBranchRequestDto implements UpdateBranchDto {
@@ -74,6 +75,7 @@ class UpdateBranchRequestDto implements UpdateBranchDto {
   @IsOptional() @IsString() complexity?: string;
   @IsOptional() @IsNumber() estimatedDurationHours?: number;
   @IsOptional() @IsString({ each: true }) requiredCompetencies?: string[];
+  @IsOptional() @IsObject() operatingHours?: Record<string, any>;
 }
 
 class CreateContactRequestDto implements CreateContactDto {
@@ -120,7 +122,7 @@ export class BranchController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Create a new branch' })
   async create(@Body() dto: CreateBranchRequestDto, @Req() req: any) {
-    const branch = await this.branchService.create(dto, req.user.id);
+    const branch = await this.branchService.create(dto, req.user.id, req.user.organizationId);
     return { success: true, data: branch };
   }
 

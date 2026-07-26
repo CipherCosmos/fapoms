@@ -172,12 +172,15 @@ export declare class AssayerService implements OnModuleInit {
     private readonly workflowEngine;
     constructor(assayerRepository: Repository<AssayerEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, workforceAttributeRepository: Repository<WorkforceAttributeEntity>, govDocRepository: Repository<AssayerGovernmentDocumentEntity>, assayerDocRepository: Repository<AssayerDocumentEntity>, remarkRepository: Repository<AssayerRemarkEntity>, activityRepository: Repository<AssayerActivityEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher, workflowEngine: WorkflowEngine);
     onModuleInit(): void;
+    hydrateWorkforceAttributes(assayer: AssayerEntity): Promise<AssayerEntity>;
+    hydrateAllWorkforceAttributes(assayers: AssayerEntity[]): Promise<void>;
+    private syncWorkforceAttributes;
     findAll(page?: number, limit?: number): Promise<{
         assayers: AssayerEntity[];
         total: number;
     }>;
     findOne(id: string): Promise<AssayerEntity>;
-    create(dto: CreateAssayerDto, userId: string): Promise<AssayerEntity>;
+    create(dto: CreateAssayerDto, userId: string, organizationId?: string | null): Promise<AssayerEntity>;
     update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity>;
     remove(id: string, userId: string): Promise<void>;
     transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity>;
@@ -223,4 +226,9 @@ export declare class AssayerService implements OnModuleInit {
     updateWorkforceAttribute(attributeId: string, dto: any, userId: string): Promise<WorkforceAttributeEntity>;
     removeWorkforceAttribute(attributeId: string, userId: string): Promise<void>;
     getWorkforceAttributes(assayerId: string, type?: string): Promise<WorkforceAttributeEntity[]>;
+    generateTemplate(): Promise<Buffer>;
+    uploadFromExcel(fileBuffer: Buffer, userId: string): Promise<{
+        importedCount: number;
+        errors: string[];
+    }>;
 }

@@ -10,6 +10,7 @@ export interface JwtPayload {
     email: string;
     roles: string[];
     permissions: string[];
+    organizationId: string | null;
 }
 export interface TokenPair {
     accessToken: string;

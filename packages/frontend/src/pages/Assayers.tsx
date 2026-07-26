@@ -154,6 +154,7 @@ export const Assayers: React.FC = () => {
   const [commercials, setCommercials] = useState<CommercialProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -283,10 +284,53 @@ export const Assayers: React.FC = () => {
             Manage assayer profiles, lifecycle, and commercial billing configurations.
           </p>
         </div>
-        <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Plus size={16} /> Add Assayer
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600 }}>
+            Upload Excel
+            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setSubmitting(true);
+                setMessage(null);
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                  const result: any = await api.request(`/assayers/upload`, { method: 'POST', body: formData });
+                  setMessage({ type: 'success', text: `Imported ${result.importedCount} assayers${result.errors?.length ? ` (${result.errors.length} errors)` : ''}` });
+                  if (result.errors?.length) console.warn('Import errors:', result.errors);
+                  fetchAssayers();
+                } catch (err: any) {
+                  setMessage({ type: 'error', text: err?.message || 'Upload failed' });
+                } finally { setSubmitting(false); }
+              }}
+            />
+          </label>
+          <button onClick={async () => {
+            try {
+              const blob = await api.request(`/assayers/template/download`, { method: 'GET', raw: true }) as Blob;
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = 'assayer_upload_template.xlsx'; a.click();
+              URL.revokeObjectURL(url);
+            } catch (err: any) {
+              setMessage({ type: 'error', text: err?.message || 'Download failed' });
+            }
+          }} style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600, cursor: 'pointer' }}>
+            Download Template
+          </button>
+          <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Plus size={16} /> Add Assayer
+          </button>
+        </div>
       </div>
+
+      {message && (
+        <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: message.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', color: message.type === 'error' ? '#ef4444' : '#10b981', border: `1px solid ${message.type === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}` }}>
+          <span style={{ flex: 1 }}>{message.text}</span>
+          <X size={14} style={{ cursor: 'pointer', opacity: 0.6 }} onClick={() => setMessage(null)} />
+        </div>
+      )}
 
       {/* ── KPI Dashboard ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>

@@ -1,8 +1,4 @@
-/**
- * FAPOMS — Assignment Module
- */
-
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AssignmentService } from './assignment.service';
@@ -14,6 +10,7 @@ import { PlatformModule } from '../platform/platform.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AssayerModule } from '../assayer/assayer.module';
 import { ProjectModule } from '../project/project.module';
+import { PlanningModule } from '../planning/planning.module';
 
 @Module({
   imports: [
@@ -23,9 +20,11 @@ import { ProjectModule } from '../project/project.module';
     NotificationsModule,
     AssayerModule,
     ProjectModule,
+    forwardRef(() => PlanningModule),
   ],
   controllers: [AssignmentController],
   providers: [AssignmentService],
   exports: [AssignmentService],
 })
 export class AssignmentModule {}
+

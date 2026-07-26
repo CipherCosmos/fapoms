@@ -17,7 +17,11 @@ import {
   Req,
   ParseUUIDPipe,
   HttpCode,
+  UseInterceptors,
+  UploadedFile,
+  Res,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString } from 'class-validator';
 
@@ -495,7 +499,7 @@ export class AssayerController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Register a new field assayer' })
   async create(@Body() dto: CreateAssayerRequestDto, @Req() req: any) {
-    const assayer = await this.assayerService.create(dto, req.user.id);
+    const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId);
     return {
       success: true,
       data: assayer,
@@ -865,6 +869,31 @@ export class AssayerController {
           hasPrevious: page > 1,
         },
       },
+    };
+  }
+
+  @Get('/template/download')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @ApiOperation({ summary: 'Download Excel template for assayer data entry' })
+  async downloadTemplate(@Res() res: any) {
+    const buffer = await this.assayerService.generateTemplate();
+    const filename = encodeURIComponent('assayer_upload_template.xlsx');
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
+    });
+    res.send(buffer);
+  }
+
+  @Post('/upload')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
+  async uploadAssayers(@UploadedFile() file: any, @Req() req: any) {
+    const result = await this.assayerService.uploadFromExcel(file.buffer, req.user.id);
+    return {
+      success: true,
+      data: result,
     };
   }
 }

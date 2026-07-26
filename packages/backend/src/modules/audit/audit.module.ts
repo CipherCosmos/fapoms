@@ -6,6 +6,8 @@ import { BillingModule } from '../billing/billing.module';
 import { LedgerModule } from '../ledger/ledger.module';
 import { AuditHistoryModule } from '../audit-history/audit-history.module';
 
+import { AuditController } from './audit.controller';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([AuditEntity]),
@@ -13,6 +15,7 @@ import { AuditHistoryModule } from '../audit-history/audit-history.module';
     LedgerModule,
     AuditHistoryModule,
   ],
+  controllers: [AuditController],
   providers: [{ provide: 'AuditPlatformService', useClass: AuditService }, AuditService],
   exports: ['AuditPlatformService', AuditService],
 })

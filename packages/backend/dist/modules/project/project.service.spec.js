@@ -9,6 +9,7 @@ const project_branch_entity_1 = require("./project-branch.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
+const client_entity_1 = require("../client/client.entity");
 const branch_service_1 = require("../branch/branch.service");
 const branch_query_service_1 = require("../branch/branch-query.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
@@ -28,6 +29,9 @@ describe('ProjectService', () => {
         findOne: jest.fn(),
         create: jest.fn(),
         save: jest.fn(),
+    };
+    const mockClientRepo = {
+        findOne: jest.fn(),
     };
     const mockBranchRepo = {
         findOne: jest.fn(),
@@ -72,6 +76,10 @@ describe('ProjectService', () => {
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
                     useValue: mockProjectBranchRepo,
+                },
+                {
+                    provide: (0, typeorm_1.getRepositoryToken)(client_entity_1.ClientEntity),
+                    useValue: mockClientRepo,
                 },
                 {
                     provide: branch_query_service_1.BranchQueryService,

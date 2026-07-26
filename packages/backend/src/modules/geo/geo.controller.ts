@@ -1,8 +1,11 @@
-import { Controller, Post, Body, UseGuards, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Query, UseGuards, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsNotEmpty, IsNumber, IsString, IsArray, ValidateNested, IsBoolean, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { RoutingService, DestinationCoords } from './routing.provider';
+import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
 import { JwtAuthGuard, RolesGuard } from '../auth/guards';
 
 export class CoordinateDto {
@@ -43,7 +46,36 @@ export class OptimizeRouteDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('geo')
 export class GeoController {
-  constructor(private readonly routingService: RoutingService) {}
+  constructor(
+    private readonly routingService: RoutingService,
+    @InjectRepository(GeoStateEntity)
+    private readonly stateRepo: Repository<GeoStateEntity>,
+    @InjectRepository(GeoDistrictEntity)
+    private readonly districtRepo: Repository<GeoDistrictEntity>,
+    @InjectRepository(GeoCityEntity)
+    private readonly cityRepo: Repository<GeoCityEntity>,
+  ) {}
+
+  @Get('states')
+  @ApiOperation({ summary: 'List all states in geographic reference data' })
+  async getStates() {
+    const states = await this.stateRepo.find({ order: { name: 'ASC' } });
+    return { success: true, data: states };
+  }
+
+  @Get('states/:stateId/districts')
+  @ApiOperation({ summary: 'List districts for a state' })
+  async getDistricts(@Param('stateId') stateId: string) {
+    const districts = await this.districtRepo.find({ where: { stateId }, order: { name: 'ASC' } });
+    return { success: true, data: districts };
+  }
+
+  @Get('districts/:districtId/cities')
+  @ApiOperation({ summary: 'List cities for a district' })
+  async getCities(@Param('districtId') districtId: string) {
+    const cities = await this.cityRepo.find({ where: { districtId }, order: { name: 'ASC' } });
+    return { success: true, data: cities };
+  }
 
   @Post('route/optimize')
   @ApiOperation({ summary: 'Calculate optimized route sequence (TSP solver) for multiple destinations' })

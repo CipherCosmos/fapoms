@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass } from 'lucide-react';
+import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass, Download } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 
@@ -795,34 +795,48 @@ export const Projects: React.FC = () => {
                           Associated Branches ({projectBranches.length})
                         </span>
                         {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
-                          <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'var(--gradient-neon)', border: 'none', color: '#fff', borderRadius: 'var(--radius-sm)', fontWeight: 600, boxShadow: 'var(--shadow-neon)' }}>
-                            <Plus size={12} /> Upload Excel
-                            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
-                              onChange={async (e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                setIsSaving(true);
-                                setMessage(null);
-                                const formData = new FormData();
-                                formData.append('file', file);
-                                try {
-                                  const token = localStorage.getItem('fapoms_token');
-                                  const response = await fetch(`/api/v1/projects/${detail.id}/branches/upload`, {
-                                    method: 'POST',
-                                    headers: { 'Authorization': `Bearer ${token}` },
-                                    body: formData
-                                  });
-                                  if (!response.ok) throw new Error('Failed to upload branches sheet');
-                                  setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
-                                  loadDetail(detail.id);
-                                } catch (err: any) {
-                                  setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
-                                } finally {
-                                  setIsSaving(false);
-                                }
-                              }}
-                            />
-                          </label>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'var(--gradient-neon)', border: 'none', color: '#fff', borderRadius: 'var(--radius-sm)', fontWeight: 600, boxShadow: 'var(--shadow-neon)' }}>
+                              <Plus size={12} /> Upload Excel
+                              <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  setIsSaving(true);
+                                  setMessage(null);
+                                  const formData = new FormData();
+                                  formData.append('file', file);
+                                  try {
+                                    await api.request(`/projects/${detail.id}/branches/upload`, {
+                                      method: 'POST',
+                                      body: formData
+                                    });
+                                    setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
+                                    loadDetail(detail.id);
+                                  } catch (err: any) {
+                                    setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
+                                  } finally {
+                                    setIsSaving(false);
+                                  }
+                                }}
+                              />
+                            </label>
+                            <button onClick={async () => {
+                              try {
+                                const blob = await api.request(`/projects/${detail.id}/branches/template`, { method: 'GET', raw: true }) as Blob;
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = 'branch_upload_template.xlsx';
+                                a.click();
+                                URL.revokeObjectURL(url);
+                              } catch (err: any) {
+                                setMessage({ type: 'error', text: err?.message || 'Failed to download template.' });
+                              }
+                            }} style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600, cursor: 'pointer' }}>
+                              <Download size={12} /> Download Template
+                            </button>
+                          </div>
                         )}
                       </div>
 

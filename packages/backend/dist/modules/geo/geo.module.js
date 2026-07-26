@@ -12,6 +12,7 @@ const typeorm_1 = require("@nestjs/typeorm");
 const geo_entities_1 = require("./geo.entities");
 const routing_provider_1 = require("./routing.provider");
 const geo_controller_1 = require("./geo.controller");
+const geo_seed_service_1 = require("./geo-seed.service");
 let GeoModule = class GeoModule {
 };
 exports.GeoModule = GeoModule;
@@ -21,7 +22,7 @@ exports.GeoModule = GeoModule = __decorate([
             typeorm_1.TypeOrmModule.forFeature([geo_entities_1.GeoStateEntity, geo_entities_1.GeoDistrictEntity, geo_entities_1.GeoCityEntity]),
         ],
         controllers: [geo_controller_1.GeoController],
-        providers: [routing_provider_1.PostGISRoutingProvider, routing_provider_1.OSRMRoutingProvider, routing_provider_1.RoutingService],
+        providers: [routing_provider_1.PostGISRoutingProvider, routing_provider_1.OSRMRoutingProvider, routing_provider_1.RoutingService, geo_seed_service_1.GeoSeedService],
         exports: [routing_provider_1.RoutingService, typeorm_1.TypeOrmModule],
     })
 ], GeoModule);

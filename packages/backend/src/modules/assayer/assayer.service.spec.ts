@@ -104,6 +104,7 @@ describe('AssayerService', () => {
     const module = await setupModule();
     service = module.get<AssayerService>(AssayerService);
     jest.clearAllMocks();
+    mockWorkforceRepo.find.mockResolvedValue([]);
   });
 
   // ---------------------------------------------------------------------------

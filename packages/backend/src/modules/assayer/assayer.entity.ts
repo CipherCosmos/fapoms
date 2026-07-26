@@ -117,19 +117,12 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   photograph: string | null;
 
-  @Column({ type: 'jsonb', nullable: true })
-  skills: string[] | null;
-
-  @Column({ type: 'jsonb', nullable: true })
-  certifications: { name: string; expiryDate: string }[] | null;
-
-  @Column({ type: 'jsonb', nullable: true })
-  languages: string[] | null;
-
   @Column({ name: 'preferred_regions', type: 'jsonb', nullable: true })
   preferredRegions: string[] | null;
 
-  @Column({ type: 'jsonb', nullable: true })
+  skills: string[] | null;
+  certifications: { name: string; expiryDate: string }[] | null;
+  languages: string[] | null;
   specializations: string[] | null;
 
   @Column({ name: 'experience_years', type: 'int', default: 0 })

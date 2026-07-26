@@ -1,0 +1,57 @@
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CoveragePlanEntity = exports.CoveragePlanStatus = void 0;
+const typeorm_1 = require("typeorm");
+const base_entity_1 = require("../../core/entities/base.entity");
+const coverage_plan_version_entity_1 = require("./coverage-plan-version.entity");
+var CoveragePlanStatus;
+(function (CoveragePlanStatus) {
+    CoveragePlanStatus["DRAFT"] = "DRAFT";
+    CoveragePlanStatus["GENERATED"] = "GENERATED";
+    CoveragePlanStatus["UNDER_REVIEW"] = "UNDER_REVIEW";
+    CoveragePlanStatus["APPROVED"] = "APPROVED";
+    CoveragePlanStatus["LOCKED"] = "LOCKED";
+    CoveragePlanStatus["DEPLOYED"] = "DEPLOYED";
+    CoveragePlanStatus["ARCHIVED"] = "ARCHIVED";
+})(CoveragePlanStatus || (exports.CoveragePlanStatus = CoveragePlanStatus = {}));
+let CoveragePlanEntity = class CoveragePlanEntity extends base_entity_1.BaseEntity {
+    projectId;
+    status;
+    currentVersion;
+    versions;
+};
+exports.CoveragePlanEntity = CoveragePlanEntity;
+__decorate([
+    (0, typeorm_1.Column)({ name: 'project_id', type: 'uuid' }),
+    __metadata("design:type", String)
+], CoveragePlanEntity.prototype, "projectId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({
+        type: 'enum',
+        enum: CoveragePlanStatus,
+        default: CoveragePlanStatus.DRAFT,
+    }),
+    __metadata("design:type", String)
+], CoveragePlanEntity.prototype, "status", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'current_version', type: 'integer', default: 1 }),
+    __metadata("design:type", Number)
+], CoveragePlanEntity.prototype, "currentVersion", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => coverage_plan_version_entity_1.CoveragePlanVersionEntity, (v) => v.coveragePlan, { cascade: true }),
+    __metadata("design:type", Array)
+], CoveragePlanEntity.prototype, "versions", void 0);
+exports.CoveragePlanEntity = CoveragePlanEntity = __decorate([
+    (0, typeorm_1.Entity)('coverage_plans'),
+    (0, typeorm_1.Index)(['projectId'])
+], CoveragePlanEntity);
+//# sourceMappingURL=coverage-plan.entity.js.map

@@ -1,8 +1,27 @@
+import { Response } from 'express';
 import { ProjectService, CreateProjectDto } from './project.service';
+export declare class CreateProjectRequestDto implements CreateProjectDto {
+    name: string;
+    projectNumber: string;
+    description?: string;
+    clientId: string;
+    priority: string;
+    startDate?: string;
+    endDate?: string;
+    budget?: number;
+    scope?: string;
+    requiredSkills?: string[];
+    requiredCertifications?: string[];
+    sla?: Record<string, any>;
+    risks?: Record<string, any>;
+    milestones?: Record<string, any>;
+    dependencies?: Record<string, any>;
+    status?: string;
+}
 export declare class ProjectController {
     private readonly projectService;
     constructor(projectService: ProjectService);
-    create(dto: CreateProjectDto, req: any): Promise<{
+    create(dto: CreateProjectRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./project.entity").ProjectEntity;
     }>;
@@ -21,7 +40,7 @@ export declare class ProjectController {
         success: boolean;
         data: import("./project.entity").ProjectEntity;
     }>;
-    update(id: string, dto: CreateProjectDto, req: any): Promise<{
+    update(id: string, dto: CreateProjectRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./project.entity").ProjectEntity;
     }>;
@@ -45,6 +64,7 @@ export declare class ProjectController {
         success: boolean;
         data: import("./project-branch.entity").ProjectBranchEntity[];
     }>;
+    downloadTemplate(id: string, res: Response): Promise<void>;
     removeBranch(id: string, pbId: string, req: any): Promise<{
         success: boolean;
         data: import("./project-branch.entity").ProjectBranchEntity[];

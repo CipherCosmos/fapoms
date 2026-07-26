@@ -4,6 +4,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
+import { ExplanationReason } from './explainability.mapper';
 export interface AssayerRecommendation {
     id: string;
     assayerCode: string;
@@ -19,6 +20,7 @@ export interface AssayerRecommendation {
     latitude?: number | null;
     longitude?: number | null;
     baseFee?: number;
+    readableReasons?: ExplanationReason[];
 }
 export interface CreateBusinessRuleDto {
     name: string;

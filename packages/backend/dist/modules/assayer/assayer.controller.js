@@ -14,6 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AssayerController = exports.UpdateAssayerDocumentRequestDto = exports.UpdateRemarkRequestDto = exports.CreateRemarkRequestDto = exports.CreateAssayerDocumentRequestDto = exports.UpdateGovernmentDocumentRequestDto = exports.CreateGovernmentDocumentRequestDto = exports.TransitionLifecycleDto = exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = void 0;
 const common_1 = require("@nestjs/common");
+const platform_express_1 = require("@nestjs/platform-express");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 const assayer_service_1 = require("./assayer.service");
@@ -926,7 +927,7 @@ let AssayerController = class AssayerController {
         this.assayerService = assayerService;
     }
     async create(dto, req) {
-        const assayer = await this.assayerService.create(dto, req.user.id);
+        const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId);
         return {
             success: true,
             data: assayer,
@@ -1107,6 +1108,22 @@ let AssayerController = class AssayerController {
                     hasPrevious: page > 1,
                 },
             },
+        };
+    }
+    async downloadTemplate(res) {
+        const buffer = await this.assayerService.generateTemplate();
+        const filename = encodeURIComponent('assayer_upload_template.xlsx');
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
+        });
+        res.send(buffer);
+    }
+    async uploadAssayers(file, req) {
+        const result = await this.assayerService.uploadFromExcel(file.buffer, req.user.id);
+        return {
+            success: true,
+            data: result,
         };
     }
 };
@@ -1407,6 +1424,26 @@ __decorate([
     __metadata("design:paramtypes", [String, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "getActivityTimeline", null);
+__decorate([
+    (0, common_1.Get)('/template/download'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, swagger_1.ApiOperation)({ summary: 'Download Excel template for assayer data entry' }),
+    __param(0, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "downloadTemplate", null);
+__decorate([
+    (0, common_1.Post)('/upload'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    (0, swagger_1.ApiOperation)({ summary: 'Upload assayers from Excel spreadsheet' }),
+    __param(0, (0, common_1.UploadedFile)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "uploadAssayers", null);
 exports.AssayerController = AssayerController = __decorate([
     (0, swagger_1.ApiTags)('Assayers'),
     (0, swagger_1.ApiBearerAuth)(),

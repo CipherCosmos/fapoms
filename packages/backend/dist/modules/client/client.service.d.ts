@@ -124,7 +124,7 @@ export declare class ClientService {
     private readonly billingRepository;
     private readonly auditService;
     constructor(clientRepository: Repository<ClientEntity>, configRepository: Repository<ClientConfigurationEntity>, contactRepository: Repository<ClientContactEntity>, contractRepository: Repository<ClientContractEntity>, billingRepository: Repository<ClientBillingEntity>, auditService: AuditService);
-    create(dto: CreateClientDto, userId: string): Promise<ClientEntity>;
+    create(dto: CreateClientDto, userId: string, organizationId?: string | null): Promise<ClientEntity>;
     findOne(id: string): Promise<ClientEntity>;
     findAll(page?: number, limit?: number): Promise<{
         clients: ClientEntity[];

@@ -21,6 +21,7 @@ const branch_query_service_1 = require("../branch/branch-query.service");
 const assayer_service_1 = require("../assayer/assayer.service");
 const recommendation_engine_1 = require("./recommendation.engine");
 const routing_provider_1 = require("../geo/routing.provider");
+const explainability_mapper_1 = require("./explainability.mapper");
 let PlanningService = class PlanningService {
     branchQueryService;
     ruleRepository;
@@ -49,6 +50,13 @@ let PlanningService = class PlanningService {
             }
             const profile = await this.assayerService.getActiveCommercialProfile(r.assayer.id);
             const baseFee = profile ? Number(profile.baseFee) : 1500;
+            const readableReasons = (0, explainability_mapper_1.generateExplanation)(r.breakdown, {
+                displayName: r.assayer.displayName,
+                distanceKm,
+                performanceRating: r.assayer.performanceRating,
+                experienceYears: r.assayer.experienceYears,
+                baseFee,
+            });
             recommendations.push({
                 id: r.assayer.id,
                 assayerCode: r.assayer.assayerCode,
@@ -64,6 +72,7 @@ let PlanningService = class PlanningService {
                 latitude: r.assayer.latitude,
                 longitude: r.assayer.longitude,
                 baseFee,
+                readableReasons,
             });
         }
         return recommendations;

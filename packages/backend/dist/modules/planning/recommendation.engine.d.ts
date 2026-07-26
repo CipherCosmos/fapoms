@@ -1,5 +1,6 @@
 import { Repository } from 'typeorm';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -8,6 +9,7 @@ import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ConstraintEvaluator } from './constraint.evaluator';
 export interface PlanningContext {
     branch: BranchEntity;
     client: ClientEntity | null;
@@ -23,9 +25,9 @@ export interface ScoreCalculator {
     calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
 }
 export declare class AvailabilityFilter implements CandidateFilter {
-    private readonly assignmentRepository;
+    private readonly constraintEvaluator;
     name: string;
-    constructor(assignmentRepository: Repository<AssignmentEntity>);
+    constructor(constraintEvaluator: ConstraintEvaluator);
     evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean>;
 }
 export declare class ClientRestrictionFilter implements CandidateFilter {
@@ -44,8 +46,9 @@ export declare class RuleEngineEligibilityFilter implements CandidateFilter {
 }
 export declare class RequiredSkillsFilter implements CandidateFilter {
     private readonly projectBranchRepository;
+    private readonly constraintEvaluator;
     name: string;
-    constructor(projectBranchRepository: Repository<ProjectBranchEntity>);
+    constructor(projectBranchRepository: Repository<ProjectBranchEntity>, constraintEvaluator: ConstraintEvaluator);
     evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean>;
 }
 export declare class DistanceScoreCalculator implements ScoreCalculator {
@@ -124,9 +127,11 @@ export declare class RecommendationEngine {
     private readonly configResolver;
     private readonly assayerRepository;
     private readonly clientRepository;
+    private readonly constraintEvaluator;
+    private readonly assayerService;
     private filters;
     private calculators;
-    constructor(availabilityFilter: AvailabilityFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, requiredSkillsFilter: RequiredSkillsFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>);
+    constructor(availabilityFilter: AvailabilityFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, requiredSkillsFilter: RequiredSkillsFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>, constraintEvaluator: ConstraintEvaluator, assayerService: AssayerService);
     recommend(branch: BranchEntity, scheduledDate: Date, weights?: Record<string, number>): Promise<{
         assayer: AssayerEntity;
         score: number;

@@ -14,6 +14,7 @@ import { AssayerService } from '../assayer/assayer.service';
 
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
+import { generateExplanation, ExplanationReason } from './explainability.mapper';
 
 export interface AssayerRecommendation {
   id: string;
@@ -30,6 +31,7 @@ export interface AssayerRecommendation {
   latitude?: number | null;
   longitude?: number | null;
   baseFee?: number;
+  readableReasons?: ExplanationReason[];
 }
 
 export interface CreateBusinessRuleDto {
@@ -84,6 +86,14 @@ export class PlanningService {
       const profile = await this.assayerService.getActiveCommercialProfile(r.assayer.id);
       const baseFee = profile ? Number(profile.baseFee) : 1500;
 
+      const readableReasons = generateExplanation(r.breakdown, {
+        displayName: r.assayer.displayName,
+        distanceKm,
+        performanceRating: r.assayer.performanceRating,
+        experienceYears: r.assayer.experienceYears,
+        baseFee,
+      });
+
       recommendations.push({
         id: r.assayer.id,
         assayerCode: r.assayer.assayerCode,
@@ -99,6 +109,7 @@ export class PlanningService {
         latitude: r.assayer.latitude,
         longitude: r.assayer.longitude,
         baseFee,
+        readableReasons,
       });
     }
 

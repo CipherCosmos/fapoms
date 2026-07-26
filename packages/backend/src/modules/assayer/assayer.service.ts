@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual } from 'typeorm';
+import { Repository, LessThanOrEqual, In } from 'typeorm';
+import * as xlsx from 'xlsx';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
@@ -248,6 +249,83 @@ export class AssayerService implements OnModuleInit {
     ]);
   }
 
+  async hydrateWorkforceAttributes(assayer: AssayerEntity): Promise<AssayerEntity> {
+    const attrs = await this.workforceAttributeRepository.find({
+      where: { assayerId: assayer.id, isActive: true },
+    });
+    (assayer as any).skills = attrs.filter(a => a.type === 'SKILL').map(a => a.name);
+    (assayer as any).certifications = attrs.filter(a => a.type === 'CERTIFICATION').map(a => ({
+      name: a.name,
+      expiryDate: a.expiryDate ? a.expiryDate.toISOString().split('T')[0] : null,
+    }));
+    (assayer as any).languages = attrs.filter(a => a.type === 'LANGUAGE').map(a => a.name);
+    (assayer as any).specializations = attrs.filter(a => a.type === 'SPECIALIZATION').map(a => a.name);
+    return assayer;
+  }
+
+  async hydrateAllWorkforceAttributes(assayers: AssayerEntity[]): Promise<void> {
+    if (assayers.length === 0) return;
+    const allAttrs = await this.workforceAttributeRepository.find({
+      where: { assayerId: In(assayers.map(a => a.id)), isActive: true },
+    });
+    const attrsMap = new Map<string, WorkforceAttributeEntity[]>();
+    for (const attr of allAttrs) {
+      if (!attrsMap.has(attr.assayerId)) attrsMap.set(attr.assayerId, []);
+      attrsMap.get(attr.assayerId)!.push(attr);
+    }
+    for (const assayer of assayers) {
+      const attrs = attrsMap.get(assayer.id) || [];
+      (assayer as any).skills = attrs.filter(a => a.type === 'SKILL').map(a => a.name);
+      (assayer as any).certifications = attrs.filter(a => a.type === 'CERTIFICATION').map(a => ({
+        name: a.name,
+        expiryDate: a.expiryDate ? a.expiryDate.toISOString().split('T')[0] : null,
+      }));
+      (assayer as any).languages = attrs.filter(a => a.type === 'LANGUAGE').map(a => a.name);
+      (assayer as any).specializations = attrs.filter(a => a.type === 'SPECIALIZATION').map(a => a.name);
+    }
+  }
+
+  private async syncWorkforceAttributes(assayerId: string, dto: CreateAssayerDto | UpdateAssayerDto, userId: string): Promise<void> {
+    const syncedFields = ['skills', 'certifications', 'languages', 'specializations'] as const;
+    const hasAny = syncedFields.some(f => (dto as any)[f] !== undefined);
+    if (!hasAny) return;
+
+    // Remove old workforce attrs for these types
+    await this.workforceAttributeRepository.delete({
+      assayerId,
+      type: In(['SKILL', 'CERTIFICATION', 'LANGUAGE', 'SPECIALIZATION']),
+    });
+
+    const newAttrs: Partial<WorkforceAttributeEntity>[] = [];
+    if (dto.skills) {
+      for (const skill of dto.skills) {
+        newAttrs.push({ assayerId, type: 'SKILL', name: skill, createdBy: userId, updatedBy: userId });
+      }
+    }
+    if (dto.certifications) {
+      for (const cert of dto.certifications) {
+        newAttrs.push({
+          assayerId, type: 'CERTIFICATION', name: cert.name,
+          expiryDate: cert.expiryDate ? new Date(cert.expiryDate) : null,
+          createdBy: userId, updatedBy: userId,
+        });
+      }
+    }
+    if (dto.languages) {
+      for (const lang of dto.languages) {
+        newAttrs.push({ assayerId, type: 'LANGUAGE', name: lang, createdBy: userId, updatedBy: userId });
+      }
+    }
+    if (dto.specializations) {
+      for (const spec of dto.specializations) {
+        newAttrs.push({ assayerId, type: 'SPECIALIZATION', name: spec, createdBy: userId, updatedBy: userId });
+      }
+    }
+    if (newAttrs.length > 0) {
+      await this.workforceAttributeRepository.save(newAttrs as any[]);
+    }
+  }
+
   async findAll(page = 1, limit = 50): Promise<{ assayers: AssayerEntity[]; total: number }> {
     const [assayers, total] = await this.assayerRepository.findAndCount({
       where: { isActive: true },
@@ -255,16 +333,18 @@ export class AssayerService implements OnModuleInit {
       take: limit,
       order: { createdAt: 'DESC' },
     });
+    await this.hydrateAllWorkforceAttributes(assayers);
     return { assayers, total };
   }
 
   async findOne(id: string): Promise<AssayerEntity> {
     const assayer = await this.assayerRepository.findOne({ where: { id, isActive: true } });
     if (!assayer) throw new NotFoundException(`Assayer ${id} not found.`);
+    await this.hydrateWorkforceAttributes(assayer);
     return assayer;
   }
 
-  async create(dto: CreateAssayerDto, userId: string): Promise<AssayerEntity> {
+  async create(dto: CreateAssayerDto, userId: string, organizationId?: string | null): Promise<AssayerEntity> {
     const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
     if (existing) throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
 
@@ -291,11 +371,13 @@ export class AssayerService implements OnModuleInit {
       location,
       lifecycleStatus: AssayerLifecycleStatus.INVITED,
       status: 'INACTIVE',
+      organizationId: organizationId ?? null,
       createdBy: userId,
       updatedBy: userId,
     });
 
     const saved = await this.assayerRepository.save(assayer);
+    await this.syncWorkforceAttributes(saved.id, dto, userId);
     await this.recordActivity(saved.id, 'ASSAYER_CREATED', null, AssayerLifecycleStatus.INVITED, userId, 'Assayer profile created');
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -305,6 +387,7 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
     });
+    await this.hydrateWorkforceAttributes(saved);
     return saved;
   }
 
@@ -347,6 +430,7 @@ export class AssayerService implements OnModuleInit {
     }
     assayer.updatedBy = userId;
     const saved = await this.assayerRepository.save(assayer);
+    await this.syncWorkforceAttributes(saved.id, dto, userId);
     await this.recordActivity(saved.id, 'ASSAYER_UPDATED', null, null, userId, 'Profile updated');
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -356,6 +440,7 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Updated assayer profile: ${saved.displayName}`,
     });
+    await this.hydrateWorkforceAttributes(saved);
     return saved;
   }
 
@@ -820,6 +905,7 @@ export class AssayerService implements OnModuleInit {
       totalEarnings: Number(earningsResult[0]?.total ?? 0),
       lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
     });
+    await this.recomputeAverageRating(assayerId);
   }
 
   async getProfile(assayerId: string): Promise<AssayerEntity> {
@@ -827,6 +913,7 @@ export class AssayerService implements OnModuleInit {
       where: { id: assayerId, isActive: true },
     });
     if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
+    await this.hydrateWorkforceAttributes(assayer);
     return assayer;
   }
 
@@ -992,5 +1079,216 @@ export class AssayerService implements OnModuleInit {
     const where: any = { assayerId, isActive: true };
     if (type) where.type = type;
     return this.workforceAttributeRepository.find({ where, order: { type: 'ASC', name: 'ASC' } });
+  }
+
+  async generateTemplate(): Promise<Buffer> {
+    const headers = [
+      'Assayer Code',
+      'First Name',
+      'Last Name',
+      'Display Name',
+      'Email',
+      'Phone',
+      'Alternate Phone',
+      'Address',
+      'State',
+      'District',
+      'City',
+      'Pincode',
+      'Region',
+      'Employee ID',
+      'Employee Code',
+      'Employment Type',
+      'Department',
+      'Joining Date',
+      'PAN Number',
+      'Bank Account Number',
+      'IFSC Code',
+      'Experience (Years)',
+      'Performance Rating',
+      'Max Daily Workload',
+      'Max Weekly Workload',
+      'Skills (comma-separated)',
+      'Languages (comma-separated)',
+      'Certifications (semicolon-separated: Name|YYYY-MM-DD)',
+      'Preferred Regions (comma-separated)',
+      'Specializations (comma-separated)',
+      'Emergency Contact Name',
+      'Emergency Contact Phone',
+      'Emergency Contact Relation',
+      'Working Hours Start',
+      'Working Hours End',
+    ];
+
+    const ws = xlsx.utils.json_to_sheet([], { header: headers });
+    ws['!cols'] = headers.map((h) => ({
+      wch: h === 'Certifications (semicolon-separated: Name|YYYY-MM-DD)' ? 45 : h.length > 25 ? 30 : 20,
+    }));
+
+    // Add a second sheet with instructions
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Assayers');
+
+    const instructions = [
+      { Field: 'Assayer Code', Required: 'Yes', Description: 'Unique identifier for the assayer' },
+      { Field: 'First Name', Required: 'Yes', Description: 'Assayer first name' },
+      { Field: 'Last Name', Required: 'Yes', Description: 'Assayer last name' },
+      { Field: 'Display Name', Required: 'No', Description: 'Auto-generated from first+last if left blank' },
+      { Field: 'Email', Required: 'No', Description: 'Work email address' },
+      { Field: 'Phone', Required: 'Yes', Description: 'Primary contact number' },
+      { Field: 'Alternate Phone', Required: 'No', Description: 'Secondary contact number' },
+      { Field: 'Address', Required: 'Yes', Description: 'Residential address' },
+      { Field: 'State', Required: 'Yes', Description: 'State name' },
+      { Field: 'District', Required: 'Yes', Description: 'District name' },
+      { Field: 'City', Required: 'Yes', Description: 'City name' },
+      { Field: 'Pincode', Required: 'No', Description: '6-digit pincode' },
+      { Field: 'Region', Required: 'No', Description: 'Geographic region' },
+      { Field: 'Employee ID', Required: 'No', Description: 'HR employee identifier' },
+      { Field: 'Employee Code', Required: 'No', Description: 'Internal employee code' },
+      { Field: 'Employment Type', Required: 'No', Description: 'INTERNAL / EXTERNAL / CONTRACT' },
+      { Field: 'Department', Required: 'No', Description: 'Department name' },
+      { Field: 'Joining Date', Required: 'No', Description: 'YYYY-MM-DD format' },
+      { Field: 'PAN Number', Required: 'No', Description: 'Tax PAN card number' },
+      { Field: 'Bank Account Number', Required: 'No', Description: 'Bank account for fee payments' },
+      { Field: 'IFSC Code', Required: 'No', Description: 'Bank IFSC code' },
+      { Field: 'Experience (Years)', Required: 'No', Description: 'Total years of experience' },
+      { Field: 'Performance Rating', Required: 'No', Description: 'Rating 1.00 - 10.00' },
+      { Field: 'Max Daily Workload', Required: 'No', Description: 'Max branches per day (default 3)' },
+      { Field: 'Max Weekly Workload', Required: 'No', Description: 'Max branches per week (default 15)' },
+      { Field: 'Skills', Required: 'No', Description: 'Comma-separated, e.g. Audit, Risk Assessment, Compliance' },
+      { Field: 'Languages', Required: 'No', Description: 'Comma-separated, e.g. English, Hindi, Marathi' },
+      { Field: 'Certifications', Required: 'No', Description: 'Semicolon-separated: Name|YYYY-MM-DD, e.g. CA|2015-06-01;CFA|2018-12-15' },
+      { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated region names' },
+      { Field: 'Specializations', Required: 'No', Description: 'Comma-separated specializations' },
+      { Field: 'Emergency Contact Name', Required: 'No', Description: 'Emergency contact person name' },
+      { Field: 'Emergency Contact Phone', Required: 'No', Description: 'Emergency contact phone number' },
+      { Field: 'Emergency Contact Relation', Required: 'No', Description: 'Relationship to assayer' },
+      { Field: 'Working Hours Start', Required: 'No', Description: 'Default shift start time, e.g. 09:00' },
+      { Field: 'Working Hours End', Required: 'No', Description: 'Default shift end time, e.g. 18:00' },
+    ];
+    const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
+    instrWs['!cols'] = [
+      { wch: 30 },
+      { wch: 10 },
+      { wch: 60 },
+    ];
+    xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
+
+    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  }
+
+  async uploadFromExcel(fileBuffer: Buffer, userId: string): Promise<{ importedCount: number; errors: string[] }> {
+    const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rows: any[] = xlsx.utils.sheet_to_json(worksheet);
+
+    const errors: string[] = [];
+    let importedCount = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+
+      try {
+        const assayerCode = (row['Assayer Code'] || '').toString().trim();
+        if (!assayerCode) {
+          errors.push(`Row ${rowNum}: Assayer Code is required`);
+          continue;
+        }
+
+        const firstName = (row['First Name'] || '').toString().trim();
+        if (!firstName) {
+          errors.push(`Row ${rowNum} (${assayerCode}): First Name is required`);
+          continue;
+        }
+
+        const lastName = (row['Last Name'] || '').toString().trim();
+        if (!lastName) {
+          errors.push(`Row ${rowNum} (${assayerCode}): Last Name is required`);
+          continue;
+        }
+
+        const phone = (row['Phone'] || '').toString().trim();
+        if (!phone) {
+          errors.push(`Row ${rowNum} (${assayerCode}): Phone is required`);
+          continue;
+        }
+
+        const dto: any = {
+          assayerCode,
+          firstName,
+          lastName,
+          displayName: (row['Display Name'] || '').toString().trim() || `${firstName} ${lastName}`,
+          email: (row['Email'] || '').toString().trim() || undefined,
+          phone,
+          alternatePhone: (row['Alternate Phone'] || '').toString().trim() || undefined,
+          address: (row['Address'] || '').toString().trim(),
+          state: (row['State'] || '').toString().trim(),
+          district: (row['District'] || '').toString().trim(),
+          city: (row['City'] || '').toString().trim(),
+          pincode: (row['Pincode'] || '').toString().trim() || undefined,
+          region: (row['Region'] || '').toString().trim() || undefined,
+          employeeId: (row['Employee ID'] || '').toString().trim() || undefined,
+          employeeCode: (row['Employee Code'] || '').toString().trim() || undefined,
+          employmentType: (row['Employment Type'] || '').toString().trim() || undefined,
+          department: (row['Department'] || '').toString().trim() || undefined,
+          joiningDate: (row['Joining Date'] || '').toString().trim() || undefined,
+          panNumber: (row['PAN Number'] || '').toString().trim() || undefined,
+          bankAccountNumber: (row['Bank Account Number'] || '').toString().trim() || undefined,
+          ifscCode: (row['IFSC Code'] || '').toString().trim() || undefined,
+          experienceYears: parseInt(row['Experience (Years)'], 10) || undefined,
+          performanceRating: parseFloat(row['Performance Rating']) || undefined,
+          maxDailyWorkload: parseInt(row['Max Daily Workload'], 10) || undefined,
+          maxWeeklyWorkload: parseInt(row['Max Weekly Workload'], 10) || undefined,
+          emergencyContactName: (row['Emergency Contact Name'] || '').toString().trim() || undefined,
+          emergencyContactPhone: (row['Emergency Contact Phone'] || '').toString().trim() || undefined,
+          emergencyContactRelation: (row['Emergency Contact Relation'] || '').toString().trim() || undefined,
+          workingHours: undefined,
+        };
+
+        // Parse array fields
+        const skills = (row['Skills (comma-separated)'] || row['Skills'] || '').toString().trim();
+        if (skills) dto.skills = skills.split(',').map((s: string) => s.trim()).filter(Boolean);
+
+        const languages = (row['Languages (comma-separated)'] || row['Languages'] || '').toString().trim();
+        if (languages) dto.languages = languages.split(',').map((s: string) => s.trim()).filter(Boolean);
+
+        const prefs = (row['Preferred Regions (comma-separated)'] || row['Preferred Regions'] || '').toString().trim();
+        if (prefs) dto.preferredRegions = prefs.split(',').map((s: string) => s.trim()).filter(Boolean);
+
+        const specializations = (row['Specializations (comma-separated)'] || row['Specializations'] || '').toString().trim();
+        if (specializations) dto.specializations = specializations.split(',').map((s: string) => s.trim()).filter(Boolean);
+
+        // Parse certifications: "Name|YYYY-MM-DD;Name2|YYYY-MM-DD"
+        const certs = (row['Certifications (semicolon-separated: Name|YYYY-MM-DD)'] || row['Certifications'] || '').toString().trim();
+        if (certs) {
+          dto.certifications = certs.split(';').map((c: string) => {
+            const [name, expiryDate] = c.split('|').map((p: string) => p.trim());
+            return { name: name || c.trim(), expiryDate: expiryDate || undefined };
+          }).filter((c: any) => c.name);
+        }
+
+        // Parse working hours
+        const whStart = (row['Working Hours Start'] || '').toString().trim();
+        const whEnd = (row['Working Hours End'] || '').toString().trim();
+        if (whStart && whEnd) {
+          dto.workingHours = { start: whStart, end: whEnd };
+        }
+
+        // Check if assayer exists by code
+        const existing = await this.assayerRepository.findOne({ where: { assayerCode } });
+        if (existing) {
+          await this.update(existing.id, dto, userId);
+        } else {
+          await this.create(dto, userId);
+        }
+        importedCount++;
+      } catch (err: any) {
+        errors.push(`Row ${rowNum}: ${err.message}`);
+      }
+    }
+
+    return { importedCount, errors };
   }
 }

@@ -28,6 +28,7 @@ const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const assignment_state_machine_1 = require("./assignment.state-machine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const constraint_evaluator_1 = require("../planning/constraint.evaluator");
 const shared_1 = require("@fapoms/shared");
 let AssignmentService = class AssignmentService {
     assignmentRepository;
@@ -39,8 +40,9 @@ let AssignmentService = class AssignmentService {
     auditService;
     workflowEngine;
     eventPublisher;
+    constraintEvaluator;
     dataSource;
-    constructor(assignmentRepository, projectQueryService, projectService, assayerService, notificationService, holidayService, auditService, workflowEngine, eventPublisher, dataSource) {
+    constructor(assignmentRepository, projectQueryService, projectService, assayerService, notificationService, holidayService, auditService, workflowEngine, eventPublisher, constraintEvaluator, dataSource) {
         this.assignmentRepository = assignmentRepository;
         this.projectQueryService = projectQueryService;
         this.projectService = projectService;
@@ -50,6 +52,7 @@ let AssignmentService = class AssignmentService {
         this.auditService = auditService;
         this.workflowEngine = workflowEngine;
         this.eventPublisher = eventPublisher;
+        this.constraintEvaluator = constraintEvaluator;
         this.dataSource = dataSource;
     }
     onModuleInit() {
@@ -158,18 +161,10 @@ let AssignmentService = class AssignmentService {
         if (!assayer) {
             throw new common_1.NotFoundException(`Assayer ${dto.assayerId} not found.`);
         }
-        if (projectBranch.project && projectBranch.project.requiredSkills && projectBranch.project.requiredSkills.length > 0) {
-            const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
-            const missingSkills = projectBranch.project.requiredSkills.filter((skill) => !assayerSkills.includes(skill.trim().toLowerCase()));
-            if (missingSkills.length > 0) {
-                throw new common_1.BadRequestException(`Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`);
-            }
-        }
-        if (projectBranch.project && projectBranch.project.requiredCertifications && projectBranch.project.requiredCertifications.length > 0) {
-            const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
-            const missingCerts = projectBranch.project.requiredCertifications.filter((cert) => !assayerCerts.includes(cert.trim().toLowerCase()));
-            if (missingCerts.length > 0) {
-                throw new common_1.BadRequestException(`Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`);
+        if (projectBranch.project) {
+            const skillsCheck = this.constraintEvaluator.checkSkillsAndCertifications(assayer, projectBranch.project);
+            if (!skillsCheck.passed) {
+                throw new common_1.BadRequestException(skillsCheck.reason);
             }
         }
         const activeAssignment = await this.assignmentRepository.findOne({
@@ -192,20 +187,13 @@ let AssignmentService = class AssignmentService {
             throw new common_1.ConflictException(`Branch Busy: An active assignment (${activeAssignment.assignmentNumber}) already exists for this branch.`);
         }
         const scheduledDateObj = new Date(dto.scheduledDate);
-        const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, projectBranch.branch.state);
-        if (isHolidayConflict) {
-            throw new common_1.BadRequestException(`Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${projectBranch.branch.state}.`);
+        const holidayCheck = await this.constraintEvaluator.checkHoliday(projectBranch.branch.state, scheduledDateObj);
+        if (!holidayCheck.passed) {
+            throw new common_1.BadRequestException(holidayCheck.reason);
         }
-        const isDoubleBooked = await this.assignmentRepository.findOne({
-            where: {
-                assayerId: dto.assayerId,
-                scheduledDate: scheduledDateObj,
-                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.SCHEDULED]),
-                isActive: true,
-            },
-        });
-        if (isDoubleBooked) {
-            throw new common_1.ConflictException(`Assayer Collision: Assayer is already assigned to branch audit on ${dto.scheduledDate}.`);
+        const doubleBookingCheck = await this.constraintEvaluator.checkDoubleBooking(dto.assayerId, scheduledDateObj);
+        if (!doubleBookingCheck.passed) {
+            throw new common_1.ConflictException(doubleBookingCheck.reason);
         }
         const randomSuffix = Math.floor(1000 + Math.random() * 9000);
         const assignmentNumber = `ASN-${new Date().getFullYear()}-${randomSuffix}`;
@@ -608,7 +596,7 @@ exports.AssignmentService = AssignmentService;
 exports.AssignmentService = AssignmentService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
-    __param(9, (0, typeorm_3.InjectDataSource)()),
+    __param(10, (0, typeorm_3.InjectDataSource)()),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         project_query_service_1.ProjectQueryService,
         project_service_1.ProjectService,
@@ -618,6 +606,7 @@ exports.AssignmentService = AssignmentService = __decorate([
         audit_service_1.AuditService,
         workflow_engine_1.WorkflowEngine,
         domain_event_publisher_1.DomainEventPublisher,
+        constraint_evaluator_1.ConstraintEvaluator,
         typeorm_2.DataSource])
 ], AssignmentService);
 //# sourceMappingURL=assignment.service.js.map

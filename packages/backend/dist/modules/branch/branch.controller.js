@@ -46,6 +46,7 @@ class CreateBranchRequestDto {
     complexity;
     estimatedDurationHours;
     requiredCompetencies;
+    operatingHours;
 }
 __decorate([
     (0, class_validator_1.IsString)(),
@@ -172,6 +173,11 @@ __decorate([
     (0, class_validator_1.IsString)({ each: true }),
     __metadata("design:type", Array)
 ], CreateBranchRequestDto.prototype, "requiredCompetencies", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], CreateBranchRequestDto.prototype, "operatingHours", void 0);
 class UpdateBranchRequestDto {
     branchCode;
     solId;
@@ -198,6 +204,7 @@ class UpdateBranchRequestDto {
     complexity;
     estimatedDurationHours;
     requiredCompetencies;
+    operatingHours;
 }
 __decorate([
     (0, class_validator_1.IsOptional)(),
@@ -324,6 +331,11 @@ __decorate([
     (0, class_validator_1.IsString)({ each: true }),
     __metadata("design:type", Array)
 ], UpdateBranchRequestDto.prototype, "requiredCompetencies", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateBranchRequestDto.prototype, "operatingHours", void 0);
 class CreateContactRequestDto {
     name;
     email;
@@ -456,7 +468,7 @@ let BranchController = class BranchController {
         this.branchService = branchService;
     }
     async create(dto, req) {
-        const branch = await this.branchService.create(dto, req.user.id);
+        const branch = await this.branchService.create(dto, req.user.id, req.user.organizationId);
         return { success: true, data: branch };
     }
     async findAll(page = 1, limit = 20, clientId, region, zoneId) {

@@ -27,9 +27,25 @@ import { ClientEntity } from '../client/client.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
+import { ConstraintEvaluator } from './constraint.evaluator';
+import { AssayerService } from '../assayer/assayer.service';
+import { HolidayService } from '../holiday/holiday.service';
+import { ScheduleEntity } from '../scheduling/schedule.entity';
 
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
+
+  const mockAssayerService = {
+    hydrateWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
+    hydrateAllWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
+    findAll: jest.fn().mockResolvedValue({ assayers: [], total: 0 }),
+    findOne: jest.fn().mockResolvedValue({ id: 'asr-1', skills: [], certifications: [], languages: [], specializations: [] }),
+  };
+
+  const mockHolidayService = {
+    isHoliday: jest.fn().mockResolvedValue(false),
+    findAll: jest.fn().mockResolvedValue({ holidays: [], total: 0 }),
+  };
 
   const mockAssayerRepo = {
     find: jest.fn(),
@@ -82,6 +98,7 @@ describe('RecommendationEngine', () => {
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
         ConfigurationResolver,
+        ConstraintEvaluator,
         {
           provide: getRepositoryToken(AssayerEntity),
           useValue: mockAssayerRepo,
@@ -89,6 +106,10 @@ describe('RecommendationEngine', () => {
         {
           provide: getRepositoryToken(AssignmentEntity),
           useValue: mockAssignmentRepo,
+        },
+        {
+          provide: getRepositoryToken(ScheduleEntity),
+          useValue: mockAssignmentRepo, // Reuse mockAssignmentRepo for ScheduleEntity
         },
         {
           provide: getRepositoryToken(AssayerCommercialProfileEntity),
@@ -109,6 +130,18 @@ describe('RecommendationEngine', () => {
         {
           provide: RuleEngine,
           useValue: mockRuleEngine,
+        },
+        {
+          provide: AssayerService,
+          useValue: mockAssayerService,
+        },
+        {
+          provide: HolidayService,
+          useValue: mockHolidayService,
+        },
+        {
+          provide: HolidayService,
+          useValue: {},
         },
       ],
     }).compile();
@@ -208,4 +241,34 @@ describe('RecommendationEngine', () => {
     expect(results[0].assayer.id).toBe('a-close');
     expect(results[0].score).toBeGreaterThan(results[1].score);
   });
+
+  it('should handle missing coordinates gracefully by calculating fallback scores', async () => {
+    const assayerNoCoords = {
+      id: 'a-no-coords',
+      status: 'ACTIVE',
+      isActive: true,
+      latitude: null,
+      longitude: null,
+      performanceRating: 5.0,
+      experienceYears: 5,
+    };
+
+    mockAssayerRepo.find.mockResolvedValue([assayerNoCoords]);
+    mockAssignmentRepo.findOne.mockResolvedValue(null);
+    mockAssignmentRepo.count.mockResolvedValue(0);
+    mockCommercialRepo.find.mockResolvedValue([]);
+    mockClientRepo.findOne.mockResolvedValue(null);
+
+    const branch = {
+      id: 'b-1',
+      latitude: 19.076,
+      longitude: 72.877,
+    } as any;
+
+    const results = await engine.recommend(branch, new Date());
+    expect(results).toHaveLength(1);
+    expect(results[0].assayer.id).toBe('a-no-coords');
+    expect(results[0].breakdown.distance).toBe(0);
+  });
 });
+

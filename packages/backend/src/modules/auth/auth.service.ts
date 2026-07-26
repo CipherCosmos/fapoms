@@ -34,6 +34,7 @@ export interface JwtPayload {
   email: string;
   roles: string[];
   permissions: string[];
+  organizationId: string | null;
 }
 
 export interface TokenPair {
@@ -249,6 +250,7 @@ export class AuthService {
       email: user.email,
       roles,
       permissions: [...new Set(permissions)], // Deduplicate
+      organizationId: user.organizationId ?? null,
     };
 
     const accessToken = this.jwtService.sign(payload, {

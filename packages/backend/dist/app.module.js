@@ -15,6 +15,7 @@ const auth_module_1 = require("./modules/auth/auth.module");
 const user_module_1 = require("./modules/user/user.module");
 const audit_module_1 = require("./core/audit/audit.module");
 const platform_module_1 = require("./modules/platform/platform.module");
+const platform_foundation_module_1 = require("./modules/platform/platform-foundation.module");
 const organization_module_1 = require("./modules/organization/organization.module");
 const client_module_1 = require("./modules/client/client.module");
 const branch_module_1 = require("./modules/branch/branch.module");
@@ -56,6 +57,7 @@ exports.AppModule = AppModule = __decorate([
             auth_module_1.AuthModule,
             user_module_1.UserModule,
             platform_module_1.PlatformModule,
+            platform_foundation_module_1.PlatformFoundationModule,
             organization_module_1.OrganizationModule,
             client_module_1.ClientModule,
             branch_module_1.BranchModule,

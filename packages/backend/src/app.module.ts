@@ -17,6 +17,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { AuditModule } from './core/audit/audit.module';
 import { PlatformModule } from './modules/platform/platform.module';
+import { PlatformFoundationModule } from './modules/platform/platform-foundation.module';
 
 // Business modules
 import { OrganizationModule } from './modules/organization/organization.module';
@@ -62,6 +63,7 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
     AuthModule,
     UserModule,
     PlatformModule,
+    PlatformFoundationModule,
 
     // Business modules
     OrganizationModule,

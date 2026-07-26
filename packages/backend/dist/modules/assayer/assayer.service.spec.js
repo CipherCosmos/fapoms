@@ -92,6 +92,7 @@ describe('AssayerService', () => {
         const module = await setupModule();
         service = module.get(assayer_service_1.AssayerService);
         jest.clearAllMocks();
+        mockWorkforceRepo.find.mockResolvedValue([]);
     });
     describe('create', () => {
         it('should create an assayer with INVITED lifecycle status', async () => {

@@ -569,7 +569,7 @@ let ClientController = class ClientController {
         this.clientService = clientService;
     }
     async create(dto, req) {
-        const client = await this.clientService.create(dto, req.user.id);
+        const client = await this.clientService.create(dto, req.user.id, req.user.organizationId);
         return { success: true, data: client };
     }
     async findAll(page = 1, limit = 20) {

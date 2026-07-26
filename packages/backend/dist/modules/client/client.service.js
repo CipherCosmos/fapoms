@@ -48,7 +48,7 @@ let ClientService = class ClientService {
         this.billingRepository = billingRepository;
         this.auditService = auditService;
     }
-    async create(dto, userId) {
+    async create(dto, userId, organizationId) {
         const existing = await this.clientRepository.findOne({ where: { clientCode: dto.clientCode } });
         if (existing) {
             throw new common_1.ConflictException(`Client code ${dto.clientCode} already exists.`);
@@ -85,6 +85,7 @@ let ClientService = class ClientService {
             preferredAssayers: dto.preferredAssayers ?? null,
             restrictedAssayers: dto.restrictedAssayers ?? null,
             planningPreferences: dto.planningPreferences ?? null,
+            organizationId: organizationId ?? null,
             createdBy: userId,
             updatedBy: userId,
             configuration: config,

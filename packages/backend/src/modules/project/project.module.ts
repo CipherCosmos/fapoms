@@ -10,12 +10,13 @@ import { ProjectQueryService } from './project-query.service';
 import { ProjectController } from './project.controller';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { ClientEntity } from '../client/client.entity';
 import { PlatformModule } from '../platform/platform.module';
 import { BranchModule } from '../branch/branch.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ProjectEntity, ProjectBranchEntity]),
+    TypeOrmModule.forFeature([ProjectEntity, ProjectBranchEntity, ClientEntity]),
     PlatformModule,
     BranchModule,
   ],

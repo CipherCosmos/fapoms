@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2 } from 'lucide-react';
+import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
@@ -102,6 +102,73 @@ interface Remark {
   createdAt: string;
 }
 
+interface DayPlanStop {
+  order: number;
+  branchId: string;
+  branchName: string;
+  branchCode: string;
+  address: string;
+  estimatedAuditHours: number;
+  travelFromPreviousKm: number;
+  travelFromPreviousMinutes: number;
+  estimatedArrival: string;
+  estimatedDeparture: string;
+}
+
+interface DayPlanCandidate {
+  assayerId: string;
+  assayerName: string;
+  assayerCode: string;
+  assayerCity: string;
+  assayerPhone: string;
+  overallScore: number;
+  totalBranches: number;
+  totalAuditHours: number;
+  totalTravelKm: number;
+  totalTravelMinutes: number;
+  totalDayHours: number;
+  estimatedBaseFee: number;
+  estimatedTravelFee: number;
+  estimatedTotalCost: number;
+  dayStartTime: string;
+  dayEndTime: string;
+  utilizationPercent: number;
+  stops: DayPlanStop[];
+  clientPreferencesMatch: {
+    skillsMatch: boolean;
+    certificationsMatch: boolean;
+    distanceWithinRange: boolean;
+    isPreferredAssayer: boolean;
+  };
+}
+
+interface BranchCluster {
+  clusterId: string;
+  radiusKm: number;
+  branches: Array<{ branchId: string; branchName: string; branchCode: string; estimatedDurationHours: number; city: string; district: string }>;
+  totalEstimatedAuditHours: number;
+  feasibleForOneDay: boolean;
+}
+
+interface ProjectDayPlan {
+  projectId: string;
+  projectName: string;
+  targetDate: string;
+  clusters: Array<{
+    cluster: BranchCluster;
+    dayPlans: DayPlanCandidate[];
+    bestPlan: DayPlanCandidate | null;
+  }>;
+  unclusteredBranches: Array<{ branchId: string; branchName: string; reason: string }>;
+  summary: {
+    totalClusters: number;
+    totalBranchesCovered: number;
+    totalAssayersNeeded: number;
+    estimatedTotalCost: number;
+    averageUtilization: number;
+  };
+}
+
 const CATEGORY_COLORS: Record<string, string> = {
   PERFORMANCE: '#8b5cf6',
   QUALITY: '#3b82f6',
@@ -154,6 +221,9 @@ export const PlanningWorkspace: React.FC = () => {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
+  const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
+  const [isLoadingDayPlans, setIsLoadingDayPlans] = useState(false);
+  const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
 
   useEffect(() => { loadProjects(); loadZones(); }, []);
 
@@ -246,6 +316,18 @@ export const PlanningWorkspace: React.FC = () => {
       setSelectedBranchId(data.length > 0 ? data[0].id : null);
     } catch { console.error('Failed to fetch project branches queue'); }
     finally { setIsLoadingQueue(false); }
+  };
+
+  const loadDayPlans = async () => {
+    if (!selectedProjectId) return;
+    setIsLoadingDayPlans(true);
+    setDayPlanData(null);
+    try {
+      const data = await api.request<ProjectDayPlan>(`/planning/projects/${selectedProjectId}/day-plans`);
+      setDayPlanData(data);
+      if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
+    } catch (err) { console.error('Failed to load day plans', err); }
+    finally { setIsLoadingDayPlans(false); }
   };
 
   const loadCandidates = async (branchId: string) => {
@@ -367,8 +449,8 @@ export const PlanningWorkspace: React.FC = () => {
                     <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km` : 'Unknown distance'}
                   </div>
                 </div>
-                <span style={{ padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
-                  {conf}%
+                <span title="Score evaluates Distance, Travel Time, Workload, Performance, Experience, and Cost." style={{ cursor: 'help', padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
+                  {conf}% {conf >= 90 ? '🔥 High Utilization' : ''}
                 </span>
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '12px' }}>
@@ -411,8 +493,12 @@ export const PlanningWorkspace: React.FC = () => {
                 </button>
               </div>
               {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
-                <div style={{ padding: '6px 8px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '10px', color: 'var(--accent-secondary)' }}>
-                  Route: {optimizedSummary.totalDistanceKm} km / {optimizedSummary.totalDurationMinutes} min
+                <div style={{ padding: '8px 10px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div><b>🗺️ Optimized Route Details:</b></div>
+                  <div>• Distance: {optimizedSummary.totalDistanceKm} km</div>
+                  <div>• Est. Travel Time: {optimizedSummary.totalDurationMinutes} minutes</div>
+                  <div>• Est. Travel Fee: ₹{(optimizedSummary.totalDistanceKm * 8).toFixed(0)} (₹8/km)</div>
+                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Path covers multiple branch locations with TSP roundtrip routing optimization.</div>
                 </div>
               )}
             </div>
@@ -450,8 +536,8 @@ export const PlanningWorkspace: React.FC = () => {
           <span style={{ color: '#f59e0b' }}>{totalCount - confirmedCount}</span> pending
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
-          {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only']].map(([k, lbl]) => (
-            <button key={k} onClick={() => setLayoutMode(k)}
+          {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only'], ['day-plans', '📋 Day Plans']].map(([k, lbl]) => (
+            <button key={k} onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
               style={{ background: layout === k ? 'rgba(99,102,241,0.15)' : 'none', border: `1px solid ${layout === k ? 'var(--accent-primary)' : 'var(--border-color)'}`, borderRadius: 'var(--radius-sm)', color: layout === k ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', padding: '4px 8px', fontSize: '10px', fontWeight: layout === k ? 600 : 400 }}>
               {lbl}
             </button>
@@ -956,6 +1042,249 @@ export const PlanningWorkspace: React.FC = () => {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Layout: Day Plans (Multi-Branch Cluster View) ── */}
+      {layout === 'day-plans' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 32px 32px', overflowY: 'auto' }}>
+          {/* Header & Refresh */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Layers size={18} style={{ color: 'var(--accent-primary)' }} />
+              <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>Multi-Branch Day Plans</h2>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Clusters nearby branches → assigns single assayer per cluster for one-day coverage</span>
+            </div>
+            <button onClick={loadDayPlans} disabled={isLoadingDayPlans}
+              className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <Route size={13} /> {isLoadingDayPlans ? 'Generating...' : 'Generate Day Plans'}
+            </button>
+          </div>
+
+          {isLoadingDayPlans && (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)', fontSize: '13px' }}>
+              <div className="loading-spinner" style={{ width: '30px', height: '30px', border: '3px solid var(--border-color)', borderTop: '3px solid var(--accent-primary)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
+              Analyzing branch clusters, calculating routes & scoring assayers...
+            </div>
+          )}
+
+          {!isLoadingDayPlans && !dayPlanData && (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)', fontSize: '13px' }}>
+              <Layers size={40} style={{ color: 'var(--border-color)', margin: '0 auto 12px', display: 'block' }} />
+              Click "Generate Day Plans" to cluster branches and find optimal assayer assignments.
+            </div>
+          )}
+
+          {dayPlanData && (
+            <>
+              {/* Summary KPI Bar */}
+              <div style={{ display: 'flex', gap: '16px', padding: '10px 0 14px', flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Clusters', value: dayPlanData.summary.totalClusters, icon: <Layers size={13} />, color: 'var(--accent-primary)' },
+                  { label: 'Branches Covered', value: dayPlanData.summary.totalBranchesCovered, icon: <Building2 size={13} />, color: 'var(--status-active)' },
+                  { label: 'Assayers Needed', value: dayPlanData.summary.totalAssayersNeeded, icon: <Users size={13} />, color: '#f59e0b' },
+                  { label: 'Est. Total Cost', value: `₹${dayPlanData.summary.estimatedTotalCost.toLocaleString()}`, icon: <DollarSign size={13} />, color: '#8b5cf6' },
+                  { label: 'Avg Utilization', value: `${dayPlanData.summary.averageUtilization.toFixed(0)}%`, icon: <TrendingUp size={13} />, color: dayPlanData.summary.averageUtilization >= 70 ? 'var(--status-active)' : '#f59e0b' },
+                ].map((kpi, idx) => (
+                  <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: '130px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{kpi.icon} {kpi.label}</div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: kpi.color }}>{kpi.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Unclustered branches warning */}
+              {dayPlanData.unclusteredBranches.length > 0 && (
+                <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#f59e0b', marginBottom: '6px' }}>⚠️ {dayPlanData.unclusteredBranches.length} Branch(es) Could Not Be Clustered</div>
+                  {dayPlanData.unclusteredBranches.map((b, i) => (
+                    <div key={i} style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '2px' }}>• {b.branchName}: {b.reason}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Clusters */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {dayPlanData.clusters.map(({ cluster, dayPlans, bestPlan }) => (
+                  <div key={cluster.clusterId} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                    {/* Cluster Header */}
+                    <div onClick={() => setExpandedCluster(expandedCluster === cluster.clusterId ? null : cluster.clusterId)}
+                      style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        background: expandedCluster === cluster.clusterId ? 'rgba(99,102,241,0.06)' : 'transparent',
+                        borderBottom: expandedCluster === cluster.clusterId ? '1px solid var(--border-color)' : 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(99,102,241,0.1)', padding: '3px 8px', borderRadius: '4px' }}>{cluster.clusterId}</span>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{cluster.branches.length} Branches</span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          {cluster.branches.map(b => b.branchName.replace(/^(Pune |Nashik |Mumbai |Bangalore )/, '')).join(' → ')}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><Clock size={11} /> {cluster.totalEstimatedAuditHours}h audit</span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> {cluster.radiusKm.toFixed(0)}km radius</span>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : '#ef4444' }}>
+                          {cluster.feasibleForOneDay ? '✅ Fits 1 day' : '❌ Exceeds capacity'}
+                        </span>
+                        {bestPlan && (
+                          <span style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600 }}>
+                            Best: {bestPlan.assayerName} (₹{bestPlan.estimatedTotalCost.toLocaleString()})
+                          </span>
+                        )}
+                        <span style={{ fontSize: '14px', color: 'var(--text-muted)', transition: 'transform 0.2s', transform: expandedCluster === cluster.clusterId ? 'rotate(180deg)' : 'none' }}>▾</span>
+                      </div>
+                    </div>
+
+                    {/* Expanded Cluster: Day Plan Candidates */}
+                    {expandedCluster === cluster.clusterId && (
+                      <div style={{ padding: '14px 16px' }}>
+                        {/* Branches in this cluster */}
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                          {cluster.branches.map(b => (
+                            <div key={b.branchId} style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '11px' }}>
+                              <div style={{ fontWeight: 600, color: '#fff' }}>{b.branchName}</div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{b.branchCode} • {b.city} • {b.estimatedDurationHours}h audit</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {dayPlans.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                            <AlertTriangle size={18} style={{ color: '#f59e0b', marginBottom: '6px' }} />
+                            <div>No eligible assayers found for this cluster. Check client preferences or expand search radius.</div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {dayPlans.map((plan, pIdx) => (
+                              <div key={plan.assayerId} style={{
+                                background: pIdx === 0 ? 'rgba(16,185,129,0.04)' : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${pIdx === 0 ? 'rgba(16,185,129,0.3)' : 'var(--border-color)'}`,
+                                borderRadius: 'var(--radius-md)', padding: '14px', position: 'relative' as const,
+                              }}>
+                                {pIdx === 0 && (
+                                  <span style={{ position: 'absolute' as const, top: '-1px', right: '12px', background: 'var(--status-active)', color: '#000', fontSize: '9px', fontWeight: 700, padding: '2px 8px', borderRadius: '0 0 4px 4px' }}>
+                                    ⭐ RECOMMENDED
+                                  </span>
+                                )}
+
+                                {/* Assayer Info Row */}
+                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                  <div>
+                                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                      {plan.assayerName}
+                                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 400 }}>({plan.assayerCode})</span>
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', gap: '10px', marginTop: '3px' }}>
+                                      <span><Phone size={10} /> {plan.assayerPhone}</span>
+                                      <span><MapPin size={10} /> {plan.assayerCity}</span>
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <span style={{
+                                      padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                      background: plan.overallScore >= 70 ? 'rgba(16,185,129,0.1)' : plan.overallScore >= 50 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)',
+                                      color: plan.overallScore >= 70 ? 'var(--status-active)' : plan.overallScore >= 50 ? '#f59e0b' : '#ef4444',
+                                    }}>
+                                      {plan.overallScore}% Score
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Metrics Grid */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+                                  {[
+                                    { label: 'Branches', val: plan.totalBranches, icon: '🏢' },
+                                    { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: '⏱️' },
+                                    { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: '🚗' },
+                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: '📅' },
+                                    { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: '🕐' },
+                                    { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? '🔥' : '📊' },
+                                  ].map((m, mi) => (
+                                    <div key={mi} style={{ background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' }}>
+                                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{m.icon} {m.label}</div>
+                                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff', marginTop: '2px' }}>{m.val}</div>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Cost Breakdown */}
+                                <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', padding: '8px 12px', background: 'rgba(139,92,246,0.04)', border: '1px dashed rgba(139,92,246,0.2)', borderRadius: 'var(--radius-sm)' }}>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                    <span style={{ fontWeight: 600 }}>💰 Cost:</span>{' '}
+                                    Base ₹{plan.estimatedBaseFee.toLocaleString()} + Travel ₹{plan.estimatedTravelFee.toLocaleString()} ={' '}
+                                    <span style={{ fontWeight: 700, color: '#f59e0b' }}>₹{plan.estimatedTotalCost.toLocaleString()}</span>
+                                  </div>
+                                </div>
+
+                                {/* Client Preferences Match */}
+                                <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                                  {[
+                                    { label: 'Skills', ok: plan.clientPreferencesMatch.skillsMatch },
+                                    { label: 'Certifications', ok: plan.clientPreferencesMatch.certificationsMatch },
+                                    { label: 'Distance', ok: plan.clientPreferencesMatch.distanceWithinRange },
+                                    { label: 'Preferred', ok: plan.clientPreferencesMatch.isPreferredAssayer },
+                                  ].map((pm, pi) => (
+                                    <span key={pi} style={{
+                                      fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                                      background: pm.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                                      color: pm.ok ? 'var(--status-active)' : '#ef4444',
+                                      fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px',
+                                    }}>
+                                      {pm.ok ? <Check size={9} /> : <X size={9} />} {pm.label}
+                                    </span>
+                                  ))}
+                                </div>
+
+                                {/* Route Stops Timeline */}
+                                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                    <Route size={12} /> Route Schedule (Optimized TSP)
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+                                    {plan.stops.map((stop, si) => (
+                                      <div key={si} style={{ display: 'flex', alignItems: 'stretch', gap: '10px' }}>
+                                        {/* Timeline connector */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '20px' }}>
+                                          <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: si === 0 ? 'var(--accent-primary)' : 'var(--status-active)', flexShrink: 0, marginTop: '5px' }} />
+                                          {si < plan.stops.length - 1 && <div style={{ width: '2px', flex: 1, background: 'var(--border-color)' }} />}
+                                        </div>
+                                        {/* Stop content */}
+                                        <div style={{ flex: 1, paddingBottom: '10px' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>
+                                              #{stop.order} {stop.branchName}
+                                            </span>
+                                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({stop.branchCode})</span>
+                                          </div>
+                                          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '2px' }}>
+                                            <span>🕐 Arrive {stop.estimatedArrival} → Depart {stop.estimatedDeparture}</span>
+                                            <span>⏱️ Audit: {stop.estimatedAuditHours}h</span>
+                                            {stop.travelFromPreviousKm > 0 && (
+                                              <span>🚗 Travel: {stop.travelFromPreviousKm}km ({stop.travelFromPreviousMinutes}min)</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                    {/* Return leg */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '20px' }}>
+                                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+                                      </div>
+                                      <div style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600 }}>🏠 Return Home by {plan.dayEndTime}</div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

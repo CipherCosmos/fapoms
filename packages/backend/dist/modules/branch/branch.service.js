@@ -79,7 +79,7 @@ let BranchService = class BranchService {
         this.auditService = auditService;
         this.branchQueryService = branchQueryService;
     }
-    async create(dto, userId) {
+    async create(dto, userId, organizationId) {
         await this.validateGeography(dto.state, dto.district, dto.city);
         if (dto.zoneId) {
             const zone = await this.zoneRepository.findOne({ where: { id: dto.zoneId } });
@@ -129,6 +129,7 @@ let BranchService = class BranchService {
             complexity: dto.complexity ?? 'STANDARD',
             estimatedDurationHours: dto.estimatedDurationHours ?? 8.00,
             requiredCompetencies: dto.requiredCompetencies ?? null,
+            organizationId: organizationId ?? null,
             createdBy: userId,
             updatedBy: userId,
         });

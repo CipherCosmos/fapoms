@@ -1,7 +1,7 @@
 class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;
 
-  async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  async request<T>(endpoint: string, options?: RequestInit & { raw?: boolean }): Promise<T> {
     let token = localStorage.getItem('fapoms_token');
     const headers: Record<string, string> = {
       ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
@@ -41,13 +41,17 @@ class ApiClient {
       }
     }
 
-    if (response.ok) {
-      const res = await response.json();
-      return res.data as T;
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `API Endpoint ${endpoint} returned status ${response.status}`);
     }
 
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || `API Endpoint ${endpoint} returned status ${response.status}`);
+    if ((options as any)?.raw) {
+      return response.blob() as unknown as T;
+    }
+
+    const res = await response.json();
+    return res.data as T;
   }
 
   private async doRefresh(): Promise<boolean> {

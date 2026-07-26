@@ -153,7 +153,7 @@ export class ClientController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Create a new client profile' })
   async create(@Body() dto: CreateClientRequestDto, @Req() req: any) {
-    const client = await this.clientService.create(dto, req.user.id);
+    const client = await this.clientService.create(dto, req.user.id, req.user.organizationId);
     return { success: true, data: client };
   }
 

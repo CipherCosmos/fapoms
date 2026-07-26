@@ -2,6 +2,7 @@ import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { OperationsExecutionGroupEntity } from '../planning/operations-execution-group.entity';
 import { AssignmentStatus, Priority } from '@fapoms/shared';
 export declare class AssignmentEntity extends BaseEntity {
     assignmentNumber: string;
@@ -22,4 +23,6 @@ export declare class AssignmentEntity extends BaseEntity {
     projectBranch: ProjectBranchEntity;
     project: ProjectEntity;
     assayer: AssayerEntity;
+    executionGroupId: string | null;
+    executionGroup: OperationsExecutionGroupEntity;
 }

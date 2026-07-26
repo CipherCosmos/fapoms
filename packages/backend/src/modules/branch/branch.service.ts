@@ -155,7 +155,7 @@ export class BranchService {
   // Branch Profile
   // -----------------------------------------------------------------------
 
-  async create(dto: CreateBranchDto, userId: string): Promise<BranchEntity> {
+  async create(dto: CreateBranchDto, userId: string, organizationId?: string | null): Promise<BranchEntity> {
     await this.validateGeography(dto.state, dto.district, dto.city);
 
     if (dto.zoneId) {
@@ -207,6 +207,7 @@ export class BranchService {
       complexity: dto.complexity ?? 'STANDARD',
       estimatedDurationHours: dto.estimatedDurationHours ?? 8.00,
       requiredCompetencies: dto.requiredCompetencies ?? null,
+      organizationId: organizationId ?? null,
       createdBy: userId,
       updatedBy: userId,
     });

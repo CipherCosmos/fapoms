@@ -15,6 +15,7 @@ const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const assayer_service_1 = require("../assayer/assayer.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const constraint_evaluator_1 = require("../planning/constraint.evaluator");
 describe('AssignmentService', () => {
     let service;
     let assignmentRepo;
@@ -172,6 +173,44 @@ describe('AssignmentService', () => {
                 {
                     provide: typeorm_2.DataSource,
                     useValue: mockDataSource,
+                },
+                {
+                    provide: constraint_evaluator_1.ConstraintEvaluator,
+                    useValue: {
+                        checkDoubleBooking: jest.fn().mockImplementation(async (assayerId, date) => {
+                            const existing = await mockAssignmentRepo.findOne();
+                            if (existing) {
+                                return { passed: false, reason: 'Assayer Collision: Assayer is already assigned.' };
+                            }
+                            return { passed: true };
+                        }),
+                        checkLeaves: jest.fn().mockReturnValue({ passed: true }),
+                        checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
+                        checkHoliday: jest.fn().mockImplementation(async (state, date) => {
+                            const isHoliday = await mockHolidayService.isHoliday(date, state);
+                            if (isHoliday) {
+                                return { passed: false, reason: 'Holiday Conflict' };
+                            }
+                            return { passed: true };
+                        }),
+                        checkSkillsAndCertifications: jest.fn().mockImplementation((assayer, project) => {
+                            if (project.requiredSkills && project.requiredSkills.length > 0) {
+                                const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
+                                const missingSkills = project.requiredSkills.filter((skill) => !assayerSkills.includes(skill.trim().toLowerCase()));
+                                if (missingSkills.length > 0) {
+                                    return { passed: false, reason: 'Assayer lacks required skills' };
+                                }
+                            }
+                            if (project.requiredCertifications && project.requiredCertifications.length > 0) {
+                                const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
+                                const missingCerts = project.requiredCertifications.filter((cert) => !assayerCerts.includes(cert.trim().toLowerCase()));
+                                if (missingCerts.length > 0) {
+                                    return { passed: false, reason: 'Assayer lacks required certifications' };
+                                }
+                            }
+                            return { passed: true };
+                        }),
+                    },
                 },
             ],
         }).compile();

@@ -11,6 +11,7 @@ export declare class ProjectBranchEntity extends BaseEntity {
     zoneId: string | null;
     scheduledDate: Date | null;
     remarks: string | null;
+    packetCount: number | null;
     project: ProjectEntity;
     branch: BranchEntity;
     assignments: AssignmentEntity[];

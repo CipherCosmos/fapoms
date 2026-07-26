@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -11,6 +12,7 @@ import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ConstraintEvaluator } from './constraint.evaluator';
 
 export interface PlanningContext {
   branch: BranchEntity;
@@ -34,8 +36,7 @@ export class AvailabilityFilter implements CandidateFilter {
   name = 'availability';
 
   constructor(
-    @InjectRepository(AssignmentEntity)
-    private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
@@ -43,16 +44,19 @@ export class AvailabilityFilter implements CandidateFilter {
       return false;
     }
 
-    const doubleBooked = await this.assignmentRepository.findOne({
-      where: {
-        assayerId: assayer.id,
-        scheduledDate: context.scheduledDate,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
-        isActive: true,
-      },
-    });
+    // 1. Check double booking
+    const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
+    if (!dbResult.passed) {
+      return false;
+    }
 
-    return !doubleBooked;
+    // 2. Check leaves
+    const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
+    if (!leaveResult.passed) {
+      return false;
+    }
+
+    return true;
   }
 }
 
@@ -114,6 +118,7 @@ export class RequiredSkillsFilter implements CandidateFilter {
   constructor(
     @InjectRepository(ProjectBranchEntity)
     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+    private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
@@ -126,31 +131,8 @@ export class RequiredSkillsFilter implements CandidateFilter {
       return true;
     }
 
-    const project = pb.project;
-
-    // Check required skills
-    if (project.requiredSkills && project.requiredSkills.length > 0) {
-      const assayerSkills = assayer.skills || [];
-      const hasAllSkills = project.requiredSkills.every((skill: string) =>
-        assayerSkills.some((s) => s.toLowerCase() === skill.toLowerCase())
-      );
-      if (!hasAllSkills) {
-        return false;
-      }
-    }
-
-    // Check required certifications
-    if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-      const assayerCerts = (assayer.certifications || []).map((c) => c.name.toLowerCase());
-      const hasAllCerts = project.requiredCertifications.every((cert: string) =>
-        assayerCerts.includes(cert.toLowerCase())
-      );
-      if (!hasAllCerts) {
-        return false;
-      }
-    }
-
-    return true;
+    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project);
+    return checkResult.passed;
   }
 }
 
@@ -409,7 +391,7 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
             Number(otherBranch.latitude),
             Number(otherBranch.longitude)
           );
-          if (dist <= 60) {
+          if (dist <= 30) {
             hasNearbyGrouping = true;
             break;
           }
@@ -417,7 +399,7 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
       }
 
       if (hasNearbyGrouping) {
-        score += 30; // Substantial boost for multi-stop efficiency
+        score += 45; // Increased boost for close-proximity multi-branch routing to maximize daily utilization
       }
     }
 
@@ -510,6 +492,8 @@ export class RecommendationEngine {
     private readonly assayerRepository: Repository<AssayerEntity>,
     @InjectRepository(ClientEntity)
     private readonly clientRepository: Repository<ClientEntity>,
+    private readonly constraintEvaluator: ConstraintEvaluator,
+    private readonly assayerService: AssayerService,
   ) {
     this.filters.push(
       this.availabilityFilter,
@@ -555,6 +539,7 @@ export class RecommendationEngine {
     const assayers = await this.assayerRepository.find({
       where: { isActive: true, status: 'ACTIVE' },
     });
+    await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
     const candidates = [];
     for (const assayer of assayers) {

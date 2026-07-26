@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
+import { api } from '../services/api';
 
 interface SearchResult {
   branches: { id: string; name: string; code: string; city: string; state: string }[];
@@ -24,12 +25,8 @@ export const GlobalSearch: React.FC = () => {
     if (!q || q.length < 1) { setResults(null); return; }
     setLoading(true);
     try {
-      const token = localStorage.getItem('fapoms_token');
-      const res = await fetch(`/api/v1/search?q=${encodeURIComponent(q)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const json = await res.json();
-      if (json.success) setResults(json.data);
+      const data = await api.request<any>(`/search?q=${encodeURIComponent(q)}`);
+      setResults(data);
     } catch {}
     setLoading(false);
   }, []);

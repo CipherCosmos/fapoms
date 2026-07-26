@@ -49,10 +49,10 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     emergencyContactPhone;
     emergencyContactRelation;
     photograph;
+    preferredRegions;
     skills;
     certifications;
     languages;
-    preferredRegions;
     specializations;
     experienceYears;
     performanceRating;
@@ -212,25 +212,9 @@ __decorate([
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "photograph", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "skills", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "certifications", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "languages", void 0);
-__decorate([
     (0, typeorm_1.Column)({ name: 'preferred_regions', type: 'jsonb', nullable: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "preferredRegions", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "specializations", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'experience_years', type: 'int', default: 0 }),
     __metadata("design:type", Number)
