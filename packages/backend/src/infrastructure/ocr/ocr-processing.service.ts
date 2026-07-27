@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+import { Repository } from 'typeorm';
 import { OcrJobEntity, OcrJobStatus } from './ocr-job.entity';
 import { DocumentEntity } from '../../modules/document/document.entity';
 import { ValidationService } from '../../modules/validation/validation.service';
@@ -8,9 +10,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { EventCategory, ValidationStatus } from '@fapoms/shared';
 
 @Injectable()
-export class OcrProcessingService implements OnModuleInit, OnModuleDestroy {
-  private timer: NodeJS.Timeout | null = null;
-
+export class OcrProcessingService {
   constructor(
     @InjectRepository(OcrJobEntity)
     private readonly ocrJobRepository: Repository<OcrJobEntity>,
@@ -18,51 +18,8 @@ export class OcrProcessingService implements OnModuleInit, OnModuleDestroy {
     private readonly documentRepository: Repository<DocumentEntity>,
     private readonly validationService: ValidationService,
     private readonly auditService: AuditService,
+    @InjectQueue('ocr') private readonly ocrQueue: Queue,
   ) {}
-
-  onModuleInit() {
-    if (process.env.NODE_ENV !== 'test') {
-      // Automatic durable queue runner for OCR jobs: scans DB for PENDING/FAILED jobs every 2 minutes
-      this.timer = setInterval(() => {
-        this.processQueueJobs();
-      }, 2 * 60 * 1000);
-      this.timer.unref();
-    }
-  }
-
-  onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
-  }
-
-  async processQueueJobs() {
-    try {
-      // Find jobs due for processing with retry count < 5
-      const pendingJobs = await this.ocrJobRepository.find({
-        where: { status: In([OcrJobStatus.PENDING, OcrJobStatus.FAILED]), isActive: true },
-        take: 10,
-      });
-
-      for (const job of pendingJobs) {
-        // Dead-Letter Queueing: If retries exceed 5, move to DEAD_LETTER state
-        if (job.retryCount >= 5) {
-          job.status = OcrJobStatus.DEAD_LETTER;
-          job.failureReason = 'Max retry count (5) exhausted. Moved to Dead-Letter Queue for manual review.';
-          await this.ocrJobRepository.save(job);
-          console.warn(`[OcrQueueWorker] Job ${job.id} moved to DEAD_LETTER queue after 5 failed attempts.`);
-          continue;
-        }
-
-        // Atomic row-level claim to prevent double-worker concurrency
-        job.status = OcrJobStatus.PROCESSING;
-        job.retryCount += 1;
-        await this.ocrJobRepository.save(job);
-
-        console.log(`[OcrQueueWorker] Atomic Claim & Processing OCR job ${job.id} (Attempt ${job.retryCount}/5)...`);
-      }
-    } catch (err) {
-      console.error('[OcrQueueWorker] Error during durable queue processing:', err);
-    }
-  }
 
   async createJob(documentId: string, userId: string): Promise<OcrJobEntity> {
     const doc = await this.documentRepository.findOne({ where: { id: documentId, isActive: true } });
@@ -85,8 +42,19 @@ export class OcrProcessingService implements OnModuleInit, OnModuleDestroy {
       entityType: 'OCR_JOB',
       entityId: saved.id,
       userId,
-      remarks: `OCR job successfully registered at boundary for document: ${doc.fileName}.`,
+      remarks: `OCR job registered for document: ${doc.fileName}.`,
     });
+
+    await this.ocrQueue.add(
+      'process',
+      { documentId, userId, fileName: doc.fileName },
+      {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 1000 },
+        removeOnComplete: false,
+        removeOnFail: false,
+      },
+    );
 
     return saved;
   }
@@ -116,7 +84,6 @@ export class OcrProcessingService implements OnModuleInit, OnModuleDestroy {
 
     const saved = await this.ocrJobRepository.save(job);
 
-    // Forward and transition straight into Validator reviews queue
     const validationCase = await this.validationService.create({ projectBranchId: job.document.projectBranchId }, userId);
     await this.validationService.transition(validationCase.id, ValidationStatus.OCR_PROCESSING, userId, 'OCR text parsed', undefined, ocrPayload);
     await this.validationService.transition(validationCase.id, ValidationStatus.HUMAN_REVIEW, userId, 'Pending manual verification review');
@@ -127,7 +94,7 @@ export class OcrProcessingService implements OnModuleInit, OnModuleDestroy {
       entityType: 'OCR_JOB',
       entityId: saved.id,
       userId,
-      remarks: `Received external OCR payload. Pushed to human validator review queue.`,
+      remarks: 'Received external OCR payload. Pushed to human validator review queue.',
     });
 
     return saved;

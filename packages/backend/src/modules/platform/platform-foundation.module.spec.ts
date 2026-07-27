@@ -8,6 +8,7 @@ import { TenantContextResolver } from './tenant/tenant-resolver.service';
 import { PlatformAuditService } from './audit/platform-audit.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogEntity } from './audit/audit-log.entity';
+import { BackgroundQueueManager } from './background/queue-manager.interface';
 
 describe('PlatformFoundationModule', () => {
   let moduleRef: TestingModule;
@@ -17,12 +18,19 @@ describe('PlatformFoundationModule', () => {
     save: jest.fn((arg) => Promise.resolve({ id: 'al-1', ...arg })),
   };
 
+  const mockQueueManager: BackgroundQueueManager = {
+    enqueue: jest.fn(),
+    registerWorker: jest.fn(),
+  };
+
   beforeEach(async () => {
     moduleRef = await Test.createTestingModule({
       imports: [PlatformFoundationModule],
     })
       .overrideProvider(getRepositoryToken(AuditLogEntity))
       .useValue(mockAuditRepository)
+      .overrideProvider('BackgroundQueueManager')
+      .useValue(mockQueueManager)
       .compile();
   });
 

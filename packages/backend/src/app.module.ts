@@ -8,6 +8,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bull';
 
 // Infrastructure
 import { databaseConfig } from './infrastructure/database/database.config';
@@ -43,6 +44,8 @@ import { LedgerModule } from './modules/ledger/ledger.module';
 import { AuditPlatformModule } from './modules/audit/audit.module';
 import { CustomerMasterModule } from './modules/customer-master/customer-master.module';
 import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
+import { QueueModule } from './infrastructure/queue/queue.module';
+import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module';
 import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 
 @Module({
@@ -58,6 +61,19 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: databaseConfig,
+    }),
+
+    // Background job queue
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        redis: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD'),
+        },
+      }),
     }),
 
     // Core modules
@@ -91,7 +107,11 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
     AuditPlatformModule,
     CustomerMasterModule,
     ValidationQueryModule,
+
+    // Background job queue
+    QueueModule,
+    SlaScannerModule,
   ],
-  providers: [SlaScannerWorker],
+  providers: [],
 })
 export class AppModule {}

@@ -8,7 +8,7 @@ import { TenantContextResolver } from './tenant/tenant-resolver.service';
 import { PlatformAuditService } from './audit/platform-audit.service';
 import { AuditLogEntity } from './audit/audit-log.entity';
 import { DefaultObservabilityService } from './observability/observability.service';
-import { InMemoryQueueManager } from './background/queue-manager.service';
+import { BullQueueManager } from '../../infrastructure/queue/bull-queue-manager';
 
 @Global()
 @Module({
@@ -25,7 +25,7 @@ import { InMemoryQueueManager } from './background/queue-manager.service';
     TenantContextResolver,
     PlatformAuditService,
     { provide: 'StructuredLogger', useClass: DefaultObservabilityService },
-    { provide: 'BackgroundQueueManager', useClass: InMemoryQueueManager },
+    { provide: 'BackgroundQueueManager', useClass: BullQueueManager },
   ],
   exports: [
     'ConfigurationManagerInterface',
