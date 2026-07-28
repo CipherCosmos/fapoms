@@ -58,3 +58,8 @@ google-services.json
 GoogleService-Info.plist
 service-account-key.json
 *-firebase-adminsdk-*.json
+
+# Mobile platform build dirs
+.expo/
+android/
+ios/
