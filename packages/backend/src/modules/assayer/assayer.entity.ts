@@ -17,6 +17,9 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true })
   employeeId: string | null;
 
+  @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true })
+  passwordHash: string | null;
+
   @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })
   employeeCode: string | null;
 

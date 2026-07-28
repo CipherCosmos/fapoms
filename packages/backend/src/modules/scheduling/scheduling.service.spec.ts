@@ -88,8 +88,8 @@ describe('SchedulingService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw BadRequestException if assignment status is not ACCEPTED', async () => {
-      const mockAsn = { id: 'asn-1', status: AssignmentStatus.CREATED };
+    it('should throw BadRequestException if assignment status is not schedulable (e.g. CANCELLED)', async () => {
+      const mockAsn = { id: 'asn-1', status: AssignmentStatus.CANCELLED };
       mockAssignmentService.findOne.mockResolvedValue(mockAsn);
 
       await expect(

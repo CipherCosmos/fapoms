@@ -1,5 +1,6 @@
 import { Module, Global } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bull';
 import { DefaultConfigurationService } from './configuration/configuration.service';
 import { DefaultAuthorizationService } from './authz/authorization.service';
 import { DefaultEventDispatcher } from './events/event-dispatcher.service';
@@ -16,6 +17,9 @@ import { BullQueueManager } from '../../infrastructure/queue/bull-queue-manager'
     TypeOrmModule.forFeature([
       AuditLogEntity,
     ]),
+    BullModule.registerQueue({
+      name: 'background-jobs',
+    }),
   ],
   providers: [
     { provide: 'ConfigurationManagerInterface', useClass: DefaultConfigurationService },

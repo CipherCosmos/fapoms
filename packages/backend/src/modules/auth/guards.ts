@@ -18,11 +18,31 @@ import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 
 // ---------------------------------------------------------------------------
-// JWT Authentication Guard
+// JWT Authentication Guard & Public Decorator
 // ---------------------------------------------------------------------------
 
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
 @Injectable()
-export class JwtAuthGuard extends AuthGuard('jwt') {}
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  constructor(private reflector?: Reflector) {
+    super();
+  }
+
+  canActivate(context: ExecutionContext) {
+    if (this.reflector) {
+      const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (isPublic) {
+        return true;
+      }
+    }
+    return super.canActivate(context);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Role-Based Access Control (RBAC) Guard
@@ -112,7 +132,7 @@ export class PermissionsGuard implements CanActivate {
     }
 
     const hasPermission = requiredPermissions.every((perm) =>
-      userPermissions.has(perm),
+      userPermissions.has(perm.toUpperCase()),
     );
 
     if (!hasPermission) {

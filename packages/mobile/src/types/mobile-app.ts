@@ -54,6 +54,7 @@ export interface AssayerAssignment {
   estimatedCustomerCount: number;
   estimatedAuditHours: number;
   status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED';
+  proposedFee: number;
   agreedBaseFee: number;
   agreedTravelFee: number;
   checkedInAt?: string;
@@ -65,6 +66,16 @@ export interface AssayerAssignment {
   customers: CustomerRecord[];
   queries: ValidationQuery[];
   expenses: AssayerExpense[];
+}
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  link: string | null;
+  createdAt: string;
+  assignmentId?: string;
 }
 
 export interface AssayerProfile {

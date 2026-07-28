@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { SystemRole } from '@fapoms/shared';
 import {
   LayoutDashboard,
   FolderKanban,
@@ -17,9 +18,10 @@ import {
   LogOut,
 } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
+import { canAccessRoute } from '../config/route-permissions';
 
 interface SidebarProps {
-  user?: { displayName: string; email: string };
+  user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
   collapsed: boolean;
   onToggle: () => void;
   onLogout?: () => void;
@@ -27,8 +29,9 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onLogout }) => {
   const location = useLocation();
+  const userRoles = (user?.roles ?? []).map((r) => r.name);
 
-  const menuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any> }[] }[] = [
+  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any> }[] }[] = [
     {
       category: 'Overview',
       items: [
@@ -40,9 +43,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
       category: 'Operations',
       items: [
         { name: 'Projects', path: '/projects', icon: FolderKanban },
-        { name: 'Planning', path: '/planning', icon: Map },
-        { name: 'Assignments', path: '/assignments', icon: ClipboardList },
-        { name: 'Scheduling', path: '/scheduling', icon: CalendarDays },
+        { name: 'Stage 1: Planning', path: '/planning', icon: Map },
+        { name: 'Stage 2: Schedule Dispatch', path: '/scheduling', icon: CalendarDays },
+        { name: 'Stage 3: Field Execution', path: '/assignments', icon: ClipboardList },
       ],
     },
     {
@@ -63,6 +66,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
       ],
     },
   ];
+
+  const menuGroups = allMenuGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canAccessRoute(userRoles, item.path)),
+    }))
+    .filter((group) => group.items.length > 0);
 
   const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any> }) => {
     const Icon = item.icon;

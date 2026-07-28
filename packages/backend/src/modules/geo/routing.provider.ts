@@ -3,6 +3,8 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
+export type RoutingMode = 'driving' | 'walking' | 'cycling';
+
 export interface RouteResult {
   distanceKm: number;
   durationMinutes: number;
@@ -18,17 +20,20 @@ export interface RoutingProvider {
   calculateRoute(
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
+    mode?: RoutingMode,
   ): Promise<RouteResult>;
 
   calculateDistances(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
+    mode?: RoutingMode,
   ): Promise<Record<string, RouteResult>>;
 
   optimizeRoute(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
     roundTrip?: boolean,
+    mode?: RoutingMode,
   ): Promise<{
     optimizedSequence: string[];
     totalDistanceKm: number;
@@ -44,9 +49,14 @@ export class PostGISRoutingProvider implements RoutingProvider {
     private readonly dataSource: DataSource,
   ) {}
 
+  private modeSpeed(mode?: RoutingMode): number {
+    return mode === 'walking' ? 5 : mode === 'cycling' ? 15 : 40;
+  }
+
   async calculateRoute(
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
+    mode?: RoutingMode,
   ): Promise<RouteResult> {
     const raw = await this.dataSource.query(
       `SELECT ST_DistanceSphere(
@@ -56,8 +66,8 @@ export class PostGISRoutingProvider implements RoutingProvider {
       [origin.longitude, origin.latitude, destination.longitude, destination.latitude],
     );
     const distanceKm = raw[0]?.distanceKm ? parseFloat(raw[0].distanceKm) : 0;
-    // Assume average driving speed of 50 km/h for straight-line conversion
-    const durationMinutes = (distanceKm / 50) * 60;
+    const speed = this.modeSpeed(mode);
+    const durationMinutes = (distanceKm / speed) * 60;
     return {
       distanceKm: parseFloat(distanceKm.toFixed(2)),
       durationMinutes: parseFloat(durationMinutes.toFixed(2)),
@@ -67,10 +77,11 @@ export class PostGISRoutingProvider implements RoutingProvider {
   async calculateDistances(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
+    mode?: RoutingMode,
   ): Promise<Record<string, RouteResult>> {
     const results: Record<string, RouteResult> = {};
     for (const dest of destinations) {
-      results[dest.id] = await this.calculateRoute(origin, dest);
+      results[dest.id] = await this.calculateRoute(origin, dest, mode);
     }
     return results;
   }
@@ -79,6 +90,7 @@ export class PostGISRoutingProvider implements RoutingProvider {
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
     roundTrip = false,
+    mode?: RoutingMode,
   ): Promise<{
     optimizedSequence: string[];
     totalDistanceKm: number;
@@ -120,12 +132,18 @@ export class OSRMRoutingProvider implements RoutingProvider {
     );
   }
 
+  private osrmProfile(mode?: RoutingMode): string {
+    return mode === 'walking' ? 'foot' : mode === 'cycling' ? 'cycling' : 'driving';
+  }
+
   async calculateRoute(
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
+    mode?: RoutingMode,
   ): Promise<RouteResult> {
     try {
-      const url = `${this.baseUrl}/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=false`;
+      const profile = this.osrmProfile(mode);
+      const url = `${this.baseUrl}/route/v1/${profile}/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=false`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`OSRM HTTP error: ${res.status}`);
       const data = await res.json();
@@ -139,19 +157,21 @@ export class OSRMRoutingProvider implements RoutingProvider {
     } catch (e) {
       // Fallback silently to PostGIS
     }
-    return this.postGISProvider.calculateRoute(origin, destination);
+    return this.postGISProvider.calculateRoute(origin, destination, mode);
   }
 
   async calculateDistances(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
+    mode?: RoutingMode,
   ): Promise<Record<string, RouteResult>> {
     try {
+      const profile = this.osrmProfile(mode);
       const coords = [
         `${origin.longitude},${origin.latitude}`,
         ...destinations.map((d) => `${d.longitude},${d.latitude}`),
       ].join(';');
-      const url = `${this.baseUrl}/table/v1/driving/${coords}?sources=0`;
+      const url = `${this.baseUrl}/table/v1/${profile}/${coords}?sources=0`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`OSRM HTTP error: ${res.status}`);
       const data = await res.json();
@@ -170,13 +190,14 @@ export class OSRMRoutingProvider implements RoutingProvider {
     } catch (e) {
       // Fallback to PostGIS
     }
-    return this.postGISProvider.calculateDistances(origin, destinations);
+    return this.postGISProvider.calculateDistances(origin, destinations, mode);
   }
 
   async optimizeRoute(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
     roundTrip = false,
+    mode?: RoutingMode,
   ): Promise<{
     optimizedSequence: string[];
     totalDistanceKm: number;
@@ -184,11 +205,12 @@ export class OSRMRoutingProvider implements RoutingProvider {
     steps: { destinationId: string; distanceKm: number; durationMinutes: number }[];
   }> {
     try {
+      const profile = this.osrmProfile(mode);
       const coords = [
         `${origin.longitude},${origin.latitude}`,
         ...destinations.map((d) => `${d.longitude},${d.latitude}`),
       ].join(';');
-      const url = `${this.baseUrl}/table/v1/driving/${coords}?annotations=distance,duration`;
+      const url = `${this.baseUrl}/table/v1/${profile}/${coords}?annotations=distance,duration`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`OSRM HTTP error: ${res.status}`);
       const data = await res.json();
@@ -213,7 +235,7 @@ export class OSRMRoutingProvider implements RoutingProvider {
     } catch (e) {
       // Fallback to PostGIS
     }
-    return this.postGISProvider.optimizeRoute(origin, destinations, roundTrip);
+    return this.postGISProvider.optimizeRoute(origin, destinations, roundTrip, mode);
   }
 }
 
@@ -234,28 +256,31 @@ export class RoutingService {
   async calculateRoute(
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
+    mode?: RoutingMode,
   ): Promise<RouteResult> {
-    return this.activeProvider.calculateRoute(origin, destination);
+    return this.activeProvider.calculateRoute(origin, destination, mode);
   }
 
   async calculateDistances(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
+    mode?: RoutingMode,
   ): Promise<Record<string, RouteResult>> {
-    return this.activeProvider.calculateDistances(origin, destinations);
+    return this.activeProvider.calculateDistances(origin, destinations, mode);
   }
 
   async optimizeRoute(
     origin: { latitude: number; longitude: number },
     destinations: DestinationCoords[],
     roundTrip = false,
+    mode?: RoutingMode,
   ): Promise<{
     optimizedSequence: string[];
     totalDistanceKm: number;
     totalDurationMinutes: number;
     steps: { destinationId: string; distanceKm: number; durationMinutes: number }[];
   }> {
-    return this.activeProvider.optimizeRoute(origin, destinations, roundTrip);
+    return this.activeProvider.optimizeRoute(origin, destinations, roundTrip, mode);
   }
 }
 

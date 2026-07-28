@@ -13,6 +13,7 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { RefreshTokenEntity } from './refresh-token.entity';
         },
       }),
     }),
-    TypeOrmModule.forFeature([UserEntity, RefreshTokenEntity]),
+    TypeOrmModule.forFeature([UserEntity, RefreshTokenEntity, AssayerEntity]),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

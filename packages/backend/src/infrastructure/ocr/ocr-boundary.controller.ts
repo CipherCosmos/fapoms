@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OcrProcessingService } from './ocr-processing.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../../modules/auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../../modules/auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class ReceiveOcrResultsDto {
@@ -11,13 +11,14 @@ class ReceiveOcrResultsDto {
 
 @ApiTags('OCR Integration Boundary')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('ocr-boundary')
 export class OcrBoundaryController {
   constructor(private readonly ocrProcessingService: OcrProcessingService) {}
 
   @Post('jobs')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('ocr:create:organization')
   @ApiOperation({ summary: 'Create a new OCR tracking job request' })
   async createJob(
     @Query('documentId', ParseUUIDPipe) documentId: string,
@@ -32,6 +33,7 @@ export class OcrBoundaryController {
 
   @Post('jobs/:id/results')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('ocr:update:organization')
   @ApiOperation({ summary: 'Callback endpoint to receive external OCR engine scan results' })
   async callbackOcr(
     @Param('id', ParseUUIDPipe) id: string,
@@ -57,6 +59,7 @@ export class OcrBoundaryController {
 
   @Post('jobs/:id/retry')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
+  @RequirePermissions('ocr:update:organization')
   @ApiOperation({ summary: 'Retry a failed OCR job request' })
   async retryJob(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const job = await this.ocrProcessingService.retryJob(id, req.user.id);

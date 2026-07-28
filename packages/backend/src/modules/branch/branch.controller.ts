@@ -17,7 +17,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nes
 import { FileInterceptor } from '@nestjs/platform-express';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateBranchRequestDto implements CreateBranchDto {
@@ -109,7 +109,7 @@ class CreateDocumentRequestDto implements CreateDocumentDto {
 
 @ApiTags('Branches')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('branches')
 export class BranchController {
   constructor(private readonly branchService: BranchService) {}
@@ -120,6 +120,7 @@ export class BranchController {
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Create a new branch' })
   async create(@Body() dto: CreateBranchRequestDto, @Req() req: any) {
     const branch = await this.branchService.create(dto, req.user.id, req.user.organizationId);
@@ -159,6 +160,7 @@ export class BranchController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('branch:update:organization')
   @ApiOperation({ summary: 'Update branch details' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchRequestDto, @Req() req: any) {
     const branch = await this.branchService.update(id, dto, req.user.id);
@@ -167,6 +169,7 @@ export class BranchController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Soft delete branch' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.branchService.remove(id, req.user.id);
@@ -186,6 +189,7 @@ export class BranchController {
 
   @Post(':id/contacts')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Add branch contact' })
   async addContact(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateContactRequestDto, @Req() req: any) {
     const contact = await this.branchService.addContact(id, dto, req.user.id);
@@ -194,6 +198,7 @@ export class BranchController {
 
   @Put(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('branch:update:organization')
   @ApiOperation({ summary: 'Update branch contact' })
   async updateContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Body() dto: UpdateContactRequestDto, @Req() req: any) {
     const contact = await this.branchService.updateContact(contactId, dto, req.user.id);
@@ -202,6 +207,7 @@ export class BranchController {
 
   @Delete(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Remove branch contact' })
   async removeContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Req() req: any) {
     await this.branchService.removeContact(contactId, req.user.id);
@@ -221,6 +227,7 @@ export class BranchController {
 
   @Post(':id/documents')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Add branch document' })
   async addDocument(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateDocumentRequestDto, @Req() req: any) {
     const doc = await this.branchService.addDocument(id, dto, req.user.id);
@@ -229,6 +236,7 @@ export class BranchController {
 
   @Delete(':id/documents/:documentId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Remove branch document' })
   async removeDocument(@Param('documentId', ParseUUIDPipe) documentId: string, @Req() req: any) {
     await this.branchService.removeDocument(documentId, req.user.id);
@@ -241,6 +249,7 @@ export class BranchController {
 
   @Post('import/:clientId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('branch:create:organization')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Import branches from Excel' })

@@ -35,6 +35,12 @@ class RefreshDto {
   refreshToken: string;
 }
 
+class BiometricLoginDto {
+  @IsString()
+  @IsNotEmpty()
+  assayerCode: string;
+}
+
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
@@ -75,11 +81,41 @@ export class AuthController {
         refreshToken: result.refreshToken,
         expiresIn: result.expiresIn,
         user: {
+          ...result.user,
+          roles: Array.isArray(result.user.roles)
+            ? result.user.roles.map((r: any) => (typeof r === 'string' ? r : r.name))
+            : [],
+        },
+      },
+    };
+  }
+
+  @Post('biometric-login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Biometric/assayer-code login without password (for mobile)' })
+  async biometricLogin(@Body() dto: BiometricLoginDto, @Req() req: any) {
+    const ipAddress = req.ip || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    const result = await this.authService.biometricLogin(
+      dto.assayerCode,
+      ipAddress,
+      userAgent,
+    );
+
+    return {
+      success: true,
+      data: {
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresIn: result.expiresIn,
+        user: {
           id: result.user.id,
           username: result.user.username,
+          name: result.user.name,
           email: result.user.email,
-          displayName: result.user.displayName,
-          roles: result.user.roles?.map((r: any) => r.name) ?? [],
+          phone: result.user.phone,
+          status: result.user.status,
         },
       },
     };

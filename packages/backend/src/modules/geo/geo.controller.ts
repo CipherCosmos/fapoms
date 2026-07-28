@@ -6,7 +6,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
-import { JwtAuthGuard, RolesGuard } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { SystemRole } from '@fapoms/shared';
 
 export class CoordinateDto {
   @IsNumber()
@@ -39,11 +40,15 @@ export class OptimizeRouteDto {
   @IsOptional()
   @IsBoolean()
   roundTrip?: boolean;
+
+  @IsOptional()
+  @IsString()
+  mode?: 'driving' | 'walking' | 'cycling';
 }
 
 @ApiTags('Geo')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('geo')
 export class GeoController {
   constructor(
@@ -78,12 +83,13 @@ export class GeoController {
   }
 
   @Post('route/optimize')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Calculate optimized route sequence (TSP solver) for multiple destinations' })
   async optimizeRoute(@Body() dto: OptimizeRouteDto) {
     if (dto.destinations.length > 20) {
       throw new BadRequestException('Optimization limit exceeded: Cannot optimize more than 20 destinations at once.');
     }
-    const result = await this.routingService.optimizeRoute(dto.origin, dto.destinations, dto.roundTrip);
+    const result = await this.routingService.optimizeRoute(dto.origin, dto.destinations, dto.roundTrip, dto.mode);
     return {
       success: true,
       data: result,

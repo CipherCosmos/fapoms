@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
+import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
@@ -37,6 +37,7 @@ interface ProjectBranch {
     status: string;
     proposedFee: number;
     agreedFee: number | null;
+    scheduledDate: string | null;
     assayer?: { displayName: string };
   } | null;
 }
@@ -214,13 +215,15 @@ export const PlanningWorkspace: React.FC = () => {
   const [negotiatingFee, setNegotiatingFee] = useState('1500');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
-  const [negotiatingDate, setNegotiatingDate] = useState('2026-07-20');
+
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
   const [detailAssayer, setDetailAssayer] = useState<AssayerDetail | null>(null);
   const [detailRemarks, setDetailRemarks] = useState<Remark[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
+  const [slaEnabled, setSlaEnabled] = useState(false);
+  const [slaRadius, setSlaRadius] = useState(50);
   const drawerRef = useRef<HTMLDivElement>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
   const [isLoadingDayPlans, setIsLoadingDayPlans] = useState(false);
@@ -247,6 +250,14 @@ export const PlanningWorkspace: React.FC = () => {
     } else {
       setCandidates([]);
     }
+  }, [selectedBranchId, branches]);
+
+  useEffect(() => {
+    if (!selectedBranchId) return;
+    const selectedPb = branches.find(b => b.id === selectedBranchId);
+    if (!selectedPb) return;
+    const interval = setInterval(() => loadCandidates(selectedPb.branchId), 60000);
+    return () => clearInterval(interval);
   }, [selectedBranchId, branches]);
 
   useEffect(() => {
@@ -278,7 +289,7 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       const data = await api.request<any>('/geo/route/optimize', {
         method: 'POST',
-        body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true })
+        body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true, mode: 'driving' })
       });
       const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = data;
       const points = [{ latitude: originLat, longitude: originLng }];
@@ -362,9 +373,9 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       await api.request('/assignments', {
         method: 'POST',
-        body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee), scheduledDate: negotiatingDate })
+        body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee) })
       });
-      setMessage({ type: 'success', text: `Successfully assigned branch to ${selectedCandidate.displayName} on ${negotiatingDate}!` });
+      setMessage({ type: 'success', text: `Assigned ${selectedCandidate.displayName} to branch. Assayer will receive the offer on their mobile app.` });
       loadProjectBranches(selectedProjectId);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
@@ -376,14 +387,24 @@ export const PlanningWorkspace: React.FC = () => {
 
     const data = branches.map((b) => ({
       'Branch Code': b.branch?.branchCode || '',
+      'SOL ID': b.branch?.solId || '',
       'Branch Name': b.branch?.name || '',
-      'State': b.branch?.state || '',
+      'City': b.branch?.city || '',
       'District': b.branch?.district || '',
+      'State': b.branch?.state || '',
+      'Priority': b.priority || '',
+      'Zone ID': b.zoneId || '',
       'Status': b.status,
       'Audit Coverage Possible': ['ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED'].includes(b.status) ? 'YES' : 'NO (Uncovered)',
       'Assigned Assayer': b.assignment?.assayer?.displayName || 'Unassigned',
-      'Scheduled Date': b.scheduledDate || 'N/A',
-      'Fee': b.assignment?.proposedFee ? `₹${b.assignment.proposedFee}` : 'N/A',
+      'Assignment Status': b.assignment?.status || '—',
+      'Proposed Fee (₹)': b.assignment?.proposedFee ?? '—',
+      'Agreed Fee (₹)': b.assignment?.agreedFee ?? '—',
+      'Scheduled Date': b.assignment?.scheduledDate
+        ? new Date(b.assignment.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : b.scheduledDate
+        ? new Date(b.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : 'N/A',
       'Remarks': b.remarks || '',
     }));
 
@@ -391,20 +412,6 @@ export const PlanningWorkspace: React.FC = () => {
     const wb = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(wb, ws, 'Branch Coverage Schedule');
     xlsx.writeFile(wb, `Branch_Coverage_Report_${selectedProjectId}.xlsx`);
-  };
-
-  const handleCancelAssignment = async (assignmentId: string) => {
-    setMessage(null);
-    try {
-      await api.request(`/assignments/${assignmentId}/transition`, {
-        method: 'POST',
-        body: JSON.stringify({ targetStatus: 'CANCELLED', remarks: 'Operational unassign from map planning workspace.' })
-      });
-      setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' });
-      loadProjectBranches(selectedProjectId);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to unassign.' });
-    }
   };
 
   const statesList = Array.from(new Set(branches.map(b => b.branch?.state).filter(Boolean)));
@@ -438,16 +445,22 @@ export const PlanningWorkspace: React.FC = () => {
     if (isLoadingCandidates) {
       return <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Searching for assayers...</div>;
     }
-    const displayCandidates = showAllCandidates 
+    const slaFiltered = slaEnabled
+      ? candidates.filter(c => c.distanceKm !== null && c.distanceKm >= slaRadius)
+      : null;
+    const displayCandidates = slaFiltered ?? (showAllCandidates 
       ? candidates 
-      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700);
+      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700));
 
     if (displayCandidates.length === 0) {
+      const msg = slaEnabled
+        ? `No assayers found beyond ${slaRadius}km SLA radius.`
+        : 'No suitable assayers found within 700km.';
       return (
         <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} style={{ color: 'var(--accent-secondary)' }} />
-          <span>No suitable assayers found within 700km.</span>
-          {!showAllCandidates && candidates.length > 0 && (
+          <span>{msg}</span>
+          {!slaEnabled && !showAllCandidates && candidates.length > 0 && (
             <button onClick={() => setShowAllCandidates(true)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '10px' }}>
               Show all ({candidates.length}) candidates
             </button>
@@ -459,17 +472,27 @@ export const PlanningWorkspace: React.FC = () => {
       <div style={{ display: 'flex', gap: '12px', overflowX: horizontal ? 'auto' : 'hidden', flexDirection: horizontal ? 'row' : 'column', paddingBottom: '4px' }}>
         {displayCandidates.map(c => {
           const conf = c.score != null ? Math.round(c.score) : c.distanceKm != null && c.distanceKm < 30 ? 98 : c.distanceKm != null && c.distanceKm < 60 ? 88 : 74;
+          const slaStatus = slaEnabled && c.distanceKm !== null
+            ? (c.distanceKm >= slaRadius ? 'compliant' : 'breach')
+            : null;
+          const cardBorderColor = slaStatus === 'compliant' ? 'rgba(16,185,129,0.4)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.4)' : 'var(--border-color)';
+          const cardBg = slaStatus === 'compliant' ? 'rgba(16,185,129,0.04)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.04)' : 'rgba(255,255,255,0.02)';
           return (
             <div key={c.id} style={{
               minWidth: horizontal ? '280px' : 'auto', maxWidth: horizontal ? '300px' : 'auto', flexShrink: horizontal ? 0 : undefined,
-              background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '12px',
+              background: cardBg, border: `1px solid ${cardBorderColor}`, borderRadius: 'var(--radius-md)', padding: '12px',
               display: 'flex', flexDirection: 'column', gap: '8px'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{c.displayName}</div>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '1px' }}>
-                    <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km` : 'Unknown distance'}
+                    <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km (straight-line)` : 'Unknown distance'}
+                    {slaEnabled && c.distanceKm !== null && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '0 5px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: c.distanceKm >= slaRadius ? '#10b981' : '#ef4444' }}>
+                        {c.distanceKm >= slaRadius ? `✓ Beyond ${slaRadius}km SLA` : `✗ Within ${slaRadius}km SLA`}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <span title="Score evaluates Distance, Travel Time, Workload, Performance, Experience, and Cost." style={{ cursor: 'help', padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
@@ -498,8 +521,8 @@ export const PlanningWorkspace: React.FC = () => {
                   setCommercialBaseFee(null);
                   setLoadingCommercial(true);
                   try {
-                    const profile = await api.request<{ baseFee: number }>(`/assayers/${c.id}/commercial/active`, { method: 'GET' });
-                    const fee = profile.baseFee ?? c.baseFee ?? 1500;
+                    const profile = await api.request<{ baseFee: number } | null>(`/assayers/${c.id}/commercial/active`, { method: 'GET' });
+                    const fee = profile?.baseFee ?? c.baseFee ?? 1500;
                     setCommercialBaseFee(fee);
                     setNegotiatingFee(fee.toString());
                   } catch {
@@ -507,7 +530,6 @@ export const PlanningWorkspace: React.FC = () => {
                     setNegotiatingFee(fee.toString());
                   } finally {
                     setLoadingCommercial(false);
-                    setNegotiatingDate(new Date().toISOString().split('T')[0]);
                     setShowNegotiationModal(true);
                   }
                 }}
@@ -532,7 +554,28 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: '-32px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', margin: '-20px' }}>
+      {/* ── STAGE 1 BANNER ── */}
+      <div style={{ background: 'linear-gradient(90deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.06) 100%)', borderBottom: '1px solid var(--border-color)', padding: '8px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ backgroundColor: '#6366f1', color: '#fff', fontSize: '10px', fontWeight: 800, padding: '3px 7px', borderRadius: '4px', marginRight: '4px' }}>STAGE 1 OF 3</span>
+          <div onClick={() => navigate('/planning')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(99,102,241,0.2)', border: '1px solid #6366f1', borderRadius: '20px', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+            <span>1</span> Planning & Matching
+          </div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/scheduling')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+            <span>2</span> Schedule Dispatch
+          </div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/assignments')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+            <span>3</span> Field Execution
+          </div>
+        </div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          💡 Step 1 of 3: Plan & assign assayers to branches. Click a branch on the map to see recommendations.
+        </div>
+      </div>
+
       {/* ── Toolbar: Project select + filters + KPI + Layout ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 32px 0', flexShrink: 0 }}>
         <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
@@ -651,6 +694,8 @@ export const PlanningWorkspace: React.FC = () => {
               onSelectBranch={id => setSelectedBranchId(id)}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
+              slaEnabled={slaEnabled}
+              slaRadius={slaRadius}
             />
             <div ref={drawerRef} style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -669,13 +714,30 @@ export const PlanningWorkspace: React.FC = () => {
                         <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
                         Show Distant (&gt;700km)
                       </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                        SLA
+                      </label>
+                      {slaEnabled && (
+                        <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
+                          style={{ fontSize: '10px', padding: '1px 4px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', width: '55px', cursor: 'pointer' }}>
+                          <option value={25}>25km</option>
+                          <option value={50}>50km</option>
+                          <option value={100}>100km</option>
+                          <option value={150}>150km</option>
+                          <option value={200}>200km</option>
+                          <option value={300}>300km</option>
+                          <option value={500}>500km</option>
+                        </select>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                        className="btn btn-secondary" title="Refresh candidates"
+                        style={{ padding: '3px 6px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <RefreshCw size={11} /> Refresh
+                      </button>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}, {selectedPb.branch.state}</span>
-                      {selectedPb.assignment && (
-                        <button onClick={() => handleCancelAssignment(selectedPb.assignment!.id)} className="btn btn-secondary"
-                          style={{ padding: '3px 8px', fontSize: '10px', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>Unassign</button>
-                      )}
                     </div>
                   </div>
                   <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }}>
@@ -736,6 +798,8 @@ export const PlanningWorkspace: React.FC = () => {
               onSelectBranch={id => setSelectedBranchId(id)}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
+              slaEnabled={slaEnabled}
+              slaRadius={slaRadius}
             />
           </div>
 
@@ -748,19 +812,39 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}</span>
-                  {selectedPb.assignment && (
-                    <button onClick={() => handleCancelAssignment(selectedPb.assignment!.id)} className="btn btn-secondary"
-                      style={{ padding: '2px 6px', fontSize: '9px', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>Unassign</button>
-                  )}
+
                 </div>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>RECOMMENDED ASSAYERS</span>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                    <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
-                    Show Distant (&gt;700km)
-                  </label>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                      className="btn btn-secondary" title="Refresh candidates"
+                      style={{ padding: '2px 6px', fontSize: '9px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <RefreshCw size={10} /> Refresh
+                    </button>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                      <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
+                      Show Distant (&gt;700km)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                      <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                      SLA
+                    </label>
+                    {slaEnabled && (
+                      <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
+                        style={{ fontSize: '9px', padding: '1px 3px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', width: '50px', cursor: 'pointer' }}>
+                        <option value={25}>25km</option>
+                        <option value={50}>50km</option>
+                        <option value={100}>100km</option>
+                        <option value={150}>150km</option>
+                        <option value={200}>200km</option>
+                        <option value={300}>300km</option>
+                        <option value={500}>500km</option>
+                      </select>
+                    )}
+                  </div>
                 </div>
                 {renderCandidatesList(false)}
               </div>
@@ -778,6 +862,8 @@ export const PlanningWorkspace: React.FC = () => {
             onSelectBranch={id => setSelectedBranchId(id)}
             routePoints={routePoints}
             selectedAssayerFromParent={selectedCandidateForMap}
+            slaEnabled={slaEnabled}
+            slaRadius={slaRadius}
           />
         </div>
       )}
@@ -864,15 +950,6 @@ export const PlanningWorkspace: React.FC = () => {
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
               </div>
-            </div>
-
-            {/* Audit Date */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Calendar size={11} /> Audit Date
-              </label>
-              <input type="date" value={negotiatingDate} onChange={e => setNegotiatingDate(e.target.value)} required
-                style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
             </div>
 
             {/* Action buttons */}

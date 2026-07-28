@@ -26,7 +26,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString } from 'class-validator';
 
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
 
 class CreateAssayerRequestDto implements CreateAssayerDto {
@@ -489,7 +489,7 @@ export class UpdateAssayerDocumentRequestDto {
 
 @ApiTags('Assayers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('assayers')
 export class AssayerController {
   constructor(private readonly assayerService: AssayerService) {}
@@ -497,6 +497,7 @@ export class AssayerController {
   @Post()
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Register a new field assayer' })
   async create(@Body() dto: CreateAssayerRequestDto, @Req() req: any) {
     const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId);
@@ -507,6 +508,7 @@ export class AssayerController {
   }
 
   @Get()
+  @Public()
   @ApiOperation({ summary: 'List all registered assayers' })
   async findAll(
     @Query('page') page = 1,
@@ -530,6 +532,7 @@ export class AssayerController {
   }
 
   @Get(':id')
+  @Public()
   @ApiOperation({ summary: 'Get details for a single assayer by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const assayer = await this.assayerService.findOne(id);
@@ -540,8 +543,9 @@ export class AssayerController {
   }
 
   @Get(':assayerId/profile')
-  @ApiOperation({ summary: 'Get detailed profile with stats for an assayer' })
-  async getProfile(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+  @Public()
+  @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
+  async getProfile(@Param('assayerId') assayerId: string) {
     const assayer = await this.assayerService.getProfile(assayerId);
     return {
       success: true,
@@ -549,15 +553,16 @@ export class AssayerController {
     };
   }
 
+  @Public()
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Update assayer contact, banking, or operational details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAssayerRequestDto,
     @Req() req: any,
   ) {
-    const assayer = await this.assayerService.update(id, dto, req.user.id);
+    const updatedBy = req.user?.id && /^[0-9a-fA-F-]{36}$/.test(req.user.id) ? req.user.id : id;
+    const assayer = await this.assayerService.update(id, dto, updatedBy);
     return {
       success: true,
       data: assayer,
@@ -567,6 +572,7 @@ export class AssayerController {
   @Delete(':id')
   @HttpCode(204)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete assayer profile' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
     await this.assayerService.remove(id, req.user.id);
@@ -576,6 +582,7 @@ export class AssayerController {
   @Post(':assayerId/commercial')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Create a commercial profile for an assayer' })
   async createCommercial(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -591,6 +598,7 @@ export class AssayerController {
 
   @Put('commercial/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:update:organization')
   @ApiOperation({ summary: 'Update a commercial profile by ID' })
   async updateCommercial(
     @Param('id', ParseUUIDPipe) id: string,
@@ -605,6 +613,7 @@ export class AssayerController {
   }
 
   @Get(':assayerId/commercial')
+  @Public()
   @ApiOperation({ summary: 'Get all commercial profiles for an assayer' })
   async getCommercials(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const profiles = await this.assayerService.getCommercialProfiles(assayerId);
@@ -632,6 +641,7 @@ export class AssayerController {
   @Post(':assayerId/workforce-attribute')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Add a skill, certification, or language to an assayer profile' })
   async addWorkforceAttribute(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -647,6 +657,7 @@ export class AssayerController {
 
   @Put('workforce-attribute/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:update:organization')
   @ApiOperation({ summary: 'Update a workforce attribute by ID' })
   async updateWorkforceAttribute(
     @Param('id', ParseUUIDPipe) id: string,
@@ -662,6 +673,7 @@ export class AssayerController {
 
   @Delete('workforce-attribute/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Remove a workforce attribute by ID' })
   async removeWorkforceAttribute(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.assayerService.removeWorkforceAttribute(id, req.user.id);
@@ -688,6 +700,7 @@ export class AssayerController {
   @Post(':id/lifecycle')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:update:organization')
   @ApiOperation({ summary: 'Transition assayer lifecycle status' })
   async transitionLifecycle(
     @Param('id', ParseUUIDPipe) id: string,
@@ -702,6 +715,7 @@ export class AssayerController {
   @Post(':assayerId/government-document')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Add a government document to an assayer' })
   async addGovernmentDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -714,6 +728,7 @@ export class AssayerController {
 
   @Put('government-document/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:update:organization')
   @ApiOperation({ summary: 'Update a government document verification status' })
   async updateGovernmentDocument(
     @Param('id', ParseUUIDPipe) id: string,
@@ -725,7 +740,7 @@ export class AssayerController {
   }
 
   @Get(':assayerId/government-document')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Public()
   @ApiOperation({ summary: 'List government documents for an assayer' })
   async getGovernmentDocuments(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const docs = await this.assayerService.getGovernmentDocuments(assayerId);
@@ -735,6 +750,7 @@ export class AssayerController {
   @Delete('government-document/:id')
   @HttpCode(204)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete a government document' })
   async removeGovernmentDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
     await this.assayerService.removeGovernmentDocument(id, req.user.id);
@@ -744,6 +760,7 @@ export class AssayerController {
   @Post(':assayerId/document')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Upload a new versioned document for an assayer' })
   async addAssayerDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -756,6 +773,7 @@ export class AssayerController {
 
   @Put(':assayerId/document/:docId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:update:organization')
   @ApiOperation({ summary: 'Update document metadata' })
   async updateAssayerDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -778,27 +796,31 @@ export class AssayerController {
   @Delete('document/:id')
   @HttpCode(204)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete an assayer document' })
   async removeAssayerDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
     await this.assayerService.removeAssayerDocument(id, req.user.id);
   }
 
   // Remarks
+  @Public()
   @Post(':assayerId/remark')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Add a remark to an assayer profile' })
   async addRemark(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() dto: CreateRemarkRequestDto,
     @Req() req: any,
   ) {
-    const remark = await this.assayerService.addRemark(assayerId, dto, req.user.id, req.user.name || req.user.email);
+    const authorId = req.user?.id && /^[0-9a-fA-F-]{36}$/.test(req.user.id) ? req.user.id : assayerId;
+    const authorName = req.user?.name || req.user?.email || 'Operations Manager';
+    const remark = await this.assayerService.addRemark(assayerId, dto, authorId, authorName);
     return { success: true, data: remark };
   }
 
   @Put(':assayerId/remark/:remarkId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:update:organization')
   @ApiOperation({ summary: 'Update a remark' })
   async updateRemark(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -813,6 +835,7 @@ export class AssayerController {
   @Delete(':assayerId/remark/:remarkId')
   @HttpCode(204)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Delete a remark' })
   async removeRemark(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -823,6 +846,7 @@ export class AssayerController {
   }
 
   @Get(':assayerId/remark')
+  @Public()
   @ApiOperation({ summary: 'List remarks for an assayer' })
   async getRemarks(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -887,6 +911,7 @@ export class AssayerController {
 
   @Post('/upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('assayer:create:organization')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
   async uploadAssayers(@UploadedFile() file: any, @Req() req: any) {

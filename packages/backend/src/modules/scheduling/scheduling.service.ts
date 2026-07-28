@@ -37,8 +37,8 @@ export class SchedulingService {
       throw new NotFoundException(`Assignment ${dto.assignmentId} not found.`);
     }
 
-    if (assignment.status !== AssignmentStatus.ACCEPTED) {
-      throw new BadRequestException(`Cannot schedule assignment. Current status must be ACCEPTED (got ${assignment.status}).`);
+    if (![AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED].includes(assignment.status as any)) {
+      throw new BadRequestException(`Cannot schedule assignment. Current status is ${assignment.status}.`);
     }
 
     const scheduledDateObj = new Date(dto.scheduledDate);
@@ -60,7 +60,8 @@ export class SchedulingService {
     }
 
     // Validate Holiday conflict via ConstraintEvaluator
-    const holidayCheck = await this.constraintEvaluator.checkHoliday(assignment.projectBranch.branch.state, scheduledDateObj);
+    const stateCode = assignment.projectBranch?.branch?.state ?? 'MH';
+    const holidayCheck = await this.constraintEvaluator.checkHoliday(stateCode, scheduledDateObj);
     if (!holidayCheck.passed) {
       throw new BadRequestException(holidayCheck.reason);
     }
@@ -102,7 +103,7 @@ export class SchedulingService {
   async findOne(id: string): Promise<ScheduleEntity> {
     const schedule = await this.scheduleRepository.findOne({
       where: { id, isActive: true },
-      relations: ['assignment', 'project', 'assayer'],
+      relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'project', 'assayer'],
     });
     if (!schedule) {
       throw new NotFoundException(`Schedule ${id} not found.`);
@@ -110,10 +111,22 @@ export class SchedulingService {
     return schedule;
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ schedules: ScheduleEntity[]; total: number }> {
+  async findAll(
+    page = 1, limit = 50,
+    status?: ScheduleStatus,
+    dateFrom?: string,
+    dateTo?: string,
+  ): Promise<{ schedules: ScheduleEntity[]; total: number }> {
+    const where: any = { isActive: true };
+    if (status) where.status = status;
+    if (dateFrom || dateTo) {
+      where.scheduledDate = {} as any;
+      if (dateFrom) where.scheduledDate.gte = new Date(dateFrom);
+      if (dateTo) where.scheduledDate.lte = new Date(dateTo);
+    }
     const [schedules, total] = await this.scheduleRepository.findAndCount({
-      where: { isActive: true },
-      relations: ['assignment', 'assayer', 'project'],
+      where,
+      relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'assayer', 'project'],
       order: { scheduledDate: 'ASC' },
       take: limit,
       skip: (page - 1) * limit,
@@ -153,6 +166,28 @@ export class SchedulingService {
     });
 
     return saved;
+  }
+
+  async getAssayerWorkloadInRange(assayerId: string, from: Date, to: Date): Promise<{ count: number; schedules: any[] }> {
+    const schedules = await this.scheduleRepository.find({
+      where: {
+        assayerId,
+        isActive: true,
+        scheduledDate: { gte: from, lte: to } as any,
+      },
+      relations: ['assignment', 'project'],
+      order: { scheduledDate: 'ASC' },
+    });
+    return {
+      count: schedules.length,
+      schedules: schedules.map(s => ({
+        id: s.id,
+        scheduledDate: s.scheduledDate,
+        status: s.status,
+        projectName: s.project?.name,
+        assignmentNumber: s.assignment?.assignmentNumber,
+      })),
+    };
   }
 
   async getTimeline(scheduleId: string): Promise<any[]> {

@@ -32,7 +32,7 @@ import { NegotiationParticipant } from './operations-execution-conversation.enti
 import { ExecutionGroupStatus } from './operations-execution-group.entity';
 import { FieldVisitStatus } from './field-visit.entity';
 import { IncidentSeverity } from './field-incident.entity';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 export class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
@@ -77,7 +77,7 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
 
 @ApiTags('Planning')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('planning')
 export class PlanningController {
   constructor(
@@ -96,6 +96,7 @@ export class PlanningController {
 
   @Post('field/visits')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Initialize new field visit execution record' })
   async createVisit(
     @Body() body: { coveragePlanId: string; executionGroupId: string; branchId: string; assayerId: string; plannedDate: string }
@@ -115,6 +116,7 @@ export class PlanningController {
 
   @Put('field/visits/:visitId/status')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @RequirePermissions('planning:update:organization')
   @ApiOperation({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' })
   async transitionVisit(
     @Param('visitId', ParseUUIDPipe) visitId: string,
@@ -129,6 +131,7 @@ export class PlanningController {
 
   @Post('field/visits/:visitId/incidents')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Report operational field incident (e.g. branch closed, assayer illness)' })
   async reportIncident(
     @Param('visitId', ParseUUIDPipe) visitId: string,
@@ -143,6 +146,7 @@ export class PlanningController {
 
   @Put('field/incidents/:incidentId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:update:organization')
   @ApiOperation({ summary: 'Resolve active field incident' })
   async resolveIncident(
     @Param('incidentId', ParseUUIDPipe) incidentId: string,
@@ -179,6 +183,7 @@ export class PlanningController {
 
   @Post('execution/packages')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Bundle multiple operational assignments into a single deployment package' })
   async packageAssignments(@Body() dto: GroupPackageDto) {
     const pkg = await this.executionService.packageAssignments(dto);
@@ -190,6 +195,7 @@ export class PlanningController {
 
   @Post('execution/packages/:groupId/conversations')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Record conversation message with fee/date negotiations' })
   async postMessage(
     @Param('groupId', ParseUUIDPipe) groupId: string,
@@ -232,6 +238,7 @@ export class PlanningController {
 
   @Post('control-center/tasks')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate manual operational task in the queue' })
   async createTask(
     @Body() body: { projectId: string; title: string; reason: string; priority: OperationsTaskPriority }
@@ -245,6 +252,7 @@ export class PlanningController {
 
   @Put('control-center/tasks/:taskId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:update:organization')
   @ApiOperation({ summary: 'Resolve an operations task with justification log' })
   async resolveTask(
     @Param('taskId', ParseUUIDPipe) taskId: string,
@@ -259,6 +267,7 @@ export class PlanningController {
 
   @Post('control-center/exceptions')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Flag managed exception rule violations' })
   async createException(
     @Body() body: { projectId: string; category: OperationsExceptionCategory; message: string; targetEntityId?: string }
@@ -272,6 +281,7 @@ export class PlanningController {
 
   @Put('control-center/exceptions/:exceptionId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:update:organization')
   @ApiOperation({ summary: 'Resolve or bypass exception log with justification' })
   async resolveException(
     @Param('exceptionId', ParseUUIDPipe) exceptionId: string,
@@ -307,6 +317,7 @@ export class PlanningController {
 
   @Post('projects/:projectId/coverage-plan')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Create or regenerate coverage plan version with manual overrides' })
   async createOrRegeneratePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -322,6 +333,7 @@ export class PlanningController {
 
   @Put('coverage-plans/:planId/transition')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:update:organization')
   @ApiOperation({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' })
   async transitionPlan(
     @Param('planId', ParseUUIDPipe) planId: string,
@@ -337,6 +349,7 @@ export class PlanningController {
 
   @Post('coverage-plans/:planId/execute')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Deploy approved plan and automatically spawn operational assignments' })
   async executePlan(
     @Param('planId', ParseUUIDPipe) planId: string,
@@ -362,6 +375,7 @@ export class PlanningController {
 
   @Post('projects/:projectId/optimize')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate optimized project-wide assayer matching and routing deployment plan' })
   async optimizeProjectDeployment(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const plan = await this.optimizationEngine.generateProjectDeploymentPlan(projectId);
@@ -373,6 +387,7 @@ export class PlanningController {
 
   @Post('scenarios/simulate')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' })
   async simulateScenario(
     @Body() dto: { projectId: string; weightOverrides?: Record<string, number>; defaultRadiusOverride?: number }
@@ -412,6 +427,7 @@ export class PlanningController {
   // Rule Engine Management REST Endpoints
   @Post('rules')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Create a new business planning rule' })
   async createRule(@Body() dto: CreateBusinessRuleRequestDto, @Req() req: any) {
     const rule = await this.planningService.createRule(dto, req.user.id);
@@ -423,6 +439,7 @@ export class PlanningController {
 
   @Put('rules/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('planning:update:organization')
   @ApiOperation({ summary: 'Update a business planning rule by ID' })
   async updateRule(
     @Param('id', ParseUUIDPipe) id: string,
@@ -438,6 +455,7 @@ export class PlanningController {
 
   @Delete('rules/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('planning:delete:organization')
   @ApiOperation({ summary: 'Soft delete/disable a business planning rule' })
   async deleteRule(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.planningService.deleteRule(id, req.user.id);

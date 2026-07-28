@@ -1,25 +1,31 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { IsUUID, IsNotEmpty, IsString, IsOptional, IsEnum } from 'class-validator';
 import { CommunicationService, CreateCommunicationDto } from './communication.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole, CommunicationType } from '@fapoms/shared';
 
 class CreateCommunicationRequestDto implements CreateCommunicationDto {
+  @IsUUID() @IsNotEmpty()
   assignmentId: string;
+  @IsEnum(CommunicationType) @IsNotEmpty()
   type: CommunicationType;
+  @IsString() @IsNotEmpty()
   content: string;
+  @IsOptional() @IsString()
   recipientRef?: string;
 }
 
 @ApiTags('Communications')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('communications')
 export class CommunicationController {
   constructor(private readonly communicationService: CommunicationService) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @RequirePermissions('communication:create:organization')
   @ApiOperation({ summary: 'Log a communication record' })
   async create(@Body() dto: CreateCommunicationRequestDto, @Req() req: any) {
     const comm = await this.communicationService.create(dto, req.user.id);

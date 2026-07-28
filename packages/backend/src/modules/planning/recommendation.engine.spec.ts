@@ -16,6 +16,7 @@ import {
   ClientPreferenceScoreCalculator,
   BranchFamiliarityScoreCalculator,
   SLAComplianceScoreCalculator,
+  CustomerDensityScoreCalculator,
   ProfitabilityScoreCalculator,
   RiskScoreCalculator,
 } from './recommendation.engine';
@@ -95,6 +96,7 @@ describe('RecommendationEngine', () => {
         ClientPreferenceScoreCalculator,
         BranchFamiliarityScoreCalculator,
         SLAComplianceScoreCalculator,
+        CustomerDensityScoreCalculator,
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
         ConfigurationResolver,

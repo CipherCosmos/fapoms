@@ -21,7 +21,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsDateString, IsArray } from 'class-validator';
 
 import { HolidayService, CreateHolidayDto } from './holiday.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateHolidayRequestDto implements CreateHolidayDto {
@@ -29,7 +29,7 @@ class CreateHolidayRequestDto implements CreateHolidayDto {
   name: string;
 
   @IsDateString()
-  date: Date;
+  date: string | Date;
 
   @IsString() @IsNotEmpty()
   type: string;
@@ -40,13 +40,14 @@ class CreateHolidayRequestDto implements CreateHolidayDto {
 
 @ApiTags('Holidays')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('holidays')
 export class HolidayController {
   constructor(private readonly holidayService: HolidayService) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('holiday:create:organization')
   @ApiOperation({ summary: 'Register a national or regional holiday' })
   async create(@Body() dto: CreateHolidayRequestDto, @Req() req: any) {
     const holiday = await this.holidayService.create(dto, req.user.id);
@@ -99,6 +100,7 @@ export class HolidayController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('holiday:update:organization')
   @ApiOperation({ summary: 'Update holiday record details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -114,6 +116,7 @@ export class HolidayController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('holiday:delete:organization')
   @ApiOperation({ summary: 'Soft delete holiday record' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.holidayService.remove(id, req.user.id);

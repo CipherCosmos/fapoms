@@ -15,7 +15,7 @@ import { EventCategory } from '@fapoms/shared';
 
 export interface CreateHolidayDto {
   name: string;
-  date: Date;
+  date: string | Date;
   type: string;
   applicableStates?: string[];
 }

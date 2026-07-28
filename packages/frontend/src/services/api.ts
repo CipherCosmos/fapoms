@@ -1,3 +1,12 @@
+export interface WebNotification {
+  id: string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  link: string | null;
+  createdAt: string;
+}
+
 class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;
 
@@ -52,6 +61,24 @@ class ApiClient {
 
     const res = await response.json();
     return res.data as T;
+  }
+
+  async getNotifications(): Promise<WebNotification[]> {
+    try {
+      const data = await this.request<WebNotification[]>('/notifications');
+      return data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async markNotificationRead(id: string): Promise<boolean> {
+    try {
+      await this.request(`/notifications/${id}/read`, { method: 'POST' });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async doRefresh(): Promise<boolean> {

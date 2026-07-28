@@ -909,9 +909,11 @@ export class AssayerService implements OnModuleInit {
   }
 
   async getProfile(assayerId: string): Promise<AssayerEntity> {
-    const assayer = await this.assayerRepository.findOne({
-      where: { id: assayerId, isActive: true },
-    });
+    const isUuid = /^[0-9a-fA-F-]{36}$/.test(assayerId);
+    const where: any[] = isUuid
+      ? [{ id: assayerId, isActive: true }]
+      : [{ assayerCode: assayerId, isActive: true }, { employeeId: assayerId, isActive: true }];
+    const assayer = await this.assayerRepository.findOne({ where });
     if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
     await this.hydrateWorkforceAttributes(assayer);
     return assayer;

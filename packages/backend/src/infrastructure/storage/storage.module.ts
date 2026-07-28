@@ -18,6 +18,6 @@ const storageProvider: Provider = {
 
 @Module({
   providers: [LocalStorageService, S3StorageService, storageProvider],
-  exports: ['StorageEngine'],
+  exports: ['StorageEngine', LocalStorageService],
 })
 export class StorageModule {}

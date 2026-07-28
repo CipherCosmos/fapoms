@@ -6,7 +6,7 @@ import * as xlsx from 'xlsx';
 import { DocumentService } from './document.service';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { SystemRole, DocumentStatus, DocumentType } from '@fapoms/shared';
 
 class UpdateDocumentStatusDto {
@@ -15,7 +15,7 @@ class UpdateDocumentStatusDto {
 
 @ApiTags('Documents')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('documents')
 export class DocumentController {
   constructor(
@@ -25,7 +25,7 @@ export class DocumentController {
   ) {}
 
   @Post('upload')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
+  @Public()
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a physical file and trigger OCR queuing' })
@@ -46,10 +46,10 @@ export class DocumentController {
       fileSize: file.size,
       mimeType: file.mimetype,
       type,
-    }, req.user.id);
+    }, req?.user?.id || projectBranchId);
 
     // 3. Auto-ingest into OCR pipeline
-    await this.ocrProcessingService.createJob(doc.id, req.user.id);
+    await this.ocrProcessingService.createJob(doc.id, req?.user?.id || projectBranchId);
 
     return {
       success: true,
@@ -59,6 +59,7 @@ export class DocumentController {
 
   @Post('validate-customer-excel')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('document:create:organization')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({ summary: 'Validate Customer Master Excel file and return structured Reconciliation Summary Report' })
   async validateCustomerExcel(@UploadedFile() file: any) {
@@ -115,6 +116,7 @@ export class DocumentController {
   }
 
   @Get(':id')
+  @Public()
   @ApiOperation({ summary: 'Get details of a document metadata' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const doc = await this.documentService.findOne(id);
@@ -125,6 +127,7 @@ export class DocumentController {
   }
 
   @Get(':id/download')
+  @Public()
   @ApiOperation({ summary: 'Download physical file payload from storage' })
   async downloadFile(
     @Param('id', ParseUUIDPipe) id: string,
@@ -139,6 +142,7 @@ export class DocumentController {
 
   @Patch(':id/status')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
+  @RequirePermissions('document:update:organization')
   @ApiOperation({ summary: 'Update status of a document' })
   async updateStatus(
     @Param('id', ParseUUIDPipe) id: string,
@@ -153,6 +157,7 @@ export class DocumentController {
   }
 
   @Get('project-branch/:projectBranchId')
+  @Public()
   @ApiOperation({ summary: 'Get documents for a project branch link' })
   async findByProjectBranch(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
     const list = await this.documentService.findByProjectBranch(projectBranchId);

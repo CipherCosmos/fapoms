@@ -2,18 +2,19 @@ import { Controller, Get, Post, Param, Body, UseGuards, ParseUUIDPipe, Req } fro
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ValidationQueryService } from './validation-query.service';
 import { CreateValidationQueryDto, RespondValidationQueryDto } from './dto/validation-query.dto';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 @ApiTags('Validation Queries')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('validation-queries')
 export class ValidationQueryController {
   constructor(private readonly validationQueryService: ValidationQueryService) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('validation-query:create:organization')
   @ApiOperation({ summary: 'Raise a new validation query to an assayer' })
   async createQuery(@Body() dto: CreateValidationQueryDto, @Req() req: any) {
     const query = await this.validationQueryService.createQuery(dto, req.user.id);
@@ -25,6 +26,7 @@ export class ValidationQueryController {
 
   @Post(':id/respond')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('validation-query:update:organization')
   @ApiOperation({ summary: 'Assayer responds to a raised validation query' })
   async respondToQuery(
     @Param('id', ParseUUIDPipe) id: string,
@@ -40,6 +42,7 @@ export class ValidationQueryController {
 
   @Post(':id/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('validation-query:update:organization')
   @ApiOperation({ summary: 'Validator marks a responded query as RESOLVED' })
   async resolveQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const query = await this.validationQueryService.resolveQuery(id, req.user.id);

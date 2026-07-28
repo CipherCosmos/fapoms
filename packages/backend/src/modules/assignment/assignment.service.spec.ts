@@ -7,6 +7,7 @@ import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
@@ -63,6 +64,10 @@ describe('AssignmentService', () => {
 
   const mockNotificationService = {
     create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
+  };
+
+  const mockPushNotificationService = {
+    sendToUser: jest.fn().mockResolvedValue(undefined),
   };
 
   const mockAuditService = {
@@ -174,6 +179,10 @@ describe('AssignmentService', () => {
         {
           provide: NotificationService,
           useValue: mockNotificationService,
+        },
+        {
+          provide: PushNotificationService,
+          useValue: mockPushNotificationService,
         },
         {
           provide: AuditService,

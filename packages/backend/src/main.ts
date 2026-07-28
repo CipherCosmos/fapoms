@@ -32,9 +32,9 @@ async function bootstrap() {
     }),
   );
 
-  // CORS configuration
+  // CORS configuration — allows frontend web (5173) and mobile app (8081)
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: ['http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
     credentials: true,
   });
 

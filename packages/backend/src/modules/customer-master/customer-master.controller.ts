@@ -3,12 +3,12 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagg
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CustomerMasterService } from './customer-master.service';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 @ApiTags('Customer Master')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('customer-master')
 export class CustomerMasterController {
   constructor(
@@ -18,6 +18,7 @@ export class CustomerMasterController {
 
   @Post('upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('customer-master:create:organization')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload customer master Excel file, run database branch reconciliation, and register new version' })
@@ -43,6 +44,7 @@ export class CustomerMasterController {
 
   @Post('versions/:versionId/approve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('customer-master:update:organization')
   @ApiOperation({ summary: 'Approve a reconciled customer master version and supersede prior active version' })
   async approveVersion(
     @Param('versionId', ParseUUIDPipe) versionId: string,

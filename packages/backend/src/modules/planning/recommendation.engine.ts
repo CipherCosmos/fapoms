@@ -411,8 +411,78 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
 export class SLAComplianceScoreCalculator implements ScoreCalculator {
   name = 'slaCompliance';
 
-  async calculate(): Promise<number> {
-    return 100; // Compliance standard baseline
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    let score = 80; // Baseline
+
+    // 1. Proximity & Travel Feasibility for SLA
+    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+      const dist = calculateHaversineDistance(
+        Number(context.branch.latitude),
+        Number(context.branch.longitude),
+        Number(assayer.latitude),
+        Number(assayer.longitude)
+      );
+
+      if (dist <= 15) {
+        score += 20; // High SLA guarantee zone
+      } else if (dist > 50) {
+        score -= 30; // High risk of travel delays causing SLA breach
+      } else if (dist > 30) {
+        score -= 15;
+      }
+    }
+
+    // 2. Same-Day Task Load (Overload increases SLA breach risk)
+    if (context.scheduledDate) {
+      const activeSameDayCount = await this.assignmentRepository.count({
+        where: {
+          assayerId: assayer.id,
+          scheduledDate: context.scheduledDate,
+          status: In([AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+          isActive: true,
+        },
+      });
+
+      if (activeSameDayCount >= 3) {
+        score -= 40; // Heavy schedule risks missing SLA target
+      } else if (activeSameDayCount === 2) {
+        score -= 20;
+      } else if (activeSameDayCount === 0) {
+        score += 10; // Unencumbered schedule ensures SLA guarantee
+      }
+    }
+
+    // 3. Branch Risk Score & Assayer Seniority / SLA Track Record
+    const branchRisk = Number(context.branch.riskScore) || 0;
+    const rating = Number(assayer.performanceRating) || 5.0;
+    const exp = Number(assayer.experienceYears) || 0;
+
+    if (branchRisk >= 7) {
+      if (rating >= 4.5 && exp >= 4) {
+        score += 15; // High reliability assayer assigned to critical SLA branch
+      } else if (rating < 4.0 || exp < 2) {
+        score -= 35; // Risk of SLA breach assigning novice assayer to critical branch
+      }
+    }
+
+    return Math.max(0, Math.min(100, score));
+  }
+}
+
+@Injectable()
+export class CustomerDensityScoreCalculator implements ScoreCalculator {
+  name = 'customerDensity';
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    const customerCount = Number(context.branch.riskScore || 20);
+    const maxCapacity = assayer.maxWeeklyWorkload || 50;
+    // Score increases when high-customer-density branches are assigned to high-capacity assayers
+    return Math.min(100, (customerCount / maxCapacity) * 100);
   }
 }
 
@@ -485,6 +555,7 @@ export class RecommendationEngine {
     private readonly clientPreferenceCalculator: ClientPreferenceScoreCalculator,
     private readonly branchFamiliarityCalculator: BranchFamiliarityScoreCalculator,
     private readonly slaComplianceCalculator: SLAComplianceScoreCalculator,
+    private readonly customerDensityCalculator: CustomerDensityScoreCalculator,
     private readonly profitabilityCalculator: ProfitabilityScoreCalculator,
     private readonly riskCalculator: RiskScoreCalculator,
     private readonly configResolver: ConfigurationResolver,
@@ -513,6 +584,7 @@ export class RecommendationEngine {
       this.clientPreferenceCalculator,
       this.branchFamiliarityCalculator,
       this.slaComplianceCalculator,
+      this.customerDensityCalculator,
       this.profitabilityCalculator,
       this.riskCalculator,
     );

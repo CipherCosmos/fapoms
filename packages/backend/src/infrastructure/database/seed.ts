@@ -11,6 +11,8 @@ import { ClientConfigurationEntity } from '../../modules/client/client-configura
 import { ClientContactEntity } from '../../modules/client/client-contact.entity';
 import { ClientBillingEntity } from '../../modules/client/client-billing.entity';
 import { AssayerEntity } from '../../modules/assayer/assayer.entity';
+import { AssayerCommercialProfileEntity } from '../../modules/assayer/assayer-commercial-profile.entity';
+import { WorkforceAttributeEntity } from '../../modules/assayer/workforce-attribute.entity';
 import { BranchEntity } from '../../modules/branch/branch.entity';
 import { BranchContactEntity } from '../../modules/branch/branch-contact.entity';
 import { ProjectEntity } from '../../modules/project/project.entity';
@@ -27,7 +29,7 @@ async function seed() {
   try {
     // Clean slate: Truncate existing tables to resolve potential database corruption
     console.log('Truncating existing tables for clean seed...');
-    await AppDataSource.query('TRUNCATE TABLE capabilities, capability_permissions, responsibilities, responsibility_capabilities, role_responsibilities, users, roles, permissions, organizations, clients, client_configurations, client_contacts, client_contracts, client_billing, assayers, assayer_government_documents, assayer_documents, assayer_remarks, assayer_activities, branches, branch_contacts, branch_documents, zones, projects, project_branches, assignments CASCADE;');
+    await AppDataSource.query('TRUNCATE TABLE capabilities, capability_permissions, responsibilities, responsibility_capabilities, role_responsibilities, users, roles, permissions, organizations, clients, client_configurations, client_contacts, client_contracts, client_billing, assayers, assayer_commercial_profiles, assayer_government_documents, assayer_documents, assayer_remarks, assayer_activities, workforce_attributes, branches, branch_contacts, branch_documents, zones, projects, project_branches, assignments CASCADE;');
 
     // 1. Seed Default Organization
     console.log('Seeding default organization...');
@@ -250,6 +252,22 @@ async function seed() {
         responsibilityNames: Array.from(responsibilityMap.keys()), // All responsibilities
       },
       {
+        name: SystemRole.ADMINISTRATOR,
+        displayName: 'Administrator',
+        description: 'Full platform access excluding system configuration.',
+        permissionKeys: [
+          'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION',
+          'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION',
+          'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
+          'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
+          'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM',
+          'USER:VIEW:PLATFORM', 'USER:CREATE:PLATFORM', 'USER:EDIT:PLATFORM',
+          'CONFIGURATION:VIEW:PLATFORM',
+          'AUDIT_LOG:VIEW:PLATFORM',
+        ],
+        responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT', 'USER_ADMINISTRATION', 'AUDIT_ACCESS'],
+      },
+      {
         name: SystemRole.OPERATIONS_MANAGER,
         displayName: 'Operations Manager',
         description: 'Manages projects, assignment planning, schedules, and assayers.',
@@ -324,6 +342,7 @@ async function seed() {
 
     const defaultUsers = [
       { username: 'admin', email: 'admin@fapoms.com', firstName: 'Super', lastName: 'Admin', displayName: 'System Admin', roleName: SystemRole.SUPER_ADMINISTRATOR },
+      { username: 'admin2', email: 'admin2@fapoms.com', firstName: 'Admin2', lastName: 'User', displayName: 'Admin User', roleName: SystemRole.ADMINISTRATOR },
       { username: 'manager', email: 'manager@fapoms.com', firstName: 'Operations', lastName: 'Manager', displayName: 'Ops Manager', roleName: SystemRole.OPERATIONS_MANAGER },
       { username: 'executive', email: 'executive@fapoms.com', firstName: 'Operations', lastName: 'Executive', displayName: 'Ops Executive', roleName: SystemRole.OPERATIONS_EXECUTIVE },
       { username: 'validator', email: 'validator@fapoms.com', firstName: 'Senior', lastName: 'Validator', displayName: 'Senior Validator', roleName: SystemRole.VALIDATOR },
@@ -635,7 +654,8 @@ async function seed() {
     // 10. Seed Assayer Master Profiles
     console.log('Seeding assayer master profiles...');
     const assayerRepository = AppDataSource.getRepository(AssayerEntity);
-    
+    const assayerPasswordHash = await bcrypt.hash('assayer123', 12);
+
     const assayersData = [
       {
         code: 'AS-01',
@@ -752,6 +772,17 @@ async function seed() {
     ];
 
     // Per-assayer skill/cert differentiation for realistic filtering
+    const assayerDetailsMap: Record<string, { emergencyContactName: string; emergencyContactPhone: string; emergencyContactRelation: string; languages: string[]; panNumber?: string }> = {
+      'AS-01': { emergencyContactName: 'Sneha Rahane', emergencyContactPhone: '+919876543210', emergencyContactRelation: 'Spouse', languages: ['Marathi', 'Hindi', 'English'], panNumber: 'ABCPR1234H' },
+      'AS-02': { emergencyContactName: 'Rajesh Kulkarni', emergencyContactPhone: '+919876543211', emergencyContactRelation: 'Father', languages: ['Marathi', 'Hindi', 'English'], panNumber: 'DEFPR5678I' },
+      'AS-03': { emergencyContactName: 'Anita Joshi', emergencyContactPhone: '+919876543212', emergencyContactRelation: 'Spouse', languages: ['Kannada', 'Hindi', 'English'], panNumber: 'GHIPR9012J' },
+      'AS-04': { emergencyContactName: 'Sunita Sharma', emergencyContactPhone: '+919876543213', emergencyContactRelation: 'Mother', languages: ['Marathi', 'Hindi', 'English'], panNumber: 'JKLPR3456K' },
+      'AS-05': { emergencyContactName: 'Priya Deshpande', emergencyContactPhone: '+919876543214', emergencyContactRelation: 'Spouse', languages: ['Marathi', 'Hindi'], panNumber: 'MNOPR7890L' },
+      'AS-06': { emergencyContactName: 'Anil Patil', emergencyContactPhone: '+919876543215', emergencyContactRelation: 'Father', languages: ['Marathi', 'Hindi', 'English'] },
+      'AS-07': { emergencyContactName: 'Meena Gupta', emergencyContactPhone: '+919876543216', emergencyContactRelation: 'Spouse', languages: ['Hindi', 'English'], panNumber: 'PQRST2345M' },
+      'AS-08': { emergencyContactName: 'Suresh Verma', emergencyContactPhone: '+919876543217', emergencyContactRelation: 'Father', languages: ['Hindi', 'English', 'Punjabi'], panNumber: 'STUVW6789N' },
+    };
+
     const assayerSkillsMap: Record<string, { skills: string[]; certifications: { name: string; expiryDate: string }[]; experienceYears: number; performanceRating: number }> = {
       'AS-01': {
         skills: ['Gold', 'Gold Valuation', 'Financial Auditing', 'Agricultural Audit'],
@@ -831,6 +862,7 @@ async function seed() {
       if (!assayer) {
         assayer = assayerRepository.create({
           assayerCode: ad.code,
+          passwordHash: assayerPasswordHash,
           firstName: ad.firstName,
           lastName: ad.lastName,
           displayName: `${ad.firstName} ${ad.lastName}`,
@@ -857,9 +889,74 @@ async function seed() {
           updatedBy: 'system',
         });
         await assayerRepository.save(assayer);
+
+        const attrRepo = AppDataSource.getRepository(WorkforceAttributeEntity);
+        const attrs: Partial<WorkforceAttributeEntity>[] = [];
+        const skills = assayerSkillsMap[ad.code]?.skills || ['Gold', 'Gold Valuation'];
+        for (const skill of skills) {
+          attrs.push({ assayerId: assayer.id, type: 'SKILL', name: skill, createdBy: 'system', updatedBy: 'system' });
+        }
+        const certs = assayerSkillsMap[ad.code]?.certifications || [];
+        for (const cert of certs) {
+          attrs.push({
+            assayerId: assayer.id, type: 'CERTIFICATION', name: cert.name,
+            expiryDate: cert.expiryDate ? new Date(cert.expiryDate) : null,
+            createdBy: 'system', updatedBy: 'system',
+          });
+        }
+        const details = assayerDetailsMap[ad.code];
+        if (details) {
+          if (details.languages.length > 0) {
+            const langAttrs = details.languages.map(lang => ({ assayerId: assayer!.id, type: 'LANGUAGE', name: lang, createdBy: 'system', updatedBy: 'system' }));
+            attrs.push(...langAttrs);
+          }
+          assayer.emergencyContactName = details.emergencyContactName;
+          assayer.emergencyContactPhone = details.emergencyContactPhone;
+          assayer.emergencyContactRelation = details.emergencyContactRelation;
+          if (details.panNumber) assayer.panNumber = details.panNumber;
+        }
+
+        if (attrs.length > 0) await attrRepo.save(attrs);
+        await assayerRepository.save(assayer);
+
         console.log(`Seeded assayer: ${assayer.displayName} (${ad.code})`);
       }
     }
+
+    // 10.5 Seed Commercial Profiles
+    console.log('Seeding commercial profiles...');
+    const commercialRepo = AppDataSource.getRepository(AssayerCommercialProfileEntity);
+    const allAssayers = await assayerRepository.find();
+    const feeBands: Record<string, { baseFee: number; dailyRate: number }> = {
+      'AS-01': { baseFee: 1800, dailyRate: 4500 },
+      'AS-02': { baseFee: 1600, dailyRate: 4000 },
+      'AS-03': { baseFee: 1500, dailyRate: 3800 },
+      'AS-04': { baseFee: 1700, dailyRate: 4200 },
+      'AS-05': { baseFee: 1550, dailyRate: 3900 },
+      'AS-06': { baseFee: 1400, dailyRate: 3600 },
+      'AS-07': { baseFee: 1500, dailyRate: 3750 },
+      'AS-08': { baseFee: 2000, dailyRate: 5000 },
+    };
+    for (const a of allAssayers) {
+      const existing = await commercialRepo.findOne({ where: { assayerId: a.id } });
+      if (!existing) {
+        const band = feeBands[a.assayerCode] || { baseFee: 1500, dailyRate: 3500 };
+        await commercialRepo.save(commercialRepo.create({
+          assayerId: a.id,
+          baseFee: band.baseFee,
+          dailyRate: band.dailyRate,
+          hourlyRate: 0,
+          travelReimbursement: 500,
+          accommodationAllowance: 1000,
+          mealAllowance: 300,
+          currency: 'INR',
+          effectiveStartDate: new Date('2026-01-01'),
+          createdBy: 'system',
+          updatedBy: 'system',
+        }));
+      }
+    }
+    console.log(`Seeded commercial profiles for ${allAssayers.length} assayers`);
 
     // 11. Seed Initial Branches
     console.log('Seeding initial branches...');

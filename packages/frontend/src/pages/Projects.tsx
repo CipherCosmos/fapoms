@@ -510,7 +510,22 @@ export const Projects: React.FC = () => {
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>Manage all client audit cycles and monitor progress</p>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button onClick={async () => {
+            try {
+              const data = projects.length > 0 ? projects : await api.request<ProjectItem[]>('/projects');
+              const header = ['Project Number', 'Name', 'Client', 'Status', 'Priority', 'Budget', 'Start Date', 'End Date'];
+              const rows = data.map(p => [
+                p.projectNumber, p.name, p.client?.name || '', p.status, p.priority,
+                p.budget || '', p.startDate ? new Date(p.startDate).toLocaleDateString() : '',
+                p.endDate ? new Date(p.endDate).toLocaleDateString() : ''
+              ]);
+              const csv = [header.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
+              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a'); a.href = url; a.download = `projects_export_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+              URL.revokeObjectURL(url);
+            } catch (e) { setMessage({ type: 'error', text: 'Export failed' }); }
+          }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <FileSpreadsheet size={15} /> Export
           </button>
           <button onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}
