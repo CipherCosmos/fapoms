@@ -4,6 +4,7 @@ const core_1 = require("@nestjs/core");
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const app_module_1 = require("./app.module");
+const bull_board_setup_1 = require("./infrastructure/queue/bull-board.setup");
 async function bootstrap() {
     const nodeEnv = process.env.NODE_ENV;
     const jwtSecret = process.env.JWT_SECRET;
@@ -21,7 +22,7 @@ async function bootstrap() {
         },
     }));
     app.enableCors({
-        origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+        origin: ['http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
         credentials: true,
     });
     const config = new swagger_1.DocumentBuilder()
@@ -32,10 +33,14 @@ async function bootstrap() {
         .build();
     const document = swagger_1.SwaggerModule.createDocument(app, config);
     swagger_1.SwaggerModule.setup('api/docs', app, document);
+    if (process.env.NODE_ENV !== 'test') {
+        (0, bull_board_setup_1.setupBullBoard)(app);
+    }
     const port = process.env.PORT || 3000;
     await app.listen(port);
     console.log(`FAPOMS API running on http://localhost:${port}`);
     console.log(`API Documentation: http://localhost:${port}/api/docs`);
+    console.log(`Bull Board: http://localhost:${port}/bull-board`);
 }
 bootstrap();
 //# sourceMappingURL=main.js.map

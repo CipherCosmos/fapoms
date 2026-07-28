@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PlatformFoundationModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
+const bull_1 = require("@nestjs/bull");
 const configuration_service_1 = require("./configuration/configuration.service");
 const authorization_service_1 = require("./authz/authorization.service");
 const event_dispatcher_service_1 = require("./events/event-dispatcher.service");
@@ -17,7 +18,7 @@ const tenant_resolver_service_1 = require("./tenant/tenant-resolver.service");
 const platform_audit_service_1 = require("./audit/platform-audit.service");
 const audit_log_entity_1 = require("./audit/audit-log.entity");
 const observability_service_1 = require("./observability/observability.service");
-const queue_manager_service_1 = require("./background/queue-manager.service");
+const bull_queue_manager_1 = require("../../infrastructure/queue/bull-queue-manager");
 let PlatformFoundationModule = class PlatformFoundationModule {
 };
 exports.PlatformFoundationModule = PlatformFoundationModule;
@@ -28,6 +29,9 @@ exports.PlatformFoundationModule = PlatformFoundationModule = __decorate([
             typeorm_1.TypeOrmModule.forFeature([
                 audit_log_entity_1.AuditLogEntity,
             ]),
+            bull_1.BullModule.registerQueue({
+                name: 'background-jobs',
+            }),
         ],
         providers: [
             { provide: 'ConfigurationManagerInterface', useClass: configuration_service_1.DefaultConfigurationService },
@@ -37,7 +41,7 @@ exports.PlatformFoundationModule = PlatformFoundationModule = __decorate([
             tenant_resolver_service_1.TenantContextResolver,
             platform_audit_service_1.PlatformAuditService,
             { provide: 'StructuredLogger', useClass: observability_service_1.DefaultObservabilityService },
-            { provide: 'BackgroundQueueManager', useClass: queue_manager_service_1.InMemoryQueueManager },
+            { provide: 'BackgroundQueueManager', useClass: bull_queue_manager_1.BullQueueManager },
         ],
         exports: [
             'ConfigurationManagerInterface',

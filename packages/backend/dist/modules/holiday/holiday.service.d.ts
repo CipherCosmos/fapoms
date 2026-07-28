@@ -3,7 +3,7 @@ import { HolidayEntity } from './holiday.entity';
 import { AuditService } from '../../core/audit/audit.service';
 export interface CreateHolidayDto {
     name: string;
-    date: Date;
+    date: string | Date;
     type: string;
     applicableStates?: string[];
 }

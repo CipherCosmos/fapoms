@@ -17,6 +17,7 @@ const auth_controller_1 = require("./auth.controller");
 const jwt_strategy_1 = require("./jwt.strategy");
 const user_entity_1 = require("../user/user.entity");
 const refresh_token_entity_1 = require("./refresh-token.entity");
+const assayer_entity_1 = require("../assayer/assayer.entity");
 let AuthModule = class AuthModule {
 };
 exports.AuthModule = AuthModule;
@@ -34,7 +35,7 @@ exports.AuthModule = AuthModule = __decorate([
                     },
                 }),
             }),
-            typeorm_1.TypeOrmModule.forFeature([user_entity_1.UserEntity, refresh_token_entity_1.RefreshTokenEntity]),
+            typeorm_1.TypeOrmModule.forFeature([user_entity_1.UserEntity, refresh_token_entity_1.RefreshTokenEntity, assayer_entity_1.AssayerEntity]),
         ],
         controllers: [auth_controller_1.AuthController],
         providers: [auth_service_1.AuthService, jwt_strategy_1.JwtStrategy],

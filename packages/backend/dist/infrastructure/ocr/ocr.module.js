@@ -9,11 +9,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.OcrModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
+const bull_1 = require("@nestjs/bull");
 const ocr_processing_service_1 = require("./ocr-processing.service");
 const ocr_boundary_controller_1 = require("./ocr-boundary.controller");
 const ocr_job_entity_1 = require("./ocr-job.entity");
 const document_entity_1 = require("../../modules/document/document.entity");
 const validation_module_1 = require("../../modules/validation/validation.module");
+const ocr_worker_1 = require("../../workers/ocr.worker");
 let OcrModule = class OcrModule {
 };
 exports.OcrModule = OcrModule;
@@ -21,10 +23,11 @@ exports.OcrModule = OcrModule = __decorate([
     (0, common_1.Module)({
         imports: [
             typeorm_1.TypeOrmModule.forFeature([ocr_job_entity_1.OcrJobEntity, document_entity_1.DocumentEntity]),
+            bull_1.BullModule.registerQueue({ name: 'ocr' }),
             validation_module_1.ValidationModule,
         ],
         controllers: [ocr_boundary_controller_1.OcrBoundaryController],
-        providers: [ocr_processing_service_1.OcrProcessingService],
+        providers: [ocr_processing_service_1.OcrProcessingService, ocr_worker_1.OcrWorker],
         exports: [ocr_processing_service_1.OcrProcessingService],
     })
 ], OcrModule);

@@ -89,7 +89,7 @@ let SchedulingService = class SchedulingService {
     async findOne(id) {
         const schedule = await this.scheduleRepository.findOne({
             where: { id, isActive: true },
-            relations: ['assignment', 'project', 'assayer'],
+            relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'project', 'assayer'],
         });
         if (!schedule) {
             throw new common_1.NotFoundException(`Schedule ${id} not found.`);
@@ -99,7 +99,7 @@ let SchedulingService = class SchedulingService {
     async findAll(page = 1, limit = 50) {
         const [schedules, total] = await this.scheduleRepository.findAndCount({
             where: { isActive: true },
-            relations: ['assignment', 'assayer', 'project'],
+            relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'assayer', 'project'],
             order: { scheduledDate: 'ASC' },
             take: limit,
             skip: (page - 1) * limit,

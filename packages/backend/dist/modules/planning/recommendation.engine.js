@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RequiredSkillsFilter = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
+exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.CustomerDensityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RequiredSkillsFilter = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
@@ -380,15 +380,76 @@ exports.BranchFamiliarityScoreCalculator = BranchFamiliarityScoreCalculator = __
     __metadata("design:paramtypes", [typeorm_2.Repository])
 ], BranchFamiliarityScoreCalculator);
 let SLAComplianceScoreCalculator = class SLAComplianceScoreCalculator {
+    assignmentRepository;
     name = 'slaCompliance';
-    async calculate() {
-        return 100;
+    constructor(assignmentRepository) {
+        this.assignmentRepository = assignmentRepository;
+    }
+    async calculate(assayer, context) {
+        let score = 80;
+        if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+            const dist = (0, shared_1.calculateHaversineDistance)(Number(context.branch.latitude), Number(context.branch.longitude), Number(assayer.latitude), Number(assayer.longitude));
+            if (dist <= 15) {
+                score += 20;
+            }
+            else if (dist > 50) {
+                score -= 30;
+            }
+            else if (dist > 30) {
+                score -= 15;
+            }
+        }
+        if (context.scheduledDate) {
+            const activeSameDayCount = await this.assignmentRepository.count({
+                where: {
+                    assayerId: assayer.id,
+                    scheduledDate: context.scheduledDate,
+                    status: (0, typeorm_2.In)([shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.SCHEDULED]),
+                    isActive: true,
+                },
+            });
+            if (activeSameDayCount >= 3) {
+                score -= 40;
+            }
+            else if (activeSameDayCount === 2) {
+                score -= 20;
+            }
+            else if (activeSameDayCount === 0) {
+                score += 10;
+            }
+        }
+        const branchRisk = Number(context.branch.riskScore) || 0;
+        const rating = Number(assayer.performanceRating) || 5.0;
+        const exp = Number(assayer.experienceYears) || 0;
+        if (branchRisk >= 7) {
+            if (rating >= 4.5 && exp >= 4) {
+                score += 15;
+            }
+            else if (rating < 4.0 || exp < 2) {
+                score -= 35;
+            }
+        }
+        return Math.max(0, Math.min(100, score));
     }
 };
 exports.SLAComplianceScoreCalculator = SLAComplianceScoreCalculator;
 exports.SLAComplianceScoreCalculator = SLAComplianceScoreCalculator = __decorate([
-    (0, common_1.Injectable)()
+    (0, common_1.Injectable)(),
+    __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
+    __metadata("design:paramtypes", [typeorm_2.Repository])
 ], SLAComplianceScoreCalculator);
+let CustomerDensityScoreCalculator = class CustomerDensityScoreCalculator {
+    name = 'customerDensity';
+    async calculate(assayer, context) {
+        const customerCount = Number(context.branch.riskScore || 20);
+        const maxCapacity = assayer.maxWeeklyWorkload || 50;
+        return Math.min(100, (customerCount / maxCapacity) * 100);
+    }
+};
+exports.CustomerDensityScoreCalculator = CustomerDensityScoreCalculator;
+exports.CustomerDensityScoreCalculator = CustomerDensityScoreCalculator = __decorate([
+    (0, common_1.Injectable)()
+], CustomerDensityScoreCalculator);
 let ProfitabilityScoreCalculator = class ProfitabilityScoreCalculator {
     commercialRepository;
     name = 'profitability';
@@ -451,6 +512,7 @@ let RecommendationEngine = class RecommendationEngine {
     clientPreferenceCalculator;
     branchFamiliarityCalculator;
     slaComplianceCalculator;
+    customerDensityCalculator;
     profitabilityCalculator;
     riskCalculator;
     configResolver;
@@ -460,7 +522,7 @@ let RecommendationEngine = class RecommendationEngine {
     assayerService;
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, constraintEvaluator, assayerService) {
+    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, customerDensityCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, constraintEvaluator, assayerService) {
         this.availabilityFilter = availabilityFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
         this.clientEligibilityFilter = clientEligibilityFilter;
@@ -475,6 +537,7 @@ let RecommendationEngine = class RecommendationEngine {
         this.clientPreferenceCalculator = clientPreferenceCalculator;
         this.branchFamiliarityCalculator = branchFamiliarityCalculator;
         this.slaComplianceCalculator = slaComplianceCalculator;
+        this.customerDensityCalculator = customerDensityCalculator;
         this.profitabilityCalculator = profitabilityCalculator;
         this.riskCalculator = riskCalculator;
         this.configResolver = configResolver;
@@ -483,7 +546,7 @@ let RecommendationEngine = class RecommendationEngine {
         this.constraintEvaluator = constraintEvaluator;
         this.assayerService = assayerService;
         this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter, this.requiredSkillsFilter);
-        this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.profitabilityCalculator, this.riskCalculator);
+        this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.customerDensityCalculator, this.profitabilityCalculator, this.riskCalculator);
     }
     async recommend(branch, scheduledDate, weights = {}) {
         const client = branch.clientId
@@ -534,8 +597,8 @@ let RecommendationEngine = class RecommendationEngine {
 exports.RecommendationEngine = RecommendationEngine;
 exports.RecommendationEngine = RecommendationEngine = __decorate([
     (0, common_1.Injectable)(),
-    __param(17, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
-    __param(18, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(18, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(19, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [AvailabilityFilter,
         ClientRestrictionFilter,
         ClientEligibilityFilter,
@@ -550,6 +613,7 @@ exports.RecommendationEngine = RecommendationEngine = __decorate([
         ClientPreferenceScoreCalculator,
         BranchFamiliarityScoreCalculator,
         SLAComplianceScoreCalculator,
+        CustomerDensityScoreCalculator,
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
         configuration_resolver_1.ConfigurationResolver,

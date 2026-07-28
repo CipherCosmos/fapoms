@@ -648,6 +648,7 @@ exports.ClientController = ClientController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new client profile' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -675,6 +676,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update client profile and configuration' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -686,6 +688,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('client:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete client profile' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -696,6 +699,7 @@ __decorate([
 __decorate([
     (0, common_1.Patch)(':id/lifecycle'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition client lifecycle status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -715,6 +719,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/contacts'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Add contact to client' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -726,6 +731,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/contacts/:contactId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update client contact' }),
     __param(0, (0, common_1.Param)('contactId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -737,6 +743,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id/contacts/:contactId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('client:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Remove client contact' }),
     __param(0, (0, common_1.Param)('contactId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -755,6 +762,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/contracts'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Add contract to client' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -766,6 +774,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/contracts/:contractId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update client contract' }),
     __param(0, (0, common_1.Param)('contractId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -777,6 +786,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id/contracts/:contractId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('client:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete client contract' }),
     __param(0, (0, common_1.Param)('contractId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -795,6 +805,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/billing'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('client:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create or update client billing information' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -806,7 +817,7 @@ __decorate([
 exports.ClientController = ClientController = __decorate([
     (0, swagger_1.ApiTags)('Clients'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('clients'),
     __metadata("design:paramtypes", [client_service_1.ClientService])
 ], ClientController);

@@ -143,6 +143,7 @@ __decorate([
     (0, common_1.Post)(),
     (0, common_1.HttpCode)(201),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('organization:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new organization' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -170,6 +171,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('organization:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update an organization' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -182,6 +184,7 @@ __decorate([
     (0, common_1.Delete)(':id'),
     (0, common_1.HttpCode)(204),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('organization:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete an organization' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -192,7 +195,7 @@ __decorate([
 exports.OrganizationController = OrganizationController = __decorate([
     (0, swagger_1.ApiTags)('Organizations'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('organizations'),
     __metadata("design:paramtypes", [organization_service_1.OrganizationService])
 ], OrganizationController);

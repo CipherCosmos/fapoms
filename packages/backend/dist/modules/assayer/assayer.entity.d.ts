@@ -2,6 +2,7 @@ import { BaseEntity } from '../../core/entities/base.entity';
 export declare class AssayerEntity extends BaseEntity {
     assayerCode: string;
     employeeId: string | null;
+    passwordHash: string | null;
     employeeCode: string | null;
     firstName: string;
     lastName: string;

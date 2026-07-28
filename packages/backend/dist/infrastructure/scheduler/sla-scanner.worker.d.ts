@@ -1,10 +1,8 @@
-import { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Job } from 'bull';
 import { AssignmentService } from '../../modules/assignment/assignment.service';
-export declare class SlaScannerWorker implements OnModuleInit, OnModuleDestroy {
+export declare class SlaScannerWorker {
     private readonly assignmentService;
-    private timer;
+    private readonly logger;
     constructor(assignmentService: AssignmentService);
-    onModuleInit(): void;
-    private runScan;
-    onModuleDestroy(): void;
+    runScan(job: Job): Promise<void>;
 }

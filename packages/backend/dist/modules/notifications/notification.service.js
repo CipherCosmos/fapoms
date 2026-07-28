@@ -17,13 +17,13 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const notification_entity_1 = require("./notification.entity");
-const audit_service_1 = require("../../core/audit/audit.service");
+const push_notification_service_1 = require("./push-notification.service");
 let NotificationService = class NotificationService {
     notificationRepository;
-    auditService;
-    constructor(notificationRepository, auditService) {
+    pushNotificationService;
+    constructor(notificationRepository, pushNotificationService) {
         this.notificationRepository = notificationRepository;
-        this.auditService = auditService;
+        this.pushNotificationService = pushNotificationService;
     }
     async create(dto, systemUser) {
         const notif = this.notificationRepository.create({
@@ -35,6 +35,11 @@ let NotificationService = class NotificationService {
             updatedBy: systemUser ?? 'SYSTEM',
         });
         const saved = await this.notificationRepository.save(notif);
+        try {
+            await this.pushNotificationService.sendToUser(dto.userId, dto.title, dto.message, dto.data || (dto.link ? { link: dto.link } : undefined));
+        }
+        catch (err) {
+        }
         return saved;
     }
     async findByUser(userId) {
@@ -61,6 +66,6 @@ exports.NotificationService = NotificationService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(notification_entity_1.NotificationEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        audit_service_1.AuditService])
+        push_notification_service_1.PushNotificationService])
 ], NotificationService);
 //# sourceMappingURL=notification.service.js.map

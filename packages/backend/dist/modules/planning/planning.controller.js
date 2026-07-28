@@ -340,6 +340,7 @@ exports.PlanningController = PlanningController;
 __decorate([
     (0, common_1.Post)('field/visits'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Initialize new field visit execution record' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -349,6 +350,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('field/visits/:visitId/status'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('planning:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' }),
     __param(0, (0, common_1.Param)('visitId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -359,6 +361,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('field/visits/:visitId/incidents'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Report operational field incident (e.g. branch closed, assayer illness)' }),
     __param(0, (0, common_1.Param)('visitId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -369,6 +372,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('field/incidents/:incidentId/resolve'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Resolve active field incident' }),
     __param(0, (0, common_1.Param)('incidentId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -397,6 +401,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('execution/packages'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Bundle multiple operational assignments into a single deployment package' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -406,6 +411,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('execution/packages/:groupId/conversations'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Record conversation message with fee/date negotiations' }),
     __param(0, (0, common_1.Param)('groupId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -433,6 +439,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('control-center/tasks'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Generate manual operational task in the queue' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -442,6 +449,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('control-center/tasks/:taskId/resolve'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Resolve an operations task with justification log' }),
     __param(0, (0, common_1.Param)('taskId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -452,6 +460,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('control-center/exceptions'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Flag managed exception rule violations' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -461,6 +470,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('control-center/exceptions/:exceptionId/resolve'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Resolve or bypass exception log with justification' }),
     __param(0, (0, common_1.Param)('exceptionId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -488,6 +498,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('projects/:projectId/coverage-plan'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create or regenerate coverage plan version with manual overrides' }),
     __param(0, (0, common_1.Param)('projectId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -499,6 +510,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('coverage-plans/:planId/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' }),
     __param(0, (0, common_1.Param)('planId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -510,6 +522,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('coverage-plans/:planId/execute'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Deploy approved plan and automatically spawn operational assignments' }),
     __param(0, (0, common_1.Param)('planId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -529,6 +542,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('projects/:projectId/optimize'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Generate optimized project-wide assayer matching and routing deployment plan' }),
     __param(0, (0, common_1.Param)('projectId', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -538,6 +552,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('scenarios/simulate'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -566,6 +581,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('rules'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new business planning rule' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -576,6 +592,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('rules/:id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('planning:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update a business planning rule by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -587,6 +604,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)('rules/:id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('planning:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete/disable a business planning rule' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -613,7 +631,7 @@ __decorate([
 exports.PlanningController = PlanningController = __decorate([
     (0, swagger_1.ApiTags)('Planning'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('planning'),
     __metadata("design:paramtypes", [planning_service_1.PlanningService,
         planning_orchestrator_service_1.PlanningOrchestratorService,

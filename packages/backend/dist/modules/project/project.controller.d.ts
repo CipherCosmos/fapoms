@@ -52,7 +52,38 @@ export declare class ProjectController {
     }>;
     getProjectBranches(id: string): Promise<{
         success: boolean;
-        data: import("./project-branch.entity").ProjectBranchEntity[];
+        data: {
+            assignment: {
+                id: string;
+                status: import("@fapoms/shared").AssignmentStatus;
+                proposedFee: number | null;
+                agreedFee: number | null;
+                scheduledDate: Date | null;
+                assayer: {
+                    displayName: string;
+                    id: string;
+                    assayerCode: string;
+                } | undefined;
+            } | null;
+            assignments: undefined;
+            projectId: string;
+            branchId: string;
+            status: import("@fapoms/shared").ProjectBranchStatus;
+            priority: import("@fapoms/shared").Priority;
+            zoneId: string | null;
+            scheduledDate: Date | null;
+            remarks: string | null;
+            packetCount: number | null;
+            project: import("./project.entity").ProjectEntity;
+            branch: import("../branch/branch.entity").BranchEntity;
+            id: string;
+            createdBy: string;
+            createdAt: Date;
+            updatedBy: string;
+            updatedAt: Date;
+            version: number;
+            isActive: boolean;
+        }[];
     }>;
     associateBranches(id: string, dto: {
         branchIds: string[];

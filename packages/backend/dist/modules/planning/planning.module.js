@@ -119,6 +119,7 @@ exports.PlanningModule = PlanningModule = __decorate([
             recommendation_engine_1.ClientPreferenceScoreCalculator,
             recommendation_engine_1.BranchFamiliarityScoreCalculator,
             recommendation_engine_1.SLAComplianceScoreCalculator,
+            recommendation_engine_1.CustomerDensityScoreCalculator,
             recommendation_engine_1.ProfitabilityScoreCalculator,
             recommendation_engine_1.RiskScoreCalculator,
             recommendation_engine_1.RecommendationEngine,

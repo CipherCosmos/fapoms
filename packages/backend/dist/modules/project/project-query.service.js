@@ -48,7 +48,7 @@ let ProjectQueryService = class ProjectQueryService {
     async findProjectBranches(projectId) {
         return this.projectBranchRepository.find({
             where: { projectId, isActive: true },
-            relations: ['branch'],
+            relations: ['branch', 'assignments', 'assignments.assayer'],
         });
     }
     async findProjectBranchById(id) {

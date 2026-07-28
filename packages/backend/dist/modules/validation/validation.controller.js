@@ -110,6 +110,7 @@ exports.ValidationController = ValidationController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER),
+    (0, guards_1.RequirePermissions)('validation:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Register a project branch for document validation' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -137,6 +138,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/assign'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER),
+    (0, guards_1.RequirePermissions)('validation:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Assign a validation case to a validator reviewer' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -148,6 +150,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR),
+    (0, guards_1.RequirePermissions)('validation:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition validation case status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -159,7 +162,7 @@ __decorate([
 exports.ValidationController = ValidationController = __decorate([
     (0, swagger_1.ApiTags)('Validation'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('validation'),
     __metadata("design:paramtypes", [validation_service_1.ValidationService])
 ], ValidationController);

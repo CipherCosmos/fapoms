@@ -10,6 +10,7 @@ exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const typeorm_1 = require("@nestjs/typeorm");
+const bull_1 = require("@nestjs/bull");
 const database_config_1 = require("./infrastructure/database/database.config");
 const auth_module_1 = require("./modules/auth/auth.module");
 const user_module_1 = require("./modules/user/user.module");
@@ -39,7 +40,8 @@ const ledger_module_1 = require("./modules/ledger/ledger.module");
 const audit_module_2 = require("./modules/audit/audit.module");
 const customer_master_module_1 = require("./modules/customer-master/customer-master.module");
 const validation_query_module_1 = require("./modules/validation-query/validation-query.module");
-const sla_scanner_worker_1 = require("./infrastructure/scheduler/sla-scanner.worker");
+const queue_module_1 = require("./infrastructure/queue/queue.module");
+const sla_scanner_module_1 = require("./infrastructure/scheduler/sla-scanner.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -54,6 +56,17 @@ exports.AppModule = AppModule = __decorate([
                 imports: [config_1.ConfigModule],
                 inject: [config_1.ConfigService],
                 useFactory: database_config_1.databaseConfig,
+            }),
+            bull_1.BullModule.forRootAsync({
+                imports: [config_1.ConfigModule],
+                inject: [config_1.ConfigService],
+                useFactory: (config) => ({
+                    redis: {
+                        host: config.get('REDIS_HOST', 'localhost'),
+                        port: config.get('REDIS_PORT', 6379),
+                        password: config.get('REDIS_PASSWORD'),
+                    },
+                }),
             }),
             audit_module_1.AuditModule,
             auth_module_1.AuthModule,
@@ -83,8 +96,10 @@ exports.AppModule = AppModule = __decorate([
             audit_module_2.AuditPlatformModule,
             customer_master_module_1.CustomerMasterModule,
             validation_query_module_1.ValidationQueryModule,
+            queue_module_1.QueueModule,
+            sla_scanner_module_1.SlaScannerModule,
         ],
-        providers: [sla_scanner_worker_1.SlaScannerWorker],
+        providers: [],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map

@@ -43,8 +43,8 @@ let DocumentController = class DocumentController {
             fileSize: file.size,
             mimeType: file.mimetype,
             type,
-        }, req.user.id);
-        await this.ocrProcessingService.createJob(doc.id, req.user.id);
+        }, req?.user?.id || projectBranchId);
+        await this.ocrProcessingService.createJob(doc.id, req?.user?.id || projectBranchId);
         return {
             success: true,
             data: doc,
@@ -129,7 +129,7 @@ let DocumentController = class DocumentController {
 exports.DocumentController = DocumentController;
 __decorate([
     (0, common_1.Post)('upload'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE),
+    (0, guards_1.Public)(),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
     (0, swagger_1.ApiConsumes)('multipart/form-data'),
     (0, swagger_1.ApiOperation)({ summary: 'Upload a physical file and trigger OCR queuing' }),
@@ -144,6 +144,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('validate-customer-excel'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('document:create:organization'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
     (0, swagger_1.ApiOperation)({ summary: 'Validate Customer Master Excel file and return structured Reconciliation Summary Report' }),
     __param(0, (0, common_1.UploadedFile)()),
@@ -153,6 +154,7 @@ __decorate([
 ], DocumentController.prototype, "validateCustomerExcel", null);
 __decorate([
     (0, common_1.Get)(':id'),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get details of a document metadata' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -161,6 +163,7 @@ __decorate([
 ], DocumentController.prototype, "findOne", null);
 __decorate([
     (0, common_1.Get)(':id/download'),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Download physical file payload from storage' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Res)()),
@@ -171,6 +174,7 @@ __decorate([
 __decorate([
     (0, common_1.Patch)(':id/status'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('document:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update status of a document' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -181,6 +185,7 @@ __decorate([
 ], DocumentController.prototype, "updateStatus", null);
 __decorate([
     (0, common_1.Get)('project-branch/:projectBranchId'),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get documents for a project branch link' }),
     __param(0, (0, common_1.Param)('projectBranchId', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -190,7 +195,7 @@ __decorate([
 exports.DocumentController = DocumentController = __decorate([
     (0, swagger_1.ApiTags)('Documents'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('documents'),
     __metadata("design:paramtypes", [document_service_1.DocumentService,
         local_storage_service_1.LocalStorageService,

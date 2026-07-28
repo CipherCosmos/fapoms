@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.OcrProcessingService = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
+const bull_1 = require("@nestjs/bull");
 const typeorm_2 = require("typeorm");
 const ocr_job_entity_1 = require("./ocr-job.entity");
 const document_entity_1 = require("../../modules/document/document.entity");
@@ -26,48 +27,13 @@ let OcrProcessingService = class OcrProcessingService {
     documentRepository;
     validationService;
     auditService;
-    timer = null;
-    constructor(ocrJobRepository, documentRepository, validationService, auditService) {
+    ocrQueue;
+    constructor(ocrJobRepository, documentRepository, validationService, auditService, ocrQueue) {
         this.ocrJobRepository = ocrJobRepository;
         this.documentRepository = documentRepository;
         this.validationService = validationService;
         this.auditService = auditService;
-    }
-    onModuleInit() {
-        if (process.env.NODE_ENV !== 'test') {
-            this.timer = setInterval(() => {
-                this.processQueueJobs();
-            }, 2 * 60 * 1000);
-            this.timer.unref();
-        }
-    }
-    onModuleDestroy() {
-        if (this.timer)
-            clearInterval(this.timer);
-    }
-    async processQueueJobs() {
-        try {
-            const pendingJobs = await this.ocrJobRepository.find({
-                where: { status: (0, typeorm_2.In)([ocr_job_entity_1.OcrJobStatus.PENDING, ocr_job_entity_1.OcrJobStatus.FAILED]), isActive: true },
-                take: 10,
-            });
-            for (const job of pendingJobs) {
-                if (job.retryCount >= 5) {
-                    job.status = ocr_job_entity_1.OcrJobStatus.DEAD_LETTER;
-                    job.failureReason = 'Max retry count (5) exhausted. Moved to Dead-Letter Queue for manual review.';
-                    await this.ocrJobRepository.save(job);
-                    console.warn(`[OcrQueueWorker] Job ${job.id} moved to DEAD_LETTER queue after 5 failed attempts.`);
-                    continue;
-                }
-                job.status = ocr_job_entity_1.OcrJobStatus.PROCESSING;
-                job.retryCount += 1;
-                await this.ocrJobRepository.save(job);
-                console.log(`[OcrQueueWorker] Atomic Claim & Processing OCR job ${job.id} (Attempt ${job.retryCount}/5)...`);
-            }
-        }
-        catch (err) {
-            console.error('[OcrQueueWorker] Error during durable queue processing:', err);
-        }
+        this.ocrQueue = ocrQueue;
     }
     async createJob(documentId, userId) {
         const doc = await this.documentRepository.findOne({ where: { id: documentId, isActive: true } });
@@ -87,7 +53,13 @@ let OcrProcessingService = class OcrProcessingService {
             entityType: 'OCR_JOB',
             entityId: saved.id,
             userId,
-            remarks: `OCR job successfully registered at boundary for document: ${doc.fileName}.`,
+            remarks: `OCR job registered for document: ${doc.fileName}.`,
+        });
+        await this.ocrQueue.add('process', { documentId, userId, fileName: doc.fileName }, {
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 1000 },
+            removeOnComplete: false,
+            removeOnFail: false,
         });
         return saved;
     }
@@ -120,7 +92,7 @@ let OcrProcessingService = class OcrProcessingService {
             entityType: 'OCR_JOB',
             entityId: saved.id,
             userId,
-            remarks: `Received external OCR payload. Pushed to human validator review queue.`,
+            remarks: 'Received external OCR payload. Pushed to human validator review queue.',
         });
         return saved;
     }
@@ -160,9 +132,10 @@ exports.OcrProcessingService = OcrProcessingService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(ocr_job_entity_1.OcrJobEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(document_entity_1.DocumentEntity)),
+    __param(4, (0, bull_1.InjectQueue)('ocr')),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
         validation_service_1.ValidationService,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService, Object])
 ], OcrProcessingService);
 //# sourceMappingURL=ocr-processing.service.js.map

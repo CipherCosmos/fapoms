@@ -7,6 +7,7 @@ const typeorm_2 = require("typeorm");
 const assignment_service_1 = require("./assignment.service");
 const assignment_entity_1 = require("./assignment.entity");
 const notification_service_1 = require("../notifications/notification.service");
+const push_notification_service_1 = require("../notifications/push-notification.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const shared_1 = require("@fapoms/shared");
@@ -54,6 +55,9 @@ describe('AssignmentService', () => {
     };
     const mockNotificationService = {
         create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
+    };
+    const mockPushNotificationService = {
+        sendToUser: jest.fn().mockResolvedValue(undefined),
     };
     const mockAuditService = {
         recordEvent: jest.fn(),
@@ -157,6 +161,10 @@ describe('AssignmentService', () => {
                 {
                     provide: notification_service_1.NotificationService,
                     useValue: mockNotificationService,
+                },
+                {
+                    provide: push_notification_service_1.PushNotificationService,
+                    useValue: mockPushNotificationService,
                 },
                 {
                     provide: audit_service_1.AuditService,

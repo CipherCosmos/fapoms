@@ -13,12 +13,18 @@ describe('PlatformFoundationModule', () => {
         create: jest.fn().mockImplementation((arg) => arg),
         save: jest.fn((arg) => Promise.resolve({ id: 'al-1', ...arg })),
     };
+    const mockQueueManager = {
+        enqueue: jest.fn(),
+        registerWorker: jest.fn(),
+    };
     beforeEach(async () => {
         moduleRef = await testing_1.Test.createTestingModule({
             imports: [platform_foundation_module_1.PlatformFoundationModule],
         })
             .overrideProvider((0, typeorm_1.getRepositoryToken)(audit_log_entity_1.AuditLogEntity))
             .useValue(mockAuditRepository)
+            .overrideProvider('BackgroundQueueManager')
+            .useValue(mockQueueManager)
             .compile();
     });
     it('should successfully resolve core infrastructure services', () => {

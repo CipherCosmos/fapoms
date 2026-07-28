@@ -132,6 +132,7 @@ exports.ZoneController = ZoneController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('zone:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create an operational zone' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -160,6 +161,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('zone:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update operational zone mappings' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -171,6 +173,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('zone:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete zone mapping' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -181,7 +184,7 @@ __decorate([
 exports.ZoneController = ZoneController = __decorate([
     (0, swagger_1.ApiTags)('Zones'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('zones'),
     __metadata("design:paramtypes", [zone_service_1.ZoneService])
 ], ZoneController);

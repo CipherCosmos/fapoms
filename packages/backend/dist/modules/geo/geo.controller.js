@@ -22,6 +22,7 @@ const typeorm_2 = require("typeorm");
 const routing_provider_1 = require("./routing.provider");
 const geo_entities_1 = require("./geo.entities");
 const guards_1 = require("../auth/guards");
+const shared_1 = require("@fapoms/shared");
 class CoordinateDto {
     latitude;
     longitude;
@@ -50,6 +51,7 @@ class OptimizeRouteDto {
     origin;
     destinations;
     roundTrip;
+    mode;
 }
 exports.OptimizeRouteDto = OptimizeRouteDto;
 __decorate([
@@ -70,6 +72,11 @@ __decorate([
     (0, class_validator_1.IsBoolean)(),
     __metadata("design:type", Boolean)
 ], OptimizeRouteDto.prototype, "roundTrip", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], OptimizeRouteDto.prototype, "mode", void 0);
 let GeoController = class GeoController {
     routingService;
     stateRepo;
@@ -97,7 +104,7 @@ let GeoController = class GeoController {
         if (dto.destinations.length > 20) {
             throw new common_1.BadRequestException('Optimization limit exceeded: Cannot optimize more than 20 destinations at once.');
         }
-        const result = await this.routingService.optimizeRoute(dto.origin, dto.destinations, dto.roundTrip);
+        const result = await this.routingService.optimizeRoute(dto.origin, dto.destinations, dto.roundTrip, dto.mode);
         return {
             success: true,
             data: result,
@@ -130,6 +137,7 @@ __decorate([
 ], GeoController.prototype, "getCities", null);
 __decorate([
     (0, common_1.Post)('route/optimize'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, swagger_1.ApiOperation)({ summary: 'Calculate optimized route sequence (TSP solver) for multiple destinations' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -139,7 +147,7 @@ __decorate([
 exports.GeoController = GeoController = __decorate([
     (0, swagger_1.ApiTags)('Geo'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('geo'),
     __param(1, (0, typeorm_1.InjectRepository)(geo_entities_1.GeoStateEntity)),
     __param(2, (0, typeorm_1.InjectRepository)(geo_entities_1.GeoDistrictEntity)),

@@ -8,45 +8,41 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var SlaScannerWorker_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SlaScannerWorker = void 0;
 const common_1 = require("@nestjs/common");
+const bull_1 = require("@nestjs/bull");
 const assignment_service_1 = require("../../modules/assignment/assignment.service");
-let SlaScannerWorker = class SlaScannerWorker {
+let SlaScannerWorker = SlaScannerWorker_1 = class SlaScannerWorker {
     assignmentService;
-    timer = null;
+    logger = new common_1.Logger(SlaScannerWorker_1.name);
     constructor(assignmentService) {
         this.assignmentService = assignmentService;
     }
-    onModuleInit() {
-        if (process.env.NODE_ENV !== 'test') {
-            console.log('[SlaScannerWorker] Starting periodic SLA breach scanner...');
-            this.timer = setInterval(() => {
-                this.runScan();
-            }, 5 * 60 * 1000);
-            this.timer.unref();
-        }
-    }
-    async runScan() {
+    async runScan(job) {
         try {
             const breachedCount = await this.assignmentService.checkSlaBreaches();
             if (breachedCount > 0) {
-                console.log(`[SlaScannerWorker] SLA scan complete. Flagged ${breachedCount} breached assignments.`);
+                this.logger.log(`SLA scan complete. Flagged ${breachedCount} breached assignments.`);
             }
         }
         catch (err) {
-            console.error('[SlaScannerWorker] Error during periodic SLA scan:', err);
-        }
-    }
-    onModuleDestroy() {
-        if (this.timer) {
-            clearInterval(this.timer);
+            this.logger.error('Error during periodic SLA scan:', err);
+            throw err;
         }
     }
 };
 exports.SlaScannerWorker = SlaScannerWorker;
-exports.SlaScannerWorker = SlaScannerWorker = __decorate([
+__decorate([
+    (0, bull_1.Process)('scan'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], SlaScannerWorker.prototype, "runScan", null);
+exports.SlaScannerWorker = SlaScannerWorker = SlaScannerWorker_1 = __decorate([
     (0, common_1.Injectable)(),
+    (0, bull_1.Processor)('sla-scanner'),
     __metadata("design:paramtypes", [assignment_service_1.AssignmentService])
 ], SlaScannerWorker);
 //# sourceMappingURL=sla-scanner.worker.js.map

@@ -1,4 +1,4 @@
-import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto, TransitionAssignmentDto } from './assignment.service';
+import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 export declare class AssignmentController {
     private readonly assignmentService;
     constructor(assignmentService: AssignmentService);
@@ -6,22 +6,19 @@ export declare class AssignmentController {
         success: boolean;
         items: import("./assignment.entity").AssignmentEntity[];
     }>;
-    checkIn(id: string, body: {
-        lat: number;
-        lng: number;
-        syncToken?: string;
-        timestamp?: string;
-    }): Promise<{
+    checkIn(id: string, dto: any, req: any): Promise<{
         success: boolean;
-        error: string;
-        message: string;
+        error: string | undefined;
+        message: string | undefined;
         syncToken?: undefined;
         timestamp?: undefined;
+        data?: undefined;
     } | {
         success: boolean;
-        message: string;
-        syncToken: string;
-        timestamp: string;
+        message: string | undefined;
+        syncToken: string | null;
+        timestamp: any;
+        data: import("./assignment.entity").AssignmentEntity;
         error?: undefined;
     }>;
     create(dto: CreateAssignmentDto, req: any): Promise<{
@@ -51,7 +48,7 @@ export declare class AssignmentController {
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
     }>;
-    transition(id: string, dto: TransitionAssignmentDto, req: any): Promise<{
+    transition(id: string, dto: any, req: any): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
     }>;

@@ -32,7 +32,7 @@ __decorate([
 ], CreateHolidayRequestDto.prototype, "name", void 0);
 __decorate([
     (0, class_validator_1.IsDateString)(),
-    __metadata("design:type", Date)
+    __metadata("design:type", Object)
 ], CreateHolidayRequestDto.prototype, "date", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
@@ -103,6 +103,7 @@ exports.HolidayController = HolidayController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('holiday:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Register a national or regional holiday' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -132,6 +133,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('holiday:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update holiday record details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -143,6 +145,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('holiday:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete holiday record' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -153,7 +156,7 @@ __decorate([
 exports.HolidayController = HolidayController = __decorate([
     (0, swagger_1.ApiTags)('Holidays'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('holidays'),
     __metadata("design:paramtypes", [holiday_service_1.HolidayService])
 ], HolidayController);

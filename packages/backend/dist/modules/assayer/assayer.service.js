@@ -758,9 +758,11 @@ let AssayerService = class AssayerService {
         await this.recomputeAverageRating(assayerId);
     }
     async getProfile(assayerId) {
-        const assayer = await this.assayerRepository.findOne({
-            where: { id: assayerId, isActive: true },
-        });
+        const isUuid = /^[0-9a-fA-F-]{36}$/.test(assayerId);
+        const where = isUuid
+            ? [{ id: assayerId, isActive: true }]
+            : [{ assayerCode: assayerId, isActive: true }, { employeeId: assayerId, isActive: true }];
+        const assayer = await this.assayerRepository.findOne({ where });
         if (!assayer)
             throw new common_1.NotFoundException(`Assayer ${assayerId} not found.`);
         await this.hydrateWorkforceAttributes(assayer);

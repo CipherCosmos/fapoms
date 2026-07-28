@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CommunicationController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const class_validator_1 = require("class-validator");
 const communication_service_1 = require("./communication.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
@@ -24,6 +25,26 @@ class CreateCommunicationRequestDto {
     content;
     recipientRef;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateCommunicationRequestDto.prototype, "assignmentId", void 0);
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.CommunicationType),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateCommunicationRequestDto.prototype, "type", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateCommunicationRequestDto.prototype, "content", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateCommunicationRequestDto.prototype, "recipientRef", void 0);
 let CommunicationController = class CommunicationController {
     communicationService;
     constructor(communicationService) {
@@ -48,6 +69,7 @@ exports.CommunicationController = CommunicationController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('communication:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Log a communication record' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -66,7 +88,7 @@ __decorate([
 exports.CommunicationController = CommunicationController = __decorate([
     (0, swagger_1.ApiTags)('Communications'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('communications'),
     __metadata("design:paramtypes", [communication_service_1.CommunicationService])
 ], CommunicationController);

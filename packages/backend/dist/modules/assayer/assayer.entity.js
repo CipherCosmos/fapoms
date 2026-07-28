@@ -16,6 +16,7 @@ const shared_1 = require("@fapoms/shared");
 let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     assayerCode;
     employeeId;
+    passwordHash;
     employeeCode;
     firstName;
     lastName;
@@ -79,6 +80,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "employeeId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'password_hash', type: 'varchar', length: 255, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "passwordHash", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'employee_code', type: 'varchar', length: 50, nullable: true }),
     __metadata("design:type", Object)

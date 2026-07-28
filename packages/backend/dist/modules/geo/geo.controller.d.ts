@@ -12,6 +12,7 @@ export declare class OptimizeRouteDto {
     origin: CoordinateDto;
     destinations: DestinationDto[];
     roundTrip?: boolean;
+    mode?: 'driving' | 'walking' | 'cycling';
 }
 export declare class GeoController {
     private readonly routingService;

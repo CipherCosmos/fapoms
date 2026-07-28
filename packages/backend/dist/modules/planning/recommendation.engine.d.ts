@@ -94,8 +94,14 @@ export declare class BranchFamiliarityScoreCalculator implements ScoreCalculator
     calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
 }
 export declare class SLAComplianceScoreCalculator implements ScoreCalculator {
+    private readonly assignmentRepository;
     name: string;
-    calculate(): Promise<number>;
+    constructor(assignmentRepository: Repository<AssignmentEntity>);
+    calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
+}
+export declare class CustomerDensityScoreCalculator implements ScoreCalculator {
+    name: string;
+    calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
 }
 export declare class ProfitabilityScoreCalculator implements ScoreCalculator {
     private readonly commercialRepository;
@@ -122,6 +128,7 @@ export declare class RecommendationEngine {
     private readonly clientPreferenceCalculator;
     private readonly branchFamiliarityCalculator;
     private readonly slaComplianceCalculator;
+    private readonly customerDensityCalculator;
     private readonly profitabilityCalculator;
     private readonly riskCalculator;
     private readonly configResolver;
@@ -131,7 +138,7 @@ export declare class RecommendationEngine {
     private readonly assayerService;
     private filters;
     private calculators;
-    constructor(availabilityFilter: AvailabilityFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, requiredSkillsFilter: RequiredSkillsFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>, constraintEvaluator: ConstraintEvaluator, assayerService: AssayerService);
+    constructor(availabilityFilter: AvailabilityFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, requiredSkillsFilter: RequiredSkillsFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, customerDensityCalculator: CustomerDensityScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>, constraintEvaluator: ConstraintEvaluator, assayerService: AssayerService);
     recommend(branch: BranchEntity, scheduledDate: Date, weights?: Record<string, number>): Promise<{
         assayer: AssayerEntity;
         score: number;

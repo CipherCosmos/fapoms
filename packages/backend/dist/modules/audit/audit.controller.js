@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuditController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const class_validator_1 = require("class-validator");
 const audit_service_1 = require("./audit.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
@@ -25,10 +26,45 @@ class StartAuditDto {
     branchId;
     scheduledDate;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], StartAuditDto.prototype, "assignmentId", void 0);
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], StartAuditDto.prototype, "assayerId", void 0);
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], StartAuditDto.prototype, "projectId", void 0);
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], StartAuditDto.prototype, "branchId", void 0);
+__decorate([
+    (0, class_validator_1.IsDateString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], StartAuditDto.prototype, "scheduledDate", void 0);
 class CloseAuditDto {
     baseFee;
     travelAllowance;
 }
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], CloseAuditDto.prototype, "baseFee", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(0),
+    __metadata("design:type", Number)
+], CloseAuditDto.prototype, "travelAllowance", void 0);
 let AuditController = class AuditController {
     auditService;
     constructor(auditService) {
@@ -53,6 +89,7 @@ exports.AuditController = AuditController;
 __decorate([
     (0, common_1.Post)('start'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.ASSAYER),
+    (0, guards_1.RequirePermissions)('audit:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Start a field audit' }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -62,6 +99,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/close'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('audit:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Close a field audit and trigger billing and ledger credits' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -72,7 +110,7 @@ __decorate([
 exports.AuditController = AuditController = __decorate([
     (0, swagger_1.ApiTags)('Audit Operations'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('audits'),
     __metadata("design:paramtypes", [audit_service_1.AuditService])
 ], AuditController);
