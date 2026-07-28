@@ -14,6 +14,7 @@ const audit_service_1 = require("./audit.service");
 const billing_module_1 = require("../billing/billing.module");
 const ledger_module_1 = require("../ledger/ledger.module");
 const audit_history_module_1 = require("../audit-history/audit-history.module");
+const audit_controller_1 = require("./audit.controller");
 let AuditPlatformModule = class AuditPlatformModule {
 };
 exports.AuditPlatformModule = AuditPlatformModule;
@@ -25,6 +26,7 @@ exports.AuditPlatformModule = AuditPlatformModule = __decorate([
             ledger_module_1.LedgerModule,
             audit_history_module_1.AuditHistoryModule,
         ],
+        controllers: [audit_controller_1.AuditController],
         providers: [{ provide: 'AuditPlatformService', useClass: audit_service_1.AuditService }, audit_service_1.AuditService],
         exports: ['AuditPlatformService', audit_service_1.AuditService],
     })

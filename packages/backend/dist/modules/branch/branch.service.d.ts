@@ -101,7 +101,7 @@ export declare class BranchService {
     private readonly auditService;
     private readonly branchQueryService;
     constructor(branchRepository: Repository<BranchEntity>, contactRepository: Repository<BranchContactEntity>, documentRepository: Repository<BranchDocumentEntity>, zoneRepository: Repository<ZoneEntity>, stateRepository: Repository<GeoStateEntity>, districtRepository: Repository<GeoDistrictEntity>, cityRepository: Repository<GeoCityEntity>, clientService: ClientService, auditService: AuditService, branchQueryService: BranchQueryService);
-    create(dto: CreateBranchDto, userId: string): Promise<BranchEntity>;
+    create(dto: CreateBranchDto, userId: string, organizationId?: string | null): Promise<BranchEntity>;
     findOne(id: string): Promise<BranchEntity>;
     findAll(page?: number, limit?: number, clientId?: string, region?: string, zoneId?: string): Promise<{
         branches: BranchEntity[];

@@ -40,6 +40,14 @@ __decorate([
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
 ], RefreshDto.prototype, "refreshToken", void 0);
+class BiometricLoginDto {
+    assayerCode;
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], BiometricLoginDto.prototype, "assayerCode", void 0);
 let AuthController = class AuthController {
     authService;
     constructor(authService) {
@@ -66,11 +74,31 @@ let AuthController = class AuthController {
                 refreshToken: result.refreshToken,
                 expiresIn: result.expiresIn,
                 user: {
+                    ...result.user,
+                    roles: Array.isArray(result.user.roles)
+                        ? result.user.roles.map((r) => (typeof r === 'string' ? r : r.name))
+                        : [],
+                },
+            },
+        };
+    }
+    async biometricLogin(dto, req) {
+        const ipAddress = req.ip || req.connection?.remoteAddress;
+        const userAgent = req.headers['user-agent'];
+        const result = await this.authService.biometricLogin(dto.assayerCode, ipAddress, userAgent);
+        return {
+            success: true,
+            data: {
+                accessToken: result.accessToken,
+                refreshToken: result.refreshToken,
+                expiresIn: result.expiresIn,
+                user: {
                     id: result.user.id,
                     username: result.user.username,
+                    name: result.user.name,
                     email: result.user.email,
-                    displayName: result.user.displayName,
-                    roles: result.user.roles?.map((r) => r.name) ?? [],
+                    phone: result.user.phone,
+                    status: result.user.status,
                 },
             },
         };
@@ -112,6 +140,16 @@ __decorate([
     __metadata("design:paramtypes", [LoginDto, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "login", null);
+__decorate([
+    (0, common_1.Post)('biometric-login'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Biometric/assayer-code login without password (for mobile)' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [BiometricLoginDto, Object]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "biometricLogin", null);
 __decorate([
     (0, common_1.Post)('refresh'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

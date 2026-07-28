@@ -3,19 +3,20 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { SchedulingService } from './scheduling.service';
 import { SchedulingController } from './scheduling.controller';
 import { ScheduleEntity } from './schedule.entity';
-import { AssignmentEntity } from '../assignment/assignment.entity';
 import { HolidayModule } from '../holiday/holiday.module';
-
 import { AssignmentModule } from '../assignment/assignment.module';
+import { PlanningModule } from '../planning/planning.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ScheduleEntity]),
     HolidayModule,
     AssignmentModule,
+    PlanningModule,
   ],
   controllers: [SchedulingController],
   providers: [SchedulingService],
   exports: [SchedulingService],
 })
 export class SchedulingModule {}
+

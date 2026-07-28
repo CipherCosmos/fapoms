@@ -1,37 +1,25 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Processor, Process } from '@nestjs/bull';
+import { Job } from 'bull';
 import { AssignmentService } from '../../modules/assignment/assignment.service';
 
 @Injectable()
-export class SlaScannerWorker implements OnModuleInit, OnModuleDestroy {
-  private timer: NodeJS.Timeout | null = null;
+@Processor('sla-scanner')
+export class SlaScannerWorker {
+  private readonly logger = new Logger(SlaScannerWorker.name);
 
   constructor(private readonly assignmentService: AssignmentService) {}
 
-  onModuleInit() {
-    if (process.env.NODE_ENV !== 'test') {
-      console.log('[SlaScannerWorker] Starting periodic SLA breach scanner...');
-      // Run every 5 minutes
-      this.timer = setInterval(() => {
-        this.runScan();
-      }, 5 * 60 * 1000);
-      this.timer.unref();
-    }
-  }
-
-  private async runScan() {
+  @Process('scan')
+  async runScan(job: Job) {
     try {
       const breachedCount = await this.assignmentService.checkSlaBreaches();
       if (breachedCount > 0) {
-        console.log(`[SlaScannerWorker] SLA scan complete. Flagged ${breachedCount} breached assignments.`);
+        this.logger.log(`SLA scan complete. Flagged ${breachedCount} breached assignments.`);
       }
     } catch (err) {
-      console.error('[SlaScannerWorker] Error during periodic SLA scan:', err);
-    }
-  }
-
-  onModuleDestroy() {
-    if (this.timer) {
-      clearInterval(this.timer);
+      this.logger.error('Error during periodic SLA scan:', err);
+      throw err;
     }
   }
 }

@@ -102,6 +102,26 @@ export var ValidationStatus;
     ValidationStatus["SUBMITTED"] = "SUBMITTED";
 })(ValidationStatus || (ValidationStatus = {}));
 // ---------------------------------------------------------------------------
+// Customer Master Lifecycle (Sprint 1 Priority 1)
+// ---------------------------------------------------------------------------
+export var CustomerMasterStatus;
+(function (CustomerMasterStatus) {
+    CustomerMasterStatus["DRAFT"] = "DRAFT";
+    CustomerMasterStatus["RECONCILED"] = "RECONCILED";
+    CustomerMasterStatus["APPROVED"] = "APPROVED";
+    CustomerMasterStatus["SUPERSEDED"] = "SUPERSEDED";
+    CustomerMasterStatus["REJECTED"] = "REJECTED";
+})(CustomerMasterStatus || (CustomerMasterStatus = {}));
+// ---------------------------------------------------------------------------
+// Validation Query Lifecycle (Sprint 1 Priority 2)
+// ---------------------------------------------------------------------------
+export var ValidationQueryStatus;
+(function (ValidationQueryStatus) {
+    ValidationQueryStatus["OPEN"] = "OPEN";
+    ValidationQueryStatus["RESPONDED"] = "RESPONDED";
+    ValidationQueryStatus["RESOLVED"] = "RESOLVED";
+})(ValidationQueryStatus || (ValidationQueryStatus = {}));
+// ---------------------------------------------------------------------------
 // Assayer Operational Status
 // ---------------------------------------------------------------------------
 export var AssayerStatus;

@@ -155,6 +155,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('user:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new user' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -191,6 +192,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('user:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update user' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -202,6 +204,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/roles'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('user:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Assign roles to user' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -214,7 +217,7 @@ exports.UserController = UserController = __decorate([
     (0, swagger_1.ApiTags)('Users'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.Controller)('users'),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     __metadata("design:paramtypes", [user_service_1.UserService])
 ], UserController);
 //# sourceMappingURL=user.controller.js.map

@@ -1,3 +1,7 @@
+export declare const INDIAN_STATES: {
+    value: string;
+    label: string;
+}[];
 /**
  * Calculates the great-circle distance between two points on the Earth's surface
  * using the Haversine formula.

@@ -22,26 +22,30 @@ let PostGISRoutingProvider = class PostGISRoutingProvider {
     constructor(dataSource) {
         this.dataSource = dataSource;
     }
-    async calculateRoute(origin, destination) {
+    modeSpeed(mode) {
+        return mode === 'walking' ? 5 : mode === 'cycling' ? 15 : 40;
+    }
+    async calculateRoute(origin, destination, mode) {
         const raw = await this.dataSource.query(`SELECT ST_DistanceSphere(
         ST_SetSRID(ST_MakePoint($1, $2), 4326),
         ST_SetSRID(ST_MakePoint($3, $4), 4326)
       ) / 1000 AS "distanceKm"`, [origin.longitude, origin.latitude, destination.longitude, destination.latitude]);
         const distanceKm = raw[0]?.distanceKm ? parseFloat(raw[0].distanceKm) : 0;
-        const durationMinutes = (distanceKm / 50) * 60;
+        const speed = this.modeSpeed(mode);
+        const durationMinutes = (distanceKm / speed) * 60;
         return {
             distanceKm: parseFloat(distanceKm.toFixed(2)),
             durationMinutes: parseFloat(durationMinutes.toFixed(2)),
         };
     }
-    async calculateDistances(origin, destinations) {
+    async calculateDistances(origin, destinations, mode) {
         const results = {};
         for (const dest of destinations) {
-            results[dest.id] = await this.calculateRoute(origin, dest);
+            results[dest.id] = await this.calculateRoute(origin, dest, mode);
         }
         return results;
     }
-    async optimizeRoute(origin, destinations, roundTrip = false) {
+    async optimizeRoute(origin, destinations, roundTrip = false, mode) {
         const matrix = {};
         const allNodes = [
             { id: 'origin', latitude: origin.latitude, longitude: origin.longitude },
@@ -76,9 +80,13 @@ let OSRMRoutingProvider = class OSRMRoutingProvider {
         this.postGISProvider = postGISProvider;
         this.baseUrl = this.configService.get('OSRM_URL', 'https://router.project-osrm.org');
     }
-    async calculateRoute(origin, destination) {
+    osrmProfile(mode) {
+        return mode === 'walking' ? 'foot' : mode === 'cycling' ? 'cycling' : 'driving';
+    }
+    async calculateRoute(origin, destination, mode) {
         try {
-            const url = `${this.baseUrl}/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=false`;
+            const profile = this.osrmProfile(mode);
+            const url = `${this.baseUrl}/route/v1/${profile}/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=false`;
             const res = await fetch(url);
             if (!res.ok)
                 throw new Error(`OSRM HTTP error: ${res.status}`);
@@ -93,15 +101,16 @@ let OSRMRoutingProvider = class OSRMRoutingProvider {
         }
         catch (e) {
         }
-        return this.postGISProvider.calculateRoute(origin, destination);
+        return this.postGISProvider.calculateRoute(origin, destination, mode);
     }
-    async calculateDistances(origin, destinations) {
+    async calculateDistances(origin, destinations, mode) {
         try {
+            const profile = this.osrmProfile(mode);
             const coords = [
                 `${origin.longitude},${origin.latitude}`,
                 ...destinations.map((d) => `${d.longitude},${d.latitude}`),
             ].join(';');
-            const url = `${this.baseUrl}/table/v1/driving/${coords}?sources=0`;
+            const url = `${this.baseUrl}/table/v1/${profile}/${coords}?sources=0`;
             const res = await fetch(url);
             if (!res.ok)
                 throw new Error(`OSRM HTTP error: ${res.status}`);
@@ -121,15 +130,16 @@ let OSRMRoutingProvider = class OSRMRoutingProvider {
         }
         catch (e) {
         }
-        return this.postGISProvider.calculateDistances(origin, destinations);
+        return this.postGISProvider.calculateDistances(origin, destinations, mode);
     }
-    async optimizeRoute(origin, destinations, roundTrip = false) {
+    async optimizeRoute(origin, destinations, roundTrip = false, mode) {
         try {
+            const profile = this.osrmProfile(mode);
             const coords = [
                 `${origin.longitude},${origin.latitude}`,
                 ...destinations.map((d) => `${d.longitude},${d.latitude}`),
             ].join(';');
-            const url = `${this.baseUrl}/table/v1/driving/${coords}?annotations=distance,duration`;
+            const url = `${this.baseUrl}/table/v1/${profile}/${coords}?annotations=distance,duration`;
             const res = await fetch(url);
             if (!res.ok)
                 throw new Error(`OSRM HTTP error: ${res.status}`);
@@ -153,7 +163,7 @@ let OSRMRoutingProvider = class OSRMRoutingProvider {
         }
         catch (e) {
         }
-        return this.postGISProvider.optimizeRoute(origin, destinations, roundTrip);
+        return this.postGISProvider.optimizeRoute(origin, destinations, roundTrip, mode);
     }
 };
 exports.OSRMRoutingProvider = OSRMRoutingProvider;
@@ -175,14 +185,14 @@ let RoutingService = class RoutingService {
         this.activeProvider =
             providerName.toUpperCase() === 'OSRM' ? this.osrmProvider : this.postGISProvider;
     }
-    async calculateRoute(origin, destination) {
-        return this.activeProvider.calculateRoute(origin, destination);
+    async calculateRoute(origin, destination, mode) {
+        return this.activeProvider.calculateRoute(origin, destination, mode);
     }
-    async calculateDistances(origin, destinations) {
-        return this.activeProvider.calculateDistances(origin, destinations);
+    async calculateDistances(origin, destinations, mode) {
+        return this.activeProvider.calculateDistances(origin, destinations, mode);
     }
-    async optimizeRoute(origin, destinations, roundTrip = false) {
-        return this.activeProvider.optimizeRoute(origin, destinations, roundTrip);
+    async optimizeRoute(origin, destinations, roundTrip = false, mode) {
+        return this.activeProvider.optimizeRoute(origin, destinations, roundTrip, mode);
     }
 };
 exports.RoutingService = RoutingService;

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Search, Upload, AlertCircle, CheckCircle, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown } from 'lucide-react';
 import { api } from '../services/api';
+import { INDIAN_STATES } from '@fapoms/shared';
 
 interface ClientOption {
   id: string;
@@ -104,26 +105,7 @@ const RISK_CATEGORIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const COMPLEXITIES = ['STANDARD', 'COMPLEX', 'VERY_COMPLEX'];
 const BRANCH_TYPES = ['MAIN', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
 
-const INDIAN_STATES = [
-  { value: 'Andhra Pradesh', label: 'Andhra Pradesh' }, { value: 'Arunachal Pradesh', label: 'Arunachal Pradesh' },
-  { value: 'Assam', label: 'Assam' }, { value: 'Bihar', label: 'Bihar' },
-  { value: 'Chhattisgarh', label: 'Chhattisgarh' }, { value: 'Goa', label: 'Goa' },
-  { value: 'Gujarat', label: 'Gujarat' }, { value: 'Haryana', label: 'Haryana' },
-  { value: 'Himachal Pradesh', label: 'Himachal Pradesh' }, { value: 'Jharkhand', label: 'Jharkhand' },
-  { value: 'Karnataka', label: 'Karnataka' }, { value: 'Kerala', label: 'Kerala' },
-  { value: 'Madhya Pradesh', label: 'Madhya Pradesh' }, { value: 'Maharashtra', label: 'Maharashtra' },
-  { value: 'Manipur', label: 'Manipur' }, { value: 'Meghalaya', label: 'Meghalaya' },
-  { value: 'Mizoram', label: 'Mizoram' }, { value: 'Nagaland', label: 'Nagaland' },
-  { value: 'Odisha', label: 'Odisha' }, { value: 'Punjab', label: 'Punjab' },
-  { value: 'Rajasthan', label: 'Rajasthan' }, { value: 'Sikkim', label: 'Sikkim' },
-  { value: 'Tamil Nadu', label: 'Tamil Nadu' }, { value: 'Telangana', label: 'Telangana' },
-  { value: 'Tripura', label: 'Tripura' }, { value: 'Uttar Pradesh', label: 'Uttar Pradesh' },
-  { value: 'Uttarakhand', label: 'Uttarakhand' }, { value: 'West Bengal', label: 'West Bengal' },
-  { value: 'Andaman and Nicobar Islands', label: 'Andaman and Nicobar Islands' },
-  { value: 'Chandigarh', label: 'Chandigarh' }, { value: 'Delhi', label: 'Delhi' },
-  { value: 'Jammu and Kashmir', label: 'Jammu and Kashmir' }, { value: 'Ladakh', label: 'Ladakh' },
-  { value: 'Lakshadweep', label: 'Lakshadweep' }, { value: 'Puducherry', label: 'Puducherry' },
-];
+
 
 export const Branches: React.FC = () => {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -147,8 +129,8 @@ export const Branches: React.FC = () => {
   const navigate = useNavigate();
   const branchIdParam = searchParams.get('id');
 
-  useEffect(() => { loadClients(); loadBranches(); }, []);
-  useEffect(() => { loadBranches(selectedClientId); }, [selectedClientId]);
+  useEffect(() => { loadClients(); }, []);
+  useEffect(() => { if (selectedClientId) loadBranches(selectedClientId); }, [selectedClientId]);
 
   useEffect(() => {
     if (branchIdParam && branches.length > 0) {
@@ -200,21 +182,15 @@ export const Branches: React.FC = () => {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const response = await fetch(`/api/v1/branches/import/${selectedClientId}`, {
+      const data = await api.request<{ importedCount: number; errors?: any[] }>(`/branches/import/${selectedClientId}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('fapoms_token')}` },
         body: formData
       });
-      const resData = await response.json();
-      if (response.ok && resData.success) {
-        const { importedCount, errors } = resData.data;
-        let msg = `Successfully imported ${importedCount} branches.`;
-        if (errors?.length > 0) msg += ` Excluded ${errors.length} rows due to validation errors.`;
-        setMessage({ type: 'success', text: msg });
-        loadBranches(selectedClientId);
-      } else {
-        setMessage({ type: 'error', text: resData.message || 'Import failed.' });
-      }
+      const { importedCount, errors } = data;
+      let msg = `Successfully imported ${importedCount} branches.`;
+      if (errors && errors.length > 0) msg += ` Excluded ${errors.length} rows due to validation errors.`;
+      setMessage({ type: 'success', text: msg });
+      loadBranches(selectedClientId);
     } catch (err) {
       setMessage({ type: 'error', text: 'Network connection error during file upload.' });
     } finally { setIsUploading(false); e.target.value = ''; }
@@ -582,6 +558,7 @@ const BranchFormModal: React.FC<{
       if (form.complexity) body.complexity = form.complexity;
       if (form.estimatedDurationHours) body.estimatedDurationHours = parseFloat(form.estimatedDurationHours);
       if (form.requiredCompetencies) body.requiredCompetencies = form.requiredCompetencies.split(',').map(s => s.trim());
+      body.operatingHours = { default: "09:00 - 18:00" };
 
       if (branchId) {
         await api.request(`/branches/${branchId}`, { method: 'PUT', body: JSON.stringify(body) });

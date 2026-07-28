@@ -21,7 +21,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsArray } from 'class-validator';
 
 import { ZoneService, CreateZoneDto, UpdateZoneDto } from './zone.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateZoneRequestDto implements CreateZoneDto {
@@ -57,13 +57,14 @@ class UpdateZoneRequestDto implements UpdateZoneDto {
 
 @ApiTags('Zones')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('zones')
 export class ZoneController {
   constructor(private readonly zoneService: ZoneService) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('zone:create:organization')
   @ApiOperation({ summary: 'Create an operational zone' })
   async create(@Body() dto: CreateZoneRequestDto, @Req() req: any) {
     const zone = await this.zoneService.create(dto, req.user.id);
@@ -109,6 +110,7 @@ export class ZoneController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('zone:update:organization')
   @ApiOperation({ summary: 'Update operational zone mappings' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -124,6 +126,7 @@ export class ZoneController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('zone:delete:organization')
   @ApiOperation({ summary: 'Soft delete zone mapping' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.zoneService.remove(id, req.user.id);

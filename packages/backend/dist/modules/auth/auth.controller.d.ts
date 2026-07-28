@@ -6,6 +6,9 @@ declare class LoginDto {
 declare class RefreshDto {
     refreshToken: string;
 }
+declare class BiometricLoginDto {
+    assayerCode: string;
+}
 export declare class AuthController {
     private readonly authService;
     constructor(authService: AuthService);
@@ -23,12 +26,22 @@ export declare class AuthController {
             accessToken: string;
             refreshToken: string;
             expiresIn: number;
+            user: any;
+        };
+    }>;
+    biometricLogin(dto: BiometricLoginDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            accessToken: string;
+            refreshToken: string;
+            expiresIn: number;
             user: {
-                id: string | undefined;
-                username: string | undefined;
-                email: string | undefined;
-                displayName: string | undefined;
-                roles: any[];
+                id: any;
+                username: any;
+                name: any;
+                email: any;
+                phone: any;
+                status: any;
             };
         };
     }>;

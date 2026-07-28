@@ -9,6 +9,7 @@ import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { OperationsExecutionGroupEntity } from '../planning/operations-execution-group.entity';
 import { AssignmentStatus, Priority } from '@fapoms/shared';
 
 @Entity('assignments')
@@ -58,6 +59,12 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
 
+  @Column({ name: 'sync_token', type: 'varchar', length: 100, nullable: true })
+  syncToken: string | null;
+
+  @Column({ name: 'entity_version', type: 'integer', default: 1 })
+  entityVersion: number;
+
   @Column({ name: 'sla_due_date', type: 'timestamptz', nullable: true })
   slaDueDate: Date | null;
 
@@ -81,4 +88,11 @@ export class AssignmentEntity extends BaseEntity {
   @ManyToOne(() => AssayerEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'assayer_id' })
   assayer: AssayerEntity;
+
+  @Column({ name: 'execution_group_id', type: 'uuid', nullable: true })
+  executionGroupId: string | null;
+
+  @ManyToOne(() => OperationsExecutionGroupEntity, (eg) => eg.assignments, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'execution_group_id' })
+  executionGroup: OperationsExecutionGroupEntity;
 }

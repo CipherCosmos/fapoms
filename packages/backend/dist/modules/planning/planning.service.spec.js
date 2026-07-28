@@ -104,6 +104,9 @@ describe('PlanningService', () => {
         });
         const results = await service.getRecommendedCandidates('b-1');
         expect(results).toHaveLength(1);
+        expect(results[0].displayName).toBe('John Doe');
+        expect(results[0].readableReasons).toBeDefined();
+        expect(results[0].readableReasons.length).toBeGreaterThan(0);
         expect(results[0].id).toBe('a-1');
         expect(results[0].distanceKm).toBe(5.5);
         expect(results[0].score).toBe(95.5);

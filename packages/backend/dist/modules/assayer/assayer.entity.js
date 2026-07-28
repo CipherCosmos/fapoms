@@ -16,6 +16,7 @@ const shared_1 = require("@fapoms/shared");
 let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     assayerCode;
     employeeId;
+    passwordHash;
     employeeCode;
     firstName;
     lastName;
@@ -49,10 +50,10 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     emergencyContactPhone;
     emergencyContactRelation;
     photograph;
+    preferredRegions;
     skills;
     certifications;
     languages;
-    preferredRegions;
     specializations;
     experienceYears;
     performanceRating;
@@ -68,6 +69,7 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     totalEarnings;
     lastAssignmentDate;
     averageRating;
+    runningBalance;
 };
 exports.AssayerEntity = AssayerEntity;
 __decorate([
@@ -78,6 +80,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "employeeId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'password_hash', type: 'varchar', length: 255, nullable: true }),
+    __metadata("design:type", Object)
+], AssayerEntity.prototype, "passwordHash", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'employee_code', type: 'varchar', length: 50, nullable: true }),
     __metadata("design:type", Object)
@@ -212,25 +218,9 @@ __decorate([
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "photograph", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "skills", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "certifications", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "languages", void 0);
-__decorate([
     (0, typeorm_1.Column)({ name: 'preferred_regions', type: 'jsonb', nullable: true }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "preferredRegions", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ type: 'jsonb', nullable: true }),
-    __metadata("design:type", Object)
-], AssayerEntity.prototype, "specializations", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'experience_years', type: 'int', default: 0 }),
     __metadata("design:type", Number)
@@ -287,6 +277,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 }),
     __metadata("design:type", Number)
 ], AssayerEntity.prototype, "averageRating", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, default: 0 }),
+    __metadata("design:type", Number)
+], AssayerEntity.prototype, "runningBalance", void 0);
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),

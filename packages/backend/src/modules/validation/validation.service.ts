@@ -28,7 +28,7 @@ export class ValidationService implements OnModuleInit {
 
   onModuleInit() {
     this.workflowEngine.registerWorkflow('validation', [
-      { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.APPROVED },
+      { from: [ValidationStatus.HUMAN_REVIEW, ValidationStatus.ASSIGNED, ValidationStatus.PENDING], to: ValidationStatus.APPROVED },
       { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.CORRECTION_REQUIRED },
       { from: [ValidationStatus.CORRECTION_REQUIRED], to: ValidationStatus.HUMAN_REVIEW },
       { from: [ValidationStatus.APPROVED], to: ValidationStatus.SUBMITTED },
@@ -111,6 +111,28 @@ export class ValidationService implements OnModuleInit {
     });
 
     return saved;
+  }
+
+  async autoBalanceUnassignedCases(availableValidatorIds: string[], userId: string): Promise<number> {
+    if (availableValidatorIds.length === 0) return 0;
+
+    const unassignedCases = await this.validationCaseRepository.find({
+      where: { status: ValidationStatus.PENDING, reviewerId: undefined as any, isActive: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    let assignedCount = 0;
+    for (let i = 0; i < unassignedCases.length; i++) {
+      const caseItem = unassignedCases[i];
+      const validatorId = availableValidatorIds[i % availableValidatorIds.length];
+      caseItem.reviewerId = validatorId;
+      caseItem.status = ValidationStatus.ASSIGNED;
+      caseItem.updatedBy = userId;
+      await this.validationCaseRepository.save(caseItem);
+      assignedCount++;
+    }
+
+    return assignedCount;
   }
 
   private async executeValidationTransition(

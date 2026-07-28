@@ -27,11 +27,11 @@ let WorkflowEngine = class WorkflowEngine {
         this.auditService = auditService;
         this.historyRepository = historyRepository;
     }
-    async executeCommand(workflowKey, entityId, command, fromState, toState, userId, userRole, allowedRoles, action) {
+    async executeCommand(workflowKey, entityId, command, fromState, toState, userId, userRole, allowedRoles, action, payload) {
         if (allowedRoles.length > 0 && !allowedRoles.includes(userRole)) {
             throw new common_1.BadRequestException(`Role ${userRole} is not authorized to execute command ${command} in this workflow stage.`);
         }
-        const context = { userId };
+        const context = { userId, payload };
         const ok = await this.canTransition(workflowKey, fromState, toState, context);
         if (!ok) {
             throw new common_1.BadRequestException(`Invalid transition from '${fromState}' to '${toState}' for command '${command}'`);

@@ -2,14 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NotificationEntity } from './notification.entity';
-import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory } from '@fapoms/shared';
+import { PushNotificationService } from './push-notification.service';
 
 export interface CreateNotificationDto {
   userId: string;
   title: string;
   message: string;
   link?: string;
+  data?: Record<string, string>;
 }
 
 @Injectable()
@@ -17,7 +17,7 @@ export class NotificationService {
   constructor(
     @InjectRepository(NotificationEntity)
     private readonly notificationRepository: Repository<NotificationEntity>,
-    private readonly auditService: AuditService,
+    private readonly pushNotificationService: PushNotificationService,
   ) {}
 
   async create(dto: CreateNotificationDto, systemUser?: string): Promise<NotificationEntity> {
@@ -31,6 +31,18 @@ export class NotificationService {
     });
 
     const saved = await this.notificationRepository.save(notif);
+
+    // Automatically send push notification to the targeted user/assayer
+    try {
+      await this.pushNotificationService.sendToUser(
+        dto.userId,
+        dto.title,
+        dto.message,
+        dto.data || (dto.link ? { link: dto.link } : undefined),
+      );
+    } catch (err: any) {
+      // Don't break notification creation if push fails
+    }
 
     return saved;
   }

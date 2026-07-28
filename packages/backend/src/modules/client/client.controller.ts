@@ -17,7 +17,7 @@ import {
   IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min,
 } from 'class-validator';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
 
 class CreateClientConfigDto {
@@ -140,7 +140,7 @@ class LifecycleTransitionDto {
 
 @ApiTags('Clients')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('clients')
 export class ClientController {
   constructor(private readonly clientService: ClientService) {}
@@ -151,9 +151,10 @@ export class ClientController {
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:create:organization')
   @ApiOperation({ summary: 'Create a new client profile' })
   async create(@Body() dto: CreateClientRequestDto, @Req() req: any) {
-    const client = await this.clientService.create(dto, req.user.id);
+    const client = await this.clientService.create(dto, req.user.id, req.user.organizationId);
     return { success: true, data: client };
   }
 
@@ -184,6 +185,7 @@ export class ClientController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:update:organization')
   @ApiOperation({ summary: 'Update client profile and configuration' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientRequestDto, @Req() req: any) {
     const client = await this.clientService.update(id, dto, req.user.id);
@@ -192,6 +194,7 @@ export class ClientController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('client:delete:organization')
   @ApiOperation({ summary: 'Soft delete client profile' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.clientService.remove(id, req.user.id);
@@ -204,6 +207,7 @@ export class ClientController {
 
   @Patch(':id/lifecycle')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:update:organization')
   @ApiOperation({ summary: 'Transition client lifecycle status' })
   async transitionLifecycle(
     @Param('id', ParseUUIDPipe) id: string,
@@ -227,6 +231,7 @@ export class ClientController {
 
   @Post(':id/contacts')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:create:organization')
   @ApiOperation({ summary: 'Add contact to client' })
   async addContact(
     @Param('id', ParseUUIDPipe) id: string,
@@ -239,6 +244,7 @@ export class ClientController {
 
   @Put(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:update:organization')
   @ApiOperation({ summary: 'Update client contact' })
   async updateContact(
     @Param('contactId', ParseUUIDPipe) contactId: string,
@@ -251,6 +257,7 @@ export class ClientController {
 
   @Delete(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('client:delete:organization')
   @ApiOperation({ summary: 'Remove client contact' })
   async removeContact(
     @Param('contactId', ParseUUIDPipe) contactId: string,
@@ -273,6 +280,7 @@ export class ClientController {
 
   @Post(':id/contracts')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:create:organization')
   @ApiOperation({ summary: 'Add contract to client' })
   async addContract(
     @Param('id', ParseUUIDPipe) id: string,
@@ -285,6 +293,7 @@ export class ClientController {
 
   @Put(':id/contracts/:contractId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:update:organization')
   @ApiOperation({ summary: 'Update client contract' })
   async updateContract(
     @Param('contractId', ParseUUIDPipe) contractId: string,
@@ -297,6 +306,7 @@ export class ClientController {
 
   @Delete(':id/contracts/:contractId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('client:delete:organization')
   @ApiOperation({ summary: 'Soft delete client contract' })
   async removeContract(
     @Param('contractId', ParseUUIDPipe) contractId: string,
@@ -319,6 +329,7 @@ export class ClientController {
 
   @Put(':id/billing')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('client:update:organization')
   @ApiOperation({ summary: 'Create or update client billing information' })
   async upsertBilling(
     @Param('id', ParseUUIDPipe) id: string,

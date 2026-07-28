@@ -11,8 +11,22 @@ const client_entity_1 = require("../client/client.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
+const constraint_evaluator_1 = require("./constraint.evaluator");
+const assayer_service_1 = require("../assayer/assayer.service");
+const holiday_service_1 = require("../holiday/holiday.service");
+const schedule_entity_1 = require("../scheduling/schedule.entity");
 describe('RecommendationEngine', () => {
     let engine;
+    const mockAssayerService = {
+        hydrateWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
+        hydrateAllWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
+        findAll: jest.fn().mockResolvedValue({ assayers: [], total: 0 }),
+        findOne: jest.fn().mockResolvedValue({ id: 'asr-1', skills: [], certifications: [], languages: [], specializations: [] }),
+    };
+    const mockHolidayService = {
+        isHoliday: jest.fn().mockResolvedValue(false),
+        findAll: jest.fn().mockResolvedValue({ holidays: [], total: 0 }),
+    };
     const mockAssayerRepo = {
         find: jest.fn(),
     };
@@ -54,15 +68,21 @@ describe('RecommendationEngine', () => {
                 recommendation_engine_1.ClientPreferenceScoreCalculator,
                 recommendation_engine_1.BranchFamiliarityScoreCalculator,
                 recommendation_engine_1.SLAComplianceScoreCalculator,
+                recommendation_engine_1.CustomerDensityScoreCalculator,
                 recommendation_engine_1.ProfitabilityScoreCalculator,
                 recommendation_engine_1.RiskScoreCalculator,
                 configuration_resolver_1.ConfigurationResolver,
+                constraint_evaluator_1.ConstraintEvaluator,
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(assayer_entity_1.AssayerEntity),
                     useValue: mockAssayerRepo,
                 },
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity),
+                    useValue: mockAssignmentRepo,
+                },
+                {
+                    provide: (0, typeorm_1.getRepositoryToken)(schedule_entity_1.ScheduleEntity),
                     useValue: mockAssignmentRepo,
                 },
                 {
@@ -84,6 +104,18 @@ describe('RecommendationEngine', () => {
                 {
                     provide: rule_engine_1.RuleEngine,
                     useValue: mockRuleEngine,
+                },
+                {
+                    provide: assayer_service_1.AssayerService,
+                    useValue: mockAssayerService,
+                },
+                {
+                    provide: holiday_service_1.HolidayService,
+                    useValue: mockHolidayService,
+                },
+                {
+                    provide: holiday_service_1.HolidayService,
+                    useValue: {},
                 },
             ],
         }).compile();
@@ -166,6 +198,31 @@ describe('RecommendationEngine', () => {
         expect(results).toHaveLength(2);
         expect(results[0].assayer.id).toBe('a-close');
         expect(results[0].score).toBeGreaterThan(results[1].score);
+    });
+    it('should handle missing coordinates gracefully by calculating fallback scores', async () => {
+        const assayerNoCoords = {
+            id: 'a-no-coords',
+            status: 'ACTIVE',
+            isActive: true,
+            latitude: null,
+            longitude: null,
+            performanceRating: 5.0,
+            experienceYears: 5,
+        };
+        mockAssayerRepo.find.mockResolvedValue([assayerNoCoords]);
+        mockAssignmentRepo.findOne.mockResolvedValue(null);
+        mockAssignmentRepo.count.mockResolvedValue(0);
+        mockCommercialRepo.find.mockResolvedValue([]);
+        mockClientRepo.findOne.mockResolvedValue(null);
+        const branch = {
+            id: 'b-1',
+            latitude: 19.076,
+            longitude: 72.877,
+        };
+        const results = await engine.recommend(branch, new Date());
+        expect(results).toHaveLength(1);
+        expect(results[0].assayer.id).toBe('a-no-coords');
+        expect(results[0].breakdown.distance).toBe(0);
     });
 });
 //# sourceMappingURL=recommendation.engine.spec.js.map

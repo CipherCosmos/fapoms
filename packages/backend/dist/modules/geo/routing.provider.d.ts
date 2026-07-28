@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+export type RoutingMode = 'driving' | 'walking' | 'cycling';
 export interface RouteResult {
     distanceKm: number;
     durationMinutes: number;
@@ -16,15 +17,15 @@ export interface RoutingProvider {
     }, destination: {
         latitude: number;
         longitude: number;
-    }): Promise<RouteResult>;
+    }, mode?: RoutingMode): Promise<RouteResult>;
     calculateDistances(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    }, destinations: DestinationCoords[], mode?: RoutingMode): Promise<Record<string, RouteResult>>;
     optimizeRoute(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+    }, destinations: DestinationCoords[], roundTrip?: boolean, mode?: RoutingMode): Promise<{
         optimizedSequence: string[];
         totalDistanceKm: number;
         totalDurationMinutes: number;
@@ -38,21 +39,22 @@ export interface RoutingProvider {
 export declare class PostGISRoutingProvider implements RoutingProvider {
     private readonly dataSource;
     constructor(dataSource: DataSource);
+    private modeSpeed;
     calculateRoute(origin: {
         latitude: number;
         longitude: number;
     }, destination: {
         latitude: number;
         longitude: number;
-    }): Promise<RouteResult>;
+    }, mode?: RoutingMode): Promise<RouteResult>;
     calculateDistances(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    }, destinations: DestinationCoords[], mode?: RoutingMode): Promise<Record<string, RouteResult>>;
     optimizeRoute(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+    }, destinations: DestinationCoords[], roundTrip?: boolean, mode?: RoutingMode): Promise<{
         optimizedSequence: string[];
         totalDistanceKm: number;
         totalDurationMinutes: number;
@@ -68,21 +70,22 @@ export declare class OSRMRoutingProvider implements RoutingProvider {
     private readonly postGISProvider;
     private readonly baseUrl;
     constructor(configService: ConfigService, postGISProvider: PostGISRoutingProvider);
+    private osrmProfile;
     calculateRoute(origin: {
         latitude: number;
         longitude: number;
     }, destination: {
         latitude: number;
         longitude: number;
-    }): Promise<RouteResult>;
+    }, mode?: RoutingMode): Promise<RouteResult>;
     calculateDistances(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    }, destinations: DestinationCoords[], mode?: RoutingMode): Promise<Record<string, RouteResult>>;
     optimizeRoute(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+    }, destinations: DestinationCoords[], roundTrip?: boolean, mode?: RoutingMode): Promise<{
         optimizedSequence: string[];
         totalDistanceKm: number;
         totalDurationMinutes: number;
@@ -105,15 +108,15 @@ export declare class RoutingService {
     }, destination: {
         latitude: number;
         longitude: number;
-    }): Promise<RouteResult>;
+    }, mode?: RoutingMode): Promise<RouteResult>;
     calculateDistances(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[]): Promise<Record<string, RouteResult>>;
+    }, destinations: DestinationCoords[], mode?: RoutingMode): Promise<Record<string, RouteResult>>;
     optimizeRoute(origin: {
         latitude: number;
         longitude: number;
-    }, destinations: DestinationCoords[], roundTrip?: boolean): Promise<{
+    }, destinations: DestinationCoords[], roundTrip?: boolean, mode?: RoutingMode): Promise<{
         optimizedSequence: string[];
         totalDistanceKm: number;
         totalDurationMinutes: number;

@@ -20,7 +20,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray } from 'class-validator';
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateUserRequestDto implements CreateUserDto {
@@ -57,7 +57,7 @@ class AssignRolesDto {
 @ApiTags('Users')
 @ApiBearerAuth()
 @Controller('users')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
@@ -72,6 +72,7 @@ export class UserController {
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('user:create:organization')
   @ApiOperation({ summary: 'Create a new user' })
   async create(@Body() dto: CreateUserRequestDto, @Req() req: any) {
     const user = await this.userService.createUser(dto, req.user.id);
@@ -128,6 +129,7 @@ export class UserController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('user:update:organization')
   @ApiOperation({ summary: 'Update user' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -143,6 +145,7 @@ export class UserController {
 
   @Put(':id/roles')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('user:update:organization')
   @ApiOperation({ summary: 'Assign roles to user' })
   async assignRoles(
     @Param('id', ParseUUIDPipe) id: string,

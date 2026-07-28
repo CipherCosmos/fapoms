@@ -3,6 +3,7 @@ import { DataSource, Repository } from 'typeorm';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
@@ -10,6 +11,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { AssignmentStatus } from '@fapoms/shared';
 export interface CreateAssignmentDto {
     projectBranchId: string;
@@ -37,12 +39,14 @@ export declare class AssignmentService implements OnModuleInit {
     private readonly projectService;
     private readonly assayerService;
     private readonly notificationService;
+    private readonly pushNotificationService;
     private readonly holidayService;
     private readonly auditService;
     private readonly workflowEngine;
     private readonly eventPublisher;
+    private readonly constraintEvaluator;
     private readonly dataSource;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, holidayService: HolidayService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, dataSource: DataSource);
+    constructor(assignmentRepository: Repository<AssignmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, dataSource: DataSource);
     onModuleInit(): void;
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
@@ -62,8 +66,15 @@ export declare class AssignmentService implements OnModuleInit {
         assignments: AssignmentEntity[];
         total: number;
     }>;
+    findByAssayer(assayerId: string): Promise<AssignmentEntity[]>;
     addComment(assignmentId: string, comment: string, userId: string, userName: string): Promise<AssignmentCommentEntity>;
     getTimeline(assignmentId: string): Promise<any[]>;
     checkSlaBreaches(): Promise<number>;
     getDashboardSummary(): Promise<any>;
+    recordCheckIn(id: string, lat: number, lng: number, syncToken?: string, userId?: string): Promise<{
+        success: boolean;
+        assignment: AssignmentEntity;
+        error?: string;
+        message?: string;
+    }>;
 }

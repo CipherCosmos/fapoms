@@ -11,6 +11,7 @@ interface MapBranch {
   longitude: number | null;
   status: string;
   city?: string;
+  riskScore?: number;
 }
 
 interface InteractivePlanningMapProps {
@@ -20,6 +21,8 @@ interface InteractivePlanningMapProps {
   routePoints?: { latitude: number; longitude: number }[];
   fillContainer?: boolean;
   selectedAssayerFromParent?: any | null;
+  slaEnabled?: boolean;
+  slaRadius?: number;
 }
 
 export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
@@ -29,6 +32,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   routePoints,
   fillContainer,
   selectedAssayerFromParent,
+  slaEnabled: slaEnabledProp = false,
+  slaRadius: slaRadiusProp = 50,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -49,10 +54,14 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
   // Phase 4 Analytics Layers states (persisted in localStorage)
   const [showSlaRisk, setShowSlaRisk] = useState(() => localStorage.getItem('map_showSlaRisk') === 'true');
+  const [slaRadiusKm, setSlaRadiusKm] = useState(() => Number(localStorage.getItem('map_slaRadiusKm')) || 50);
+  const effectiveSlaRadius = slaEnabledProp ? slaRadiusProp : slaRadiusKm;
+  const effectiveSlaEnabled = slaEnabledProp || showSlaRisk;
   const [showWorkforceDensity, setShowWorkforceDensity] = useState(() => localStorage.getItem('map_showWorkforceDensity') === 'true');
   const [showRevenueDensity, setShowRevenueDensity] = useState(() => localStorage.getItem('map_showRevenueDensity') === 'true');
 
   useEffect(() => localStorage.setItem('map_showSlaRisk', String(showSlaRisk)), [showSlaRisk]);
+  useEffect(() => localStorage.setItem('map_slaRadiusKm', String(slaRadiusKm)), [slaRadiusKm]);
   useEffect(() => localStorage.setItem('map_showWorkforceDensity', String(showWorkforceDensity)), [showWorkforceDensity]);
   useEffect(() => localStorage.setItem('map_showRevenueDensity', String(showRevenueDensity)), [showRevenueDensity]);
 
@@ -93,7 +102,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
   // Real-time routing overlay states
   const [selectedAssayerForRouting, setSelectedAssayerForRouting] = useState<any | null>(null);
-  const [travelMode, setTravelMode] = useState<'driving' | 'two-wheeler' | 'transit' | 'walking'>('driving');
+  const [travelMode, setTravelMode] = useState<'driving' | 'two-wheeler' | 'walking'>('driving');
   const [roadDistanceKm, setRoadDistanceKm] = useState<number | null>(null);
   const [roadDurationMinutes, setRoadDurationMinutes] = useState<number | null>(null);
   const [roadGeometry, setRoadGeometry] = useState<L.LatLngExpression[]>([]);
@@ -143,7 +152,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       .catch(err => console.error("Failed to load assayers", err));
   }, []);
 
-  // Fetch real-time OSRM driving route when an assayer is clicked
+  // Fetch real-time OSRM route for road geometry display
   useEffect(() => {
     if (!selectedAssayerForRouting) {
       setRoadDistanceKm(null);
@@ -152,10 +161,13 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       return;
     }
 
-    const { aLat, aLng, bLat, bLng } = selectedAssayerForRouting;
-    
-    // Map OSRM profile based on mode
-    const osrmProfile = travelMode === 'walking' ? 'foot' : 'driving';
+    const { aLat, aLng, bLat, bLng, straightDistance } = selectedAssayerForRouting;
+
+    // Map travel mode to OSRM profile
+    const osrmProfile = travelMode === 'walking' ? 'foot' : travelMode === 'two-wheeler' ? 'cycling' : 'driving';
+    const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
+    const modeSpeed = modeSpeeds[travelMode] || 40;
+
     const url = `https://router.project-osrm.org/route/v1/${osrmProfile}/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`;
 
     fetch(url)
@@ -163,23 +175,31 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       .then(data => {
         if (data.code === 'Ok' && data.routes?.[0]) {
           const route = data.routes[0];
-          setRoadDistanceKm(route.distance / 1000);
-          setRoadDurationMinutes(route.duration / 60);
+          const roadKm = route.distance / 1000;
+          const roadMin = route.duration / 60;
+          // Validate OSRM result against mode: if avg speed > 2x mode speed, result is unrealistic (OSRM fallback)
+          const avgSpeed = roadKm / (roadMin / 60);
+          if (avgSpeed > modeSpeed * 2) {
+            setRoadDistanceKm(straightDistance);
+            setRoadDurationMinutes((straightDistance / modeSpeed) * 60);
+          } else {
+            setRoadDistanceKm(roadKm);
+            setRoadDurationMinutes(roadMin);
+          }
           if (route.geometry?.coordinates) {
             const coords = route.geometry.coordinates.map((pt: any) => [pt[1], pt[0]] as L.LatLngExpression);
             setRoadGeometry(coords);
           }
         } else {
-          // Fallback to straight-line line on failure
-          setRoadDistanceKm(selectedAssayerForRouting.straightDistance);
-          setRoadDurationMinutes((selectedAssayerForRouting.straightDistance / 40) * 60);
+          setRoadDistanceKm(straightDistance);
+          setRoadDurationMinutes((straightDistance / modeSpeed) * 60);
           setRoadGeometry([[aLat, aLng], [bLat, bLng]]);
         }
       })
       .catch(err => {
         console.error("OSRM Route fetch error", err);
-        setRoadDistanceKm(selectedAssayerForRouting.straightDistance);
-        setRoadDurationMinutes((selectedAssayerForRouting.straightDistance / 40) * 60);
+        setRoadDistanceKm(straightDistance);
+        setRoadDurationMinutes((straightDistance / modeSpeed) * 60);
         setRoadGeometry([[aLat, aLng], [bLat, bLng]]);
       });
   }, [selectedAssayerForRouting, travelMode]);
@@ -280,16 +300,39 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           markersRef.current[b.id] = marker;
           bounds.push([lat, lng]);
 
-          // GIP Phase 4 Analytics Layer: SLA Risk Overlay
-          if (showSlaRisk && b.status === 'PLANNING') {
+          // GIP Phase 4 Analytics Layer: Targeted SLA Risk Overlay
+          // Target selected branch or high risk score branches (riskScore >= 7 or overdue) to prevent map clutter
+          const isSelectedForSla = selectedBranchId ? b.id === selectedBranchId : false;
+          const isHighRiskSla = (b.riskScore && Number(b.riskScore) >= 7) || (b.status === 'PLANNING' && (!selectedBranchId || isSelectedForSla));
+
+          if (effectiveSlaEnabled && (isSelectedForSla || (isHighRiskSla && !selectedBranchId))) {
+            const slaColor = slaEnabledProp ? '#f97316' : '#ef4444';
+            const slaLabel = slaEnabledProp
+              ? `🛡️ SLA Boundary: Beyond ${effectiveSlaRadius}km\nCurrent branch: ${b.name}`
+              : `⚠️ SLA Breach Risk Zone (${effectiveSlaRadius}km): ${b.name}`;
             const riskCircle = L.circle([lat, lng], {
-              radius: 40000,
-              color: '#ef4444',
-              fillColor: '#ef4444',
-              fillOpacity: 0.15,
-              weight: 1
+              radius: effectiveSlaRadius * 1000,
+              color: slaColor,
+              fillColor: slaColor,
+              fillOpacity: slaEnabledProp ? 0.03 : 0.12,
+              weight: slaEnabledProp ? 3 : 2,
+              dashArray: slaEnabledProp ? '10, 8' : '6, 6'
             }).addTo(map);
+            riskCircle.bindTooltip(slaLabel, { permanent: false, direction: 'top' });
             circlesRef.current.push(riskCircle);
+
+            if (slaEnabledProp) {
+              const innerCircle = L.circle([lat, lng], {
+                radius: effectiveSlaRadius * 1000,
+                color: '#ef4444',
+                fillColor: '#ef4444',
+                fillOpacity: 0.06,
+                weight: 1,
+                dashArray: '3, 6'
+              }).addTo(map);
+              innerCircle.bindTooltip(`🚫 Restricted Zone (within ${effectiveSlaRadius}km)`, { permanent: false, direction: 'bottom' });
+              circlesRef.current.push(innerCircle);
+            }
           }
 
           // GIP Phase 4 Analytics Layer: Revenue Density Heat
@@ -342,10 +385,13 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }
 
         if (shouldRender) {
+          const slaCompliant = slaEnabledProp && selectedBranchLatLng
+            ? straightDist >= slaRadiusProp
+            : null;
+          const markerColor = slaCompliant === null ? '#a855f7' : slaCompliant ? '#10b981' : '#ef4444';
           const assayerSvg = `
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#a855f7" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
-              <!-- Auditor User Avatar -->
-              <circle cx="12" cy="12" r="10" fill="none" stroke="#a855f7" stroke-width="2"/>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${markerColor}" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
+              <circle cx="12" cy="12" r="10" fill="none" stroke="${markerColor}" stroke-width="2"/>
               <path d="M12 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V18h14v-1.5c0-2.33-4.67-3.5-7-3.5z"/>
             </svg>
           `;
@@ -361,6 +407,18 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             .addTo(map);
 
           if (selectedBranchLatLng) {
+            const slaStatus = slaCompliant === null ? '' : slaCompliant
+              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${slaRadiusProp}km SLA</div>`
+              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${slaRadiusProp}km SLA — Breach Risk</div>`;
+            assayerMarker.bindPopup(`
+              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:150px;">
+                <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
+                <div>Code: <b>${assayer.assayerCode}</b></div>
+                <div>Distance: <b>${straightDist.toFixed(1)} km</b></div>
+                ${slaStatus}
+                <div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>
+              </div>
+            `);
             assayerMarker.on('click', () => {
               setSelectedAssayerForRouting({
                 ...assayer,
@@ -467,24 +525,28 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     // Zoom map to cover bounds automatically, or zoom to show the full radius circle
     if (bounds.length > 0 && !selectedAssayerForRouting) {
       if (selectedBranchId && selectedBranchLatLng) {
-        const radiusMeters = radiusKm * 1000;
+        const zoomRadius = effectiveSlaEnabled ? effectiveSlaRadius : radiusKm;
+        const radiusMeters = zoomRadius * 1000;
         const circleBounds = L.latLng(selectedBranchLatLng).toBounds(radiusMeters);
         map.fitBounds(circleBounds, { padding: [40, 40] });
       } else {
         map.fitBounds(bounds, { padding: [30, 30] });
       }
     }
-  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter]);
+  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp]);
 
-  // Travel math calculations based on OSRM real road distance
-  const actualDistance = roadDistanceKm !== null ? roadDistanceKm : (selectedAssayerForRouting?.straightDistance || 0);
-  const costModes = { driving: 8, 'two-wheeler': 3, transit: 1.5, walking: 0 };
-  const trafficDelays = { driving: 6, 'two-wheeler': 2, transit: 0, walking: 0 };
+  // Travel math calculations based on mode-aware estimates
+  const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
+  const speed = modeSpeeds[travelMode] || 40;
+  const straightDist = selectedAssayerForRouting?.straightDistance || 0;
 
+  // Use OSRM road data for driving, PostGIS mode-aware estimate for walking/cycling
+  const actualDistance = roadDistanceKm !== null ? roadDistanceKm : straightDist;
   const durationVal = roadDurationMinutes !== null 
     ? Math.round(roadDurationMinutes) 
-    : Math.round((actualDistance / 40) * 60);
+    : Math.round((straightDist / speed) * 60);
 
+  const costModes = { driving: 8, 'two-wheeler': 3, walking: 0 };
   const estCost = Math.round(actualDistance * costModes[travelMode]);
 
   return (
@@ -496,6 +558,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           showAssayers={showAssayers} setShowAssayers={setShowAssayers}
           showRoutes={showRoutes} setShowRoutes={setShowRoutes}
           showSlaRisk={showSlaRisk} setShowSlaRisk={setShowSlaRisk}
+          slaRadiusKm={slaRadiusKm} setSlaRadiusKm={setSlaRadiusKm}
           showWorkforceDensity={showWorkforceDensity} setShowWorkforceDensity={setShowWorkforceDensity}
           showRevenueDensity={showRevenueDensity} setShowRevenueDensity={setShowRevenueDensity}
           mapStyle={mapStyle} setMapStyle={setMapStyle}
@@ -622,7 +685,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
-            {(['driving', 'two-wheeler', 'transit', 'walking'] as const).map(mode => (
+            {(['driving', 'two-wheeler', 'walking'] as const).map(mode => (
               <button
                 key={mode}
                 onClick={() => setTravelMode(mode)}
@@ -637,29 +700,31 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                   textAlign: 'center'
                 }}
               >
-                {mode === 'driving' ? '🚗' : mode === 'two-wheeler' ? '🏍️' : mode === 'transit' ? '🚆' : '🚶'}
+                {mode === 'driving' ? '🚗' : mode === 'two-wheeler' ? '🏍️' : '🚶'}
               </button>
             ))}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Road Distance:</span>
+              <span>{roadDistanceKm !== null ? 'Road Distance:' : 'Straight-line:'}</span>
               <b>{actualDistance.toFixed(1)} km</b>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Est. Duration:</span>
+              <span>Est. Travel Time:</span>
               <b>{durationVal} mins</b>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Traffic Delay:</span>
-              <b style={{ color: trafficDelays[travelMode] > 3 ? '#ef4444' : 'var(--status-active)' }}>
-                {trafficDelays[travelMode] > 0 && travelMode !== 'transit' && travelMode !== 'walking' ? `+${trafficDelays[travelMode]} mins` : 'None'}
-              </b>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: '10px', color: 'var(--text-muted)' }}>
+              <span>Mode:</span>
+              <span>{travelMode === 'driving' ? '🚗 Car' : travelMode === 'two-wheeler' ? '🏍️ Motorcycle' : '🚶 Walking'}</span>
+              <span>| Speed: ~{speed} km/h</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '6px', marginTop: '4px' }}>
-              <span>Est. Travel Cost:</span>
+              <span>{roadDistanceKm !== null ? 'Est. Travel Cost:' : 'Est. Travel Cost (approx):'}</span>
               <b style={{ color: '#fff', fontSize: '12px' }}>₹{estCost}</b>
+            </div>
+            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {roadDistanceKm !== null ? 'Road distance from OSRM' : 'Estimate based on straight-line distance'} — traffic not included
             </div>
           </div>
         </div>

@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { Repository } from 'typeorm';
 import { OcrJobEntity, OcrJobStatus } from './ocr-job.entity';
 import { DocumentEntity } from '../../modules/document/document.entity';
@@ -16,6 +18,7 @@ export class OcrProcessingService {
     private readonly documentRepository: Repository<DocumentEntity>,
     private readonly validationService: ValidationService,
     private readonly auditService: AuditService,
+    @InjectQueue('ocr') private readonly ocrQueue: Queue,
   ) {}
 
   async createJob(documentId: string, userId: string): Promise<OcrJobEntity> {
@@ -39,8 +42,19 @@ export class OcrProcessingService {
       entityType: 'OCR_JOB',
       entityId: saved.id,
       userId,
-      remarks: `OCR job successfully registered at boundary for document: ${doc.fileName}.`,
+      remarks: `OCR job registered for document: ${doc.fileName}.`,
     });
+
+    await this.ocrQueue.add(
+      'process',
+      { documentId, userId, fileName: doc.fileName },
+      {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 1000 },
+        removeOnComplete: false,
+        removeOnFail: false,
+      },
+    );
 
     return saved;
   }
@@ -70,7 +84,6 @@ export class OcrProcessingService {
 
     const saved = await this.ocrJobRepository.save(job);
 
-    // Forward and transition straight into Validator reviews queue
     const validationCase = await this.validationService.create({ projectBranchId: job.document.projectBranchId }, userId);
     await this.validationService.transition(validationCase.id, ValidationStatus.OCR_PROCESSING, userId, 'OCR text parsed', undefined, ocrPayload);
     await this.validationService.transition(validationCase.id, ValidationStatus.HUMAN_REVIEW, userId, 'Pending manual verification review');
@@ -81,7 +94,45 @@ export class OcrProcessingService {
       entityType: 'OCR_JOB',
       entityId: saved.id,
       userId,
-      remarks: `Received external OCR payload. Pushed to human validator review queue.`,
+      remarks: 'Received external OCR payload. Pushed to human validator review queue.',
+    });
+
+    return saved;
+  }
+
+  async retryJob(jobId: string, userId: string): Promise<OcrJobEntity> {
+    const job = await this.findOne(jobId);
+    job.status = OcrJobStatus.PROCESSING;
+    job.updatedBy = userId;
+
+    const saved = await this.ocrJobRepository.save(job);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.SYSTEM,
+      eventType: 'OCR_JOB_RETRY',
+      entityType: 'OCR_JOB',
+      entityId: saved.id,
+      userId,
+      remarks: `Re-enqueued OCR job retry for document ID: ${job.documentId}`,
+    });
+
+    return saved;
+  }
+
+  async handleJobFailure(jobId: string, errorDetails: string, userId: string): Promise<OcrJobEntity> {
+    const job = await this.findOne(jobId);
+    job.status = OcrJobStatus.FAILED;
+    job.updatedBy = userId;
+
+    const saved = await this.ocrJobRepository.save(job);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.SYSTEM,
+      eventType: 'OCR_JOB_FAILED',
+      entityType: 'OCR_JOB',
+      entityId: saved.id,
+      userId,
+      remarks: `OCR job failed. Error details: ${errorDetails}`,
     });
 
     return saved;

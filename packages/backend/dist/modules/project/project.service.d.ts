@@ -2,6 +2,7 @@ import { OnModuleInit } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { ClientEntity } from '../client/client.entity';
 import { BranchService } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
 import { BranchQueryService } from '../branch/branch-query.service';
@@ -30,15 +31,16 @@ export interface CreateProjectDto {
 export declare class ProjectService implements OnModuleInit {
     private readonly projectRepository;
     private readonly projectBranchRepository;
+    private readonly clientRepository;
     private readonly branchQueryService;
     private readonly branchService;
     private readonly auditService;
     private readonly workflowEngine;
     private readonly eventPublisher;
     private readonly projectQueryService;
-    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
+    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, clientRepository: Repository<ClientEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
     onModuleInit(): void;
-    create(dto: CreateProjectDto, userId: string): Promise<ProjectEntity>;
+    create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity>;
     findAll(page?: number, limit?: number): Promise<{
         projects: ProjectEntity[];
         total: number;
@@ -48,6 +50,7 @@ export declare class ProjectService implements OnModuleInit {
     remove(id: string, userId: string): Promise<void>;
     findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]>;
     associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]>;
+    generateBranchTemplate(projectId: string): Promise<Buffer>;
     uploadBranchesFromExcel(projectId: string, fileBuffer: Buffer, userId: string): Promise<ProjectBranchEntity[]>;
     removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]>;
     startProjectPlanning(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;

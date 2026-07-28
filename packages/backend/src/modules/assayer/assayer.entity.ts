@@ -17,6 +17,9 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true })
   employeeId: string | null;
 
+  @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true })
+  passwordHash: string | null;
+
   @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })
   employeeCode: string | null;
 
@@ -117,19 +120,12 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   photograph: string | null;
 
-  @Column({ type: 'jsonb', nullable: true })
-  skills: string[] | null;
-
-  @Column({ type: 'jsonb', nullable: true })
-  certifications: { name: string; expiryDate: string }[] | null;
-
-  @Column({ type: 'jsonb', nullable: true })
-  languages: string[] | null;
-
   @Column({ name: 'preferred_regions', type: 'jsonb', nullable: true })
   preferredRegions: string[] | null;
 
-  @Column({ type: 'jsonb', nullable: true })
+  skills: string[] | null;
+  certifications: { name: string; expiryDate: string }[] | null;
+  languages: string[] | null;
   specializations: string[] | null;
 
   @Column({ name: 'experience_years', type: 'int', default: 0 })
@@ -173,4 +169,7 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 })
   averageRating: number;
+
+  @Column({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, default: 0 })
+  runningBalance: number;
 }

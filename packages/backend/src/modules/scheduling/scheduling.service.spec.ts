@@ -7,6 +7,7 @@ import { ScheduleEntity } from './schedule.entity';
 import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
+import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { ScheduleStatus, AssignmentStatus } from '@fapoms/shared';
 
 describe('SchedulingService', () => {
@@ -35,6 +36,14 @@ describe('SchedulingService', () => {
     recordEvent: jest.fn(),
   };
 
+  const mockConstraintEvaluator = {
+    checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
+    checkLeaves: jest.fn().mockReturnValue({ passed: true }),
+    checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
+    checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+    checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -54,6 +63,10 @@ describe('SchedulingService', () => {
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: ConstraintEvaluator,
+          useValue: mockConstraintEvaluator,
         },
       ],
     }).compile();
@@ -75,8 +88,8 @@ describe('SchedulingService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw BadRequestException if assignment status is not ACCEPTED', async () => {
-      const mockAsn = { id: 'asn-1', status: AssignmentStatus.CREATED };
+    it('should throw BadRequestException if assignment status is not schedulable (e.g. CANCELLED)', async () => {
+      const mockAsn = { id: 'asn-1', status: AssignmentStatus.CANCELLED };
       mockAssignmentService.findOne.mockResolvedValue(mockAsn);
 
       await expect(
@@ -93,6 +106,7 @@ describe('SchedulingService', () => {
         },
       };
       mockAssignmentService.findOne.mockResolvedValue(mockAsn);
+      mockConstraintEvaluator.checkLeaves.mockReturnValueOnce({ passed: false, reason: 'Assayer is on leave' });
 
       await expect(
         service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1'),
@@ -110,6 +124,7 @@ describe('SchedulingService', () => {
         },
       };
       mockAssignmentService.findOne.mockResolvedValue(mockAsn);
+      mockConstraintEvaluator.checkProjectTimeline.mockReturnValueOnce({ passed: false, reason: 'Outside project timeline' });
 
       await expect(
         service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1'),
@@ -117,3 +132,4 @@ describe('SchedulingService', () => {
     });
   });
 });
+

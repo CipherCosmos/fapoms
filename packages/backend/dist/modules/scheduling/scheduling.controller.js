@@ -111,6 +111,7 @@ exports.SchedulingController = SchedulingController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('scheduling:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a confirmed schedule from an accepted assignment' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -138,6 +139,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('scheduling:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition schedule state' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -157,7 +159,7 @@ __decorate([
 exports.SchedulingController = SchedulingController = __decorate([
     (0, swagger_1.ApiTags)('Scheduling'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('schedules'),
     __metadata("design:paramtypes", [scheduling_service_1.SchedulingService])
 ], SchedulingController);

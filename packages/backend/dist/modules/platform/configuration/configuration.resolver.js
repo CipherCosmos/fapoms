@@ -10,17 +10,15 @@ exports.ConfigurationResolver = void 0;
 const common_1 = require("@nestjs/common");
 const DEFAULT_RECOMMENDATION_CONFIG = {
     weights: {
-        distance: 0.2,
-        travelTime: 0.1,
-        workload: 0.1,
-        performance: 0.1,
-        experience: 0.1,
-        cost: 0.1,
-        clientPreference: 0.1,
-        branchFamiliarity: 0.1,
-        slaCompliance: 0.05,
-        profitability: 0.05,
-        riskScore: 0.1,
+        slaCompliance: 0.25,
+        distance: 0.20,
+        travelTime: 0.15,
+        workload: 0.10,
+        performance: 0.10,
+        experience: 0.05,
+        cost: 0.05,
+        clientPreference: 0.05,
+        branchFamiliarity: 0.05,
     },
     defaultRadius: 50.0,
 };

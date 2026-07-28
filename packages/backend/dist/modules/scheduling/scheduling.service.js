@@ -20,17 +20,20 @@ const schedule_entity_1 = require("./schedule.entity");
 const assignment_service_1 = require("../assignment/assignment.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
+const constraint_evaluator_1 = require("../planning/constraint.evaluator");
 const shared_1 = require("@fapoms/shared");
 let SchedulingService = class SchedulingService {
     scheduleRepository;
     assignmentService;
     holidayService;
     auditService;
-    constructor(scheduleRepository, assignmentService, holidayService, auditService) {
+    constraintEvaluator;
+    constructor(scheduleRepository, assignmentService, holidayService, auditService, constraintEvaluator) {
         this.scheduleRepository = scheduleRepository;
         this.assignmentService = assignmentService;
         this.holidayService = holidayService;
         this.auditService = auditService;
+        this.constraintEvaluator = constraintEvaluator;
     }
     async create(dto, userId) {
         const assignment = await this.assignmentService.findOne(dto.assignmentId);
@@ -41,46 +44,25 @@ let SchedulingService = class SchedulingService {
             throw new common_1.BadRequestException(`Cannot schedule assignment. Current status must be ACCEPTED (got ${assignment.status}).`);
         }
         const scheduledDateObj = new Date(dto.scheduledDate);
-        if (assignment.assayer && assignment.assayer.leaves && assignment.assayer.leaves.length > 0) {
-            const targetTime = scheduledDateObj.getTime();
-            const onLeave = assignment.assayer.leaves.some((leave) => {
-                const start = new Date(leave.startDate).getTime();
-                const end = new Date(leave.endDate).getTime();
-                return targetTime >= start && targetTime <= end;
-            });
-            if (onLeave) {
-                throw new common_1.BadRequestException(`Assayer Unavailable: Assayer is on leave on ${dto.scheduledDate}.`);
+        if (assignment.assayer) {
+            const leavesCheck = this.constraintEvaluator.checkLeaves(assignment.assayer, scheduledDateObj);
+            if (!leavesCheck.passed) {
+                throw new common_1.BadRequestException(leavesCheck.reason);
             }
         }
         if (assignment.project) {
-            const scheduledTime = scheduledDateObj.getTime();
-            if (assignment.project.startDate) {
-                const projectStart = new Date(assignment.project.startDate).getTime();
-                if (scheduledTime < projectStart) {
-                    throw new common_1.BadRequestException(`Timeline Conflict: Scheduled date ${dto.scheduledDate} is before project start date ${assignment.project.startDate}.`);
-                }
-            }
-            if (assignment.project.endDate) {
-                const projectEnd = new Date(assignment.project.endDate).getTime();
-                if (scheduledTime > projectEnd) {
-                    throw new common_1.BadRequestException(`Timeline Conflict: Scheduled date ${dto.scheduledDate} is after project end date ${assignment.project.endDate}.`);
-                }
+            const timelineCheck = this.constraintEvaluator.checkProjectTimeline(assignment.project, scheduledDateObj);
+            if (!timelineCheck.passed) {
+                throw new common_1.BadRequestException(timelineCheck.reason);
             }
         }
-        const isHoliday = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
-        if (isHoliday) {
-            throw new common_1.BadRequestException(`Holiday Conflict: ${dto.scheduledDate} is a holiday in ${assignment.projectBranch.branch.state}.`);
+        const holidayCheck = await this.constraintEvaluator.checkHoliday(assignment.projectBranch.branch.state, scheduledDateObj);
+        if (!holidayCheck.passed) {
+            throw new common_1.BadRequestException(holidayCheck.reason);
         }
-        const doubleBooked = await this.scheduleRepository.findOne({
-            where: {
-                assayerId: assignment.assayerId,
-                scheduledDate: scheduledDateObj,
-                status: (0, typeorm_2.In)([shared_1.ScheduleStatus.CONFIRMED]),
-                isActive: true,
-            },
-        });
-        if (doubleBooked) {
-            throw new common_1.ConflictException(`Assayer double booking: already scheduled on ${dto.scheduledDate}.`);
+        const doubleBookedCheck = await this.constraintEvaluator.checkDoubleBooking(assignment.assayerId, scheduledDateObj);
+        if (!doubleBookedCheck.passed) {
+            throw new common_1.ConflictException(doubleBookedCheck.reason);
         }
         const schedule = this.scheduleRepository.create({
             assignmentId: assignment.id,
@@ -107,7 +89,7 @@ let SchedulingService = class SchedulingService {
     async findOne(id) {
         const schedule = await this.scheduleRepository.findOne({
             where: { id, isActive: true },
-            relations: ['assignment', 'project', 'assayer'],
+            relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'project', 'assayer'],
         });
         if (!schedule) {
             throw new common_1.NotFoundException(`Schedule ${id} not found.`);
@@ -117,7 +99,7 @@ let SchedulingService = class SchedulingService {
     async findAll(page = 1, limit = 50) {
         const [schedules, total] = await this.scheduleRepository.findAndCount({
             where: { isActive: true },
-            relations: ['assignment', 'assayer', 'project'],
+            relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'assayer', 'project'],
             order: { scheduledDate: 'ASC' },
             take: limit,
             skip: (page - 1) * limit,
@@ -177,6 +159,7 @@ exports.SchedulingService = SchedulingService = __decorate([
     __metadata("design:paramtypes", [typeorm_2.Repository,
         assignment_service_1.AssignmentService,
         holiday_service_1.HolidayService,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        constraint_evaluator_1.ConstraintEvaluator])
 ], SchedulingService);
 //# sourceMappingURL=scheduling.service.js.map

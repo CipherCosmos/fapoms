@@ -1,9 +1,11 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Readable } from 'stream';
+import { StorageEngine } from './storage-engine.interface';
 
 @Injectable()
-export class LocalStorageService {
+export class LocalStorageService implements StorageEngine {
   private readonly uploadDir = path.join(__dirname, '../../../../uploads');
 
   constructor() {
@@ -19,7 +21,7 @@ export class LocalStorageService {
     return `/uploads/${safeFileName}`;
   }
 
-  async getFileStream(relativePath: string): Promise<fs.ReadStream> {
+  async getFileStream(relativePath: string): Promise<Readable> {
     const absolutePath = path.join(this.uploadDir, path.basename(relativePath));
     if (!fs.existsSync(absolutePath)) {
       throw new BadRequestException(`File ${relativePath} not found on disk.`);

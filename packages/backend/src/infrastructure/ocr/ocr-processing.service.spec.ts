@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bull';
 import { Repository } from 'typeorm';
 import { OcrProcessingService } from './ocr-processing.service';
 import { OcrJobEntity } from './ocr-job.entity';
@@ -32,6 +33,10 @@ describe('OcrProcessingService', () => {
     recordEvent: jest.fn(),
   };
 
+  const mockOcrQueue = {
+    add: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -51,6 +56,10 @@ describe('OcrProcessingService', () => {
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: getQueueToken('ocr'),
+          useValue: mockOcrQueue,
         },
       ],
     }).compile();

@@ -38,7 +38,7 @@ export class ProjectQueryService {
   async findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]> {
     return this.projectBranchRepository.find({
       where: { projectId, isActive: true },
-      relations: ['branch'],
+      relations: ['branch', 'assignments', 'assignments.assayer'],
     });
   }
 

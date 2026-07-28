@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2 } from 'lucide-react';
+import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
 import { Priority } from '@fapoms/shared';
+import * as xlsx from 'xlsx';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 
@@ -36,6 +37,7 @@ interface ProjectBranch {
     status: string;
     proposedFee: number;
     agreedFee: number | null;
+    scheduledDate: string | null;
     assayer?: { displayName: string };
   } | null;
 }
@@ -102,6 +104,73 @@ interface Remark {
   createdAt: string;
 }
 
+interface DayPlanStop {
+  order: number;
+  branchId: string;
+  branchName: string;
+  branchCode: string;
+  address: string;
+  estimatedAuditHours: number;
+  travelFromPreviousKm: number;
+  travelFromPreviousMinutes: number;
+  estimatedArrival: string;
+  estimatedDeparture: string;
+}
+
+interface DayPlanCandidate {
+  assayerId: string;
+  assayerName: string;
+  assayerCode: string;
+  assayerCity: string;
+  assayerPhone: string;
+  overallScore: number;
+  totalBranches: number;
+  totalAuditHours: number;
+  totalTravelKm: number;
+  totalTravelMinutes: number;
+  totalDayHours: number;
+  estimatedBaseFee: number;
+  estimatedTravelFee: number;
+  estimatedTotalCost: number;
+  dayStartTime: string;
+  dayEndTime: string;
+  utilizationPercent: number;
+  stops: DayPlanStop[];
+  clientPreferencesMatch: {
+    skillsMatch: boolean;
+    certificationsMatch: boolean;
+    distanceWithinRange: boolean;
+    isPreferredAssayer: boolean;
+  };
+}
+
+interface BranchCluster {
+  clusterId: string;
+  radiusKm: number;
+  branches: Array<{ branchId: string; branchName: string; branchCode: string; estimatedDurationHours: number; city: string; district: string }>;
+  totalEstimatedAuditHours: number;
+  feasibleForOneDay: boolean;
+}
+
+interface ProjectDayPlan {
+  projectId: string;
+  projectName: string;
+  targetDate: string;
+  clusters: Array<{
+    cluster: BranchCluster;
+    dayPlans: DayPlanCandidate[];
+    bestPlan: DayPlanCandidate | null;
+  }>;
+  unclusteredBranches: Array<{ branchId: string; branchName: string; reason: string }>;
+  summary: {
+    totalClusters: number;
+    totalBranchesCovered: number;
+    totalAssayersNeeded: number;
+    estimatedTotalCost: number;
+    averageUtilization: number;
+  };
+}
+
 const CATEGORY_COLORS: Record<string, string> = {
   PERFORMANCE: '#8b5cf6',
   QUALITY: '#3b82f6',
@@ -146,14 +215,19 @@ export const PlanningWorkspace: React.FC = () => {
   const [negotiatingFee, setNegotiatingFee] = useState('1500');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
-  const [negotiatingDate, setNegotiatingDate] = useState('2026-07-20');
+
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
   const [detailAssayer, setDetailAssayer] = useState<AssayerDetail | null>(null);
   const [detailRemarks, setDetailRemarks] = useState<Remark[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
+  const [slaEnabled, setSlaEnabled] = useState(false);
+  const [slaRadius, setSlaRadius] = useState(50);
   const drawerRef = useRef<HTMLDivElement>(null);
+  const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
+  const [isLoadingDayPlans, setIsLoadingDayPlans] = useState(false);
+  const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
 
   useEffect(() => { loadProjects(); loadZones(); }, []);
 
@@ -176,6 +250,14 @@ export const PlanningWorkspace: React.FC = () => {
     } else {
       setCandidates([]);
     }
+  }, [selectedBranchId, branches]);
+
+  useEffect(() => {
+    if (!selectedBranchId) return;
+    const selectedPb = branches.find(b => b.id === selectedBranchId);
+    if (!selectedPb) return;
+    const interval = setInterval(() => loadCandidates(selectedPb.branchId), 60000);
+    return () => clearInterval(interval);
   }, [selectedBranchId, branches]);
 
   useEffect(() => {
@@ -207,7 +289,7 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       const data = await api.request<any>('/geo/route/optimize', {
         method: 'POST',
-        body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true })
+        body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true, mode: 'driving' })
       });
       const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = data;
       const points = [{ latitude: originLat, longitude: originLng }];
@@ -248,6 +330,18 @@ export const PlanningWorkspace: React.FC = () => {
     finally { setIsLoadingQueue(false); }
   };
 
+  const loadDayPlans = async () => {
+    if (!selectedProjectId) return;
+    setIsLoadingDayPlans(true);
+    setDayPlanData(null);
+    try {
+      const data = await api.request<ProjectDayPlan>(`/planning/projects/${selectedProjectId}/day-plans`);
+      setDayPlanData(data);
+      if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
+    } catch (err) { console.error('Failed to load day plans', err); }
+    finally { setIsLoadingDayPlans(false); }
+  };
+
   const loadCandidates = async (branchId: string) => {
     setIsLoadingCandidates(true);
     try {
@@ -279,27 +373,45 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       await api.request('/assignments', {
         method: 'POST',
-        body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee), scheduledDate: negotiatingDate })
+        body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee) })
       });
-      setMessage({ type: 'success', text: `Successfully assigned branch to ${selectedCandidate.displayName} on ${negotiatingDate}!` });
+      setMessage({ type: 'success', text: `Assigned ${selectedCandidate.displayName} to branch. Assayer will receive the offer on their mobile app.` });
       loadProjectBranches(selectedProjectId);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
     }
   };
 
-  const handleCancelAssignment = async (assignmentId: string) => {
-    setMessage(null);
-    try {
-      await api.request(`/assignments/${assignmentId}/transition`, {
-        method: 'POST',
-        body: JSON.stringify({ targetStatus: 'CANCELLED', remarks: 'Operational unassign from map planning workspace.' })
-      });
-      setMessage({ type: 'success', text: 'Assignment successfully cancelled/unassigned!' });
-      loadProjectBranches(selectedProjectId);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to unassign.' });
-    }
+  const handleExportCoverageReport = () => {
+    if (!selectedProjectId || branches.length === 0) return;
+
+    const data = branches.map((b) => ({
+      'Branch Code': b.branch?.branchCode || '',
+      'SOL ID': b.branch?.solId || '',
+      'Branch Name': b.branch?.name || '',
+      'City': b.branch?.city || '',
+      'District': b.branch?.district || '',
+      'State': b.branch?.state || '',
+      'Priority': b.priority || '',
+      'Zone ID': b.zoneId || '',
+      'Status': b.status,
+      'Audit Coverage Possible': ['ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED'].includes(b.status) ? 'YES' : 'NO (Uncovered)',
+      'Assigned Assayer': b.assignment?.assayer?.displayName || 'Unassigned',
+      'Assignment Status': b.assignment?.status || '—',
+      'Proposed Fee (₹)': b.assignment?.proposedFee ?? '—',
+      'Agreed Fee (₹)': b.assignment?.agreedFee ?? '—',
+      'Scheduled Date': b.assignment?.scheduledDate
+        ? new Date(b.assignment.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : b.scheduledDate
+        ? new Date(b.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : 'N/A',
+      'Remarks': b.remarks || '',
+    }));
+
+    const ws = xlsx.utils.json_to_sheet(data);
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Branch Coverage Schedule');
+    xlsx.writeFile(wb, `Branch_Coverage_Report_${selectedProjectId}.xlsx`);
   };
 
   const statesList = Array.from(new Set(branches.map(b => b.branch?.state).filter(Boolean)));
@@ -333,16 +445,22 @@ export const PlanningWorkspace: React.FC = () => {
     if (isLoadingCandidates) {
       return <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Searching for assayers...</div>;
     }
-    const displayCandidates = showAllCandidates 
+    const slaFiltered = slaEnabled
+      ? candidates.filter(c => c.distanceKm !== null && c.distanceKm >= slaRadius)
+      : null;
+    const displayCandidates = slaFiltered ?? (showAllCandidates 
       ? candidates 
-      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700);
+      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700));
 
     if (displayCandidates.length === 0) {
+      const msg = slaEnabled
+        ? `No assayers found beyond ${slaRadius}km SLA radius.`
+        : 'No suitable assayers found within 700km.';
       return (
         <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} style={{ color: 'var(--accent-secondary)' }} />
-          <span>No suitable assayers found within 700km.</span>
-          {!showAllCandidates && candidates.length > 0 && (
+          <span>{msg}</span>
+          {!slaEnabled && !showAllCandidates && candidates.length > 0 && (
             <button onClick={() => setShowAllCandidates(true)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '10px' }}>
               Show all ({candidates.length}) candidates
             </button>
@@ -354,21 +472,31 @@ export const PlanningWorkspace: React.FC = () => {
       <div style={{ display: 'flex', gap: '12px', overflowX: horizontal ? 'auto' : 'hidden', flexDirection: horizontal ? 'row' : 'column', paddingBottom: '4px' }}>
         {displayCandidates.map(c => {
           const conf = c.score != null ? Math.round(c.score) : c.distanceKm != null && c.distanceKm < 30 ? 98 : c.distanceKm != null && c.distanceKm < 60 ? 88 : 74;
+          const slaStatus = slaEnabled && c.distanceKm !== null
+            ? (c.distanceKm >= slaRadius ? 'compliant' : 'breach')
+            : null;
+          const cardBorderColor = slaStatus === 'compliant' ? 'rgba(16,185,129,0.4)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.4)' : 'var(--border-color)';
+          const cardBg = slaStatus === 'compliant' ? 'rgba(16,185,129,0.04)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.04)' : 'rgba(255,255,255,0.02)';
           return (
             <div key={c.id} style={{
               minWidth: horizontal ? '280px' : 'auto', maxWidth: horizontal ? '300px' : 'auto', flexShrink: horizontal ? 0 : undefined,
-              background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '12px',
+              background: cardBg, border: `1px solid ${cardBorderColor}`, borderRadius: 'var(--radius-md)', padding: '12px',
               display: 'flex', flexDirection: 'column', gap: '8px'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{c.displayName}</div>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '1px' }}>
-                    <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km` : 'Unknown distance'}
+                    <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km (straight-line)` : 'Unknown distance'}
+                    {slaEnabled && c.distanceKm !== null && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '0 5px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: c.distanceKm >= slaRadius ? '#10b981' : '#ef4444' }}>
+                        {c.distanceKm >= slaRadius ? `✓ Beyond ${slaRadius}km SLA` : `✗ Within ${slaRadius}km SLA`}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <span style={{ padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
-                  {conf}%
+                <span title="Score evaluates Distance, Travel Time, Workload, Performance, Experience, and Cost." style={{ cursor: 'help', padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
+                  {conf}% {conf >= 90 ? '🔥 High Utilization' : ''}
                 </span>
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '12px' }}>
@@ -393,8 +521,8 @@ export const PlanningWorkspace: React.FC = () => {
                   setCommercialBaseFee(null);
                   setLoadingCommercial(true);
                   try {
-                    const profile = await api.request<{ baseFee: number }>(`/assayers/${c.id}/commercial/active`, { method: 'GET' });
-                    const fee = profile.baseFee ?? c.baseFee ?? 1500;
+                    const profile = await api.request<{ baseFee: number } | null>(`/assayers/${c.id}/commercial/active`, { method: 'GET' });
+                    const fee = profile?.baseFee ?? c.baseFee ?? 1500;
                     setCommercialBaseFee(fee);
                     setNegotiatingFee(fee.toString());
                   } catch {
@@ -402,7 +530,6 @@ export const PlanningWorkspace: React.FC = () => {
                     setNegotiatingFee(fee.toString());
                   } finally {
                     setLoadingCommercial(false);
-                    setNegotiatingDate(new Date().toISOString().split('T')[0]);
                     setShowNegotiationModal(true);
                   }
                 }}
@@ -411,8 +538,12 @@ export const PlanningWorkspace: React.FC = () => {
                 </button>
               </div>
               {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
-                <div style={{ padding: '6px 8px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '10px', color: 'var(--accent-secondary)' }}>
-                  Route: {optimizedSummary.totalDistanceKm} km / {optimizedSummary.totalDurationMinutes} min
+                <div style={{ padding: '8px 10px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div><b>🗺️ Optimized Route Details:</b></div>
+                  <div>• Distance: {optimizedSummary.totalDistanceKm} km</div>
+                  <div>• Est. Travel Time: {optimizedSummary.totalDurationMinutes} minutes</div>
+                  <div>• Est. Travel Fee: ₹{(optimizedSummary.totalDistanceKm * 8).toFixed(0)} (₹8/km)</div>
+                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Path covers multiple branch locations with TSP roundtrip routing optimization.</div>
                 </div>
               )}
             </div>
@@ -423,7 +554,28 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: '-32px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', margin: '-20px' }}>
+      {/* ── STAGE 1 BANNER ── */}
+      <div style={{ background: 'linear-gradient(90deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.06) 100%)', borderBottom: '1px solid var(--border-color)', padding: '8px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ backgroundColor: '#6366f1', color: '#fff', fontSize: '10px', fontWeight: 800, padding: '3px 7px', borderRadius: '4px', marginRight: '4px' }}>STAGE 1 OF 3</span>
+          <div onClick={() => navigate('/planning')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(99,102,241,0.2)', border: '1px solid #6366f1', borderRadius: '20px', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+            <span>1</span> Planning & Matching
+          </div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/scheduling')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+            <span>2</span> Schedule Dispatch
+          </div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/assignments')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+            <span>3</span> Field Execution
+          </div>
+        </div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          💡 Step 1 of 3: Plan & assign assayers to branches. Click a branch on the map to see recommendations.
+        </div>
+      </div>
+
       {/* ── Toolbar: Project select + filters + KPI + Layout ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 32px 0', flexShrink: 0 }}>
         <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
@@ -449,9 +601,29 @@ export const PlanningWorkspace: React.FC = () => {
           <span style={{ color: 'var(--status-active)' }}>{coveragePct}%</span> confirmed
           <span style={{ color: '#f59e0b' }}>{totalCount - confirmedCount}</span> pending
         </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
-          {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only']].map(([k, lbl]) => (
-            <button key={k} onClick={() => setLayoutMode(k)}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <button
+            onClick={handleExportCoverageReport}
+            title="Download Excel containing covered vs uncovered branches for bank confirmation"
+            style={{
+              background: 'rgba(16,185,129,0.15)',
+              border: '1px solid var(--status-active)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--status-active)',
+              cursor: 'pointer',
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              marginRight: '8px'
+            }}
+          >
+            📥 Export Coverage Excel
+          </button>
+          {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only'], ['day-plans', '📋 Day Plans']].map(([k, lbl]) => (
+            <button key={k} onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
               style={{ background: layout === k ? 'rgba(99,102,241,0.15)' : 'none', border: `1px solid ${layout === k ? 'var(--accent-primary)' : 'var(--border-color)'}`, borderRadius: 'var(--radius-sm)', color: layout === k ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', padding: '4px 8px', fontSize: '10px', fontWeight: layout === k ? 600 : 400 }}>
               {lbl}
             </button>
@@ -522,6 +694,8 @@ export const PlanningWorkspace: React.FC = () => {
               onSelectBranch={id => setSelectedBranchId(id)}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
+              slaEnabled={slaEnabled}
+              slaRadius={slaRadius}
             />
             <div ref={drawerRef} style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -540,13 +714,30 @@ export const PlanningWorkspace: React.FC = () => {
                         <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
                         Show Distant (&gt;700km)
                       </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                        SLA
+                      </label>
+                      {slaEnabled && (
+                        <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
+                          style={{ fontSize: '10px', padding: '1px 4px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', width: '55px', cursor: 'pointer' }}>
+                          <option value={25}>25km</option>
+                          <option value={50}>50km</option>
+                          <option value={100}>100km</option>
+                          <option value={150}>150km</option>
+                          <option value={200}>200km</option>
+                          <option value={300}>300km</option>
+                          <option value={500}>500km</option>
+                        </select>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                        className="btn btn-secondary" title="Refresh candidates"
+                        style={{ padding: '3px 6px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <RefreshCw size={11} /> Refresh
+                      </button>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}, {selectedPb.branch.state}</span>
-                      {selectedPb.assignment && (
-                        <button onClick={() => handleCancelAssignment(selectedPb.assignment!.id)} className="btn btn-secondary"
-                          style={{ padding: '3px 8px', fontSize: '10px', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>Unassign</button>
-                      )}
                     </div>
                   </div>
                   <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }}>
@@ -607,6 +798,8 @@ export const PlanningWorkspace: React.FC = () => {
               onSelectBranch={id => setSelectedBranchId(id)}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
+              slaEnabled={slaEnabled}
+              slaRadius={slaRadius}
             />
           </div>
 
@@ -619,19 +812,39 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}</span>
-                  {selectedPb.assignment && (
-                    <button onClick={() => handleCancelAssignment(selectedPb.assignment!.id)} className="btn btn-secondary"
-                      style={{ padding: '2px 6px', fontSize: '9px', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>Unassign</button>
-                  )}
+
                 </div>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>RECOMMENDED ASSAYERS</span>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                    <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
-                    Show Distant (&gt;700km)
-                  </label>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                      className="btn btn-secondary" title="Refresh candidates"
+                      style={{ padding: '2px 6px', fontSize: '9px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <RefreshCw size={10} /> Refresh
+                    </button>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                      <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
+                      Show Distant (&gt;700km)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                      <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                      SLA
+                    </label>
+                    {slaEnabled && (
+                      <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
+                        style={{ fontSize: '9px', padding: '1px 3px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', width: '50px', cursor: 'pointer' }}>
+                        <option value={25}>25km</option>
+                        <option value={50}>50km</option>
+                        <option value={100}>100km</option>
+                        <option value={150}>150km</option>
+                        <option value={200}>200km</option>
+                        <option value={300}>300km</option>
+                        <option value={500}>500km</option>
+                      </select>
+                    )}
+                  </div>
                 </div>
                 {renderCandidatesList(false)}
               </div>
@@ -649,6 +862,8 @@ export const PlanningWorkspace: React.FC = () => {
             onSelectBranch={id => setSelectedBranchId(id)}
             routePoints={routePoints}
             selectedAssayerFromParent={selectedCandidateForMap}
+            slaEnabled={slaEnabled}
+            slaRadius={slaRadius}
           />
         </div>
       )}
@@ -735,15 +950,6 @@ export const PlanningWorkspace: React.FC = () => {
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
               </div>
-            </div>
-
-            {/* Audit Date */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Calendar size={11} /> Audit Date
-              </label>
-              <input type="date" value={negotiatingDate} onChange={e => setNegotiatingDate(e.target.value)} required
-                style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
             </div>
 
             {/* Action buttons */}
@@ -956,6 +1162,249 @@ export const PlanningWorkspace: React.FC = () => {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Layout: Day Plans (Multi-Branch Cluster View) ── */}
+      {layout === 'day-plans' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 32px 32px', overflowY: 'auto' }}>
+          {/* Header & Refresh */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Layers size={18} style={{ color: 'var(--accent-primary)' }} />
+              <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>Multi-Branch Day Plans</h2>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Clusters nearby branches → assigns single assayer per cluster for one-day coverage</span>
+            </div>
+            <button onClick={loadDayPlans} disabled={isLoadingDayPlans}
+              className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <Route size={13} /> {isLoadingDayPlans ? 'Generating...' : 'Generate Day Plans'}
+            </button>
+          </div>
+
+          {isLoadingDayPlans && (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)', fontSize: '13px' }}>
+              <div className="loading-spinner" style={{ width: '30px', height: '30px', border: '3px solid var(--border-color)', borderTop: '3px solid var(--accent-primary)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
+              Analyzing branch clusters, calculating routes & scoring assayers...
+            </div>
+          )}
+
+          {!isLoadingDayPlans && !dayPlanData && (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)', fontSize: '13px' }}>
+              <Layers size={40} style={{ color: 'var(--border-color)', margin: '0 auto 12px', display: 'block' }} />
+              Click "Generate Day Plans" to cluster branches and find optimal assayer assignments.
+            </div>
+          )}
+
+          {dayPlanData && (
+            <>
+              {/* Summary KPI Bar */}
+              <div style={{ display: 'flex', gap: '16px', padding: '10px 0 14px', flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Clusters', value: dayPlanData.summary.totalClusters, icon: <Layers size={13} />, color: 'var(--accent-primary)' },
+                  { label: 'Branches Covered', value: dayPlanData.summary.totalBranchesCovered, icon: <Building2 size={13} />, color: 'var(--status-active)' },
+                  { label: 'Assayers Needed', value: dayPlanData.summary.totalAssayersNeeded, icon: <Users size={13} />, color: '#f59e0b' },
+                  { label: 'Est. Total Cost', value: `₹${dayPlanData.summary.estimatedTotalCost.toLocaleString()}`, icon: <DollarSign size={13} />, color: '#8b5cf6' },
+                  { label: 'Avg Utilization', value: `${dayPlanData.summary.averageUtilization.toFixed(0)}%`, icon: <TrendingUp size={13} />, color: dayPlanData.summary.averageUtilization >= 70 ? 'var(--status-active)' : '#f59e0b' },
+                ].map((kpi, idx) => (
+                  <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: '130px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{kpi.icon} {kpi.label}</div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: kpi.color }}>{kpi.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Unclustered branches warning */}
+              {dayPlanData.unclusteredBranches.length > 0 && (
+                <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#f59e0b', marginBottom: '6px' }}>⚠️ {dayPlanData.unclusteredBranches.length} Branch(es) Could Not Be Clustered</div>
+                  {dayPlanData.unclusteredBranches.map((b, i) => (
+                    <div key={i} style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '2px' }}>• {b.branchName}: {b.reason}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Clusters */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {dayPlanData.clusters.map(({ cluster, dayPlans, bestPlan }) => (
+                  <div key={cluster.clusterId} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                    {/* Cluster Header */}
+                    <div onClick={() => setExpandedCluster(expandedCluster === cluster.clusterId ? null : cluster.clusterId)}
+                      style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        background: expandedCluster === cluster.clusterId ? 'rgba(99,102,241,0.06)' : 'transparent',
+                        borderBottom: expandedCluster === cluster.clusterId ? '1px solid var(--border-color)' : 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(99,102,241,0.1)', padding: '3px 8px', borderRadius: '4px' }}>{cluster.clusterId}</span>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{cluster.branches.length} Branches</span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          {cluster.branches.map(b => b.branchName.replace(/^(Pune |Nashik |Mumbai |Bangalore )/, '')).join(' → ')}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><Clock size={11} /> {cluster.totalEstimatedAuditHours}h audit</span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> {cluster.radiusKm.toFixed(0)}km radius</span>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : '#ef4444' }}>
+                          {cluster.feasibleForOneDay ? '✅ Fits 1 day' : '❌ Exceeds capacity'}
+                        </span>
+                        {bestPlan && (
+                          <span style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600 }}>
+                            Best: {bestPlan.assayerName} (₹{bestPlan.estimatedTotalCost.toLocaleString()})
+                          </span>
+                        )}
+                        <span style={{ fontSize: '14px', color: 'var(--text-muted)', transition: 'transform 0.2s', transform: expandedCluster === cluster.clusterId ? 'rotate(180deg)' : 'none' }}>▾</span>
+                      </div>
+                    </div>
+
+                    {/* Expanded Cluster: Day Plan Candidates */}
+                    {expandedCluster === cluster.clusterId && (
+                      <div style={{ padding: '14px 16px' }}>
+                        {/* Branches in this cluster */}
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                          {cluster.branches.map(b => (
+                            <div key={b.branchId} style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '11px' }}>
+                              <div style={{ fontWeight: 600, color: '#fff' }}>{b.branchName}</div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{b.branchCode} • {b.city} • {b.estimatedDurationHours}h audit</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {dayPlans.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                            <AlertTriangle size={18} style={{ color: '#f59e0b', marginBottom: '6px' }} />
+                            <div>No eligible assayers found for this cluster. Check client preferences or expand search radius.</div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {dayPlans.map((plan, pIdx) => (
+                              <div key={plan.assayerId} style={{
+                                background: pIdx === 0 ? 'rgba(16,185,129,0.04)' : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${pIdx === 0 ? 'rgba(16,185,129,0.3)' : 'var(--border-color)'}`,
+                                borderRadius: 'var(--radius-md)', padding: '14px', position: 'relative' as const,
+                              }}>
+                                {pIdx === 0 && (
+                                  <span style={{ position: 'absolute' as const, top: '-1px', right: '12px', background: 'var(--status-active)', color: '#000', fontSize: '9px', fontWeight: 700, padding: '2px 8px', borderRadius: '0 0 4px 4px' }}>
+                                    ⭐ RECOMMENDED
+                                  </span>
+                                )}
+
+                                {/* Assayer Info Row */}
+                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                  <div>
+                                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                      {plan.assayerName}
+                                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 400 }}>({plan.assayerCode})</span>
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', gap: '10px', marginTop: '3px' }}>
+                                      <span><Phone size={10} /> {plan.assayerPhone}</span>
+                                      <span><MapPin size={10} /> {plan.assayerCity}</span>
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <span style={{
+                                      padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                      background: plan.overallScore >= 70 ? 'rgba(16,185,129,0.1)' : plan.overallScore >= 50 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)',
+                                      color: plan.overallScore >= 70 ? 'var(--status-active)' : plan.overallScore >= 50 ? '#f59e0b' : '#ef4444',
+                                    }}>
+                                      {plan.overallScore}% Score
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Metrics Grid */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+                                  {[
+                                    { label: 'Branches', val: plan.totalBranches, icon: '🏢' },
+                                    { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: '⏱️' },
+                                    { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: '🚗' },
+                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: '📅' },
+                                    { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: '🕐' },
+                                    { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? '🔥' : '📊' },
+                                  ].map((m, mi) => (
+                                    <div key={mi} style={{ background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' }}>
+                                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{m.icon} {m.label}</div>
+                                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff', marginTop: '2px' }}>{m.val}</div>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Cost Breakdown */}
+                                <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', padding: '8px 12px', background: 'rgba(139,92,246,0.04)', border: '1px dashed rgba(139,92,246,0.2)', borderRadius: 'var(--radius-sm)' }}>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                    <span style={{ fontWeight: 600 }}>💰 Cost:</span>{' '}
+                                    Base ₹{plan.estimatedBaseFee.toLocaleString()} + Travel ₹{plan.estimatedTravelFee.toLocaleString()} ={' '}
+                                    <span style={{ fontWeight: 700, color: '#f59e0b' }}>₹{plan.estimatedTotalCost.toLocaleString()}</span>
+                                  </div>
+                                </div>
+
+                                {/* Client Preferences Match */}
+                                <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                                  {[
+                                    { label: 'Skills', ok: plan.clientPreferencesMatch.skillsMatch },
+                                    { label: 'Certifications', ok: plan.clientPreferencesMatch.certificationsMatch },
+                                    { label: 'Distance', ok: plan.clientPreferencesMatch.distanceWithinRange },
+                                    { label: 'Preferred', ok: plan.clientPreferencesMatch.isPreferredAssayer },
+                                  ].map((pm, pi) => (
+                                    <span key={pi} style={{
+                                      fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                                      background: pm.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                                      color: pm.ok ? 'var(--status-active)' : '#ef4444',
+                                      fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px',
+                                    }}>
+                                      {pm.ok ? <Check size={9} /> : <X size={9} />} {pm.label}
+                                    </span>
+                                  ))}
+                                </div>
+
+                                {/* Route Stops Timeline */}
+                                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                    <Route size={12} /> Route Schedule (Optimized TSP)
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+                                    {plan.stops.map((stop, si) => (
+                                      <div key={si} style={{ display: 'flex', alignItems: 'stretch', gap: '10px' }}>
+                                        {/* Timeline connector */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '20px' }}>
+                                          <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: si === 0 ? 'var(--accent-primary)' : 'var(--status-active)', flexShrink: 0, marginTop: '5px' }} />
+                                          {si < plan.stops.length - 1 && <div style={{ width: '2px', flex: 1, background: 'var(--border-color)' }} />}
+                                        </div>
+                                        {/* Stop content */}
+                                        <div style={{ flex: 1, paddingBottom: '10px' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>
+                                              #{stop.order} {stop.branchName}
+                                            </span>
+                                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({stop.branchCode})</span>
+                                          </div>
+                                          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '2px' }}>
+                                            <span>🕐 Arrive {stop.estimatedArrival} → Depart {stop.estimatedDeparture}</span>
+                                            <span>⏱️ Audit: {stop.estimatedAuditHours}h</span>
+                                            {stop.travelFromPreviousKm > 0 && (
+                                              <span>🚗 Travel: {stop.travelFromPreviousKm}km ({stop.travelFromPreviousMinutes}min)</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                    {/* Return leg */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '20px' }}>
+                                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+                                      </div>
+                                      <div style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600 }}>🏠 Return Home by {plan.dayEndTime}</div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

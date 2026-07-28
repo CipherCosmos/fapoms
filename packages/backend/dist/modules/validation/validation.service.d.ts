@@ -26,6 +26,7 @@ export declare class ValidationService implements OnModuleInit {
         total: number;
     }>;
     assign(id: string, reviewerId: string, userId: string): Promise<ValidationCaseEntity>;
+    autoBalanceUnassignedCases(availableValidatorIds: string[], userId: string): Promise<number>;
     private executeValidationTransition;
     transition(id: string, targetStatus: ValidationStatus, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;
     approveValidation(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;

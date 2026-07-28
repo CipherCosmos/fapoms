@@ -19,6 +19,7 @@ var OcrJobStatus;
     OcrJobStatus["PROCESSING"] = "PROCESSING";
     OcrJobStatus["COMPLETED"] = "COMPLETED";
     OcrJobStatus["FAILED"] = "FAILED";
+    OcrJobStatus["DEAD_LETTER"] = "DEAD_LETTER";
 })(OcrJobStatus || (exports.OcrJobStatus = OcrJobStatus = {}));
 let OcrJobEntity = class OcrJobEntity extends base_entity_1.BaseEntity {
     documentId;
@@ -27,6 +28,11 @@ let OcrJobEntity = class OcrJobEntity extends base_entity_1.BaseEntity {
     ocrPayload;
     retryCount;
     failureReason;
+    externalCorrelationId;
+    lastAttemptAt;
+    nextRetryAt;
+    callbackReceivedAt;
+    completedAt;
     document;
 };
 exports.OcrJobEntity = OcrJobEntity;
@@ -58,6 +64,26 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'failure_reason', type: 'text', nullable: true }),
     __metadata("design:type", Object)
 ], OcrJobEntity.prototype, "failureReason", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'external_correlation_id', type: 'varchar', length: 150, nullable: true }),
+    __metadata("design:type", Object)
+], OcrJobEntity.prototype, "externalCorrelationId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'last_attempt_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], OcrJobEntity.prototype, "lastAttemptAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'next_retry_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], OcrJobEntity.prototype, "nextRetryAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'callback_received_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], OcrJobEntity.prototype, "callbackReceivedAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'completed_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], OcrJobEntity.prototype, "completedAt", void 0);
 __decorate([
     (0, typeorm_1.ManyToOne)(() => document_entity_1.DocumentEntity, { onDelete: 'CASCADE' }),
     (0, typeorm_1.JoinColumn)({ name: 'document_id' }),

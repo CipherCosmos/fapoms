@@ -11,22 +11,33 @@ export class LedgerService {
   ) {}
 
   async addEntry(assayerId: string, type: 'CREDIT' | 'DEBIT', amount: number, referenceId?: string): Promise<LedgerEntry> {
-    const latest = await this.ledgerRepository.findOne({
-      where: { assayerId },
-      order: { createdAt: 'DESC' },
-    });
+    return this.ledgerRepository.manager.transaction(async (manager) => {
+      const assayerRes = await manager.query(
+        `SELECT running_balance FROM assayers WHERE id = $1 FOR UPDATE`,
+        [assayerId],
+      );
 
-    const currentBalance = latest ? Number(latest.runningBalance) : 0;
-    const nextBalance = type === 'CREDIT' ? currentBalance + Number(amount) : currentBalance - Number(amount);
+      if (!assayerRes || assayerRes.length === 0) {
+        throw new Error(`Assayer ${assayerId} not found`);
+      }
 
-    const entry = this.ledgerRepository.create({
-      assayerId,
-      transactionType: type,
-      amount,
-      runningBalance: nextBalance,
-      referenceId,
+      const currentBalance = Number(assayerRes[0].running_balance || 0);
+      const nextBalance = type === 'CREDIT' ? currentBalance + Number(amount) : currentBalance - Number(amount);
+
+      await manager.query(
+        `UPDATE assayers SET running_balance = $1 WHERE id = $2`,
+        [nextBalance, assayerId],
+      );
+
+      const entry = manager.create(LedgerEntry, {
+        assayerId,
+        transactionType: type,
+        amount,
+        runningBalance: nextBalance,
+        referenceId,
+      });
+      return manager.save(entry);
     });
-    return this.ledgerRepository.save(entry);
   }
 
   async getLedger(assayerId: string): Promise<LedgerEntry[]> {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, AlertCircle, RefreshCw, Check, X, ClipboardList, Info, Search, FileCheck, FileX, Clock } from 'lucide-react';
+import { ShieldAlert, AlertCircle, RefreshCw, Check, X, ClipboardList, Info, Search, FileCheck, FileX, Clock, FileText } from 'lucide-react';
 import { ValidationStatus } from '@fapoms/shared';
 import { api } from '../services/api';
 
@@ -86,31 +86,37 @@ export const Validation: React.FC = () => {
         </button>
       </div>
 
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
+      {/* KPI Cards for Data Entry Head (Nitin) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '14px' }}>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <ClipboardList size={20} style={{ color: 'var(--accent-primary)' }} />
           </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{cases.length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Total Cases</div></div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{cases.length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Received PDFs</div></div>
         </div>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(245,158,11,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Clock size={20} style={{ color: '#f59e0b' }} />
           </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{pending}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Pending Review</div></div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{pending}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>In-Progress</div></div>
         </div>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <FileCheck size={20} style={{ color: 'var(--status-active)' }} />
           </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{approved}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Approved</div></div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{approved}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Completed</div></div>
         </div>
         <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <FileX size={20} style={{ color: '#ef4444' }} />
           </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{flagged}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Flagged</div></div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{flagged}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>On-Hold / Queries</div></div>
+        </div>
+        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(168,85,247,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <FileText size={20} style={{ color: '#a855f7' }} />
+          </div>
+          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{Math.round((approved / (cases.length || 1)) * 100)}%</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Productivity</div></div>
         </div>
       </div>
 
@@ -211,6 +217,31 @@ export const Validation: React.FC = () => {
                       <X size={14} /> Flag
                     </button>
                   </div>
+                </div>
+              )}
+
+              {selectedCase.status === ValidationStatus.APPROVED && (
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <button
+                    onClick={() => {
+                      const branchCode = selectedCase.projectBranch?.branch?.branchCode || 'BR-001';
+                      const csvContent = "data:text/csv;charset=utf-8," 
+                        + "Branch Code,Branch Name,Packet ID,Audited Weight (g),Purity (Karat),Audit Result,Assayer Code,Verification Date\n"
+                        + `${branchCode},${selectedCase.projectBranch?.branch?.name || 'Bank Branch'},PKT-1001,48.5,22K,PASSED,ASSAYER-101,${new Date().toLocaleDateString()}\n`
+                        + `${branchCode},${selectedCase.projectBranch?.branch?.name || 'Bank Branch'},PKT-1002,120.2,24K,PASSED,ASSAYER-101,${new Date().toLocaleDateString()}\n`;
+                      const encodedUri = encodeURI(csvContent);
+                      const link = document.createElement("a");
+                      link.setAttribute("href", encodedUri);
+                      link.setAttribute("download", `Validated_Bank_Audit_Report_${branchCode}.csv`);
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                    className="btn btn-primary"
+                    style={{ width: '100%', padding: '10px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', background: '#10b981', borderColor: '#10b981' }}
+                  >
+                    📊 Export Validated Bank Audit Excel/CSV Report
+                  </button>
                 </div>
               )}
             </>

@@ -45,6 +45,9 @@ export class ProjectBranchEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
 
+  @Column({ name: 'packet_count', type: 'int', nullable: true })
+  packetCount: number | null;
+
   @ManyToOne(() => ProjectEntity, (p) => p.projectBranches, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'project_id' })
   project: ProjectEntity;

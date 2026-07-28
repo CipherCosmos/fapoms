@@ -10,6 +10,8 @@ interface MapLayerControlsProps {
   setShowRoutes: (val: boolean) => void;
   showSlaRisk: boolean;
   setShowSlaRisk: (val: boolean) => void;
+  slaRadiusKm?: number;
+  setSlaRadiusKm?: (val: number) => void;
   showWorkforceDensity: boolean;
   setShowWorkforceDensity: (val: boolean) => void;
   showRevenueDensity: boolean;
@@ -32,6 +34,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
   showAssayers, setShowAssayers,
   showRoutes, setShowRoutes,
   showSlaRisk, setShowSlaRisk,
+  slaRadiusKm, setSlaRadiusKm,
   showWorkforceDensity, setShowWorkforceDensity,
   showRevenueDensity, setShowRevenueDensity,
   mapStyle, setMapStyle,
@@ -158,6 +161,44 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showSlaRisk} onChange={(e) => setShowSlaRisk(e.target.checked)} /> ⚠️ SLA Breach Risk
         </label>
+        {showSlaRisk && setSlaRadiusKm && (
+          <div style={{ marginLeft: '22px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 8px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#fca5a5' }}>
+              <span>SLA Radius: <strong>{slaRadiusKm || 15} km</strong></span>
+            </div>
+            <input
+              type="range"
+              min="2"
+              max="60"
+              step="1"
+              value={slaRadiusKm || 15}
+              onChange={(e) => setSlaRadiusKm(Number(e.target.value))}
+              style={{ accentColor: '#ef4444', width: '100%', cursor: 'pointer' }}
+            />
+            <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
+              {[5, 15, 30, 50].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setSlaRadiusKm(preset)}
+                  style={{
+                    flex: 1,
+                    fontSize: '9px',
+                    padding: '2px 0',
+                    borderRadius: '4px',
+                    border: (slaRadiusKm || 15) === preset ? '1px solid #ef4444' : '1px solid rgba(255,255,255,0.1)',
+                    backgroundColor: (slaRadiusKm || 15) === preset ? 'rgba(239, 68, 68, 0.3)' : 'rgba(15,23,42,0.4)',
+                    color: (slaRadiusKm || 15) === preset ? '#ffffff' : '#94a3b8',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  {preset}k
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showWorkforceDensity} onChange={(e) => setShowWorkforceDensity(e.target.checked)} /> 👥 Workforce Density
         </label>

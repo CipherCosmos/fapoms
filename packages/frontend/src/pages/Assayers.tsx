@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star, ExternalLink, Search, Phone, DollarSign, TrendingUp, CheckCircle, X } from 'lucide-react';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, INDIAN_STATES } from '@fapoms/shared';
 
 interface Assayer {
   id: string;
@@ -154,12 +154,18 @@ export const Assayers: React.FC = () => {
   const [commercials, setCommercials] = useState<CommercialProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showLifecycleModal, setShowLifecycleModal] = useState(false);
   const [targetLifecycle, setTargetLifecycle] = useState('');
-  const [activeTab, setActiveTab] = useState<'profile' | 'commercial'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'commercial' | 'history' | 'remarks' | 'documents'>('profile');
+  const [assayerHistory, setAssayerHistory] = useState<any[]>([]);
+  const [assayerRemarks, setAssayerRemarks] = useState<any[]>([]);
+  const [assayerGovDocs, setAssayerGovDocs] = useState<any[]>([]);
+  const [newRemarkText, setNewRemarkText] = useState('');
+  const [newRemarkCategory, setNewRemarkCategory] = useState('PERFORMANCE');
 
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -200,8 +206,11 @@ export const Assayers: React.FC = () => {
   const fetchAssayers = async () => {
     setLoading(true);
     try {
-      const data = await api.request<Assayer[]>('/assayers');
+      const data = await api.request<Assayer[]>('/assayers', { method: 'GET' });
       setAssayers(data);
+      if (data.length > 0 && !selectedAssayer) {
+        selectAssayer(data[0]);
+      }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -211,12 +220,18 @@ export const Assayers: React.FC = () => {
     setActiveTab('profile');
     setSelectedProfile(null);
     try {
-      const [profile, commercial] = await Promise.all([
+      const [profile, commercial, histData, remData, docData] = await Promise.all([
         api.request<AssayerProfile>(`/assayers/${assayer.id}/profile`, { method: 'GET' }).catch(() => null),
         api.request<CommercialProfile[]>(`/assayers/${assayer.id}/commercial`).catch(() => [] as CommercialProfile[]),
+        api.request<any[]>(`/assignments/assayer/${assayer.id}`, { method: 'GET' }).catch(() => []),
+        api.request<any[]>(`/assayers/${assayer.id}/remark`, { method: 'GET' }).catch(() => []),
+        api.request<any[]>(`/assayers/${assayer.id}/government-document`, { method: 'GET' }).catch(() => []),
       ]);
       setSelectedProfile(profile);
       setCommercials(commercial);
+      setAssayerHistory(Array.isArray(histData) ? histData : (histData as any)?.items || []);
+      setAssayerRemarks(Array.isArray(remData) ? remData : []);
+      setAssayerGovDocs(Array.isArray(docData) ? docData : []);
     } catch (e) { console.error(e); }
   };
 
@@ -283,10 +298,53 @@ export const Assayers: React.FC = () => {
             Manage assayer profiles, lifecycle, and commercial billing configurations.
           </p>
         </div>
-        <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Plus size={16} /> Add Assayer
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600 }}>
+            Upload Excel
+            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setSubmitting(true);
+                setMessage(null);
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                  const result: any = await api.request(`/assayers/upload`, { method: 'POST', body: formData });
+                  setMessage({ type: 'success', text: `Imported ${result.importedCount} assayers${result.errors?.length ? ` (${result.errors.length} errors)` : ''}` });
+                  if (result.errors?.length) console.warn('Import errors:', result.errors);
+                  fetchAssayers();
+                } catch (err: any) {
+                  setMessage({ type: 'error', text: err?.message || 'Upload failed' });
+                } finally { setSubmitting(false); }
+              }}
+            />
+          </label>
+          <button onClick={async () => {
+            try {
+              const blob = await api.request(`/assayers/template/download`, { method: 'GET', raw: true }) as Blob;
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = 'assayer_upload_template.xlsx'; a.click();
+              URL.revokeObjectURL(url);
+            } catch (err: any) {
+              setMessage({ type: 'error', text: err?.message || 'Download failed' });
+            }
+          }} style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600, cursor: 'pointer' }}>
+            Download Template
+          </button>
+          <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Plus size={16} /> Add Assayer
+          </button>
+        </div>
       </div>
+
+      {message && (
+        <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: message.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', color: message.type === 'error' ? '#ef4444' : '#10b981', border: `1px solid ${message.type === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}` }}>
+          <span style={{ flex: 1 }}>{message.text}</span>
+          <X size={14} style={{ cursor: 'pointer', opacity: 0.6 }} onClick={() => setMessage(null)} />
+        </div>
+      )}
 
       {/* ── KPI Dashboard ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
@@ -477,8 +535,45 @@ export const Assayers: React.FC = () => {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={async () => {
+                        const currentS = selectedAssayer.lifecycleStatus || selectedAssayer.status;
+                        const newStatus = currentS === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+                        try {
+                          await api.request(`/assayers/${selectedAssayer.id}/transition`, {
+                            method: 'POST',
+                            body: JSON.stringify({ targetStatus: newStatus, reason: 'Status toggled from command center' }),
+                          });
+                          fetchAssayers().then(() => selectAssayer({ ...selectedAssayer, lifecycleStatus: newStatus, status: newStatus }));
+                        } catch (e) {
+                          alert('Failed to update assayer status');
+                        }
+                      }}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '11px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        background: (selectedAssayer.lifecycleStatus || selectedAssayer.status) === 'ACTIVE' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                        color: (selectedAssayer.lifecycleStatus || selectedAssayer.status) === 'ACTIVE' ? '#f87171' : '#34d399',
+                        border: `1px solid ${(selectedAssayer.lifecycleStatus || selectedAssayer.status) === 'ACTIVE' ? '#ef4444' : '#10b981'}`,
+                      }}
+                    >
+                      {(selectedAssayer.lifecycleStatus || selectedAssayer.status) === 'ACTIVE' ? '🚫 Deactivate' : '✅ Activate'}
+                    </button>
                     <button onClick={() => navigate(`/assayers/${selectedAssayer.id}`)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <ExternalLink size={12} /> Full Profile
+                    </button>
+                    <button onClick={() => navigate('/planning')} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(99,102,241,0.1)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)' }}>
+                      🗺️ Stage 1
+                    </button>
+                    <button onClick={() => navigate('/scheduling')} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(139,92,246,0.1)', color: '#c084fc', border: '1px solid rgba(139,92,246,0.3)' }}>
+                      📅 Stage 2
+                    </button>
+                    <button onClick={() => navigate('/assignments')} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(16,185,129,0.1)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.3)' }}>
+                      📋 Stage 3
                     </button>
                     <button onClick={() => setShowEditModal(true)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Edit2 size={12} /> Edit
@@ -524,13 +619,19 @@ export const Assayers: React.FC = () => {
               </div>
 
               {/* Tabs */}
-              <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
-                {(['profile', 'commercial'] as const).map(tab => (
-                  <button key={tab} onClick={() => setActiveTab(tab)}
-                    style={{ flex: 1, padding: '12px', background: 'transparent', border: 'none',
-                      borderBottom: activeTab === tab ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                      color: activeTab === tab ? '#fff' : 'var(--text-muted)', fontWeight: 600, fontSize: '13px', cursor: 'pointer', textTransform: 'uppercase', transition: 'all 0.15s' }}>
-                    {tab === 'profile' ? 'Profile' : 'Commercial'}
+              <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+                {[
+                  { id: 'profile', label: 'Profile' },
+                  { id: 'commercial', label: 'Commercial' },
+                  { id: 'history', label: `Audit History (${assayerHistory.length})` },
+                  { id: 'remarks', label: `Remarks & Issues (${assayerRemarks.length})` },
+                  { id: 'documents', label: `Govt Docs (${assayerGovDocs.length})` },
+                ].map(t => (
+                  <button key={t.id} onClick={() => setActiveTab(t.id as any)}
+                    style={{ flex: 1, minWidth: '100px', padding: '12px 8px', background: 'transparent', border: 'none',
+                      borderBottom: activeTab === t.id ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                      color: activeTab === t.id ? '#fff' : 'var(--text-muted)', fontWeight: 600, fontSize: '12px', cursor: 'pointer', textTransform: 'uppercase', transition: 'all 0.15s' }}>
+                    {t.label}
                   </button>
                 ))}
               </div>
@@ -638,17 +739,17 @@ export const Assayers: React.FC = () => {
                       <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{selectedAssayer.notes || 'No notes'}</div>
                     </Section>
                   </div>
-                ) : (
+                ) : activeTab === 'commercial' ? (
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                      <h3 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>Commercial Profile History</h3>
+                      <h3 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>Commercial Fee Rates & Allowances</h3>
                       <button onClick={() => setShowProfileModal(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Plus size={12} /> Add Rate
+                        <Plus size={12} /> Add Fee Rate
                       </button>
                     </div>
                     {commercials.length === 0 ? (
                       <div style={{ padding: '30px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', color: 'var(--text-muted)' }}>
-                        No commercial profile configured.
+                        No commercial fee profile configured. Default base rates apply.
                       </div>
                     ) : commercials.map(c => (
                       <div key={c.id} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '16px', marginBottom: '12px' }}>
@@ -658,7 +759,7 @@ export const Assayers: React.FC = () => {
                           </div>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', fontSize: '13px' }}>
-                          <div><span style={{ color: 'var(--text-muted)' }}>Base Fee</span><div style={{ fontWeight: 600 }}>₹{c.baseFee}</div></div>
+                          <div><span style={{ color: 'var(--text-muted)' }}>Base Fee</span><div style={{ fontWeight: 600, color: 'var(--status-active)' }}>₹{c.baseFee}</div></div>
                           <div><span style={{ color: 'var(--text-muted)' }}>Hourly</span><div style={{ fontWeight: 600 }}>₹{c.hourlyRate}</div></div>
                           <div><span style={{ color: 'var(--text-muted)' }}>Daily</span><div style={{ fontWeight: 600 }}>₹{c.dailyRate}</div></div>
                           <div><span style={{ color: 'var(--text-muted)' }}>Travel/km</span><div style={{ fontWeight: 600 }}>₹{c.travelReimbursement}</div></div>
@@ -667,6 +768,110 @@ export const Assayers: React.FC = () => {
                         </div>
                       </div>
                     ))}
+                  </div>
+                ) : activeTab === 'history' ? (
+                  <div>
+                    <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>Audit Assignment History</h3>
+                    {assayerHistory.length === 0 ? (
+                      <div style={{ padding: '30px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', color: 'var(--text-muted)' }}>
+                        No audit assignments assigned yet.
+                      </div>
+                    ) : (
+                      assayerHistory.map(hist => (
+                        <div key={hist.id} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '14px', color: '#fff' }}>{hist.projectBranch?.branch?.name || hist.branchName || 'Branch Audit'}</div>
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                Scheduled: {hist.scheduledDate ? new Date(hist.scheduledDate).toLocaleDateString() : 'Today'} | Fee: ₹{hist.agreedFee || 3500}
+                              </div>
+                            </div>
+                            <span style={{ padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: hist.status === 'COMPLETED' ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)', color: hist.status === 'COMPLETED' ? '#34d399' : '#fbbf24' }}>
+                              {hist.status || 'PENDING'}
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : activeTab === 'remarks' ? (
+                  <div>
+                    <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '14px' }}>Performance Remarks & Issue Log</h3>
+
+                    {/* Add Remark Form */}
+                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '16px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff', marginBottom: '8px' }}>Log Performance Remark / Incident Note</div>
+                      <textarea
+                        value={newRemarkText}
+                        onChange={e => setNewRemarkText(e.target.value)}
+                        placeholder="Enter observation, customer feedback, or operational note..."
+                        style={{ width: '100%', height: '60px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: '#fff', padding: '8px', fontSize: '12px', marginBottom: '8px' }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <select
+                          value={newRemarkCategory}
+                          onChange={e => setNewRemarkCategory(e.target.value)}
+                          style={{ borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: '#fff', padding: '6px', fontSize: '12px' }}
+                        >
+                          <option value="PERFORMANCE">Performance Note</option>
+                          <option value="BEHAVIORAL">Behavioral</option>
+                          <option value="QUALITY">Quality / Hallmark Accuracy</option>
+                          <option value="INCIDENT">Incident / Issue</option>
+                        </select>
+                        <button
+                          onClick={async () => {
+                            if (!newRemarkText.trim() || !selectedAssayer) return;
+                            try {
+                              const created = await api.request<any>(`/assayers/${selectedAssayer.id}/remark`, {
+                                method: 'POST',
+                                body: JSON.stringify({ content: newRemarkText, category: newRemarkCategory, visibility: 'PUBLIC' }),
+                              });
+                              setAssayerRemarks([created, ...assayerRemarks]);
+                              setNewRemarkText('');
+                            } catch (e) { console.error(e); }
+                          }}
+                          className="btn btn-primary"
+                          style={{ padding: '6px 12px', fontSize: '12px' }}
+                        >
+                          Save Remark
+                        </button>
+                      </div>
+                    </div>
+
+                    {assayerRemarks.length === 0 ? (
+                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>No remarks or issue notes logged.</div>
+                    ) : (
+                      assayerRemarks.map(rem => (
+                        <div key={rem.id} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>{rem.category || 'NOTE'}</span>
+                            <span>{new Date(rem.createdAt || Date.now()).toLocaleDateString()}</span>
+                          </div>
+                          <div style={{ fontSize: '13px', color: '#fff' }}>{rem.content}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>Government IDs & Verified License Documents</h3>
+                    {assayerGovDocs.length === 0 ? (
+                      <div style={{ padding: '30px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', color: 'var(--text-muted)' }}>
+                        No government documents uploaded yet.
+                      </div>
+                    ) : (
+                      assayerGovDocs.map(doc => (
+                        <div key={doc.id} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontWeight: 700, color: '#fff', fontSize: '13px' }}>{doc.documentType || 'Government ID'}</div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>Doc No: {doc.documentNumber || 'VERIFIED'}</div>
+                          </div>
+                          <span style={{ padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'rgba(16,185,129,0.2)', color: '#34d399' }}>
+                            {doc.verificationStatus || 'VERIFIED'}
+                          </span>
+                        </div>
+                      ))
+                    )}
                   </div>
                 )}
               </div>
@@ -681,7 +886,7 @@ export const Assayers: React.FC = () => {
         </div>
       </div>
 
-      {showCreateModal && <CreateAssayerModal onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); fetchAssayers(); }} />}
+      {showCreateModal && <CreateAssayerModal existingAssayersCount={assayers.length} onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); fetchAssayers(); }} />}
       {showEditModal && selectedAssayer && <EditAssayerModal assayer={selectedAssayer} onClose={() => setShowEditModal(false)} onUpdated={() => { setShowEditModal(false); fetchAssayers().then(() => selectAssayer(selectedAssayer)); }} />}
       {showLifecycleModal && selectedAssayer && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowLifecycleModal(false)}>
@@ -763,26 +968,7 @@ const FIELD_TEL = new Set(['phone', 'alternatePhone', 'emergencyContactPhone']);
 const FIELD_NUM = new Set(['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']);
 const FIELD_TIME = new Set(['workingHoursStart', 'workingHoursEnd']);
 
-const INDIAN_STATES: { value: string; label: string }[] = [
-  { value: 'Andhra Pradesh', label: 'Andhra Pradesh' }, { value: 'Arunachal Pradesh', label: 'Arunachal Pradesh' },
-  { value: 'Assam', label: 'Assam' }, { value: 'Bihar', label: 'Bihar' },
-  { value: 'Chhattisgarh', label: 'Chhattisgarh' }, { value: 'Goa', label: 'Goa' },
-  { value: 'Gujarat', label: 'Gujarat' }, { value: 'Haryana', label: 'Haryana' },
-  { value: 'Himachal Pradesh', label: 'Himachal Pradesh' }, { value: 'Jharkhand', label: 'Jharkhand' },
-  { value: 'Karnataka', label: 'Karnataka' }, { value: 'Kerala', label: 'Kerala' },
-  { value: 'Madhya Pradesh', label: 'Madhya Pradesh' }, { value: 'Maharashtra', label: 'Maharashtra' },
-  { value: 'Manipur', label: 'Manipur' }, { value: 'Meghalaya', label: 'Meghalaya' },
-  { value: 'Mizoram', label: 'Mizoram' }, { value: 'Nagaland', label: 'Nagaland' },
-  { value: 'Odisha', label: 'Odisha' }, { value: 'Punjab', label: 'Punjab' },
-  { value: 'Rajasthan', label: 'Rajasthan' }, { value: 'Sikkim', label: 'Sikkim' },
-  { value: 'Tamil Nadu', label: 'Tamil Nadu' }, { value: 'Telangana', label: 'Telangana' },
-  { value: 'Tripura', label: 'Tripura' }, { value: 'Uttar Pradesh', label: 'Uttar Pradesh' },
-  { value: 'Uttarakhand', label: 'Uttarakhand' }, { value: 'West Bengal', label: 'West Bengal' },
-  { value: 'Andaman and Nicobar Islands', label: 'Andaman and Nicobar Islands' },
-  { value: 'Chandigarh', label: 'Chandigarh' }, { value: 'Delhi', label: 'Delhi' },
-  { value: 'Jammu and Kashmir', label: 'Jammu and Kashmir' }, { value: 'Ladakh', label: 'Ladakh' },
-  { value: 'Lakshadweep', label: 'Lakshadweep' }, { value: 'Puducherry', label: 'Puducherry' },
-];
+
 
 const EMPLOYMENT_TYPES: { value: string; label: string }[] = [
   { value: 'FULL_TIME', label: 'Full Time' }, { value: 'PART_TIME', label: 'Part Time' },
@@ -944,88 +1130,338 @@ const renderFormField = (field: FieldDef, form: Record<string, string>, setForm:
   );
 };
 
-const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void }> = ({ onClose, onCreated }) => {
-  const [form, setForm] = useState<Record<string, string>>({});
+const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void; existingAssayersCount?: number }> = ({ onClose, onCreated, existingAssayersCount = 10 }) => {
+  const [mode, setMode] = useState<'express' | 'advanced'>('express');
+  const [form, setForm] = useState<Record<string, string>>(() => {
+    const autoCode = `AS-${String(existingAssayersCount + 1).padStart(2, '0')}`;
+    return {
+      assayerCode: autoCode,
+      employmentType: 'FULL_TIME',
+      department: 'Gold Testing',
+      experienceYears: '5',
+      state: 'Delhi',
+      district: 'Central Delhi',
+      city: 'New Delhi',
+      joiningDate: new Date().toISOString().split('T')[0],
+    };
+  });
   const [activeTab, setActiveTab] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setSubmitting(true);
-    try {
-      const body: any = {};
-      CREATE_FIELDS.forEach(f => {
-        const val = form[f.key];
-        if (val !== undefined && val !== '') {
-          if (f.type === 'number') body[f.key] = Number(val);
-          else if (f.type === 'date') body[f.key] = new Date(val).toISOString();
-          else body[f.key] = val;
+  const handlePincodeLookup = async (pincode: string) => {
+    if (pincode.length === 6 && /^\d+$/.test(pincode)) {
+      try {
+        const res = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
+        const data = await res.json();
+        if (data && data[0] && data[0].Status === 'Success' && data[0].PostOffice?.[0]) {
+          const po = data[0].PostOffice[0];
+          setForm(prev => ({
+            ...prev,
+            city: po.District || po.Block || prev.city,
+            district: po.District || prev.district,
+            state: po.State || prev.state,
+          }));
         }
-      });
+      } catch (e) {}
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const firstName = form.firstName?.trim() || '';
+      const lastName = form.lastName?.trim() || '';
+      const displayName = form.displayName?.trim() || `${firstName} ${lastName}`.trim() || firstName || lastName || 'Assayer';
+      const autoCode = form.assayerCode?.trim() || `AS-${String(Math.floor(10 + Math.random() * 89))}`;
+
+      const rawPhone = form.phone?.replace(/\D/g, '') || '';
+      const formattedPhone = rawPhone ? (rawPhone.startsWith('91') ? `+${rawPhone}` : `+91${rawPhone}`) : '';
+
+      const body: any = {
+        assayerCode: autoCode,
+        firstName: firstName,
+        lastName: lastName,
+        displayName: displayName,
+        phone: formattedPhone,
+        email: form.email?.trim() || (firstName && lastName ? `${firstName.toLowerCase()}.${lastName.toLowerCase()}@fapoms.com` : null),
+        address: form.address?.trim() || '',
+        city: form.city?.trim() || '',
+        district: form.district?.trim() || form.city?.trim() || '',
+        state: form.state?.trim() || '',
+        pincode: form.pincode?.trim() || null,
+        employmentType: form.employmentType || 'FULL_TIME',
+        department: form.department || 'Operations',
+        experienceYears: form.experienceYears ? Number(form.experienceYears) : 0,
+        joiningDate: form.joiningDate ? new Date(form.joiningDate).toISOString() : new Date().toISOString(),
+        alternatePhone: form.alternatePhone?.trim() || null,
+        region: form.region?.trim() || null,
+        employeeId: form.employeeId?.trim() || null,
+        employeeCode: form.employeeCode?.trim() || null,
+        panNumber: form.panNumber?.trim() || null,
+        bankAccountNumber: form.bankAccountNumber?.trim() || null,
+        ifscCode: form.ifscCode?.trim() || null,
+        notes: form.notes?.trim() || null,
+      };
+
       await api.request('/assayers', { method: 'POST', body: JSON.stringify(body) });
       onCreated();
-    } catch (err) { alert(err instanceof Error ? err.message : 'Failed to create assayer'); }
-    finally { setSubmitting(false); }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create assayer');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const fieldsMap = new Map(CREATE_FIELDS.map(f => [f.key, f]));
   const currentGroup = CREATE_FIELD_GROUPS[activeTab];
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
-      <div className="glass-card" style={{ width: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ padding: '20px 24px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <User size={18} style={{ color: 'var(--accent-primary)' }} /> Add Assayer
-          </h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}><X size={18} /></button>
-        </div>
-        <div style={{ display: 'flex', gap: '0', padding: '16px 24px 0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
-          {CREATE_FIELD_GROUPS.map((group, i) => (
-            <button key={group.title} onClick={() => setActiveTab(i)}
-              style={{
-                padding: '8px 14px', background: 'transparent', border: 'none',
-                borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                color: activeTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
-                fontWeight: activeTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
-                transition: 'all 0.15s', opacity: activeTab === i ? 1 : 0.6,
-              }}>
-              {group.icon} {group.title}
-            </button>
-          ))}
-        </div>
-        <form onSubmit={handleSubmit} style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              {currentGroup.fields.map(key => {
-                const field = fieldsMap.get(key);
-                return field ? renderFormField(field, form, setForm) : null;
-              })}
-            </div>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
+      <div className="glass-card" style={{ width: '680px', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-color)', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()}>
+        {/* Top Header & Mode Selector */}
+        <div style={{ padding: '20px 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
+          <div>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <User size={18} style={{ color: 'var(--accent-primary)' }} /> Enroll New Assayer
+            </h3>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '4px 0 0' }}>
+              Fast 1-click onboarding with auto-generated code and pincode geocoding.
+            </p>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '20px' }}>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {activeTab > 0 && (
-                <button type="button" onClick={() => setActiveTab(activeTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  ← Previous
-                </button>
-              )}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div style={{ background: 'rgba(255,255,255,0.06)', padding: '3px', borderRadius: '8px', display: 'flex', gap: '2px', border: '1px solid var(--border-color)' }}>
+              <button
+                type="button"
+                onClick={() => setMode('express')}
+                style={{
+                  padding: '5px 12px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: mode === 'express' ? 'var(--accent-primary)' : 'transparent',
+                  color: mode === 'express' ? '#fff' : 'var(--text-muted)',
+                }}
+              >
+                ⚡ Express Mode
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('advanced')}
+                style={{
+                  padding: '5px 12px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: mode === 'advanced' ? 'var(--accent-primary)' : 'transparent',
+                  color: mode === 'advanced' ? '#fff' : 'var(--text-muted)',
+                }}
+              >
+                📋 Advanced (6 Tabs)
+              </button>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
-              {activeTab < CREATE_FIELD_GROUPS.length - 1 ? (
-                <button type="button" onClick={() => setActiveTab(activeTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  Next →
-                </button>
-              ) : (
-                <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  {submitting ? 'Saving...' : <><CheckCircle size={14} /> Create Assayer</>}
-                </button>
-              )}
-            </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}><X size={18} /></button>
           </div>
-        </form>
+        </div>
+
+        {/* Mode Body */}
+        {mode === 'express' ? (
+          <form onSubmit={handleSubmit} style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Auto-Generated Assayer Code</span>
+                <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{form.assayerCode}</span>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Default Department</span>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#34d399' }}>Gold Testing & Assay</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <div>
+                <label style={labelStyle}>First Name <span style={{ color: '#ef4444' }}>*</span></label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Deepak"
+                  className="form-input"
+                  style={formFieldStyle}
+                  value={form.firstName || ''}
+                  onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Last Name <span style={{ color: '#ef4444' }}>*</span></label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Verma"
+                  className="form-input"
+                  style={formFieldStyle}
+                  value={form.lastName || ''}
+                  onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Mobile Phone Number <span style={{ color: '#ef4444' }}>*</span></label>
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="9876543217"
+                    maxLength={10}
+                    style={{ ...formFieldStyle, paddingLeft: '42px' }}
+                    value={form.phone || ''}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, '') })}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Email Address (Optional)</label>
+                <input
+                  type="email"
+                  placeholder="deepak.verma@fapoms.com"
+                  className="form-input"
+                  style={formFieldStyle}
+                  value={form.email || ''}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+              </div>
+
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={labelStyle}>Base Street Address <span style={{ color: '#ef4444' }}>*</span></label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Connaught Place, Radial Road 1, Central Delhi"
+                  className="form-input"
+                  style={formFieldStyle}
+                  value={form.address || ''}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Pincode (Auto-Fills City & State) <span style={{ color: '#ef4444' }}>*</span></label>
+                <input
+                  type="text"
+                  required
+                  maxLength={6}
+                  placeholder="e.g. 110001"
+                  className="form-input"
+                  style={{ ...formFieldStyle, fontFamily: 'monospace' }}
+                  value={form.pincode || ''}
+                  onChange={(e) => {
+                    const pin = e.target.value.replace(/\D/g, '');
+                    setForm({ ...form, pincode: pin });
+                    handlePincodeLookup(pin);
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>City / Base District <span style={{ color: '#ef4444' }}>*</span></label>
+                <input
+                  type="text"
+                  required
+                  placeholder="New Delhi"
+                  className="form-input"
+                  style={formFieldStyle}
+                  value={form.city || ''}
+                  onChange={(e) => setForm({ ...form, city: e.target.value, district: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>State <span style={{ color: '#ef4444' }}>*</span></label>
+                <select
+                  value={form.state || 'Delhi'}
+                  onChange={(e) => setForm({ ...form, state: e.target.value })}
+                  style={formSelectStyle}
+                >
+                  {INDIAN_STATES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Employment Type</label>
+                <select
+                  value={form.employmentType || 'FULL_TIME'}
+                  onChange={(e) => setForm({ ...form, employmentType: e.target.value })}
+                  style={formSelectStyle}
+                >
+                  {EMPLOYMENT_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '9px 18px', fontSize: '13px' }}>Cancel</button>
+              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '9px 22px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)' }}>
+                {submitting ? 'Enrolling...' : <><CheckCircle size={16} /> Enroll Assayer Instantly ⚡</>}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '0', padding: '16px 24px 0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
+              {CREATE_FIELD_GROUPS.map((group, i) => (
+                <button key={group.title} onClick={() => setActiveTab(i)}
+                  style={{
+                    padding: '8px 14px', background: 'transparent', border: 'none',
+                    borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                    color: activeTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
+                    fontWeight: activeTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+                    transition: 'all 0.15s', opacity: activeTab === i ? 1 : 0.6,
+                  }}>
+                  {group.icon} {group.title}
+                </button>
+              ))}
+            </div>
+            <form onSubmit={handleSubmit} style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  {currentGroup.fields.map(key => {
+                    const field = fieldsMap.get(key);
+                    return field ? renderFormField(field, form, setForm) : null;
+                  })}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '20px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {activeTab > 0 && (
+                    <button type="button" onClick={() => setActiveTab(activeTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      ← Previous
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
+                  {activeTab < CREATE_FIELD_GROUPS.length - 1 ? (
+                    <button type="button" onClick={() => setActiveTab(activeTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      Next →
+                    </button>
+                  ) : (
+                    <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {submitting ? 'Saving...' : <><CheckCircle size={14} /> Create Assayer</>}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </form>
+          </>
+        )}
       </div>
     </div>
   );

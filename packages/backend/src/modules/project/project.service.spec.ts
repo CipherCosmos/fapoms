@@ -9,6 +9,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { ProjectStatus, Priority } from '@fapoms/shared';
+import { ClientEntity } from '../client/client.entity';
 import { BranchService } from '../branch/branch.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
@@ -31,6 +32,10 @@ describe('ProjectService', () => {
     findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
+  };
+
+  const mockClientRepo = {
+    findOne: jest.fn(),
   };
 
   const mockBranchRepo = {
@@ -83,6 +88,10 @@ describe('ProjectService', () => {
         {
           provide: getRepositoryToken(ProjectBranchEntity),
           useValue: mockProjectBranchRepo,
+        },
+        {
+          provide: getRepositoryToken(ClientEntity),
+          useValue: mockClientRepo,
         },
         {
           provide: BranchQueryService,

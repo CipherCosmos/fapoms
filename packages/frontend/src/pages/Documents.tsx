@@ -89,6 +89,31 @@ export const Documents: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* ── MASTER DOCUMENT & OCR WORKFLOW HEADER ── */}
+      <div style={{ background: 'linear-gradient(90deg, rgba(99,102,241,0.12) 0%, rgba(16,185,129,0.06) 100%)', border: '1px solid rgba(99,102,241,0.25)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ backgroundColor: '#6366f1', color: '#fff', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Master Data & PDF Ingestion
+          </span>
+          <div>
+            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+              Master File Upload & PDF Document Distribution
+            </h3>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              Upload customer master files, store audit report PDFs, and dispatch incoming documents to the OCR parsing queue.
+            </span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button 
+            onClick={() => window.location.href = '/validation'} 
+            style={{ padding: '6px 12px', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)', borderRadius: '6px', color: '#6ee7b7', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            🔍 View OCR Validation Queue ➔
+          </button>
+        </div>
+      </div>
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -201,35 +226,44 @@ export const Documents: React.FC = () => {
           )}
         </div>
 
-        {/* Upload Panel */}
+        {/* Upload Panel for Sajid & Operations Team */}
         <div className="glass-card" style={{ height: 'fit-content', display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-          <h4 style={{ fontWeight: 600, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Upload size={16} /> Upload Document
+          <h4 style={{ fontWeight: 600, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-primary)' }}>
+            <Upload size={16} /> Master Customer Excel Upload (Sajid/Operations)
           </h4>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+            Upload customer master Excel file for planned branches. System performs accountability checks against planned branches and dispatches to the external OCR application.
+          </p>
+
           <form onSubmit={handleUploadSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Project Branch ID</label>
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Project Branch Link ID</label>
               <input type="text" value={projectBranchId} onChange={e => setProjectBranchId(e.target.value)} required
+                placeholder="e.g. pb-001 or select branch..."
                 style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Document Type</label>
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Document Workflow Category</label>
               <select value={docType} onChange={e => setDocType(e.target.value)}
                 style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
-                <option value="CUSTOMER_MASTER_DATA">Customer Master Data</option>
-                <option value="RETURNED_AUDIT_PDF">Returned Audit PDF</option>
-                <option value="BRANCH_LIST">Branch List</option>
+                <option value="CUSTOMER_MASTER_DATA">Customer Master Excel (Sajid Team)</option>
+                <option value="RETURNED_AUDIT_PDF">Returned Scanned Audit PDF (Field Auditor)</option>
+                <option value="BRANCH_LIST">Branch Mandate List</option>
               </select>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Select File</label>
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Select File (.xlsx / .pdf)</label>
               <input id="file-upload-input" type="file" onChange={e => { if (e.target.files?.length) setSelectedFile(e.target.files[0]); }} required
                 style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
             </div>
-            <button type="submit" disabled={isUploading} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              <Upload size={15} /> {isUploading ? 'Uploading...' : 'Upload File'}
+            <button type="submit" disabled={isUploading} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px' }}>
+              <Upload size={15} /> {isUploading ? 'Uploading & Triggering OCR Bridge...' : 'Upload & Send to OCR Engine'}
             </button>
           </form>
+
+          <div style={{ padding: '12px', background: 'rgba(16,185,129,0.06)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16,185,129,0.2)', fontSize: '11px', color: 'var(--status-active)' }}>
+            ✓ Accountability Check: Verification system will cross-reference customer rows against planned branch IDs.
+          </div>
         </div>
       </div>
     </div>

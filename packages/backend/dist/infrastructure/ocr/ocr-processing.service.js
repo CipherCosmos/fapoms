@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.OcrProcessingService = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
+const bull_1 = require("@nestjs/bull");
 const typeorm_2 = require("typeorm");
 const ocr_job_entity_1 = require("./ocr-job.entity");
 const document_entity_1 = require("../../modules/document/document.entity");
@@ -26,11 +27,13 @@ let OcrProcessingService = class OcrProcessingService {
     documentRepository;
     validationService;
     auditService;
-    constructor(ocrJobRepository, documentRepository, validationService, auditService) {
+    ocrQueue;
+    constructor(ocrJobRepository, documentRepository, validationService, auditService, ocrQueue) {
         this.ocrJobRepository = ocrJobRepository;
         this.documentRepository = documentRepository;
         this.validationService = validationService;
         this.auditService = auditService;
+        this.ocrQueue = ocrQueue;
     }
     async createJob(documentId, userId) {
         const doc = await this.documentRepository.findOne({ where: { id: documentId, isActive: true } });
@@ -50,7 +53,13 @@ let OcrProcessingService = class OcrProcessingService {
             entityType: 'OCR_JOB',
             entityId: saved.id,
             userId,
-            remarks: `OCR job successfully registered at boundary for document: ${doc.fileName}.`,
+            remarks: `OCR job registered for document: ${doc.fileName}.`,
+        });
+        await this.ocrQueue.add('process', { documentId, userId, fileName: doc.fileName }, {
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 1000 },
+            removeOnComplete: false,
+            removeOnFail: false,
         });
         return saved;
     }
@@ -83,7 +92,37 @@ let OcrProcessingService = class OcrProcessingService {
             entityType: 'OCR_JOB',
             entityId: saved.id,
             userId,
-            remarks: `Received external OCR payload. Pushed to human validator review queue.`,
+            remarks: 'Received external OCR payload. Pushed to human validator review queue.',
+        });
+        return saved;
+    }
+    async retryJob(jobId, userId) {
+        const job = await this.findOne(jobId);
+        job.status = ocr_job_entity_1.OcrJobStatus.PROCESSING;
+        job.updatedBy = userId;
+        const saved = await this.ocrJobRepository.save(job);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.SYSTEM,
+            eventType: 'OCR_JOB_RETRY',
+            entityType: 'OCR_JOB',
+            entityId: saved.id,
+            userId,
+            remarks: `Re-enqueued OCR job retry for document ID: ${job.documentId}`,
+        });
+        return saved;
+    }
+    async handleJobFailure(jobId, errorDetails, userId) {
+        const job = await this.findOne(jobId);
+        job.status = ocr_job_entity_1.OcrJobStatus.FAILED;
+        job.updatedBy = userId;
+        const saved = await this.ocrJobRepository.save(job);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.SYSTEM,
+            eventType: 'OCR_JOB_FAILED',
+            entityType: 'OCR_JOB',
+            entityId: saved.id,
+            userId,
+            remarks: `OCR job failed. Error details: ${errorDetails}`,
         });
         return saved;
     }
@@ -93,9 +132,10 @@ exports.OcrProcessingService = OcrProcessingService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(ocr_job_entity_1.OcrJobEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(document_entity_1.DocumentEntity)),
+    __param(4, (0, bull_1.InjectQueue)('ocr')),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
         validation_service_1.ValidationService,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService, Object])
 ], OcrProcessingService);
 //# sourceMappingURL=ocr-processing.service.js.map

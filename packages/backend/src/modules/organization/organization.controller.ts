@@ -5,7 +5,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
 import { OrganizationService, CreateOrganizationDto, UpdateOrganizationDto } from './organization.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateOrganizationRequestDto implements CreateOrganizationDto {
@@ -56,7 +56,7 @@ class UpdateOrganizationRequestDto implements UpdateOrganizationDto {
 
 @ApiTags('Organizations')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('organizations')
 export class OrganizationController {
   constructor(private readonly organizationService: OrganizationService) {}
@@ -64,6 +64,7 @@ export class OrganizationController {
   @Post()
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('organization:create:organization')
   @ApiOperation({ summary: 'Create a new organization' })
   async create(@Body() dto: CreateOrganizationRequestDto, @Req() req: any) {
     const org = await this.organizationService.create(dto, req.user.id);
@@ -92,6 +93,7 @@ export class OrganizationController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('organization:update:organization')
   @ApiOperation({ summary: 'Update an organization' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateOrganizationRequestDto, @Req() req: any) {
     const org = await this.organizationService.update(id, dto, req.user.id);
@@ -101,6 +103,7 @@ export class OrganizationController {
   @Delete(':id')
   @HttpCode(204)
   @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @RequirePermissions('organization:delete:organization')
   @ApiOperation({ summary: 'Soft delete an organization' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
     await this.organizationService.remove(id, req.user.id);

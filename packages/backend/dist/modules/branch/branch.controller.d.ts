@@ -25,6 +25,7 @@ declare class CreateBranchRequestDto implements CreateBranchDto {
     complexity?: string;
     estimatedDurationHours?: number;
     requiredCompetencies?: string[];
+    operatingHours?: Record<string, any>;
 }
 declare class UpdateBranchRequestDto implements UpdateBranchDto {
     branchCode?: string;
@@ -52,6 +53,7 @@ declare class UpdateBranchRequestDto implements UpdateBranchDto {
     complexity?: string;
     estimatedDurationHours?: number;
     requiredCompetencies?: string[];
+    operatingHours?: Record<string, any>;
 }
 declare class CreateContactRequestDto implements CreateContactDto {
     name: string;

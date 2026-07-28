@@ -46,6 +46,7 @@ class CreateBranchRequestDto {
     complexity;
     estimatedDurationHours;
     requiredCompetencies;
+    operatingHours;
 }
 __decorate([
     (0, class_validator_1.IsString)(),
@@ -172,6 +173,11 @@ __decorate([
     (0, class_validator_1.IsString)({ each: true }),
     __metadata("design:type", Array)
 ], CreateBranchRequestDto.prototype, "requiredCompetencies", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], CreateBranchRequestDto.prototype, "operatingHours", void 0);
 class UpdateBranchRequestDto {
     branchCode;
     solId;
@@ -198,6 +204,7 @@ class UpdateBranchRequestDto {
     complexity;
     estimatedDurationHours;
     requiredCompetencies;
+    operatingHours;
 }
 __decorate([
     (0, class_validator_1.IsOptional)(),
@@ -324,6 +331,11 @@ __decorate([
     (0, class_validator_1.IsString)({ each: true }),
     __metadata("design:type", Array)
 ], UpdateBranchRequestDto.prototype, "requiredCompetencies", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateBranchRequestDto.prototype, "operatingHours", void 0);
 class CreateContactRequestDto {
     name;
     email;
@@ -456,7 +468,7 @@ let BranchController = class BranchController {
         this.branchService = branchService;
     }
     async create(dto, req) {
-        const branch = await this.branchService.create(dto, req.user.id);
+        const branch = await this.branchService.create(dto, req.user.id, req.user.organizationId);
         return { success: true, data: branch };
     }
     async findAll(page = 1, limit = 20, clientId, region, zoneId) {
@@ -526,6 +538,7 @@ exports.BranchController = BranchController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('branch:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new branch' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -556,6 +569,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('branch:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update branch details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -567,6 +581,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('branch:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete branch' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -585,6 +600,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/contacts'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('branch:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Add branch contact' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -596,6 +612,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/contacts/:contactId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('branch:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update branch contact' }),
     __param(0, (0, common_1.Param)('contactId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -607,6 +624,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id/contacts/:contactId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('branch:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Remove branch contact' }),
     __param(0, (0, common_1.Param)('contactId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -625,6 +643,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/documents'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('branch:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Add branch document' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -636,6 +655,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id/documents/:documentId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('branch:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Remove branch document' }),
     __param(0, (0, common_1.Param)('documentId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -646,6 +666,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('import/:clientId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('branch:create:organization'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
     (0, swagger_1.ApiConsumes)('multipart/form-data'),
     (0, swagger_1.ApiOperation)({ summary: 'Import branches from Excel' }),
@@ -665,7 +686,7 @@ __decorate([
 exports.BranchController = BranchController = __decorate([
     (0, swagger_1.ApiTags)('Branches'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('branches'),
     __metadata("design:paramtypes", [branch_service_1.BranchService])
 ], BranchController);

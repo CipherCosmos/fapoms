@@ -1,0 +1,152 @@
+# =============================================================================
+# FAPOMS — Docker Compose (Development with Hot Reload)
+# =============================================================================
+#
+# Usage:
+#   docker compose up --build        # Build & start all services
+#   docker compose up -d             # Start in background
+#   docker compose logs -f backend   # Follow logs for a specific service
+#   docker compose down              # Stop all services
+#   docker compose down -v           # Stop & remove volumes (reset DB)
+#
+# Hot Reload:
+#   Source directories are bind-mounted into containers.
+#   Edit any file on your host → the container picks up changes instantly.
+#
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: fapoms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fapoms
+      POSTGRES_USER: fapoms
+      POSTGRES_PASSWORD: fapoms_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fapoms -d fapoms"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Redis 7
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: fapoms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Backend (NestJS) — Hot Reload via nest start --watch
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile.dev
+    container_name: fapoms-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.docker
+    volumes:
+      # Bind-mount source code for hot reload
+      - ./packages/backend/src:/app/packages/backend/src
+      - ./packages/backend/nest-cli.json:/app/packages/backend/nest-cli.json
+      - ./packages/backend/tsconfig.json:/app/packages/backend/tsconfig.json
+      # Bind-mount shared source so shared changes propagate
+      - ./packages/shared/src:/app/packages/shared/src
+      # Persist uploads
+      - ./packages/uploads:/app/packages/backend/uploads
+      # Anonymous volume: keep container's node_modules (don't clobber with host)
+      - /app/node_modules
+      - /app/packages/backend/node_modules
+      - /app/packages/shared/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Frontend (Vite + React) — Hot Reload via Vite HMR
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile.dev
+    container_name: fapoms-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://backend:3000
+    volumes:
+      # Bind-mount source code for hot reload
+      - ./packages/frontend/src:/app/packages/frontend/src
+      - ./packages/frontend/index.html:/app/packages/frontend/index.html
+      - ./packages/frontend/vite.config.ts:/app/packages/frontend/vite.config.ts
+      - ./packages/frontend/tsconfig.json:/app/packages/frontend/tsconfig.json
+      # Bind-mount shared source
+      - ./packages/shared/src:/app/packages/shared/src
+      # Anonymous volume: keep container's node_modules
+      - /app/node_modules
+      - /app/packages/frontend/node_modules
+      - /app/packages/shared/node_modules
+    depends_on:
+      - backend
+
+  # ---------------------------------------------------------------------------
+  # Mobile (Expo Web) — Hot Reload via Metro Bundler
+  # ---------------------------------------------------------------------------
+  mobile:
+    build:
+      context: .
+      dockerfile: packages/mobile/Dockerfile.dev
+    container_name: fapoms-mobile
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
+      - REACT_NATIVE_PACKAGER_HOSTNAME=0.0.0.0
+    volumes:
+      # Bind-mount source code for hot reload
+      - ./packages/mobile/src:/app/packages/mobile/src
+      - ./packages/mobile/App.tsx:/app/packages/mobile/App.tsx
+      - ./packages/mobile/tsconfig.json:/app/packages/mobile/tsconfig.json
+      # Bind-mount shared source
+      - ./packages/shared/src:/app/packages/shared/src
+      # Anonymous volume: keep container's node_modules
+      - /app/node_modules
+      - /app/packages/mobile/node_modules
+      - /app/packages/shared/node_modules
+    depends_on:
+      - backend
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local

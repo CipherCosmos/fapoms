@@ -1,0 +1,36 @@
+# =============================================================================
+# DEPRECATED: Use the root-level docker-compose.yml instead!
+#   cd .. && docker compose up --build
+# =============================================================================
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: fapoms-postgres
+    environment:
+      POSTGRES_DB: fapoms_db
+      POSTGRES_USER: fapoms_admin
+      POSTGRES_PASSWORD: fapoms_password
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: fapoms-redis
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    container_name: fapoms-backend
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://fapoms_admin:fapoms_password@postgres:5432/fapoms_db
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis

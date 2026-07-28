@@ -14,6 +14,7 @@ const scheduling_controller_1 = require("./scheduling.controller");
 const schedule_entity_1 = require("./schedule.entity");
 const holiday_module_1 = require("../holiday/holiday.module");
 const assignment_module_1 = require("../assignment/assignment.module");
+const planning_module_1 = require("../planning/planning.module");
 let SchedulingModule = class SchedulingModule {
 };
 exports.SchedulingModule = SchedulingModule;
@@ -23,6 +24,7 @@ exports.SchedulingModule = SchedulingModule = __decorate([
             typeorm_1.TypeOrmModule.forFeature([schedule_entity_1.ScheduleEntity]),
             holiday_module_1.HolidayModule,
             assignment_module_1.AssignmentModule,
+            planning_module_1.PlanningModule,
         ],
         controllers: [scheduling_controller_1.SchedulingController],
         providers: [scheduling_service_1.SchedulingService],

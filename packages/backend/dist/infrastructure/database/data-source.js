@@ -16,14 +16,14 @@ exports.AppDataSource = new typeorm_1.DataSource({
     synchronize: process.env.DB_SYNCHRONIZE === 'true',
     logging: process.env.DB_LOGGING === 'true',
     entities: [
-        path.join(process.cwd(), 'src/**/*.entity.ts'),
-        path.join(process.cwd(), 'src/modules/**/*.entities.ts'),
         path.join(process.cwd(), 'dist/**/*.entity.js'),
-        path.join(process.cwd(), 'dist/modules/**/*.entities.js')
+        path.join(process.cwd(), 'dist/modules/**/*.entities.js'),
+        path.join(process.cwd(), 'src/**/*.entity.ts'),
+        path.join(process.cwd(), 'src/modules/**/*.entities.ts')
     ],
     migrations: [
-        path.join(process.cwd(), 'src/infrastructure/database/migrations/*.ts'),
-        path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js')
+        path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js'),
+        path.join(process.cwd(), 'src/infrastructure/database/migrations/*.ts')
     ],
     subscribers: [],
 });

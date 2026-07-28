@@ -18,18 +18,46 @@ const swagger_1 = require("@nestjs/swagger");
 const validation_service_1 = require("./validation.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
+const class_validator_1 = require("class-validator");
 class CreateValidationCaseRequestDto {
     projectBranchId;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateValidationCaseRequestDto.prototype, "projectBranchId", void 0);
 class AssignReviewerDto {
     reviewerId;
 }
+__decorate([
+    (0, class_validator_1.IsUUID)(),
+    __metadata("design:type", String)
+], AssignReviewerDto.prototype, "reviewerId", void 0);
 class TransitionValidationCaseDto {
     targetStatus;
     remarks;
     notes;
     ocrResult;
 }
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.ValidationStatus),
+    __metadata("design:type", String)
+], TransitionValidationCaseDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TransitionValidationCaseDto.prototype, "remarks", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TransitionValidationCaseDto.prototype, "notes", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", Object)
+], TransitionValidationCaseDto.prototype, "ocrResult", void 0);
 let ValidationController = class ValidationController {
     validationService;
     constructor(validationService) {
@@ -82,6 +110,7 @@ exports.ValidationController = ValidationController;
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER),
+    (0, guards_1.RequirePermissions)('validation:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Register a project branch for document validation' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -109,6 +138,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/assign'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER),
+    (0, guards_1.RequirePermissions)('validation:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Assign a validation case to a validator reviewer' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -120,6 +150,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR),
+    (0, guards_1.RequirePermissions)('validation:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition validation case status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -131,7 +162,7 @@ __decorate([
 exports.ValidationController = ValidationController = __decorate([
     (0, swagger_1.ApiTags)('Validation'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('validation'),
     __metadata("design:paramtypes", [validation_service_1.ValidationService])
 ], ValidationController);

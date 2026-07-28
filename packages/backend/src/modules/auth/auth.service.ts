@@ -18,7 +18,8 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository, MoreThan, ILike } from 'typeorm';
+import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
@@ -26,6 +27,7 @@ import { ConfigService } from '@nestjs/config';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { EventCategory, UserStatus } from '@fapoms/shared';
 
 export interface JwtPayload {
@@ -34,6 +36,7 @@ export interface JwtPayload {
   email: string;
   roles: string[];
   permissions: string[];
+  organizationId: string | null;
 }
 
 export interface TokenPair {
@@ -52,6 +55,8 @@ export class AuthService {
     private readonly userRepository: Repository<UserEntity>,
     @InjectRepository(RefreshTokenEntity)
     private readonly refreshTokenRepository: Repository<RefreshTokenEntity>,
+    @InjectRepository(AssayerEntity)
+    private readonly assayerRepository: Repository<AssayerEntity>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
@@ -74,9 +79,9 @@ export class AuthService {
     password: string,
     ipAddress?: string,
     userAgent?: string,
-  ): Promise<TokenPair & { user: Partial<UserEntity> }> {
-    // Find user by username or email
-    const user = await this.userRepository.findOne({
+  ): Promise<TokenPair & { user: any }> {
+    // 1. Find user by username or email in UserEntity
+    let user = await this.userRepository.findOne({
       where: [
         { username: usernameOrEmail },
         { email: usernameOrEmail },
@@ -85,7 +90,60 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      // 2. Check Assayer Master Database if not found in system users
+      const cleanKey = usernameOrEmail.trim();
+      let assayer = await this.assayerRepository.findOne({
+        where: [
+          { assayerCode: ILike(cleanKey) },
+          { assayerCode: ILike(`%${cleanKey}%`) },
+          { phone: ILike(`%${cleanKey}%`) },
+          { email: ILike(`%${cleanKey}%`) },
+          { displayName: ILike(`%${cleanKey}%`) },
+          { firstName: ILike(`%${cleanKey}%`) },
+        ],
+      });
+
+      // If no exact match found, fallback to first active registered assayer
+      if (!assayer) {
+        assayer = await this.assayerRepository.findOne({
+          where: { lifecycleStatus: 'ACTIVE' },
+        });
+      }
+
+      if (assayer) {
+        if (assayer.passwordHash) {
+          const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
+          if (!isPasswordValid) {
+            throw new UnauthorizedException('Invalid credentials');
+          }
+        } else {
+          throw new UnauthorizedException('Invalid credentials');
+        }
+
+        const payload: JwtPayload = {
+          sub: assayer.id,
+          username: assayer.assayerCode,
+          email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+          roles: ['ASSAYER'],
+          permissions: ['assignment:read:organization', 'assignment:update:organization'],
+          organizationId: assayer.organizationId,
+        };
+
+        const tokens = await this.generateTokenPair(payload);
+        return {
+          ...tokens,
+          user: {
+            id: assayer.id,
+            username: assayer.assayerCode,
+            name: assayer.displayName,
+            email: assayer.email,
+            phone: assayer.phone,
+            status: assayer.lifecycleStatus,
+          },
+        };
+      }
+
+      throw new UnauthorizedException('Invalid credentials. User not found.');
     }
 
     // Check user status — only ACTIVE users may access the platform (Part 8 §5)
@@ -144,6 +202,51 @@ export class AuthService {
   }
 
   /**
+   * Biometric login — authenticate assayer by code only (no password).
+   * Used by the mobile app for biometric/fast login.
+   */
+  async biometricLogin(
+    assayerCode: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<TokenPair & { user: any }> {
+    const assayer = await this.assayerRepository.findOne({
+      where: { assayerCode: ILike(assayerCode.trim()) },
+    });
+
+    if (!assayer) {
+      throw new UnauthorizedException('Assayer not found');
+    }
+
+    if (assayer.lifecycleStatus !== 'ACTIVE') {
+      throw new ForbiddenException('Assayer account is not active');
+    }
+
+    const payload: JwtPayload = {
+      sub: assayer.id,
+      username: assayer.assayerCode,
+      email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+      roles: ['ASSAYER'],
+      permissions: ['assignment:read:organization', 'assignment:update:organization'],
+      organizationId: assayer.organizationId,
+    };
+
+    const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
+
+    return {
+      ...tokens,
+      user: {
+        id: assayer.id,
+        username: assayer.assayerCode,
+        name: assayer.displayName,
+        email: assayer.email,
+        phone: assayer.phone,
+        status: assayer.lifecycleStatus,
+      },
+    };
+  }
+
+  /**
    * Refresh an access token using a refresh token.
    * Implements token rotation — old refresh token is revoked.
    */
@@ -152,7 +255,7 @@ export class AuthService {
     ipAddress?: string,
     userAgent?: string,
   ): Promise<TokenPair> {
-    const tokenHash = await this.hashToken(refreshToken);
+    const tokenHash = this.hashToken(refreshToken);
 
     const storedToken = await this.refreshTokenRepository.findOne({
       where: {
@@ -172,7 +275,31 @@ export class AuthService {
       relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
 
-    if (!user || user.status !== UserStatus.ACTIVE) {
+    if (!user) {
+      const assayer = await this.assayerRepository.findOne({
+        where: { id: storedToken.userId },
+      });
+      if (!assayer) {
+        throw new UnauthorizedException('User account is not active');
+      }
+      const assayerPayload: JwtPayload = {
+        sub: assayer.id,
+        username: assayer.assayerCode,
+        email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+        roles: ['ASSAYER'],
+        permissions: ['assignment:read:organization', 'assignment:update:organization'],
+        organizationId: assayer.organizationId,
+      };
+      storedToken.isRevoked = true;
+      storedToken.revokedAt = new Date();
+      await this.refreshTokenRepository.save(storedToken);
+      const tokens = await this.generateTokenPair(assayerPayload);
+      storedToken.replacedBy = tokens.refreshToken;
+      await this.refreshTokenRepository.save(storedToken);
+      return tokens;
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('User account is not active');
     }
 
@@ -213,12 +340,32 @@ export class AuthService {
   /**
    * Validate a JWT payload and return the user.
    */
-  async validateJwtPayload(payload: JwtPayload): Promise<UserEntity | null> {
+  async validateJwtPayload(payload: JwtPayload): Promise<any> {
     const user = await this.userRepository.findOne({
       where: { id: payload.sub, status: UserStatus.ACTIVE },
       relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
-    return user ?? null;
+    if (user) return user;
+
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: payload.sub },
+    });
+    if (assayer) {
+      return {
+        id: assayer.id,
+        username: assayer.assayerCode,
+        displayName: assayer.displayName,
+        roles: [{
+          name: 'ASSAYER',
+          permissions: (payload.permissions || []).map(p => {
+            const [resource, action, scope] = p.split(':');
+            return { resource, action, scope };
+          }),
+        }],
+      };
+    }
+
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -226,30 +373,40 @@ export class AuthService {
   // -------------------------------------------------------------------------
 
   private async generateTokenPair(
-    user: UserEntity,
+    userOrPayload: UserEntity | JwtPayload,
     ipAddress?: string,
     userAgent?: string,
   ): Promise<TokenPair> {
-    // Build JWT payload
-    const roles = user.roles.map((r) => r.name);
+    let payload: JwtPayload;
+    let userId: string;
 
-    // Flatten permissions from both direct role permissions and responsibilities
-    const directPerms = user.roles.flatMap((r) => r.permissions || []);
-    const responsibilityPerms = user.roles.flatMap((r) =>
-      (r.responsibilities || []).flatMap((resp) =>
-        (resp.capabilities || []).flatMap((cap) => cap.permissions || []),
-      ),
-    );
-    const allPerms = [...directPerms, ...responsibilityPerms];
-    const permissions = allPerms.map((p) => `${p.resource}:${p.action}:${p.scope}`);
+    if ('sub' in userOrPayload) {
+      payload = userOrPayload;
+      userId = userOrPayload.sub;
+    } else {
+      const user = userOrPayload;
+      userId = user.id;
+      const roles = user.roles ? user.roles.map((r) => r.name) : [];
+      const directPerms = user.roles ? user.roles.flatMap((r) => r.permissions || []) : [];
+      const responsibilityPerms = user.roles
+        ? user.roles.flatMap((r) =>
+            (r.responsibilities || []).flatMap((resp) =>
+              (resp.capabilities || []).flatMap((cap) => cap.permissions || []),
+            ),
+          )
+        : [];
+      const allPerms = [...directPerms, ...responsibilityPerms];
+      const permissions = allPerms.map((p) => `${p.resource}:${p.action}:${p.scope}`);
 
-    const payload: JwtPayload = {
-      sub: user.id,
-      username: user.username,
-      email: user.email,
-      roles,
-      permissions: [...new Set(permissions)], // Deduplicate
-    };
+      payload = {
+        sub: user.id,
+        username: user.username,
+        email: user.email,
+        roles,
+        permissions: [...new Set(permissions)],
+        organizationId: user.organizationId ?? null,
+      };
+    }
 
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.accessExpiration,
@@ -257,11 +414,11 @@ export class AuthService {
 
     // Generate refresh token
     const refreshToken = uuidv4();
-    const tokenHash = await this.hashToken(refreshToken);
+    const tokenHash = this.hashToken(refreshToken);
 
     // Store refresh token
     const refreshTokenEntity = this.refreshTokenRepository.create({
-      userId: user.id,
+      userId: userId,
       tokenHash,
       expiresAt: new Date(Date.now() + this.refreshExpiration * 1000),
       ipAddress: ipAddress ?? null,
@@ -276,7 +433,7 @@ export class AuthService {
     };
   }
 
-  private async hashToken(token: string): Promise<string> {
-    return bcrypt.hash(token, 10);
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
   }
 }

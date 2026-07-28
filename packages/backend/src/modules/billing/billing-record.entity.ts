@@ -5,8 +5,8 @@ export class BillingRecord {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
-  auditId: string;
+  @Column({ nullable: true })
+  auditId?: string;
 
   @Column()
   assayerId: string;

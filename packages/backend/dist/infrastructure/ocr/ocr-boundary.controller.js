@@ -48,11 +48,19 @@ let OcrBoundaryController = class OcrBoundaryController {
             data: job,
         };
     }
+    async retryJob(id, req) {
+        const job = await this.ocrProcessingService.retryJob(id, req.user.id);
+        return {
+            success: true,
+            data: job,
+        };
+    }
 };
 exports.OcrBoundaryController = OcrBoundaryController;
 __decorate([
     (0, common_1.Post)('jobs'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('ocr:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new OCR tracking job request' }),
     __param(0, (0, common_1.Query)('documentId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
@@ -63,6 +71,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('jobs/:id/results'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('ocr:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Callback endpoint to receive external OCR engine scan results' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -79,10 +88,21 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], OcrBoundaryController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Post)('jobs/:id/retry'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('ocr:update:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Retry a failed OCR job request' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], OcrBoundaryController.prototype, "retryJob", null);
 exports.OcrBoundaryController = OcrBoundaryController = __decorate([
     (0, swagger_1.ApiTags)('OCR Integration Boundary'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('ocr-boundary'),
     __metadata("design:paramtypes", [ocr_processing_service_1.OcrProcessingService])
 ], OcrBoundaryController);

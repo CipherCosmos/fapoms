@@ -1,0 +1,36 @@
+# =============================================================================
+# FAPOMS Frontend — Development Dockerfile (Hot Reload)
+# =============================================================================
+# Uses Vite dev server with HMR for instant browser updates on file changes.
+# Source files are bind-mounted from the host via docker-compose volumes.
+# =============================================================================
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+# ---- 1. Copy workspace root files for npm workspaces ----
+COPY package.json package-lock.json ./
+
+# ---- 2. Copy all package.json files (for dependency resolution) ----
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/backend/package.json ./packages/backend/
+COPY packages/frontend/package.json ./packages/frontend/
+COPY packages/mobile/package.json ./packages/mobile/
+
+# ---- 3. Install ALL workspace dependencies ----
+RUN npm ci --ignore-scripts
+
+# ---- 4. Copy and build the shared package ----
+COPY packages/shared/ ./packages/shared/
+RUN npm run build:shared
+
+# ---- 5. Copy frontend source (will be overridden by bind mount in dev) ----
+COPY packages/frontend/ ./packages/frontend/
+
+WORKDIR /app/packages/frontend
+
+EXPOSE 5173
+
+# Vite dev server: --host 0.0.0.0 allows access from outside the container
+CMD ["npx", "vite", "--host", "0.0.0.0"]

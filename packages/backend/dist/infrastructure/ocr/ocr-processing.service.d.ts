@@ -1,3 +1,4 @@
+import { Queue } from 'bull';
 import { Repository } from 'typeorm';
 import { OcrJobEntity } from './ocr-job.entity';
 import { DocumentEntity } from '../../modules/document/document.entity';
@@ -8,8 +9,11 @@ export declare class OcrProcessingService {
     private readonly documentRepository;
     private readonly validationService;
     private readonly auditService;
-    constructor(ocrJobRepository: Repository<OcrJobEntity>, documentRepository: Repository<DocumentEntity>, validationService: ValidationService, auditService: AuditService);
+    private readonly ocrQueue;
+    constructor(ocrJobRepository: Repository<OcrJobEntity>, documentRepository: Repository<DocumentEntity>, validationService: ValidationService, auditService: AuditService, ocrQueue: Queue);
     createJob(documentId: string, userId: string): Promise<OcrJobEntity>;
     findOne(id: string): Promise<OcrJobEntity>;
     receiveOcrResults(jobId: string, externalJobId: string, ocrPayload: any, userId: string): Promise<OcrJobEntity>;
+    retryJob(jobId: string, userId: string): Promise<OcrJobEntity>;
+    handleJobFailure(jobId: string, errorDetails: string, userId: string): Promise<OcrJobEntity>;
 }

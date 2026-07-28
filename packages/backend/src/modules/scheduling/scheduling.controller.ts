@@ -2,7 +2,7 @@ import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, ParseUUIDPip
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsUUID, IsDateString } from 'class-validator';
 import { SchedulingService, CreateScheduleDto, UpdateScheduleDto } from './scheduling.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
 
 class CreateScheduleRequestDto implements CreateScheduleDto {
@@ -35,13 +35,14 @@ class TransitionScheduleRequestDto {
 
 @ApiTags('Scheduling')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('schedules')
 export class SchedulingController {
   constructor(private readonly schedulingService: SchedulingService) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @RequirePermissions('scheduling:create:organization')
   @ApiOperation({ summary: 'Create a confirmed schedule from an accepted assignment' })
   async create(@Body() dto: CreateScheduleRequestDto, @Req() req: any) {
     const schedule = await this.schedulingService.create(dto, req.user.id);
@@ -53,8 +54,16 @@ export class SchedulingController {
 
   @Get()
   @ApiOperation({ summary: 'List all active schedules' })
-  async findAll(@Query('page') page = 1, @Query('limit') limit = 50) {
-    const { schedules, total } = await this.schedulingService.findAll(Number(page), Number(limit));
+  async findAll(
+    @Query('page') page = 1,
+    @Query('limit') limit = 50,
+    @Query('status') status?: ScheduleStatus,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    const { schedules, total } = await this.schedulingService.findAll(
+      Number(page), Number(limit), status, dateFrom, dateTo,
+    );
     return {
       success: true,
       data: schedules,
@@ -80,6 +89,7 @@ export class SchedulingController {
 
   @Post(':id/transition')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @RequirePermissions('scheduling:update:organization')
   @ApiOperation({ summary: 'Transition schedule state' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,
@@ -91,6 +101,24 @@ export class SchedulingController {
       success: true,
       data: schedule,
     };
+  }
+
+  @Get('assayer-workload')
+  @ApiOperation({ summary: 'Get number of confirmed/tentative schedules for an assayer around a date' })
+  async getAssayerWorkload(
+    @Query('assayerId') assayerId: string,
+    @Query('date') date: string,
+  ) {
+    if (!assayerId || !date) {
+      return { success: true, data: { count: 0, schedules: [] } };
+    }
+    const dt = new Date(date);
+    const weekStart = new Date(dt);
+    weekStart.setDate(dt.getDate() - dt.getDay());
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    const data = await this.schedulingService.getAssayerWorkloadInRange(assayerId, weekStart, weekEnd);
+    return { success: true, data };
   }
 
   @Get(':id/timeline')

@@ -322,5 +322,13 @@ export declare class AssayerController {
             };
         };
     }>;
+    downloadTemplate(res: any): Promise<void>;
+    uploadAssayers(file: any, req: any): Promise<{
+        success: boolean;
+        data: {
+            importedCount: number;
+            errors: string[];
+        };
+    }>;
 }
 export {};

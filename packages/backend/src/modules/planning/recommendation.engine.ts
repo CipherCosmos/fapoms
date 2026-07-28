@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -11,6 +12,7 @@ import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ConstraintEvaluator } from './constraint.evaluator';
 
 export interface PlanningContext {
   branch: BranchEntity;
@@ -34,8 +36,7 @@ export class AvailabilityFilter implements CandidateFilter {
   name = 'availability';
 
   constructor(
-    @InjectRepository(AssignmentEntity)
-    private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
@@ -43,16 +44,19 @@ export class AvailabilityFilter implements CandidateFilter {
       return false;
     }
 
-    const doubleBooked = await this.assignmentRepository.findOne({
-      where: {
-        assayerId: assayer.id,
-        scheduledDate: context.scheduledDate,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
-        isActive: true,
-      },
-    });
+    // 1. Check double booking
+    const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
+    if (!dbResult.passed) {
+      return false;
+    }
 
-    return !doubleBooked;
+    // 2. Check leaves
+    const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
+    if (!leaveResult.passed) {
+      return false;
+    }
+
+    return true;
   }
 }
 
@@ -114,6 +118,7 @@ export class RequiredSkillsFilter implements CandidateFilter {
   constructor(
     @InjectRepository(ProjectBranchEntity)
     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+    private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
@@ -126,31 +131,8 @@ export class RequiredSkillsFilter implements CandidateFilter {
       return true;
     }
 
-    const project = pb.project;
-
-    // Check required skills
-    if (project.requiredSkills && project.requiredSkills.length > 0) {
-      const assayerSkills = assayer.skills || [];
-      const hasAllSkills = project.requiredSkills.every((skill: string) =>
-        assayerSkills.some((s) => s.toLowerCase() === skill.toLowerCase())
-      );
-      if (!hasAllSkills) {
-        return false;
-      }
-    }
-
-    // Check required certifications
-    if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-      const assayerCerts = (assayer.certifications || []).map((c) => c.name.toLowerCase());
-      const hasAllCerts = project.requiredCertifications.every((cert: string) =>
-        assayerCerts.includes(cert.toLowerCase())
-      );
-      if (!hasAllCerts) {
-        return false;
-      }
-    }
-
-    return true;
+    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project);
+    return checkResult.passed;
   }
 }
 
@@ -409,7 +391,7 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
             Number(otherBranch.latitude),
             Number(otherBranch.longitude)
           );
-          if (dist <= 60) {
+          if (dist <= 30) {
             hasNearbyGrouping = true;
             break;
           }
@@ -417,7 +399,7 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
       }
 
       if (hasNearbyGrouping) {
-        score += 30; // Substantial boost for multi-stop efficiency
+        score += 45; // Increased boost for close-proximity multi-branch routing to maximize daily utilization
       }
     }
 
@@ -429,8 +411,78 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
 export class SLAComplianceScoreCalculator implements ScoreCalculator {
   name = 'slaCompliance';
 
-  async calculate(): Promise<number> {
-    return 100; // Compliance standard baseline
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    let score = 80; // Baseline
+
+    // 1. Proximity & Travel Feasibility for SLA
+    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+      const dist = calculateHaversineDistance(
+        Number(context.branch.latitude),
+        Number(context.branch.longitude),
+        Number(assayer.latitude),
+        Number(assayer.longitude)
+      );
+
+      if (dist <= 15) {
+        score += 20; // High SLA guarantee zone
+      } else if (dist > 50) {
+        score -= 30; // High risk of travel delays causing SLA breach
+      } else if (dist > 30) {
+        score -= 15;
+      }
+    }
+
+    // 2. Same-Day Task Load (Overload increases SLA breach risk)
+    if (context.scheduledDate) {
+      const activeSameDayCount = await this.assignmentRepository.count({
+        where: {
+          assayerId: assayer.id,
+          scheduledDate: context.scheduledDate,
+          status: In([AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+          isActive: true,
+        },
+      });
+
+      if (activeSameDayCount >= 3) {
+        score -= 40; // Heavy schedule risks missing SLA target
+      } else if (activeSameDayCount === 2) {
+        score -= 20;
+      } else if (activeSameDayCount === 0) {
+        score += 10; // Unencumbered schedule ensures SLA guarantee
+      }
+    }
+
+    // 3. Branch Risk Score & Assayer Seniority / SLA Track Record
+    const branchRisk = Number(context.branch.riskScore) || 0;
+    const rating = Number(assayer.performanceRating) || 5.0;
+    const exp = Number(assayer.experienceYears) || 0;
+
+    if (branchRisk >= 7) {
+      if (rating >= 4.5 && exp >= 4) {
+        score += 15; // High reliability assayer assigned to critical SLA branch
+      } else if (rating < 4.0 || exp < 2) {
+        score -= 35; // Risk of SLA breach assigning novice assayer to critical branch
+      }
+    }
+
+    return Math.max(0, Math.min(100, score));
+  }
+}
+
+@Injectable()
+export class CustomerDensityScoreCalculator implements ScoreCalculator {
+  name = 'customerDensity';
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    const customerCount = Number(context.branch.riskScore || 20);
+    const maxCapacity = assayer.maxWeeklyWorkload || 50;
+    // Score increases when high-customer-density branches are assigned to high-capacity assayers
+    return Math.min(100, (customerCount / maxCapacity) * 100);
   }
 }
 
@@ -503,6 +555,7 @@ export class RecommendationEngine {
     private readonly clientPreferenceCalculator: ClientPreferenceScoreCalculator,
     private readonly branchFamiliarityCalculator: BranchFamiliarityScoreCalculator,
     private readonly slaComplianceCalculator: SLAComplianceScoreCalculator,
+    private readonly customerDensityCalculator: CustomerDensityScoreCalculator,
     private readonly profitabilityCalculator: ProfitabilityScoreCalculator,
     private readonly riskCalculator: RiskScoreCalculator,
     private readonly configResolver: ConfigurationResolver,
@@ -510,6 +563,8 @@ export class RecommendationEngine {
     private readonly assayerRepository: Repository<AssayerEntity>,
     @InjectRepository(ClientEntity)
     private readonly clientRepository: Repository<ClientEntity>,
+    private readonly constraintEvaluator: ConstraintEvaluator,
+    private readonly assayerService: AssayerService,
   ) {
     this.filters.push(
       this.availabilityFilter,
@@ -529,6 +584,7 @@ export class RecommendationEngine {
       this.clientPreferenceCalculator,
       this.branchFamiliarityCalculator,
       this.slaComplianceCalculator,
+      this.customerDensityCalculator,
       this.profitabilityCalculator,
       this.riskCalculator,
     );
@@ -555,6 +611,7 @@ export class RecommendationEngine {
     const assayers = await this.assayerRepository.find({
       where: { isActive: true, status: 'ACTIVE' },
     });
+    await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
     const candidates = [];
     for (const assayer of assayers) {

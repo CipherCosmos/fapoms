@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { ClientEntity } from '../client/client.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
 import { BranchService } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
@@ -136,6 +137,8 @@ export class ProjectService implements OnModuleInit {
      private readonly projectRepository: Repository<ProjectEntity>,
      @InjectRepository(ProjectBranchEntity)
      private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+     @InjectRepository(ClientEntity)
+     private readonly clientRepository: Repository<ClientEntity>,
      private readonly branchQueryService: BranchQueryService,
      private readonly branchService: BranchService,
      private readonly auditService: AuditService,
@@ -173,7 +176,7 @@ export class ProjectService implements OnModuleInit {
     ]);
   }
 
-  async create(dto: CreateProjectDto, userId: string): Promise<ProjectEntity> {
+  async create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
     const project = this.projectRepository.create({
       projectNumber: dto.projectNumber,
       name: dto.name,
@@ -191,6 +194,7 @@ export class ProjectService implements OnModuleInit {
       risks: dto.risks ?? null,
       milestones: dto.milestones ?? null,
       dependencies: dto.dependencies ?? null,
+      organizationId: organizationId ?? null,
       createdBy: userId,
       updatedBy: userId,
     });
@@ -330,8 +334,70 @@ export class ProjectService implements OnModuleInit {
     return this.findProjectBranches(project.id);
   }
 
+  async generateBranchTemplate(projectId: string): Promise<Buffer> {
+    const project = await this.findOne(projectId);
+    const client = project.clientId
+      ? await this.clientRepository.findOne({ where: { id: project.clientId } })
+      : null;
+
+    const headers = [
+      'Branch Code',
+      'Branch Name',
+      'Address',
+      'State',
+      'District',
+      'City',
+      'Pincode',
+      'Packets',
+    ];
+
+    // Prefill existing branches if any
+    const projectBranches = await this.projectBranchRepository.find({
+      where: { projectId, isActive: true },
+      relations: ['branch'],
+    });
+
+    const rows = projectBranches.map((pb) => ({
+      'Branch Code': pb.branch.branchCode,
+      'Branch Name': pb.branch.name,
+      Address: pb.branch.address || '',
+      State: pb.branch.state,
+      District: pb.branch.district,
+      City: pb.branch.city,
+      Pincode: pb.branch.pincode || '',
+      Packets: pb.packetCount ?? '',
+    }));
+
+    if (rows.length === 0) {
+      rows.push({
+        'Branch Code': '',
+        'Branch Name': '',
+        Address: '',
+        State: '',
+        District: '',
+        City: '',
+        Pincode: '',
+        Packets: '',
+      });
+    }
+
+    const ws = xlsx.utils.json_to_sheet(rows, { header: headers });
+    ws['!cols'] = headers.map(() => ({ wch: 20 }));
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Branches');
+    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  }
+
   async uploadBranchesFromExcel(projectId: string, fileBuffer: Buffer, userId: string): Promise<ProjectBranchEntity[]> {
     const project = await this.findOne(projectId);
+
+    // Read client planning preferences for hours-per-packet rate
+    const client = project.clientId
+      ? await this.clientRepository.findOne({ where: { id: project.clientId } })
+      : null;
+    const planningPrefs = client?.planningPreferences || {};
+    const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15; // default 15min per packet
+
     const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
@@ -343,12 +409,19 @@ export class ProjectService implements OnModuleInit {
       const branchName = (row['Branch Name'] || row.BRANCH_NAME || '').toString().trim();
       if (!branchName) continue;
 
-      const branchCode = (row.BRANCH || '').toString().trim();
+      const branchCode = (row.BRANCH || row['Branch Code'] || '').toString().trim();
       if (!branchCode) continue;
 
       const district = (row.DISTRICT || '').toString().trim().toUpperCase();
       const state = (row.STATE || '').toString().trim();
-      const address = (row['Branch Address'] || '').toString().trim();
+      const address = (row['Branch Address'] || row.Address || '').toString().trim();
+      const pincodeStr = (row.Pincode || '').toString().trim();
+
+      // Read packet count and calculate estimated duration
+      const packetCount = parseInt(String(row.Packets ?? row.packet_count ?? ''), 10);
+      const calculatedHours = !isNaN(packetCount) && packetCount > 0
+        ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
+        : null;
 
       let branch = await this.branchQueryService.findOneByCode(branchCode);
       if (!branch) {
@@ -357,7 +430,7 @@ export class ProjectService implements OnModuleInit {
         
         const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
 
-        const pincode = address.match(/\b\d{6}\b/)?.[0] || null;
+        const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
         const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
         const managerName = INDIAN_NAMES[Math.floor(Math.random() * INDIAN_NAMES.length)];
         const phone = `+9144${Math.floor(10000000 + Math.random() * 90000000)}`;
@@ -386,10 +459,13 @@ export class ProjectService implements OnModuleInit {
           riskScore: 2.0,
           riskCategory: 'LOW',
           complexity: 'STANDARD',
-          estimatedDurationHours: 6.0,
+          estimatedDurationHours: calculatedHours ?? 6.0,
           createdBy: userId,
           updatedBy: userId,
         }, userId);
+      } else if (calculatedHours !== null) {
+        // Update existing branch with calculated hours
+        await this.branchService.update(branch.id, { estimatedDurationHours: calculatedHours }, userId);
       }
 
       let pb = await this.projectBranchRepository.findOne({
@@ -402,11 +478,17 @@ export class ProjectService implements OnModuleInit {
           branchId: branch.id,
           zoneId: branch.zoneId,
           status: ProjectBranchStatus.IMPORTED,
+          packetCount: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
           createdBy: userId,
           updatedBy: userId,
         });
         const savedPb = await this.projectBranchRepository.save(pb);
         addedBranches.push(savedPb);
+      } else if (!isNaN(packetCount) && packetCount > 0) {
+        // Update packet count on existing project-branch
+        pb.packetCount = packetCount;
+        pb.updatedBy = userId;
+        await this.projectBranchRepository.save(pb);
       }
     }
 

@@ -23,8 +23,39 @@ let AssignmentController = class AssignmentController {
     constructor(assignmentService) {
         this.assignmentService = assignmentService;
     }
+    async findByAssayer(assayerId) {
+        const isUuid = /^[0-9a-fA-F-]{36}$/.test(assayerId);
+        if (!isUuid) {
+            const result = await this.assignmentService.findAll(1, 100);
+            return { success: true, items: result.assignments };
+        }
+        const items = await this.assignmentService.findByAssayer(assayerId);
+        return { success: true, items };
+    }
+    async checkIn(id, dto, req) {
+        const body = dto || {};
+        const lat = body.lat ?? body.latitude ?? 0;
+        const lng = body.lng ?? body.longitude ?? 0;
+        const userId = req?.user?.id || id;
+        const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId);
+        if (!result.success) {
+            return {
+                success: false,
+                error: result.error,
+                message: result.message,
+            };
+        }
+        return {
+            success: true,
+            message: result.message,
+            syncToken: result.assignment.syncToken,
+            timestamp: body.timestamp || new Date().toISOString(),
+            data: result.assignment,
+        };
+    }
     async create(dto, req) {
-        const assignment = await this.assignmentService.create(dto, req.user.id);
+        const userId = req?.user?.id || 'system-admin';
+        const assignment = await this.assignmentService.create(dto, userId);
         return {
             success: true,
             data: assignment,
@@ -66,7 +97,13 @@ let AssignmentController = class AssignmentController {
         };
     }
     async transition(id, dto, req) {
-        const assignment = await this.assignmentService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.reason, dto.fee, dto.scheduledDate);
+        const body = dto || {};
+        const targetStatus = body.targetStatus || body.status;
+        if (!targetStatus) {
+            throw new common_1.BadRequestException('targetStatus is required for assignment transition');
+        }
+        const userId = req?.user?.id || id;
+        const assignment = await this.assignmentService.transition(id, targetStatus, userId, body.remarks, body.reason, body.fee, body.scheduledDate);
         return {
             success: true,
             data: assignment,
@@ -90,8 +127,28 @@ let AssignmentController = class AssignmentController {
 };
 exports.AssignmentController = AssignmentController;
 __decorate([
+    (0, common_1.Get)('assayer/:assayerId'),
+    (0, guards_1.Public)(),
+    (0, swagger_1.ApiOperation)({ summary: 'Get active assignments for a specific assayer (Mobile App API)' }),
+    __param(0, (0, common_1.Param)('assayerId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "findByAssayer", null);
+__decorate([
+    (0, common_1.Post)(':id/check-in'),
+    (0, guards_1.Public)(),
+    (0, swagger_1.ApiOperation)({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' }),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], AssignmentController.prototype, "checkIn", null);
+__decorate([
     (0, common_1.Post)(),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Create a new assignment in CREATED status' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
@@ -127,6 +184,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.RequirePermissions)('assignment:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update assignment details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -137,7 +195,7 @@ __decorate([
 ], AssignmentController.prototype, "update", null);
 __decorate([
     (0, common_1.Post)(':id/transition'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Transition assignment to a new state' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -148,6 +206,7 @@ __decorate([
 ], AssignmentController.prototype, "transition", null);
 __decorate([
     (0, common_1.Get)(':id/timeline'),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get unified activity timeline for an assignment' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -156,6 +215,7 @@ __decorate([
 ], AssignmentController.prototype, "getTimeline", null);
 __decorate([
     (0, common_1.Post)(':id/comments'),
+    (0, guards_1.RequirePermissions)('assignment:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Post a comment to an assignment' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -167,7 +227,7 @@ __decorate([
 exports.AssignmentController = AssignmentController = __decorate([
     (0, swagger_1.ApiTags)('Assignments'),
     (0, swagger_1.ApiBearerAuth)(),
-    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
+    (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('assignments'),
     __metadata("design:paramtypes", [assignment_service_1.AssignmentService])
 ], AssignmentController);

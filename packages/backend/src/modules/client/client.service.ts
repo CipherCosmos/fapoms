@@ -163,7 +163,7 @@ export class ClientService {
   // Client Profile
   // -----------------------------------------------------------------------
 
-  async create(dto: CreateClientDto, userId: string): Promise<ClientEntity> {
+  async create(dto: CreateClientDto, userId: string, organizationId?: string | null): Promise<ClientEntity> {
     const existing = await this.clientRepository.findOne({ where: { clientCode: dto.clientCode } });
     if (existing) {
       throw new ConflictException(`Client code ${dto.clientCode} already exists.`);
@@ -202,6 +202,7 @@ export class ClientService {
       preferredAssayers: dto.preferredAssayers ?? null,
       restrictedAssayers: dto.restrictedAssayers ?? null,
       planningPreferences: dto.planningPreferences ?? null,
+      organizationId: organizationId ?? null,
       createdBy: userId,
       updatedBy: userId,
       configuration: config,

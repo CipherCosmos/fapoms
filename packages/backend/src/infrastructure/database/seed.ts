@@ -11,6 +11,8 @@ import { ClientConfigurationEntity } from '../../modules/client/client-configura
 import { ClientContactEntity } from '../../modules/client/client-contact.entity';
 import { ClientBillingEntity } from '../../modules/client/client-billing.entity';
 import { AssayerEntity } from '../../modules/assayer/assayer.entity';
+import { AssayerCommercialProfileEntity } from '../../modules/assayer/assayer-commercial-profile.entity';
+import { WorkforceAttributeEntity } from '../../modules/assayer/workforce-attribute.entity';
 import { BranchEntity } from '../../modules/branch/branch.entity';
 import { BranchContactEntity } from '../../modules/branch/branch-contact.entity';
 import { ProjectEntity } from '../../modules/project/project.entity';
@@ -27,7 +29,7 @@ async function seed() {
   try {
     // Clean slate: Truncate existing tables to resolve potential database corruption
     console.log('Truncating existing tables for clean seed...');
-    await AppDataSource.query('TRUNCATE TABLE capabilities, capability_permissions, responsibilities, responsibility_capabilities, role_responsibilities, users, roles, permissions, organizations, clients, client_configurations, client_contacts, client_contracts, client_billing, assayers, assayer_government_documents, assayer_documents, assayer_remarks, assayer_activities, branches, branch_contacts, branch_documents, zones, projects, project_branches, assignments CASCADE;');
+    await AppDataSource.query('TRUNCATE TABLE capabilities, capability_permissions, responsibilities, responsibility_capabilities, role_responsibilities, users, roles, permissions, organizations, clients, client_configurations, client_contacts, client_contracts, client_billing, assayers, assayer_commercial_profiles, assayer_government_documents, assayer_documents, assayer_remarks, assayer_activities, workforce_attributes, branches, branch_contacts, branch_documents, zones, projects, project_branches, assignments CASCADE;');
 
     // 1. Seed Default Organization
     console.log('Seeding default organization...');
@@ -250,6 +252,22 @@ async function seed() {
         responsibilityNames: Array.from(responsibilityMap.keys()), // All responsibilities
       },
       {
+        name: SystemRole.ADMINISTRATOR,
+        displayName: 'Administrator',
+        description: 'Full platform access excluding system configuration.',
+        permissionKeys: [
+          'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION',
+          'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION',
+          'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
+          'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
+          'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM',
+          'USER:VIEW:PLATFORM', 'USER:CREATE:PLATFORM', 'USER:EDIT:PLATFORM',
+          'CONFIGURATION:VIEW:PLATFORM',
+          'AUDIT_LOG:VIEW:PLATFORM',
+        ],
+        responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT', 'USER_ADMINISTRATION', 'AUDIT_ACCESS'],
+      },
+      {
         name: SystemRole.OPERATIONS_MANAGER,
         displayName: 'Operations Manager',
         description: 'Manages projects, assignment planning, schedules, and assayers.',
@@ -324,6 +342,7 @@ async function seed() {
 
     const defaultUsers = [
       { username: 'admin', email: 'admin@fapoms.com', firstName: 'Super', lastName: 'Admin', displayName: 'System Admin', roleName: SystemRole.SUPER_ADMINISTRATOR },
+      { username: 'admin2', email: 'admin2@fapoms.com', firstName: 'Admin2', lastName: 'User', displayName: 'Admin User', roleName: SystemRole.ADMINISTRATOR },
       { username: 'manager', email: 'manager@fapoms.com', firstName: 'Operations', lastName: 'Manager', displayName: 'Ops Manager', roleName: SystemRole.OPERATIONS_MANAGER },
       { username: 'executive', email: 'executive@fapoms.com', firstName: 'Operations', lastName: 'Executive', displayName: 'Ops Executive', roleName: SystemRole.OPERATIONS_EXECUTIVE },
       { username: 'validator', email: 'validator@fapoms.com', firstName: 'Senior', lastName: 'Validator', displayName: 'Senior Validator', roleName: SystemRole.VALIDATOR },
@@ -343,6 +362,7 @@ async function seed() {
           lastName: du.lastName,
           displayName: du.displayName,
           status: UserStatus.ACTIVE,
+          organizationId: defaultOrg?.id ?? null,
           createdBy: 'system',
           updatedBy: 'system',
           roles: role ? [role] : [],
@@ -362,14 +382,40 @@ async function seed() {
       { name: 'Maharashtra', code: 'MH', districts: [
         { name: 'Mumbai', cities: [{ name: 'Mumbai City', pincode: '400001' }] },
         { name: 'Pune', cities: [{ name: 'Pune City', pincode: '411001' }, { name: 'Pimpri-Chinchwad', pincode: '411018' }] },
+        { name: 'Nagpur', cities: [{ name: 'Nagpur', pincode: '440001' }] },
+        { name: 'Thane', cities: [{ name: 'Thane', pincode: '400601' }] },
+        { name: 'Nashik', cities: [{ name: 'Nashik', pincode: '422001' }] },
+        { name: 'Aurangabad', cities: [{ name: 'Aurangabad', pincode: '431001' }] },
+        { name: 'Solapur', cities: [{ name: 'Solapur', pincode: '413001' }] },
       ]},
       { name: 'Gujarat', code: 'GJ', districts: [
         { name: 'Ahmedabad', cities: [{ name: 'Ahmedabad City', pincode: '380001' }] },
         { name: 'Surat', cities: [{ name: 'Surat City', pincode: '395003' }] },
+        { name: 'Vadodara', cities: [{ name: 'Vadodara', pincode: '390001' }] },
+        { name: 'Rajkot', cities: [{ name: 'Rajkot', pincode: '360001' }] },
       ]},
       { name: 'Karnataka', code: 'KA', districts: [
         { name: 'Bangalore Urban', cities: [{ name: 'Bangalore', pincode: '560001' }] },
-      ]}
+        { name: 'Mysore', cities: [{ name: 'Mysore', pincode: '570001' }] },
+        { name: 'Hubli', cities: [{ name: 'Hubli', pincode: '580001' }] },
+      ]},
+      { name: 'Tamil Nadu', code: 'TN', districts: [
+        { name: 'Chennai', cities: [{ name: 'Chennai', pincode: '600001' }] },
+        { name: 'Coimbatore', cities: [{ name: 'Coimbatore', pincode: '641001' }] },
+      ]},
+      { name: 'Uttar Pradesh', code: 'UP', districts: [
+        { name: 'Lucknow', cities: [{ name: 'Lucknow', pincode: '226001' }] },
+        { name: 'Kanpur', cities: [{ name: 'Kanpur', pincode: '208001' }] },
+      ]},
+      { name: 'West Bengal', code: 'WB', districts: [
+        { name: 'Kolkata', cities: [{ name: 'Kolkata', pincode: '700001' }] },
+      ]},
+      { name: 'Rajasthan', code: 'RJ', districts: [
+        { name: 'Jaipur', cities: [{ name: 'Jaipur', pincode: '302001' }] },
+      ]},
+      { name: 'Delhi', code: 'DL', districts: [
+        { name: 'New Delhi', cities: [{ name: 'New Delhi', pincode: '110001' }] },
+      ]},
     ];
 
     for (const sd of statesData) {
@@ -462,6 +508,15 @@ async function seed() {
           ifscCode: 'SBIN0000001',
         },
         sla: { maxAuditsPerMonth: 3, schedulingWindowDays: 14, serviceLevel: 'PREMIUM', maxResponseTimeHours: 4 },
+        planningPreferences: {
+          minDistanceKm: 5,
+          maxDistanceKm: 200,
+          requiredSkills: ['Gold Valuation'],
+          preferredSkills: ['Financial Auditing', 'Agricultural Audit'],
+          requiredCertifications: ['Certified Gold Assayer'],
+          preferredCertifications: ['Gold Valuation Specialist'],
+          weights: { distance: 0.25, clientPreference: 0.15, branchFamiliarity: 0.15 },
+        },
       },
       {
         code: 'HDFC',
@@ -504,6 +559,15 @@ async function seed() {
           ifscCode: 'HDFC0000001',
         },
         sla: { maxAuditsPerMonth: 2, schedulingWindowDays: 10, serviceLevel: 'STANDARD', maxResponseTimeHours: 8 },
+        planningPreferences: {
+          minDistanceKm: 10,
+          maxDistanceKm: 150,
+          requiredSkills: ['Gold Valuation'],
+          preferredSkills: ['Gold'],
+          requiredCertifications: [],
+          preferredCertifications: ['Certified Gold Assayer'],
+          weights: { distance: 0.20, cost: 0.15, performance: 0.15 },
+        },
       },
     ];
 
@@ -537,6 +601,7 @@ async function seed() {
           address: cd.address,
           priority: cd.priority,
           budget: cd.budget,
+          planningPreferences: cd.planningPreferences || null,
           configuration: config,
           organizationId: defaultOrg.id,
           createdBy: 'system',
@@ -589,7 +654,8 @@ async function seed() {
     // 10. Seed Assayer Master Profiles
     console.log('Seeding assayer master profiles...');
     const assayerRepository = AppDataSource.getRepository(AssayerEntity);
-    
+    const assayerPasswordHash = await bcrypt.hash('assayer123', 12);
+
     const assayersData = [
       {
         code: 'AS-01',
@@ -633,13 +699,170 @@ async function seed() {
         latitude: 12.9719,
         longitude: 77.6412,
       },
+      {
+        code: 'AS-04',
+        firstName: 'Aditya',
+        lastName: 'Sharma',
+        phone: '+919876543213',
+        email: 'aditya.sharma@fapoms.com',
+        address: 'Kothrud, Pune',
+        state: 'Maharashtra',
+        district: 'Pune',
+        city: 'Pune City',
+        pincode: '411038',
+        latitude: 18.5074,
+        longitude: 73.8077,
+      },
+      {
+        code: 'AS-05',
+        firstName: 'Amit',
+        lastName: 'Deshpande',
+        phone: '+919876543214',
+        email: 'amit.deshpande@fapoms.com',
+        address: 'Hadapsar, Pune',
+        state: 'Maharashtra',
+        district: 'Pune',
+        city: 'Pune City',
+        pincode: '411028',
+        latitude: 18.5089,
+        longitude: 73.9260,
+      },
+      {
+        code: 'AS-06',
+        firstName: 'Sneha',
+        lastName: 'Patil',
+        phone: '+919876543215',
+        email: 'sneha.patil@fapoms.com',
+        address: 'Hinjewadi, Pune',
+        state: 'Maharashtra',
+        district: 'Pune',
+        city: 'Pune City',
+        pincode: '411057',
+        latitude: 18.5912,
+        longitude: 73.7388,
+      },
+      {
+        code: 'AS-07',
+        firstName: 'Rajesh',
+        lastName: 'Gupta',
+        phone: '+919876543216',
+        email: 'rajesh.gupta@fapoms.com',
+        address: 'Nashik Road, Nashik',
+        state: 'Maharashtra',
+        district: 'Nashik',
+        city: 'Nashik',
+        pincode: '422101',
+        latitude: 19.9975,
+        longitude: 73.7898,
+      },
+      {
+        code: 'AS-08',
+        firstName: 'Deepak',
+        lastName: 'Verma',
+        phone: '+919876543217',
+        email: 'deepak.verma@fapoms.com',
+        address: 'Connaught Place, Delhi',
+        state: 'Delhi',
+        district: 'Central Delhi',
+        city: 'New Delhi',
+        pincode: '110001',
+        latitude: 28.6315,
+        longitude: 77.2167,
+      },
     ];
+
+    // Per-assayer skill/cert differentiation for realistic filtering
+    const assayerDetailsMap: Record<string, { emergencyContactName: string; emergencyContactPhone: string; emergencyContactRelation: string; languages: string[]; panNumber?: string }> = {
+      'AS-01': { emergencyContactName: 'Sneha Rahane', emergencyContactPhone: '+919876543210', emergencyContactRelation: 'Spouse', languages: ['Marathi', 'Hindi', 'English'], panNumber: 'ABCPR1234H' },
+      'AS-02': { emergencyContactName: 'Rajesh Kulkarni', emergencyContactPhone: '+919876543211', emergencyContactRelation: 'Father', languages: ['Marathi', 'Hindi', 'English'], panNumber: 'DEFPR5678I' },
+      'AS-03': { emergencyContactName: 'Anita Joshi', emergencyContactPhone: '+919876543212', emergencyContactRelation: 'Spouse', languages: ['Kannada', 'Hindi', 'English'], panNumber: 'GHIPR9012J' },
+      'AS-04': { emergencyContactName: 'Sunita Sharma', emergencyContactPhone: '+919876543213', emergencyContactRelation: 'Mother', languages: ['Marathi', 'Hindi', 'English'], panNumber: 'JKLPR3456K' },
+      'AS-05': { emergencyContactName: 'Priya Deshpande', emergencyContactPhone: '+919876543214', emergencyContactRelation: 'Spouse', languages: ['Marathi', 'Hindi'], panNumber: 'MNOPR7890L' },
+      'AS-06': { emergencyContactName: 'Anil Patil', emergencyContactPhone: '+919876543215', emergencyContactRelation: 'Father', languages: ['Marathi', 'Hindi', 'English'] },
+      'AS-07': { emergencyContactName: 'Meena Gupta', emergencyContactPhone: '+919876543216', emergencyContactRelation: 'Spouse', languages: ['Hindi', 'English'], panNumber: 'PQRST2345M' },
+      'AS-08': { emergencyContactName: 'Suresh Verma', emergencyContactPhone: '+919876543217', emergencyContactRelation: 'Father', languages: ['Hindi', 'English', 'Punjabi'], panNumber: 'STUVW6789N' },
+    };
+
+    const assayerSkillsMap: Record<string, { skills: string[]; certifications: { name: string; expiryDate: string }[]; experienceYears: number; performanceRating: number }> = {
+      'AS-01': {
+        skills: ['Gold', 'Gold Valuation', 'Financial Auditing', 'Agricultural Audit'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 8,
+        performanceRating: 4.8,
+      },
+      'AS-02': {
+        skills: ['Gold', 'Gold Valuation', 'Financial Auditing'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 6,
+        performanceRating: 4.5,
+      },
+      'AS-03': {
+        skills: ['Gold', 'Gold Valuation'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 4,
+        performanceRating: 4.2,
+      },
+      'AS-04': {
+        skills: ['Gold', 'Gold Valuation', 'Agricultural Audit'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 7,
+        performanceRating: 4.6,
+      },
+      'AS-05': {
+        skills: ['Gold', 'Gold Valuation', 'Financial Auditing'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 5,
+        performanceRating: 4.3,
+      },
+      'AS-06': {
+        // Missing 'Certified Gold Assayer' — will be filtered out by SBI's requiredCertifications
+        skills: ['Gold', 'Gold Valuation', 'Financial Auditing'],
+        certifications: [
+          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 3,
+        performanceRating: 3.9,
+      },
+      'AS-07': {
+        skills: ['Gold', 'Gold Valuation'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 5,
+        performanceRating: 4.1,
+      },
+      'AS-08': {
+        // Has everything but is in Delhi — distance filter will handle
+        skills: ['Gold', 'Gold Valuation', 'Financial Auditing', 'Agricultural Audit'],
+        certifications: [
+          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' },
+          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
+        ],
+        experienceYears: 10,
+        performanceRating: 4.9,
+      },
+    };
 
     for (const ad of assayersData) {
       let assayer = await assayerRepository.findOne({ where: { assayerCode: ad.code } });
       if (!assayer) {
         assayer = assayerRepository.create({
           assayerCode: ad.code,
+          passwordHash: assayerPasswordHash,
           firstName: ad.firstName,
           lastName: ad.lastName,
           displayName: `${ad.firstName} ${ad.lastName}`,
@@ -655,19 +878,85 @@ async function seed() {
           location: { type: 'Point', coordinates: [ad.longitude, ad.latitude] },
           status: 'ACTIVE',
           lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
-          skills: ['Gold', 'Gold Valuation', 'Agricultural Audit', 'Financial Auditing'],
-          certifications: [
+          skills: assayerSkillsMap[ad.code]?.skills || ['Gold', 'Gold Valuation'],
+          certifications: assayerSkillsMap[ad.code]?.certifications || [
             { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
-            { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' }
           ],
+          experienceYears: assayerSkillsMap[ad.code]?.experienceYears || 3,
+          performanceRating: assayerSkillsMap[ad.code]?.performanceRating || 4.0,
           organizationId: defaultOrg.id,
           createdBy: 'system',
           updatedBy: 'system',
         });
         await assayerRepository.save(assayer);
+
+        const attrRepo = AppDataSource.getRepository(WorkforceAttributeEntity);
+        const attrs: Partial<WorkforceAttributeEntity>[] = [];
+        const skills = assayerSkillsMap[ad.code]?.skills || ['Gold', 'Gold Valuation'];
+        for (const skill of skills) {
+          attrs.push({ assayerId: assayer.id, type: 'SKILL', name: skill, createdBy: 'system', updatedBy: 'system' });
+        }
+        const certs = assayerSkillsMap[ad.code]?.certifications || [];
+        for (const cert of certs) {
+          attrs.push({
+            assayerId: assayer.id, type: 'CERTIFICATION', name: cert.name,
+            expiryDate: cert.expiryDate ? new Date(cert.expiryDate) : null,
+            createdBy: 'system', updatedBy: 'system',
+          });
+        }
+        const details = assayerDetailsMap[ad.code];
+        if (details) {
+          if (details.languages.length > 0) {
+            const langAttrs = details.languages.map(lang => ({ assayerId: assayer!.id, type: 'LANGUAGE', name: lang, createdBy: 'system', updatedBy: 'system' }));
+            attrs.push(...langAttrs);
+          }
+          assayer.emergencyContactName = details.emergencyContactName;
+          assayer.emergencyContactPhone = details.emergencyContactPhone;
+          assayer.emergencyContactRelation = details.emergencyContactRelation;
+          if (details.panNumber) assayer.panNumber = details.panNumber;
+        }
+
+        if (attrs.length > 0) await attrRepo.save(attrs);
+        await assayerRepository.save(assayer);
+
         console.log(`Seeded assayer: ${assayer.displayName} (${ad.code})`);
       }
     }
+
+    // 10.5 Seed Commercial Profiles
+    console.log('Seeding commercial profiles...');
+    const commercialRepo = AppDataSource.getRepository(AssayerCommercialProfileEntity);
+    const allAssayers = await assayerRepository.find();
+    const feeBands: Record<string, { baseFee: number; dailyRate: number }> = {
+      'AS-01': { baseFee: 1800, dailyRate: 4500 },
+      'AS-02': { baseFee: 1600, dailyRate: 4000 },
+      'AS-03': { baseFee: 1500, dailyRate: 3800 },
+      'AS-04': { baseFee: 1700, dailyRate: 4200 },
+      'AS-05': { baseFee: 1550, dailyRate: 3900 },
+      'AS-06': { baseFee: 1400, dailyRate: 3600 },
+      'AS-07': { baseFee: 1500, dailyRate: 3750 },
+      'AS-08': { baseFee: 2000, dailyRate: 5000 },
+    };
+    for (const a of allAssayers) {
+      const existing = await commercialRepo.findOne({ where: { assayerId: a.id } });
+      if (!existing) {
+        const band = feeBands[a.assayerCode] || { baseFee: 1500, dailyRate: 3500 };
+        await commercialRepo.save(commercialRepo.create({
+          assayerId: a.id,
+          baseFee: band.baseFee,
+          dailyRate: band.dailyRate,
+          hourlyRate: 0,
+          travelReimbursement: 500,
+          accommodationAllowance: 1000,
+          mealAllowance: 300,
+          currency: 'INR',
+          effectiveStartDate: new Date('2026-01-01'),
+          createdBy: 'system',
+          updatedBy: 'system',
+        }));
+      }
+    }
+    console.log(`Seeded commercial profiles for ${allAssayers.length} assayers`);
 
     // 11. Seed Initial Branches
     console.log('Seeding initial branches...');
@@ -751,6 +1040,181 @@ async function seed() {
           managerName: 'Ananya Rao',
           contacts: [
             { name: 'Ananya Rao', email: 'ananya.rao@sbi.co.in', phone: '+918012345678', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0015',
+          solId: '1035',
+          name: 'Pune Aundh Branch',
+          address: '45 Aundh Road, Pune',
+          state: 'Maharashtra',
+          district: 'Pune',
+          city: 'Pune City',
+          pincode: '411007',
+          latitude: 18.5580,
+          longitude: 73.8075,
+          region: 'West',
+          territory: 'Maharashtra West',
+          branchType: 'SUB',
+          riskScore: 1.5,
+          riskCategory: 'LOW',
+          complexity: 'STANDARD',
+          estimatedDurationHours: 4.0,
+          phone: '+912012345680',
+          email: 'pune.aundh@sbi.co.in',
+          managerName: 'Sanjay Deshpande',
+          contacts: [
+            { name: 'Sanjay Deshpande', email: 'sanjay.deshpande@sbi.co.in', phone: '+912012345680', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0016',
+          solId: '1036',
+          name: 'Pune Yerwada Branch',
+          address: '89 Yerwada Central, Pune',
+          state: 'Maharashtra',
+          district: 'Pune',
+          city: 'Pune City',
+          pincode: '411006',
+          latitude: 18.5529,
+          longitude: 73.8796,
+          region: 'West',
+          territory: 'Maharashtra West',
+          branchType: 'SUB',
+          riskScore: 2.0,
+          riskCategory: 'LOW',
+          complexity: 'STANDARD',
+          estimatedDurationHours: 4.0,
+          phone: '+912012345681',
+          email: 'pune.yerwada@sbi.co.in',
+          managerName: 'Karan Malhotra',
+          contacts: [
+            { name: 'Karan Malhotra', email: 'karan.malhotra@sbi.co.in', phone: '+912012345681', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0017',
+          solId: '1037',
+          name: 'Pune Hinjewadi Branch',
+          address: '12 Rajiv Gandhi IT Park, Hinjewadi, Pune',
+          state: 'Maharashtra',
+          district: 'Pune',
+          city: 'Pune City',
+          pincode: '411057',
+          latitude: 18.5912,
+          longitude: 73.7389,
+          region: 'West',
+          territory: 'Maharashtra West',
+          branchType: 'SUB',
+          riskScore: 1.0,
+          riskCategory: 'LOW',
+          complexity: 'SIMPLE',
+          estimatedDurationHours: 3.0,
+          phone: '+912012345682',
+          email: 'pune.hinjewadi@sbi.co.in',
+          managerName: 'Priya Sawant',
+          contacts: [
+            { name: 'Priya Sawant', email: 'priya.sawant@sbi.co.in', phone: '+912012345682', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0018',
+          solId: '1038',
+          name: 'Pune Koregaon Park Branch',
+          address: '77 North Main Road, Koregaon Park, Pune',
+          state: 'Maharashtra',
+          district: 'Pune',
+          city: 'Pune City',
+          pincode: '411001',
+          latitude: 18.5362,
+          longitude: 73.8930,
+          region: 'West',
+          territory: 'Maharashtra West',
+          branchType: 'SUB',
+          riskScore: 1.5,
+          riskCategory: 'LOW',
+          complexity: 'STANDARD',
+          estimatedDurationHours: 3.5,
+          phone: '+912012345683',
+          email: 'pune.koregaon@sbi.co.in',
+          managerName: 'Anil Kale',
+          contacts: [
+            { name: 'Anil Kale', email: 'anil.kale@sbi.co.in', phone: '+912012345683', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0020',
+          solId: '2001',
+          name: 'Nashik Main Branch',
+          address: '9 MG Road, Nashik',
+          state: 'Maharashtra',
+          district: 'Nashik',
+          city: 'Nashik',
+          pincode: '422001',
+          latitude: 20.0063,
+          longitude: 73.7902,
+          region: 'West',
+          territory: 'Maharashtra North',
+          branchType: 'MAIN',
+          riskScore: 2.5,
+          riskCategory: 'MEDIUM',
+          complexity: 'STANDARD',
+          estimatedDurationHours: 5.0,
+          phone: '+912532345678',
+          email: 'nashik.main@sbi.co.in',
+          managerName: 'Sandeep Bhosale',
+          contacts: [
+            { name: 'Sandeep Bhosale', email: 'sandeep.bhosale@sbi.co.in', phone: '+912532345678', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0021',
+          solId: '2002',
+          name: 'Nashik Gangapur Road Branch',
+          address: '45 Gangapur Road, Nashik',
+          state: 'Maharashtra',
+          district: 'Nashik',
+          city: 'Nashik',
+          pincode: '422005',
+          latitude: 20.0140,
+          longitude: 73.7700,
+          region: 'West',
+          territory: 'Maharashtra North',
+          branchType: 'SUB',
+          riskScore: 1.5,
+          riskCategory: 'LOW',
+          complexity: 'SIMPLE',
+          estimatedDurationHours: 3.0,
+          phone: '+912532345679',
+          email: 'nashik.gangapur@sbi.co.in',
+          managerName: 'Meera Jadhav',
+          contacts: [
+            { name: 'Meera Jadhav', email: 'meera.jadhav@sbi.co.in', phone: '+912532345679', designation: 'Branch Manager', department: 'Management', isPrimary: true },
+          ],
+        },
+        {
+          branchCode: 'BR-0025',
+          solId: '2501',
+          name: 'Nagpur Sitabuldi Branch',
+          address: '101 Sitabuldi Road, Nagpur',
+          state: 'Maharashtra',
+          district: 'Nagpur',
+          city: 'Nagpur',
+          pincode: '440012',
+          latitude: 21.1458,
+          longitude: 79.0882,
+          region: 'Central',
+          territory: 'Maharashtra Central',
+          branchType: 'MAIN',
+          riskScore: 3.0,
+          riskCategory: 'MEDIUM',
+          complexity: 'COMPLEX',
+          estimatedDurationHours: 6.0,
+          phone: '+917122345678',
+          email: 'nagpur.sitabuldi@sbi.co.in',
+          managerName: 'Vivek Shinde',
+          contacts: [
+            { name: 'Vivek Shinde', email: 'vivek.shinde@sbi.co.in', phone: '+917122345678', designation: 'Branch Manager', department: 'Management', isPrimary: true },
           ],
         },
       ];

@@ -38,13 +38,14 @@ export class WorkflowEngine {
     userId: string,
     userRole: string,
     allowedRoles: string[],
-    action: () => Promise<any>
+    action: () => Promise<any>,
+    payload?: any
   ): Promise<any> {
     if (allowedRoles.length > 0 && !allowedRoles.includes(userRole)) {
       throw new BadRequestException(`Role ${userRole} is not authorized to execute command ${command} in this workflow stage.`);
     }
 
-    const context = { userId };
+    const context = { userId, payload };
     const ok = await this.canTransition(workflowKey, fromState, toState, context);
     if (!ok) {
       throw new BadRequestException(`Invalid transition from '${fromState}' to '${toState}' for command '${command}'`);

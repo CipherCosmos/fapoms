@@ -18,26 +18,49 @@ import {
   Req,
   UseInterceptors,
   UploadedFile,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject } from 'class-validator';
 import { ProjectService, CreateProjectDto } from './project.service';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
+
+export class CreateProjectRequestDto implements CreateProjectDto {
+  @IsString() @IsNotEmpty() name: string;
+  @IsString() @IsNotEmpty() projectNumber: string;
+  @IsOptional() @IsString() description?: string;
+  @IsString() @IsNotEmpty() clientId: string;
+  @IsString() @IsNotEmpty() priority: string;
+  @IsOptional() @IsString() startDate?: string;
+  @IsOptional() @IsString() endDate?: string;
+  @IsOptional() @IsNumber() budget?: number;
+  @IsOptional() @IsString() scope?: string;
+  @IsOptional() @IsArray() requiredSkills?: string[];
+  @IsOptional() @IsArray() requiredCertifications?: string[];
+  @IsOptional() @IsObject() sla?: Record<string, any>;
+  @IsOptional() @IsObject() risks?: Record<string, any>;
+  @IsOptional() @IsObject() milestones?: Record<string, any>;
+  @IsOptional() @IsObject() dependencies?: Record<string, any>;
+  @IsOptional() @IsString() status?: string;
+}
 
 @ApiTags('Projects')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('projects')
 export class ProjectController {
   constructor(private readonly projectService: ProjectService) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:create:organization')
   @ApiOperation({ summary: 'Create a new project linked to a client institution' })
-  async create(@Body() dto: CreateProjectDto, @Req() req: any) {
-    const project = await this.projectService.create(dto, req.user.id);
+  async create(@Body() dto: CreateProjectRequestDto, @Req() req: any) {
+    const project = await this.projectService.create(dto, req.user.id, req.user.organizationId);
     return {
       success: true,
       data: project,
@@ -45,7 +68,8 @@ export class ProjectController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List all active projects' })
+  @Public()
+  @ApiOperation({ summary: 'Get paginated list of projects' })
   async findAll(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
@@ -76,10 +100,11 @@ export class ProjectController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:update:organization')
   @ApiOperation({ summary: 'Update project details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CreateProjectDto,
+    @Body() dto: CreateProjectRequestDto,
     @Req() req: any,
   ) {
     const project = await this.projectService.update(id, dto, req.user.id);
@@ -91,6 +116,7 @@ export class ProjectController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('project:delete:organization')
   @ApiOperation({ summary: 'Soft delete a project' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.projectService.remove(id, req.user.id);
@@ -101,17 +127,40 @@ export class ProjectController {
   }
 
   @Get(':id/branches')
+  @Public()
   @ApiOperation({ summary: 'Get unassigned and planning branches queue for project' })
   async getProjectBranches(@Param('id', ParseUUIDPipe) id: string) {
     const branches = await this.projectService.findProjectBranches(id);
+    const data = branches.map(b => {
+      const activeAssignment = b.assignments?.find(
+        a => a.status !== 'CANCELLED' && a.status !== 'REJECTED'
+      );
+      return {
+        ...b,
+        assignment: activeAssignment ? {
+          id: activeAssignment.id,
+          status: activeAssignment.status,
+          proposedFee: activeAssignment.proposedFee,
+          agreedFee: activeAssignment.agreedFee,
+          scheduledDate: activeAssignment.scheduledDate,
+          assayer: activeAssignment.assayer ? {
+            displayName: activeAssignment.assayer.displayName,
+            id: activeAssignment.assayer.id,
+            assayerCode: activeAssignment.assayer.assayerCode,
+          } : undefined,
+        } : null,
+        assignments: undefined,
+      };
+    });
     return {
       success: true,
-      data: branches,
+      data,
     };
   }
 
   @Post(':id/branches')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:create:organization')
   @ApiOperation({ summary: 'Associate branches with a project' })
   async associateBranches(
     @Param('id', ParseUUIDPipe) id: string,
@@ -127,6 +176,7 @@ export class ProjectController {
 
   @Post(':id/branches/upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:create:organization')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({ summary: 'Upload branches from Excel spreadsheet and associate with project' })
   async uploadBranches(
@@ -141,8 +191,22 @@ export class ProjectController {
     };
   }
 
+  @Get(':id/branches/template')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @ApiOperation({ summary: 'Download Excel template for branch data entry' })
+  async downloadTemplate(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const buffer = await this.projectService.generateBranchTemplate(id);
+    const filename = encodeURIComponent('branch_upload_template.xlsx');
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
+    });
+    res.send(buffer);
+  }
+
   @Delete(':id/branches/:pbId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:delete:organization')
   @ApiOperation({ summary: 'Remove a branch association from a project' })
   async removeBranch(
     @Param('id', ParseUUIDPipe) id: string,

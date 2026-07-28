@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const testing_1 = require("@nestjs/testing");
 const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
+const bull_1 = require("@nestjs/bull");
 const ocr_processing_service_1 = require("./ocr-processing.service");
 const ocr_job_entity_1 = require("./ocr-job.entity");
 const document_entity_1 = require("../../modules/document/document.entity");
@@ -27,6 +28,9 @@ describe('OcrProcessingService', () => {
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
+    const mockOcrQueue = {
+        add: jest.fn(),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
@@ -46,6 +50,10 @@ describe('OcrProcessingService', () => {
                 {
                     provide: audit_service_1.AuditService,
                     useValue: mockAuditService,
+                },
+                {
+                    provide: (0, bull_1.getQueueToken)('ocr'),
+                    useValue: mockOcrQueue,
                 },
             ],
         }).compile();

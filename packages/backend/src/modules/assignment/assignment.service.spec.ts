@@ -7,6 +7,7 @@ import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
@@ -15,6 +16,7 @@ import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -62,6 +64,10 @@ describe('AssignmentService', () => {
 
   const mockNotificationService = {
     create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
+  };
+
+  const mockPushNotificationService = {
+    sendToUser: jest.fn().mockResolvedValue(undefined),
   };
 
   const mockAuditService = {
@@ -175,6 +181,10 @@ describe('AssignmentService', () => {
           useValue: mockNotificationService,
         },
         {
+          provide: PushNotificationService,
+          useValue: mockPushNotificationService,
+        },
+        {
           provide: AuditService,
           useValue: mockAuditService,
         },
@@ -189,6 +199,49 @@ describe('AssignmentService', () => {
         {
           provide: DataSource,
           useValue: mockDataSource,
+        },
+        {
+          provide: ConstraintEvaluator,
+          useValue: {
+            checkDoubleBooking: jest.fn().mockImplementation(async (assayerId, date) => {
+              // If the test has mocked a double booking count/find, return failed
+              const existing = await mockAssignmentRepo.findOne();
+              if (existing) {
+                return { passed: false, reason: 'Assayer Collision: Assayer is already assigned.' };
+              }
+              return { passed: true };
+            }),
+            checkLeaves: jest.fn().mockReturnValue({ passed: true }),
+            checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
+            checkHoliday: jest.fn().mockImplementation(async (state, date) => {
+              const isHoliday = await mockHolidayService.isHoliday(date, state);
+              if (isHoliday) {
+                return { passed: false, reason: 'Holiday Conflict' };
+              }
+              return { passed: true };
+            }),
+            checkSkillsAndCertifications: jest.fn().mockImplementation((assayer, project) => {
+              if (project.requiredSkills && project.requiredSkills.length > 0) {
+                const assayerSkills = (assayer.skills || []).map((s: string) => s.trim().toLowerCase());
+                const missingSkills = project.requiredSkills.filter(
+                  (skill: string) => !assayerSkills.includes(skill.trim().toLowerCase())
+                );
+                if (missingSkills.length > 0) {
+                  return { passed: false, reason: 'Assayer lacks required skills' };
+                }
+              }
+              if (project.requiredCertifications && project.requiredCertifications.length > 0) {
+                const assayerCerts = (assayer.certifications || []).map((c: any) => c.name.trim().toLowerCase());
+                const missingCerts = project.requiredCertifications.filter(
+                  (cert: string) => !assayerCerts.includes(cert.trim().toLowerCase())
+                );
+                if (missingCerts.length > 0) {
+                  return { passed: false, reason: 'Assayer lacks required certifications' };
+                }
+              }
+              return { passed: true };
+            }),
+          },
         },
       ],
     }).compile();

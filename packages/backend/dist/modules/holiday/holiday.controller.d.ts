@@ -1,7 +1,7 @@
 import { HolidayService, CreateHolidayDto } from './holiday.service';
 declare class CreateHolidayRequestDto implements CreateHolidayDto {
     name: string;
-    date: Date;
+    date: string | Date;
     type: string;
     applicableStates?: string[];
 }

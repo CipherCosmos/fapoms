@@ -15,6 +15,7 @@ const base_entity_1 = require("../../core/entities/base.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
 const project_entity_1 = require("../project/project.entity");
 const assayer_entity_1 = require("../assayer/assayer.entity");
+const operations_execution_group_entity_1 = require("../planning/operations-execution-group.entity");
 const shared_1 = require("@fapoms/shared");
 let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     assignmentNumber;
@@ -28,6 +29,8 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     scheduledDate;
     completionDate;
     remarks;
+    syncToken;
+    entityVersion;
     slaDueDate;
     slaStatus;
     cancelReason;
@@ -35,6 +38,8 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     projectBranch;
     project;
     assayer;
+    executionGroupId;
+    executionGroup;
 };
 exports.AssignmentEntity = AssignmentEntity;
 __decorate([
@@ -90,6 +95,14 @@ __decorate([
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "remarks", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'sync_token', type: 'varchar', length: 100, nullable: true }),
+    __metadata("design:type", Object)
+], AssignmentEntity.prototype, "syncToken", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'entity_version', type: 'integer', default: 1 }),
+    __metadata("design:type", Number)
+], AssignmentEntity.prototype, "entityVersion", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'sla_due_date', type: 'timestamptz', nullable: true }),
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "slaDueDate", void 0);
@@ -120,6 +133,15 @@ __decorate([
     (0, typeorm_1.JoinColumn)({ name: 'assayer_id' }),
     __metadata("design:type", assayer_entity_1.AssayerEntity)
 ], AssignmentEntity.prototype, "assayer", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'execution_group_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], AssignmentEntity.prototype, "executionGroupId", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => operations_execution_group_entity_1.OperationsExecutionGroupEntity, (eg) => eg.assignments, { onDelete: 'SET NULL', nullable: true }),
+    (0, typeorm_1.JoinColumn)({ name: 'execution_group_id' }),
+    __metadata("design:type", operations_execution_group_entity_1.OperationsExecutionGroupEntity)
+], AssignmentEntity.prototype, "executionGroup", void 0);
 exports.AssignmentEntity = AssignmentEntity = __decorate([
     (0, typeorm_1.Entity)('assignments'),
     (0, typeorm_1.Index)(['assignmentNumber']),

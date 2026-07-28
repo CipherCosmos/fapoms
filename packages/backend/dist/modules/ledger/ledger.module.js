@@ -11,12 +11,14 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const ledger_entry_entity_1 = require("./ledger-entry.entity");
 const ledger_service_1 = require("./ledger.service");
+const ledger_controller_1 = require("./ledger.controller");
 let LedgerModule = class LedgerModule {
 };
 exports.LedgerModule = LedgerModule;
 exports.LedgerModule = LedgerModule = __decorate([
     (0, common_1.Module)({
         imports: [typeorm_1.TypeOrmModule.forFeature([ledger_entry_entity_1.LedgerEntry])],
+        controllers: [ledger_controller_1.LedgerController],
         providers: [ledger_service_1.LedgerService],
         exports: [ledger_service_1.LedgerService],
     })

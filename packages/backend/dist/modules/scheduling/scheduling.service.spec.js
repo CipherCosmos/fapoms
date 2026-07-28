@@ -8,6 +8,7 @@ const schedule_entity_1 = require("./schedule.entity");
 const assignment_service_1 = require("../assignment/assignment.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
+const constraint_evaluator_1 = require("../planning/constraint.evaluator");
 const shared_1 = require("@fapoms/shared");
 describe('SchedulingService', () => {
     let service;
@@ -30,6 +31,13 @@ describe('SchedulingService', () => {
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
+    const mockConstraintEvaluator = {
+        checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
+        checkLeaves: jest.fn().mockReturnValue({ passed: true }),
+        checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
+        checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+        checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
@@ -49,6 +57,10 @@ describe('SchedulingService', () => {
                 {
                     provide: audit_service_1.AuditService,
                     useValue: mockAuditService,
+                },
+                {
+                    provide: constraint_evaluator_1.ConstraintEvaluator,
+                    useValue: mockConstraintEvaluator,
                 },
             ],
         }).compile();
@@ -77,6 +89,7 @@ describe('SchedulingService', () => {
                 },
             };
             mockAssignmentService.findOne.mockResolvedValue(mockAsn);
+            mockConstraintEvaluator.checkLeaves.mockReturnValueOnce({ passed: false, reason: 'Assayer is on leave' });
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
         it('should throw BadRequestException if scheduled date is outside project timeline', async () => {
@@ -90,6 +103,7 @@ describe('SchedulingService', () => {
                 },
             };
             mockAssignmentService.findOne.mockResolvedValue(mockAsn);
+            mockConstraintEvaluator.checkProjectTimeline.mockReturnValueOnce({ passed: false, reason: 'Outside project timeline' });
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
     });
