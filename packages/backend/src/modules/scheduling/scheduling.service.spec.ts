@@ -8,6 +8,7 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ScheduleStatus, AssignmentStatus } from '@fapoms/shared';
 
 describe('SchedulingService', () => {
@@ -67,6 +68,10 @@ describe('SchedulingService', () => {
         {
           provide: ConstraintEvaluator,
           useValue: mockConstraintEvaluator,
+        },
+        {
+          provide: DomainEventPublisher,
+          useValue: { publish: jest.fn() },
         },
       ],
     }).compile();

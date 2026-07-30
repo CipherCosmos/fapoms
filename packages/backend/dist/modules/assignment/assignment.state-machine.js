@@ -6,9 +6,12 @@ const shared_1 = require("@fapoms/shared");
 class AssignmentStateMachine {
     static VALID_PATHS = {
         [shared_1.AssignmentStatus.PENDING]: [shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.REJECTED, shared_1.AssignmentStatus.CANCELLED],
-        [shared_1.AssignmentStatus.ACCEPTED]: [shared_1.AssignmentStatus.CANCELLED],
-        [shared_1.AssignmentStatus.REJECTED]: [],
-        [shared_1.AssignmentStatus.CANCELLED]: [],
+        [shared_1.AssignmentStatus.ACCEPTED]: [shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.CHECKED_IN, shared_1.AssignmentStatus.CANCELLED],
+        [shared_1.AssignmentStatus.CHECKED_IN]: [shared_1.AssignmentStatus.CHECKED_IN, shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.IN_PROGRESS, shared_1.AssignmentStatus.COMPLETED, shared_1.AssignmentStatus.CANCELLED],
+        [shared_1.AssignmentStatus.IN_PROGRESS]: [shared_1.AssignmentStatus.IN_PROGRESS, shared_1.AssignmentStatus.COMPLETED, shared_1.AssignmentStatus.CANCELLED],
+        [shared_1.AssignmentStatus.COMPLETED]: [],
+        [shared_1.AssignmentStatus.REJECTED]: [shared_1.AssignmentStatus.PENDING],
+        [shared_1.AssignmentStatus.CANCELLED]: [shared_1.AssignmentStatus.PENDING],
     };
     static validateTransition(current, target) {
         const allowed = AssignmentStateMachine.VALID_PATHS[current];

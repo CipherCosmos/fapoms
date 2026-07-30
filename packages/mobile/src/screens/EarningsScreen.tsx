@@ -2,6 +2,8 @@ import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
+import { Ionicons } from '@expo/vector-icons';
+import { getAssignmentBaseFee, getAssignmentTotalFee } from '../utils/fees';
 
 interface EarningsScreenProps {
   totalEarnings: number;
@@ -9,6 +11,12 @@ interface EarningsScreenProps {
   runningBalance?: number;
   assignments: AssayerAssignment[];
   onOpenExpenseModal: () => void;
+  /** Real assayer quality/performance rating expressed as a %, or null if no rating data exists yet. */
+  qualityScore?: number | null;
+  /** Real % of raised validation queries that have been resolved (0 when there are no queries yet). */
+  queryResolutionRate?: number;
+  /** Real average estimated audit duration across assignments, or null if no duration data exists. */
+  avgAuditHours?: number | null;
 }
 
 export const EarningsScreen: React.FC<EarningsScreenProps> = ({
@@ -17,6 +25,9 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   runningBalance,
   assignments,
   onOpenExpenseModal,
+  qualityScore,
+  queryResolutionRate,
+  avgAuditHours,
 }) => {
   const totalExpenses = assignments
     .flatMap((a) => a.expenses)
@@ -55,7 +66,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
       <Text style={styles.subHeading}>Audit Performance & Quality Metrics</Text>
       <View style={styles.perfGrid}>
         <View style={styles.perfBox}>
-          <Text style={styles.perfVal}>98%</Text>
+          <Text style={styles.perfVal}>{qualityScore != null ? `${qualityScore}%` : '—'}</Text>
           <Text style={styles.perfLabel}>Quality Score</Text>
         </View>
         <View style={styles.perfBox}>
@@ -63,25 +74,33 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           <Text style={styles.perfLabel}>Completed</Text>
         </View>
         <View style={styles.perfBox}>
-          <Text style={[styles.perfVal, { color: '#fbbf24' }]}>100%</Text>
+          <Text style={[styles.perfVal, { color: '#fbbf24' }]}>{queryResolutionRate != null ? `${queryResolutionRate}%` : '—'}</Text>
           <Text style={styles.perfLabel}>Query Resolved</Text>
         </View>
         <View style={styles.perfBox}>
-          <Text style={[styles.perfVal, { color: '#38bdf8' }]}>2.5h</Text>
+          <Text style={[styles.perfVal, { color: '#38bdf8' }]}>{avgAuditHours != null ? `${avgAuditHours.toFixed(1)}h` : '—'}</Text>
           <Text style={styles.perfLabel}>Avg Hours</Text>
         </View>
       </View>
 
       <Text style={styles.subHeading}>Fee Breakdown by Assignment</Text>
       <View style={{ gap: 8, marginBottom: 16 }}>
-        {assignments.length === 0 ? (
-          <Text style={{ color: '#64748b', fontSize: 12 }}>No assignment financial records</Text>
-        ) : (
-          assignments.map((a) => {
+        {(() => {
+          // A rejected assignment (also covers backend CANCELLED — see
+          // BACKEND_TO_MOBILE_STATUS in api.service.ts) never has a billable fee,
+          // so it has nothing to break down here.
+          const billableAssignments = assignments.filter((a) => a.status !== 'REJECTED');
+          if (billableAssignments.length === 0) {
+            return <Text style={{ color: '#64748b', fontSize: 12 }}>No assignment financial records</Text>;
+          }
+          return billableAssignments.map((a) => {
+            // Same precedence-based fee resolution used everywhere else (App.tsx summary
+            // cards, ScheduleScreen) — a negotiated-down agreed fee must never be inflated
+            // back up to the standard rate here.
             const baseFee = a.standardBaseFee || 1200;
-            const agreedFee = Math.max(a.agreedBaseFee || 0, a.proposedFee || 0, baseFee);
+            const agreedFee = getAssignmentBaseFee(a);
             const travelFee = a.agreedTravelFee || 0;
-            const total = agreedFee + travelFee;
+            const total = getAssignmentTotalFee(a);
 
             return (
               <View key={a.id} style={[styles.card, { marginBottom: 0, padding: 12 }]}>
@@ -96,15 +115,15 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                 </View>
               </View>
             );
-          })
-        )}
+          });
+        })()}
       </View>
 
       <Text style={styles.subHeading}>Travel Expenses</Text>
 
       {assignments.flatMap((a) => a.expenses).length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={{ fontSize: 32, marginBottom: 8 }}>🧾</Text>
+          <Ionicons name="receipt" size={32} color="#94a3b8" style={{ marginBottom: 8 }} />
           <Text style={styles.emptyText}>No travel expenses yet</Text>
         </View>
       ) : (

@@ -1,6 +1,6 @@
 import { Controller, Post, Body, Param, ParseUUIDPipe, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsUUID, IsNotEmpty, IsDateString, IsNumber, Min } from 'class-validator';
+import { IsUUID, IsNotEmpty, IsDateString, IsNumber, IsOptional, Min } from 'class-validator';
 import { AuditService } from './audit.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
@@ -19,10 +19,12 @@ class StartAuditDto {
 }
 
 class CloseAuditDto {
-  @IsNumber() @Min(0)
-  baseFee: number;
-  @IsNumber() @Min(0)
-  travelAllowance: number;
+  // Optional — omit to default the payout to the assignment's actual agreed fee
+  // instead of requiring it be manually re-typed from scratch (see AuditService.closeAudit).
+  @IsOptional() @IsNumber() @Min(0)
+  baseFee?: number;
+  @IsOptional() @IsNumber() @Min(0)
+  travelAllowance?: number;
 }
 
 @ApiTags('Audit Operations')

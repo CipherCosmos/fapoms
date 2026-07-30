@@ -15,6 +15,7 @@ const constraint_evaluator_1 = require("./constraint.evaluator");
 const assayer_service_1 = require("../assayer/assayer.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const schedule_entity_1 = require("../scheduling/schedule.entity");
+const validation_query_entity_1 = require("../validation-query/validation-query.entity");
 describe('RecommendationEngine', () => {
     let engine;
     const mockAssayerService = {
@@ -55,6 +56,7 @@ describe('RecommendationEngine', () => {
             providers: [
                 recommendation_engine_1.RecommendationEngine,
                 recommendation_engine_1.AvailabilityFilter,
+                recommendation_engine_1.ConsecutiveBranchAuditFilter,
                 recommendation_engine_1.ClientRestrictionFilter,
                 recommendation_engine_1.ClientEligibilityFilter,
                 recommendation_engine_1.RuleEngineEligibilityFilter,
@@ -63,6 +65,9 @@ describe('RecommendationEngine', () => {
                 recommendation_engine_1.TravelTimeScoreCalculator,
                 recommendation_engine_1.WorkloadScoreCalculator,
                 recommendation_engine_1.PerformanceScoreCalculator,
+                recommendation_engine_1.RejectionAcceptanceScoreCalculator,
+                recommendation_engine_1.DeliverySpeedScoreCalculator,
+                recommendation_engine_1.QueryVolumeScoreCalculator,
                 recommendation_engine_1.ExperienceScoreCalculator,
                 recommendation_engine_1.CostScoreCalculator,
                 recommendation_engine_1.ClientPreferenceScoreCalculator,
@@ -96,6 +101,10 @@ describe('RecommendationEngine', () => {
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
                     useValue: mockProjectBranchRepo,
+                },
+                {
+                    provide: (0, typeorm_1.getRepositoryToken)(validation_query_entity_1.ValidationQueryEntity),
+                    useValue: { count: jest.fn().mockResolvedValue(0), find: jest.fn().mockResolvedValue([]) },
                 },
                 {
                     provide: routing_provider_1.RoutingService,

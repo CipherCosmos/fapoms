@@ -143,7 +143,7 @@ export class MobileApiService {
     return null;
   }
 
-  private static async tryRefresh(): Promise<boolean> {
+  static async tryRefresh(): Promise<boolean> {
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) return false;
     try {
@@ -196,65 +196,66 @@ export class MobileApiService {
       const data = await response.json();
       const items: any[] = Array.isArray(data) ? data : (data.items || []);
 
+      // Exact-identifier match only — assayerCode, phone, email, or full display name.
+      // No fuzzy/substring matching and no "first item in the list" fallback: every
+      // assayer is a distinct individual, so an identifier that doesn't precisely match
+      // must never resolve to someone else's identity.
       const searchKey = identifier.trim().toLowerCase();
       const matchedAssayer = items.find(
         (a: any) =>
           a.assayerCode?.toLowerCase() === searchKey ||
           a.phone?.toLowerCase() === searchKey ||
           a.email?.toLowerCase() === searchKey ||
-          `${a.firstName} ${a.lastName}`.toLowerCase().includes(searchKey) ||
-          a.id === searchKey
+          `${a.firstName} ${a.lastName}`.toLowerCase() === searchKey ||
+          a.id === identifier.trim()
       );
 
-      if (matchedAssayer) {
-        const fullName = `${matchedAssayer.firstName} ${matchedAssayer.lastName}`;
+      if (!matchedAssayer) {
         return {
-          verified: true,
-          assayer: {
-            id: matchedAssayer.id,
-            code: matchedAssayer.assayerCode,
-            name: fullName,
-            phone: matchedAssayer.phone,
-            status: matchedAssayer.lifecycleStatus,
-          },
-        };
-      } else if (items.length > 0) {
-        const first = items[0];
-        const fullName = `${first.firstName} ${first.lastName}`;
-        return {
-          verified: true,
-          assayer: {
-            id: first.id,
-            code: first.assayerCode,
-            name: fullName,
-            phone: first.phone,
-            status: first.lifecycleStatus,
-          },
+          verified: false,
+          error: 'Assayer code, phone, or email not registered in the FAPOMS Master Database.',
         };
       }
 
+      const fullName = `${matchedAssayer.firstName} ${matchedAssayer.lastName}`;
       return {
-        verified: false,
-        error: 'FRAUD ALERT: Assayer code or mobile number not registered in FAPOMS Master Database.',
+        verified: true,
+        assayer: {
+          id: matchedAssayer.id,
+          code: matchedAssayer.assayerCode,
+          name: fullName,
+          phone: matchedAssayer.phone,
+          status: matchedAssayer.lifecycleStatus,
+        },
       };
     } catch (err: any) {
-      return { verified: false, error: 'Database network error during fraud identity check.' };
+      return { verified: false, error: 'Database network error during identity check.' };
     }
   }
 
-  static async biometricLogin(assayerCode: string): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
+  /**
+   * Biometric login only resumes a session that already exists on this device from a
+   * prior real password login — the server verifies the stored refresh token, not the
+   * biometric prompt itself (that happens on-device, before this is ever called).
+   */
+  static async biometricLogin(): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
+    const refreshToken = this.getRefreshToken();
+    if (!refreshToken) {
+      return { success: false, error: 'No saved session on this device. Please sign in with your password first.' };
+    }
+
     try {
       const response = await fetch(`${API_BASE_URL}/auth/biometric-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assayerCode }),
+        body: JSON.stringify({ refreshToken }),
       });
       const data = await response.json().catch(() => ({}));
 
       if (response.ok && data.success && data.data?.accessToken) {
         const userPayload = data.data.user || {};
         const token = data.data.accessToken;
-        const name = userPayload.name || assayerCode;
+        const name = userPayload.name || userPayload.displayName || userPayload.username;
         this.setAuthToken(token, userPayload.id, name);
         if (data.data.refreshToken) {
           this.storeRefreshToken(data.data.refreshToken);
@@ -264,7 +265,7 @@ export class MobileApiService {
 
       return {
         success: false,
-        error: data.message || 'Assayer not found or inactive.',
+        error: data.message || 'Saved session expired. Please sign in with your password.',
       };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error during biometric login.' };
@@ -383,10 +384,13 @@ export class MobileApiService {
           scheduledDate: item.scheduledDate || '',
           sequenceOrder: idx + 1,
           estimatedCustomerCount: item.customerCount || item.projectBranch?.packetCount || (item.customers && item.customers.length > 0 ? item.customers.length : 15),
-          estimatedAuditHours: 0,
+          // Real backend-configured branch audit duration (branches.estimated_duration_hours),
+          // not a fabricated value. 0 (rather than undefined) when the backend genuinely has
+          // no branch data attached, so downstream averages/UI can detect "no real data".
+          estimatedAuditHours: branch?.estimatedDurationHours != null ? Number(branch.estimatedDurationHours) : 0,
           status: (BACKEND_TO_MOBILE_STATUS as any)[item.status] || 'PENDING',
           proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
-          standardBaseFee: item.baseFee != null ? Number(item.baseFee) : 1200,
+          standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : 1200,
           agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
           agreedTravelFee: item.travelAllowance != null ? Number(item.travelAllowance) : 0,
           distanceKm: (() => {

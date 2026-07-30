@@ -4,6 +4,7 @@ const testing_1 = require("@nestjs/testing");
 const typeorm_1 = require("@nestjs/typeorm");
 const billing_service_1 = require("./billing.service");
 const billing_record_entity_1 = require("./billing-record.entity");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 describe('BillingService', () => {
     let service;
     const mockBillingRepository = {
@@ -18,6 +19,10 @@ describe('BillingService', () => {
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(billing_record_entity_1.BillingRecord),
                     useValue: mockBillingRepository,
+                },
+                {
+                    provide: domain_event_publisher_1.DomainEventPublisher,
+                    useValue: { publish: jest.fn() },
                 },
             ],
         }).compile();

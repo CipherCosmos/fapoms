@@ -40,6 +40,28 @@ interface AssayerProfile {
   lastAssignmentDate: string | null;
   averageRating: number;
   notes: string | null;
+  queryCount?: number;
+  acceptanceRate?: number;
+  rejectionRate?: number;
+  auditHistory?: Array<{
+    id: string;
+    assignment_number: string;
+    status: string;
+    agreed_fee: number;
+    proposed_fee: number;
+    scheduled_date: string;
+    completion_date: string;
+    branch_name: string;
+    branch_city: string;
+    branch_state: string;
+    project_name: string;
+  }>;
+  activeCommercialProfile?: {
+    baseFee: number;
+    hourlyRate?: number;
+    dailyRate?: number;
+    travelReimbursement?: number;
+  } | null;
 }
 
 interface Remark {
@@ -147,10 +169,12 @@ export const AssayerProfile: React.FC = () => {
     return <div style={{ padding: '32px', color: 'var(--text-muted)' }}>Assayer not found.</div>;
   }
 
-  const completionRate = assayer.totalAssignments > 0
-    ? Math.round((assayer.completedAssignments / assayer.totalAssignments) * 100) : 0;
-  const onTimeRate = assayer.completedAssignments > 0
-    ? Math.round((assayer.onTimeCompletions / assayer.completedAssignments) * 100) : 0;
+  const effectiveTotal = Math.max(assayer.totalAssignments, assayer.auditHistory?.length || 0);
+  const effectiveCompleted = Math.max(assayer.completedAssignments, assayer.auditHistory?.filter(a => ['COMPLETED', 'AUDIT_COMPLETED', 'CLOSED', 'VALIDATION_COMPLETED'].includes(a.status)).length || 0);
+  const completionRate = effectiveTotal > 0
+    ? Math.round((effectiveCompleted / effectiveTotal) * 100) : 0;
+  const onTimeRate = effectiveCompleted > 0
+    ? Math.round((Math.max(assayer.onTimeCompletions, effectiveCompleted) / effectiveCompleted) * 100) : 0;
 
   return (
     <div style={{ padding: '24px 32px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -229,46 +253,43 @@ export const AssayerProfile: React.FC = () => {
       </div>
 
       {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '20px' }}>
         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <Briefcase size={11} /> Total Assignments
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 700, color: 'var(--accent-primary)' }}>{assayer.totalAssignments}</div>
+          <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--accent-primary)' }}>{effectiveTotal}</div>
         </div>
         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <CheckCircle size={11} /> Completed
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 700, color: 'var(--status-active)' }}>{assayer.completedAssignments}</div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{completionRate}% completion rate</div>
+          <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--status-active)' }}>{effectiveCompleted}</div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{completionRate}% completion</div>
         </div>
         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Clock size={11} /> On-Time
+            <TrendingUp size={11} /> Acceptance
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 700, color: '#3b82f6' }}>{onTimeRate}%</div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{assayer.onTimeCompletions} jobs on time</div>
+          <div style={{ fontSize: '24px', fontWeight: 700, color: '#38bdf8' }}>{assayer.acceptanceRate ?? 100}%</div>
         </div>
         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <XCircle size={11} /> Cancelled
+            <XCircle size={11} /> Rejection Rate
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 700, color: '#ef4444' }}>{assayer.cancelledAssignments}</div>
+          <div style={{ fontSize: '24px', fontWeight: 700, color: (assayer.rejectionRate || 0) > 15 ? '#ef4444' : '#34d399' }}>{assayer.rejectionRate ?? 0}%</div>
         </div>
         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <DollarSign size={11} /> Total Earnings
+            <Clock size={11} /> Queries Raised
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 700, color: '#f59e0b' }}>₹{Number(assayer.totalEarnings).toLocaleString()}</div>
+          <div style={{ fontSize: '24px', fontWeight: 700, color: (assayer.queryCount || 0) > 0 ? '#f59e0b' : '#34d399' }}>{assayer.queryCount ?? 0}</div>
         </div>
         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Calendar size={11} /> Last Assignment
+            <DollarSign size={11} /> Total Paid
           </div>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
-            {assayer.lastAssignmentDate ? new Date(assayer.lastAssignmentDate).toLocaleDateString() : '—'}
-          </div>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: '#f59e0b' }}>₹{Number(assayer.totalEarnings).toLocaleString()}</div>
         </div>
       </div>
 
@@ -309,7 +330,7 @@ export const AssayerProfile: React.FC = () => {
             </div>
           </div>
 
-          {/* Strengths & Weaknesses */}
+          {/* Performance Insights */}
           <div className="glass-card" style={{ padding: '16px', borderRadius: 'var(--radius-md)' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 600, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <TrendingUp size={15} /> Performance Insights
@@ -329,6 +350,15 @@ export const AssayerProfile: React.FC = () => {
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{onTimeRate}%</div>
               </div>
+              {assayer.activeCommercialProfile && (
+                <div style={{ padding: '10px', background: 'rgba(56,189,248,0.1)', borderRadius: '6px', border: '1px solid rgba(56,189,248,0.2)' }}>
+                  <div style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff' }}>₹{assayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
+                    Travel: ₹{assayer.activeCommercialProfile.travelReimbursement || 0}/km | Daily: ₹{assayer.activeCommercialProfile.dailyRate || 0}
+                  </div>
+                </div>
+              )}
               {assayer.totalEarnings > 0 && (
                 <div>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' }}>AVERAGE EARNINGS PER JOB</div>
@@ -337,13 +367,32 @@ export const AssayerProfile: React.FC = () => {
                   </div>
                 </div>
               )}
-              {assayer.experienceYears > 0 && (
-                <div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' }}>EXPERIENCE</div>
-                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{assayer.experienceYears} years</div>
-                </div>
-              )}
             </div>
+          </div>
+
+          {/* Audit History Timeline */}
+          <div className="glass-card" style={{ padding: '16px', borderRadius: 'var(--radius-md)' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 600, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Calendar size={15} /> Audit History & Fee Logs
+            </h3>
+            {assayer.auditHistory && assayer.auditHistory.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '250px', overflowY: 'auto' }}>
+                {assayer.auditHistory.map(ah => (
+                  <div key={ah.id} style={{ padding: '10px 12px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid #6366f1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>{ah.branch_name || 'Branch Audit'}</div>
+                      <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>{ah.branch_city}, {ah.branch_state} | {ah.project_name || 'GSS Project'}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#f59e0b' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
+                      <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', background: 'rgba(99,102,241,0.2)', color: '#818cf8', fontWeight: 600 }}>{ah.status}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>No audit history recorded.</div>
+            )}
           </div>
         </div>
 

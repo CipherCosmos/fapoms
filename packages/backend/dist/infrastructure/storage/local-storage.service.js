@@ -27,9 +27,17 @@ let LocalStorageService = class LocalStorageService {
         return `/uploads/${safeFileName}`;
     }
     async getFileStream(relativePath) {
-        const absolutePath = path.join(this.uploadDir, path.basename(relativePath));
+        let absolutePath = relativePath.startsWith('/')
+            ? path.join(this.uploadDir, path.basename(relativePath))
+            : path.join(this.uploadDir, relativePath);
         if (!fs.existsSync(absolutePath)) {
-            throw new common_1.BadRequestException(`File ${relativePath} not found on disk.`);
+            const directPath = path.resolve(this.uploadDir, '..', relativePath.replace(/^\//, ''));
+            if (fs.existsSync(directPath)) {
+                absolutePath = directPath;
+            }
+            else {
+                throw new common_1.BadRequestException(`File ${relativePath} not found on disk.`);
+            }
         }
         return fs.createReadStream(absolutePath);
     }

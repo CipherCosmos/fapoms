@@ -5,6 +5,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const app_module_1 = require("./app.module");
 const bull_board_setup_1 = require("./infrastructure/queue/bull-board.setup");
+const express = require("express");
 async function bootstrap() {
     const nodeEnv = process.env.NODE_ENV;
     const jwtSecret = process.env.JWT_SECRET;
@@ -12,6 +13,8 @@ async function bootstrap() {
         throw new Error('CRITICAL: JWT_SECRET must be set to a secure key in production environments!');
     }
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
+    app.use(express.json({ limit: '50mb' }));
+    app.use(express.urlencoded({ limit: '50mb', extended: true }));
     app.setGlobalPrefix('api/v1');
     app.useGlobalPipes(new common_1.ValidationPipe({
         whitelist: true,

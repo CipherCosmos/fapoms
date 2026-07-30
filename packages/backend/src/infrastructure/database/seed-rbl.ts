@@ -5,7 +5,7 @@ import { ClientEntity } from '../../modules/client/client.entity';
 import { ClientConfigurationEntity } from '../../modules/client/client-configuration.entity';
 import { OrganizationEntity } from '../../modules/organization/organization.entity';
 import { ZoneEntity } from '../../modules/zone/zone.entity';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -345,14 +345,9 @@ async function seed() {
         latitude: coords.lat,
         longitude: coords.lng,
         location: { type: 'Point', coordinates: [coords.lng, coords.lat] },
-        status: 'ACTIVE',
+        status: AssayerStatus.ACTIVE,
         lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
         eligibleClients: ['*'],
-        skills: ['Gold', 'Gold Valuation', 'Agricultural Audit', 'Financial Auditing'],
-        certifications: [
-          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
-          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' }
-        ],
         organizationId: defaultOrg.id,
         createdBy: 'system',
         updatedBy: 'system',

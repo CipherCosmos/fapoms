@@ -15,7 +15,10 @@ const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const assayer_service_1 = require("../assayer/assayer.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const assessment_entity_1 = require("../project/assessment.entity");
 const constraint_evaluator_1 = require("../planning/constraint.evaluator");
+const routing_provider_1 = require("../geo/routing.provider");
+const validation_service_1 = require("../validation/validation.service");
 describe('AssignmentService', () => {
     let service;
     let assignmentRepo;
@@ -47,6 +50,7 @@ describe('AssignmentService', () => {
     const mockAssayerService = {
         findOne: mockAssayerRepo.findOne,
         updateAssayerStats: jest.fn(),
+        getActiveCommercialProfile: jest.fn().mockResolvedValue({ baseFee: 1500 }),
     };
     const mockHolidayService = {
         isHoliday: jest.fn(),
@@ -83,6 +87,7 @@ describe('AssignmentService', () => {
             providers: [
                 assignment_service_1.AssignmentService,
                 { provide: (0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity), useValue: mockAssignmentRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(assessment_entity_1.AssessmentEntity), useValue: { findOne: jest.fn(), save: jest.fn() } },
                 { provide: project_query_service_1.ProjectQueryService, useValue: mockProjectQueryService },
                 { provide: project_service_1.ProjectService, useValue: mockProjectService },
                 { provide: assayer_service_1.AssayerService, useValue: mockAssayerService },
@@ -93,6 +98,8 @@ describe('AssignmentService', () => {
                 { provide: domain_event_publisher_1.DomainEventPublisher, useValue: mockDomainEventPublisher },
                 { provide: typeorm_2.DataSource, useValue: mockDataSource },
                 { provide: constraint_evaluator_1.ConstraintEvaluator, useValue: mockConstraintEvaluator },
+                { provide: routing_provider_1.RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
+                { provide: validation_service_1.ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
             ],
         }).compile();
         service = module.get(assignment_service_1.AssignmentService);
@@ -131,6 +138,7 @@ describe('AssignmentService', () => {
         it('should throw ConflictException if existing active assignment exists', async () => {
             mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', branch: { state: 'MH' }, project: {} });
             mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+            mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
             mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing', status: shared_1.AssignmentStatus.ACCEPTED });
             await expect(service.create(validDto, 'user-1')).rejects.toThrow(common_1.ConflictException);
         });
@@ -139,6 +147,7 @@ describe('AssignmentService', () => {
                 id: 'pb-1', projectId: 'p-1', branch: { name: 'Test', state: 'MH' }, project: {},
             });
             mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+            mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
             mockAssignmentRepo.findOne.mockResolvedValue(null);
             const created = {
                 id: 'asn-1', assignmentNumber: 'ASN-2026-1',

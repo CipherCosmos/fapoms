@@ -19,6 +19,8 @@ const notifications_module_1 = require("../notifications/notifications.module");
 const assayer_module_1 = require("../assayer/assayer.module");
 const project_module_1 = require("../project/project.module");
 const planning_module_1 = require("../planning/planning.module");
+const geo_module_1 = require("../geo/geo.module");
+const validation_module_1 = require("../validation/validation.module");
 let AssignmentModule = class AssignmentModule {
 };
 exports.AssignmentModule = AssignmentModule;
@@ -31,6 +33,8 @@ exports.AssignmentModule = AssignmentModule = __decorate([
             notifications_module_1.NotificationsModule,
             assayer_module_1.AssayerModule,
             project_module_1.ProjectModule,
+            geo_module_1.GeoModule,
+            validation_module_1.ValidationModule,
             (0, common_1.forwardRef)(() => planning_module_1.PlanningModule),
         ],
         controllers: [assignment_controller_1.AssignmentController],

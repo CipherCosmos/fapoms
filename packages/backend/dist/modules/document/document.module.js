@@ -15,6 +15,7 @@ const document_controller_1 = require("./document.controller");
 const document_dispatch_worker_1 = require("./document-dispatch.worker");
 const document_entity_1 = require("./document.entity");
 const assessment_entity_1 = require("../project/assessment.entity");
+const project_branch_entity_1 = require("../project/project-branch.entity");
 const assignment_entity_1 = require("../assignment/assignment.entity");
 const notifications_module_1 = require("../notifications/notifications.module");
 const storage_module_1 = require("../../infrastructure/storage/storage.module");
@@ -25,7 +26,7 @@ exports.DocumentModule = DocumentModule;
 exports.DocumentModule = DocumentModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([document_entity_1.DocumentEntity, assessment_entity_1.AssessmentEntity, assignment_entity_1.AssignmentEntity]),
+            typeorm_1.TypeOrmModule.forFeature([document_entity_1.DocumentEntity, assessment_entity_1.AssessmentEntity, project_branch_entity_1.ProjectBranchEntity, assignment_entity_1.AssignmentEntity]),
             bull_1.BullModule.registerQueue({ name: 'document-dispatch' }),
             notifications_module_1.NotificationsModule,
             storage_module_1.StorageModule,

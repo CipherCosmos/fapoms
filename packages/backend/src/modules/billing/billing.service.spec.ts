@@ -3,6 +3,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { BillingService } from './billing.service';
 import { BillingRecord } from './billing-record.entity';
 
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+
 describe('BillingService', () => {
   let service: BillingService;
 
@@ -19,6 +21,10 @@ describe('BillingService', () => {
         {
           provide: getRepositoryToken(BillingRecord),
           useValue: mockBillingRepository,
+        },
+        {
+          provide: DomainEventPublisher,
+          useValue: { publish: jest.fn() },
         },
       ],
     }).compile();

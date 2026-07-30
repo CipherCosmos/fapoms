@@ -90,60 +90,69 @@ export class AuthService {
     });
 
     if (!user) {
-      // 2. Check Assayer Master Database if not found in system users
+      // 2. Check Assayer Master Database if not found in system users. Exact-identifier
+      // match only (code, phone, or email) — no fuzzy/partial matching, and no fallback
+      // to "any active assayer" when nothing matches. An unrecognized identifier must fail.
       const cleanKey = usernameOrEmail.trim();
-      let assayer = await this.assayerRepository.findOne({
+      const assayer = await this.assayerRepository.findOne({
         where: [
           { assayerCode: ILike(cleanKey) },
-          { assayerCode: ILike(`%${cleanKey}%`) },
-          { phone: ILike(`%${cleanKey}%`) },
-          { email: ILike(`%${cleanKey}%`) },
-          { displayName: ILike(`%${cleanKey}%`) },
-          { firstName: ILike(`%${cleanKey}%`) },
+          { phone: cleanKey },
+          { email: ILike(cleanKey) },
         ],
       });
 
-      // If no exact match found, fallback to first active registered assayer
       if (!assayer) {
-        assayer = await this.assayerRepository.findOne({
-          where: { lifecycleStatus: 'ACTIVE' },
-        });
+        throw new UnauthorizedException('Invalid credentials');
       }
 
-      if (assayer) {
-        if (assayer.passwordHash) {
-          const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
-          if (!isPasswordValid) {
-            throw new UnauthorizedException('Invalid credentials');
-          }
-        } else {
-          throw new UnauthorizedException('Invalid credentials');
-        }
+      // An assayer with no password set has never completed onboarding — deny access
+      // rather than silently skipping verification.
+      if (!assayer.passwordHash) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
 
-        const payload: JwtPayload = {
-          sub: assayer.id,
+      const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
+      if (!isPasswordValid) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      if (assayer.lifecycleStatus !== 'ACTIVE') {
+        throw new ForbiddenException(`Account is ${String(assayer.lifecycleStatus).toLowerCase()}`);
+      }
+
+      const payload: JwtPayload = {
+        sub: assayer.id,
+        username: assayer.assayerCode,
+        email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+        roles: ['ASSAYER'],
+        permissions: ['assignment:read:organization', 'assignment:update:organization'],
+        organizationId: assayer.organizationId,
+      };
+
+      const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
+
+      await this.auditService.recordEvent({
+        category: EventCategory.USER,
+        eventType: 'USER_LOGIN',
+        entityType: 'ASSAYER',
+        entityId: assayer.id,
+        userId: assayer.id,
+        userDisplayName: assayer.displayName,
+        ipAddress: ipAddress ?? undefined,
+      }).catch(() => {});
+
+      return {
+        ...tokens,
+        user: {
+          id: assayer.id,
           username: assayer.assayerCode,
-          email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
-          roles: ['ASSAYER'],
-          permissions: ['assignment:read:organization', 'assignment:update:organization'],
-          organizationId: assayer.organizationId,
-        };
-
-        const tokens = await this.generateTokenPair(payload);
-        return {
-          ...tokens,
-          user: {
-            id: assayer.id,
-            username: assayer.assayerCode,
-            name: assayer.displayName,
-            email: assayer.email,
-            phone: assayer.phone,
-            status: assayer.lifecycleStatus,
-          },
-        };
-      }
-
-      throw new UnauthorizedException('Invalid credentials. User not found.');
+          name: assayer.displayName,
+          email: assayer.email,
+          phone: assayer.phone,
+          status: assayer.lifecycleStatus,
+        },
+      };
     }
 
     // Check user status — only ACTIVE users may access the platform (Part 8 §5)
@@ -202,48 +211,30 @@ export class AuthService {
   }
 
   /**
-   * Biometric login — authenticate assayer by code only (no password).
-   * Used by the mobile app for biometric/fast login.
+   * Biometric login — the on-device Face ID/fingerprint prompt (handled entirely
+   * client-side) gates whether the app attempts to redeem a refresh token that was
+   * only ever issued by a prior real password login on this device. The server never
+   * trusts the biometric assertion itself — it trusts the same hashed, expiry- and
+   * revocation-checked refresh token used by /auth/refresh. This is why the mobile app
+   * must have completed a normal login at least once before biometric login can work.
    */
   async biometricLogin(
-    assayerCode: string,
+    refreshToken: string,
     ipAddress?: string,
     userAgent?: string,
   ): Promise<TokenPair & { user: any }> {
-    const assayer = await this.assayerRepository.findOne({
-      where: { assayerCode: ILike(assayerCode.trim()) },
-    });
+    const { tokens, user } = await this.redeemRefreshToken(refreshToken, ipAddress, userAgent);
 
-    if (!assayer) {
-      throw new UnauthorizedException('Assayer not found');
-    }
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'BIOMETRIC_LOGIN',
+      entityType: user.roles ? 'USER' : 'ASSAYER',
+      entityId: user.id,
+      userId: user.id,
+      ipAddress: ipAddress ?? undefined,
+    }).catch(() => {});
 
-    if (assayer.lifecycleStatus !== 'ACTIVE') {
-      throw new ForbiddenException('Assayer account is not active');
-    }
-
-    const payload: JwtPayload = {
-      sub: assayer.id,
-      username: assayer.assayerCode,
-      email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
-      roles: ['ASSAYER'],
-      permissions: ['assignment:read:organization', 'assignment:update:organization'],
-      organizationId: assayer.organizationId,
-    };
-
-    const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
-
-    return {
-      ...tokens,
-      user: {
-        id: assayer.id,
-        username: assayer.assayerCode,
-        name: assayer.displayName,
-        email: assayer.email,
-        phone: assayer.phone,
-        status: assayer.lifecycleStatus,
-      },
-    };
+    return { ...tokens, user };
   }
 
   /**
@@ -255,6 +246,21 @@ export class AuthService {
     ipAddress?: string,
     userAgent?: string,
   ): Promise<TokenPair> {
+    const { tokens } = await this.redeemRefreshToken(refreshToken, ipAddress, userAgent);
+    return tokens;
+  }
+
+  /**
+   * Validates a refresh token (hash lookup, not revoked, not expired) and rotates it,
+   * resolving the underlying System User or Assayer account. Shared by both
+   * refreshAccessToken() and biometricLogin() so there is exactly one code path that
+   * ever trusts a refresh token — no separate/weaker verification anywhere.
+   */
+  private async redeemRefreshToken(
+    refreshToken: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<{ tokens: TokenPair; user: any }> {
     const tokenHash = this.hashToken(refreshToken);
 
     const storedToken = await this.refreshTokenRepository.findOne({
@@ -275,47 +281,71 @@ export class AuthService {
       relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
 
-    if (!user) {
-      const assayer = await this.assayerRepository.findOne({
-        where: { id: storedToken.userId },
-      });
-      if (!assayer) {
+    if (user) {
+      if (user.status !== UserStatus.ACTIVE) {
         throw new UnauthorizedException('User account is not active');
       }
-      const assayerPayload: JwtPayload = {
-        sub: assayer.id,
-        username: assayer.assayerCode,
-        email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
-        roles: ['ASSAYER'],
-        permissions: ['assignment:read:organization', 'assignment:update:organization'],
-        organizationId: assayer.organizationId,
-      };
+
       storedToken.isRevoked = true;
       storedToken.revokedAt = new Date();
       await this.refreshTokenRepository.save(storedToken);
-      const tokens = await this.generateTokenPair(assayerPayload);
+
+      const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
+
       storedToken.replacedBy = tokens.refreshToken;
       await this.refreshTokenRepository.save(storedToken);
-      return tokens;
+
+      return {
+        tokens,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          displayName: user.displayName,
+          roles: user.roles,
+        },
+      };
     }
 
-    if (user.status !== UserStatus.ACTIVE) {
-      throw new UnauthorizedException('User account is not active');
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: storedToken.userId },
+    });
+    if (!assayer) {
+      throw new UnauthorizedException('Account is not active');
+    }
+    if (assayer.lifecycleStatus !== 'ACTIVE') {
+      throw new ForbiddenException('Assayer account is not active');
     }
 
-    // Revoke old token (rotation)
+    const assayerPayload: JwtPayload = {
+      sub: assayer.id,
+      username: assayer.assayerCode,
+      email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+      roles: ['ASSAYER'],
+      permissions: ['assignment:read:organization', 'assignment:update:organization'],
+      organizationId: assayer.organizationId,
+    };
+
     storedToken.isRevoked = true;
     storedToken.revokedAt = new Date();
     await this.refreshTokenRepository.save(storedToken);
 
-    // Generate new token pair
-    const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
+    const tokens = await this.generateTokenPair(assayerPayload);
 
-    // Link old token to new one
     storedToken.replacedBy = tokens.refreshToken;
     await this.refreshTokenRepository.save(storedToken);
 
-    return tokens;
+    return {
+      tokens,
+      user: {
+        id: assayer.id,
+        username: assayer.assayerCode,
+        name: assayer.displayName,
+        email: assayer.email,
+        phone: assayer.phone,
+        status: assayer.lifecycleStatus,
+      },
+    };
   }
 
   /**

@@ -14,7 +14,9 @@ export function connectMobileSocket(): Socket | null {
   if (!token) return null;
 
   socket = io(WS_URL, {
-    auth: { token },
+    // Read the token fresh on every (re)connection attempt — a static value here would
+    // keep resending a token captured at connect time, which is wrong once it's refreshed.
+    auth: (cb) => cb({ token: MobileApiService.getAuthToken() }),
     transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionAttempts: 10,
@@ -30,8 +32,17 @@ export function connectMobileSocket(): Socket | null {
     console.log('[MobileSocket] Disconnected:', reason);
   });
 
-  socket.on('error', (err) => {
+  socket.on('error', async (err) => {
     console.error('[MobileSocket] Error:', err);
+    // The server disconnects the socket on auth failure, and socket.io does not
+    // auto-retry a server-initiated disconnect. Refresh the access token and
+    // reconnect explicitly, instead of leaving the socket dead until next app launch.
+    if (err?.message === 'Invalid or expired token' || err?.message === 'Authentication required') {
+      const refreshed = await MobileApiService.tryRefresh();
+      if (refreshed) {
+        socket?.connect();
+      }
+    }
   });
 
   return socket;

@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.CustomerDensityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RequiredSkillsFilter = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.AvailabilityFilter = void 0;
+exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.CustomerDensityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.QueryVolumeScoreCalculator = exports.DeliverySpeedScoreCalculator = exports.RejectionAcceptanceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RequiredSkillsFilter = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.ConsecutiveBranchAuditFilter = exports.AvailabilityFilter = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
@@ -26,6 +26,7 @@ const client_entity_1 = require("../client/client.entity");
 const rule_engine_1 = require("../platform/rules/rule.engine");
 const configuration_resolver_1 = require("../platform/configuration/configuration.resolver");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const validation_query_entity_1 = require("../validation-query/validation-query.entity");
 const constraint_evaluator_1 = require("./constraint.evaluator");
 let AvailabilityFilter = class AvailabilityFilter {
     constraintEvaluator;
@@ -53,6 +54,37 @@ exports.AvailabilityFilter = AvailabilityFilter = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [constraint_evaluator_1.ConstraintEvaluator])
 ], AvailabilityFilter);
+let ConsecutiveBranchAuditFilter = class ConsecutiveBranchAuditFilter {
+    assignmentRepository;
+    name = 'consecutiveBranchAudit';
+    constructor(assignmentRepository) {
+        this.assignmentRepository = assignmentRepository;
+    }
+    async evaluate(assayer, context) {
+        if (!context.branch?.id)
+            return true;
+        const lastAssignment = await this.assignmentRepository.findOne({
+            where: {
+                projectBranch: { branchId: context.branch.id },
+                isActive: true,
+            },
+            order: { createdAt: 'DESC' },
+            relations: ['projectBranch'],
+        });
+        if (!lastAssignment)
+            return true;
+        if (lastAssignment.assayerId === assayer.id) {
+            return false;
+        }
+        return true;
+    }
+};
+exports.ConsecutiveBranchAuditFilter = ConsecutiveBranchAuditFilter;
+exports.ConsecutiveBranchAuditFilter = ConsecutiveBranchAuditFilter = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
+    __metadata("design:paramtypes", [typeorm_2.Repository])
+], ConsecutiveBranchAuditFilter);
 let ClientRestrictionFilter = class ClientRestrictionFilter {
     name = 'clientRestriction';
     async evaluate(assayer, context) {
@@ -204,7 +236,7 @@ exports.WorkloadScoreCalculator = WorkloadScoreCalculator = __decorate([
 let PerformanceScoreCalculator = class PerformanceScoreCalculator {
     name = 'performance';
     async calculate(assayer) {
-        const rating = assayer.performanceRating || 5.0;
+        const rating = Number(assayer.performanceRating) || 5.0;
         return (rating / 5.0) * 100;
     }
 };
@@ -212,6 +244,99 @@ exports.PerformanceScoreCalculator = PerformanceScoreCalculator;
 exports.PerformanceScoreCalculator = PerformanceScoreCalculator = __decorate([
     (0, common_1.Injectable)()
 ], PerformanceScoreCalculator);
+let RejectionAcceptanceScoreCalculator = class RejectionAcceptanceScoreCalculator {
+    assignmentRepository;
+    name = 'acceptanceRate';
+    constructor(assignmentRepository) {
+        this.assignmentRepository = assignmentRepository;
+    }
+    async calculate(assayer) {
+        const totalDispatched = await this.assignmentRepository.count({
+            where: { assayerId: assayer.id, isActive: true },
+        });
+        if (totalDispatched === 0)
+            return 85;
+        const acceptedCount = await this.assignmentRepository.count({
+            where: {
+                assayerId: assayer.id,
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.COMPLETED]),
+                isActive: true,
+            },
+        });
+        return Math.round((acceptedCount / totalDispatched) * 100);
+    }
+};
+exports.RejectionAcceptanceScoreCalculator = RejectionAcceptanceScoreCalculator;
+exports.RejectionAcceptanceScoreCalculator = RejectionAcceptanceScoreCalculator = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
+    __metadata("design:paramtypes", [typeorm_2.Repository])
+], RejectionAcceptanceScoreCalculator);
+let DeliverySpeedScoreCalculator = class DeliverySpeedScoreCalculator {
+    assignmentRepository;
+    name = 'deliverySpeed';
+    constructor(assignmentRepository) {
+        this.assignmentRepository = assignmentRepository;
+    }
+    async calculate(assayer) {
+        const completedAssignments = await this.assignmentRepository.find({
+            where: {
+                assayerId: assayer.id,
+                status: shared_1.AssignmentStatus.COMPLETED,
+                isActive: true,
+            },
+            take: 20,
+        });
+        if (completedAssignments.length === 0)
+            return 80;
+        let totalScore = 0;
+        for (const a of completedAssignments) {
+            if (a.completionDate && a.createdAt) {
+                const diffHours = (new Date(a.completionDate).getTime() - new Date(a.createdAt).getTime()) / (1000 * 3600);
+                if (diffHours <= 24)
+                    totalScore += 100;
+                else if (diffHours <= 48)
+                    totalScore += 80;
+                else if (diffHours <= 72)
+                    totalScore += 60;
+                else
+                    totalScore += 40;
+            }
+            else {
+                totalScore += 75;
+            }
+        }
+        return Math.round(totalScore / completedAssignments.length);
+    }
+};
+exports.DeliverySpeedScoreCalculator = DeliverySpeedScoreCalculator;
+exports.DeliverySpeedScoreCalculator = DeliverySpeedScoreCalculator = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
+    __metadata("design:paramtypes", [typeorm_2.Repository])
+], DeliverySpeedScoreCalculator);
+let QueryVolumeScoreCalculator = class QueryVolumeScoreCalculator {
+    queryRepository;
+    name = 'queryVolume';
+    constructor(queryRepository) {
+        this.queryRepository = queryRepository;
+    }
+    async calculate(assayer) {
+        const queries = await this.queryRepository.find({
+            where: { assayerId: assayer.id, isActive: true },
+            take: 50,
+        });
+        if (queries.length === 0)
+            return 95;
+        return Math.max(20, Math.round(100 - (queries.length * 10)));
+    }
+};
+exports.QueryVolumeScoreCalculator = QueryVolumeScoreCalculator;
+exports.QueryVolumeScoreCalculator = QueryVolumeScoreCalculator = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, typeorm_1.InjectRepository)(validation_query_entity_1.ValidationQueryEntity)),
+    __metadata("design:paramtypes", [typeorm_2.Repository])
+], QueryVolumeScoreCalculator);
 let ExperienceScoreCalculator = class ExperienceScoreCalculator {
     name = 'experience';
     async calculate(assayer) {
@@ -499,6 +624,7 @@ exports.RiskScoreCalculator = RiskScoreCalculator = __decorate([
 ], RiskScoreCalculator);
 let RecommendationEngine = class RecommendationEngine {
     availabilityFilter;
+    consecutiveBranchAuditFilter;
     clientRestrictionFilter;
     clientEligibilityFilter;
     ruleEngineEligibilityFilter;
@@ -507,6 +633,9 @@ let RecommendationEngine = class RecommendationEngine {
     travelTimeCalculator;
     workloadCalculator;
     performanceCalculator;
+    rejectionAcceptanceCalculator;
+    deliverySpeedCalculator;
+    queryVolumeCalculator;
     experienceCalculator;
     costCalculator;
     clientPreferenceCalculator;
@@ -522,8 +651,9 @@ let RecommendationEngine = class RecommendationEngine {
     assayerService;
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, customerDensityCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, constraintEvaluator, assayerService) {
+    constructor(availabilityFilter, consecutiveBranchAuditFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, rejectionAcceptanceCalculator, deliverySpeedCalculator, queryVolumeCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, customerDensityCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, constraintEvaluator, assayerService) {
         this.availabilityFilter = availabilityFilter;
+        this.consecutiveBranchAuditFilter = consecutiveBranchAuditFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
         this.clientEligibilityFilter = clientEligibilityFilter;
         this.ruleEngineEligibilityFilter = ruleEngineEligibilityFilter;
@@ -532,6 +662,9 @@ let RecommendationEngine = class RecommendationEngine {
         this.travelTimeCalculator = travelTimeCalculator;
         this.workloadCalculator = workloadCalculator;
         this.performanceCalculator = performanceCalculator;
+        this.rejectionAcceptanceCalculator = rejectionAcceptanceCalculator;
+        this.deliverySpeedCalculator = deliverySpeedCalculator;
+        this.queryVolumeCalculator = queryVolumeCalculator;
         this.experienceCalculator = experienceCalculator;
         this.costCalculator = costCalculator;
         this.clientPreferenceCalculator = clientPreferenceCalculator;
@@ -545,8 +678,8 @@ let RecommendationEngine = class RecommendationEngine {
         this.clientRepository = clientRepository;
         this.constraintEvaluator = constraintEvaluator;
         this.assayerService = assayerService;
-        this.filters.push(this.availabilityFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter, this.requiredSkillsFilter);
-        this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.customerDensityCalculator, this.profitabilityCalculator, this.riskCalculator);
+        this.filters.push(this.availabilityFilter, this.consecutiveBranchAuditFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter, this.requiredSkillsFilter);
+        this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.rejectionAcceptanceCalculator, this.deliverySpeedCalculator, this.queryVolumeCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.customerDensityCalculator, this.profitabilityCalculator, this.riskCalculator);
     }
     async recommend(branch, scheduledDate, weights = {}) {
         const client = branch.clientId
@@ -597,9 +730,10 @@ let RecommendationEngine = class RecommendationEngine {
 exports.RecommendationEngine = RecommendationEngine;
 exports.RecommendationEngine = RecommendationEngine = __decorate([
     (0, common_1.Injectable)(),
-    __param(18, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
-    __param(19, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(22, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
+    __param(23, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [AvailabilityFilter,
+        ConsecutiveBranchAuditFilter,
         ClientRestrictionFilter,
         ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
@@ -608,6 +742,9 @@ exports.RecommendationEngine = RecommendationEngine = __decorate([
         TravelTimeScoreCalculator,
         WorkloadScoreCalculator,
         PerformanceScoreCalculator,
+        RejectionAcceptanceScoreCalculator,
+        DeliverySpeedScoreCalculator,
+        QueryVolumeScoreCalculator,
         ExperienceScoreCalculator,
         CostScoreCalculator,
         ClientPreferenceScoreCalculator,

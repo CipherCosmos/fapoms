@@ -24,6 +24,7 @@ class CreateHolidayRequestDto {
     date;
     type;
     applicableStates;
+    clientId;
 }
 __decorate([
     (0, class_validator_1.IsString)(),
@@ -44,6 +45,11 @@ __decorate([
     (0, class_validator_1.IsArray)(),
     __metadata("design:type", Array)
 ], CreateHolidayRequestDto.prototype, "applicableStates", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateHolidayRequestDto.prototype, "clientId", void 0);
 let HolidayController = class HolidayController {
     holidayService;
     constructor(holidayService) {
@@ -56,8 +62,8 @@ let HolidayController = class HolidayController {
             data: holiday,
         };
     }
-    async findAll(page = 1, limit = 50, year) {
-        const { holidays, total } = await this.holidayService.findAll(page, limit, year);
+    async findAll(page = 1, limit = 50, year, clientId) {
+        const { holidays, total } = await this.holidayService.findAll(page, limit, year, clientId);
         return {
             success: true,
             data: holidays,
@@ -73,12 +79,12 @@ let HolidayController = class HolidayController {
             },
         };
     }
-    async checkHoliday(dateString, stateCode) {
+    async checkHoliday(dateString, stateCode, clientId) {
         const date = new Date(dateString);
         if (isNaN(date.getTime())) {
             return { success: false, error: 'Invalid date parameter' };
         }
-        const isHoliday = await this.holidayService.isHoliday(date, stateCode);
+        const isHoliday = await this.holidayService.isHoliday(date, stateCode, clientId);
         return {
             success: true,
             data: { isHoliday },
@@ -117,8 +123,9 @@ __decorate([
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
     __param(2, (0, common_1.Query)('year')),
+    __param(3, (0, common_1.Query)('clientId')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object, Number]),
+    __metadata("design:paramtypes", [Object, Object, Number, String]),
     __metadata("design:returntype", Promise)
 ], HolidayController.prototype, "findAll", null);
 __decorate([
@@ -126,8 +133,9 @@ __decorate([
     (0, swagger_1.ApiOperation)({ summary: 'Verify if a date is a holiday' }),
     __param(0, (0, common_1.Query)('date')),
     __param(1, (0, common_1.Query)('stateCode')),
+    __param(2, (0, common_1.Query)('clientId')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", Promise)
 ], HolidayController.prototype, "checkHoliday", null);
 __decorate([

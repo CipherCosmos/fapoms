@@ -13,6 +13,7 @@ const client_entity_1 = require("../client/client.entity");
 const branch_service_1 = require("../branch/branch.service");
 const branch_query_service_1 = require("../branch/branch-query.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const assessment_entity_1 = require("./assessment.entity");
 const project_query_service_1 = require("./project-query.service");
 describe('ProjectService', () => {
     let service;
@@ -76,6 +77,10 @@ describe('ProjectService', () => {
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
                     useValue: mockProjectBranchRepo,
+                },
+                {
+                    provide: (0, typeorm_1.getRepositoryToken)(assessment_entity_1.AssessmentEntity),
+                    useValue: { findOne: jest.fn(), save: jest.fn() },
                 },
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(client_entity_1.ClientEntity),

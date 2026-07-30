@@ -4,6 +4,7 @@ declare class CreateHolidayRequestDto implements CreateHolidayDto {
     date: string | Date;
     type: string;
     applicableStates?: string[];
+    clientId?: string;
 }
 export declare class HolidayController {
     private readonly holidayService;
@@ -12,7 +13,7 @@ export declare class HolidayController {
         success: boolean;
         data: import("./holiday.entity").HolidayEntity;
     }>;
-    findAll(page?: number, limit?: number, year?: number): Promise<{
+    findAll(page?: number, limit?: number, year?: number, clientId?: string): Promise<{
         success: boolean;
         data: import("./holiday.entity").HolidayEntity[];
         meta: {
@@ -26,7 +27,7 @@ export declare class HolidayController {
             };
         };
     }>;
-    checkHoliday(dateString: string, stateCode?: string): Promise<{
+    checkHoliday(dateString: string, stateCode?: string, clientId?: string): Promise<{
         success: boolean;
         error: string;
         data?: undefined;

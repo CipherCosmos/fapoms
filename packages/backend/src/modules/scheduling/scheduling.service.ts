@@ -156,12 +156,40 @@ export class SchedulingService {
       take: limit,
       skip: (page - 1) * limit,
     });
-    return { schedules, total };
+
+    // Dynamic State Reconciliation Mechanism:
+    // If the parent assignment or project branch has completed the audit workflow,
+    // dynamically elevate the schedule's display status to COMPLETED so UI views never see stale states.
+    const reconciledSchedules = schedules.map((sch) => {
+      const asnStatus = sch.assignment?.status;
+      const pbStatus = sch.assignment?.projectBranch?.status;
+      const isParentCompleted =
+        asnStatus === 'COMPLETED' ||
+        ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(pbStatus as string);
+
+      if (isParentCompleted && sch.status !== ScheduleStatus.COMPLETED) {
+        return {
+          ...sch,
+          status: ScheduleStatus.COMPLETED,
+          completedAt: sch.completedAt || sch.updatedAt,
+        };
+      }
+      return sch;
+    });
+
+    return { schedules: reconciledSchedules, total };
   }
 
   async transition(id: string, targetStatus: ScheduleStatus, userId: string, remarks?: string, newScheduledDate?: string): Promise<ScheduleEntity> {
     const schedule = await this.findOne(id);
     const prevStatus = schedule.status;
+
+    if (schedule.assignment?.projectBranch) {
+      const pbStatus = schedule.assignment.projectBranch.status;
+      if (['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(pbStatus) || schedule.assignment.status === 'COMPLETED' || prevStatus === ScheduleStatus.COMPLETED) {
+        throw new BadRequestException('Cannot reschedule an audit that has already been completed or is under validation review.');
+      }
+    }
 
     if (!isValidTransition(SCHEDULE_TRANSITIONS, prevStatus, targetStatus)) {
       throw new BadRequestException(`Invalid Transition: Cannot transition schedule from ${prevStatus} to ${targetStatus}.`);
@@ -175,6 +203,22 @@ export class SchedulingService {
         await this.assignmentService.scheduleAudit(schedule.assignmentId, userId, newScheduledDate);
       }
     }
+
+    // Record completion timestamp for audit duration calculation (Audit Workflow only)
+    if (targetStatus === ScheduleStatus.COMPLETED) {
+      schedule.completedAt = new Date();
+
+      // Cascade: complete the parent assignment (sets completionDate, transitions branch to AUDIT_COMPLETED)
+      if (schedule.assignmentId) {
+        try {
+          await this.assignmentService.completeAssignment(schedule.assignmentId, userId, 'Completed via schedule dispatch');
+        } catch (err) {
+          // Assignment may already be completed (e.g., completed via document upload path)
+          console.warn('Assignment completion cascade skipped:', err.message);
+        }
+      }
+    }
+
     schedule.updatedBy = userId;
 
     const saved = await this.scheduleRepository.save(schedule);

@@ -7,6 +7,7 @@ const audit_entity_1 = require("./audit.entity");
 const billing_service_1 = require("../billing/billing.service");
 const ledger_service_1 = require("../ledger/ledger.service");
 const audit_history_service_1 = require("../audit-history/audit-history.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 describe('AuditService', () => {
     let service;
     const mockAuditRepository = {
@@ -42,6 +43,10 @@ describe('AuditService', () => {
                 {
                     provide: audit_history_service_1.AuditHistoryService,
                     useValue: mockHistoryService,
+                },
+                {
+                    provide: domain_event_publisher_1.DomainEventPublisher,
+                    useValue: { publish: jest.fn() },
                 },
             ],
         }).compile();

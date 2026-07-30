@@ -50,6 +50,7 @@ const business_rule_entity_1 = require("../platform/rules/business-rule.entity")
 const client_entity_1 = require("../client/client.entity");
 const constraint_evaluator_1 = require("./constraint.evaluator");
 const recommendation_engine_1 = require("./recommendation.engine");
+const validation_query_entity_1 = require("../validation-query/validation-query.entity");
 let PlanningModule = class PlanningModule {
 };
 exports.PlanningModule = PlanningModule;
@@ -60,6 +61,7 @@ exports.PlanningModule = PlanningModule = __decorate([
                 branch_entity_1.BranchEntity,
                 assayer_entity_1.AssayerEntity,
                 assignment_entity_1.AssignmentEntity,
+                validation_query_entity_1.ValidationQueryEntity,
                 schedule_entity_1.ScheduleEntity,
                 project_branch_entity_1.ProjectBranchEntity,
                 project_entity_1.ProjectEntity,
@@ -106,6 +108,7 @@ exports.PlanningModule = PlanningModule = __decorate([
             { provide: 'WorkloadProvider', useClass: planning_acl_adapter_1.PlanningAntiCorruptionLayer },
             { provide: 'OperationsControlServiceInterface', useClass: operations_planning_service_1.OperationsPlanningService },
             recommendation_engine_1.AvailabilityFilter,
+            recommendation_engine_1.ConsecutiveBranchAuditFilter,
             recommendation_engine_1.ClientRestrictionFilter,
             recommendation_engine_1.ClientEligibilityFilter,
             recommendation_engine_1.RuleEngineEligibilityFilter,
@@ -114,6 +117,9 @@ exports.PlanningModule = PlanningModule = __decorate([
             recommendation_engine_1.TravelTimeScoreCalculator,
             recommendation_engine_1.WorkloadScoreCalculator,
             recommendation_engine_1.PerformanceScoreCalculator,
+            recommendation_engine_1.RejectionAcceptanceScoreCalculator,
+            recommendation_engine_1.DeliverySpeedScoreCalculator,
+            recommendation_engine_1.QueryVolumeScoreCalculator,
             recommendation_engine_1.ExperienceScoreCalculator,
             recommendation_engine_1.CostScoreCalculator,
             recommendation_engine_1.ClientPreferenceScoreCalculator,

@@ -13,6 +13,9 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { SystemRole, DocumentStatus, DocumentType, AssessmentStatus, AssignmentStatus } from '@fapoms/shared';
 
+import { ValidationService } from '../validation/validation.service';
+import { AssignmentService } from '../assignment/assignment.service';
+
 @ApiTags('Documents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -26,6 +29,8 @@ export class DocumentController {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     @InjectRepository(AssessmentEntity)
     private readonly assessmentRepository: Repository<AssessmentEntity>,
+    private readonly validationService: ValidationService,
+    private readonly assignmentService: AssignmentService,
   ) {}
 
   @Post('upload')
@@ -100,16 +105,27 @@ export class DocumentController {
       targetAsn = await this.assignmentRepository.findOne({ where: { projectBranchId: targetId }, relations: ['projectBranch'] }).catch(() => null);
     }
 
-    if (targetAsn) {
-      targetAsn.status = AssignmentStatus.COMPLETED;
-      targetAsn.completionDate = new Date();
-      await this.assignmentRepository.save(targetAsn).catch(() => {});
-
-      if (targetAsn.projectBranchId) {
-        await this.assessmentRepository.manager.query(
-          `UPDATE project_branches SET status = 'AUDIT_COMPLETED' WHERE id = $1`,
-          [targetAsn.projectBranchId]
-        ).catch(() => {});
+    if (targetAsn && targetAsn.status !== AssignmentStatus.COMPLETED) {
+      // Completion must go through the single owner of that transition. It cascades the
+      // project branch (via ProjectBranchStateMachine, so the domain event fires), the
+      // schedule, the assessment status, the validation case, the audit trail, the
+      // notification and the assayer stats — all in one place.
+      //
+      // This used to be hand-rolled here with direct writes + raw SQL, each wrapped in a
+      // silent `.catch(() => {})`, so a single failure left the assignment COMPLETED while
+      // its branch stayed SCHEDULED and its schedule stayed RESCHEDULED — the exact
+      // cross-view status drift this replaced.
+      try {
+        await this.assignmentService.completeAssignment(
+          targetAsn.id,
+          req?.user?.id || 'SYSTEM',
+          `Audited return PDF uploaded (${fileName})`,
+        );
+      } catch (err: any) {
+        console.error(
+          `Failed to complete assignment ${targetAsn.id} after audited-return upload:`,
+          err?.message,
+        );
       }
     }
 

@@ -19,7 +19,7 @@ import { ProjectEntity } from '../../modules/project/project.entity';
 import { ProjectBranchEntity } from '../../modules/project/project-branch.entity';
 import { HolidayEntity } from '../../modules/holiday/holiday.entity';
 import { ValidationCaseEntity } from '../../modules/validation/validation-case.entity';
-import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerLifecycleStatus, ValidationStatus } from '@fapoms/shared';
+import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
 async function seed() {
@@ -879,12 +879,8 @@ async function seed() {
           latitude: ad.latitude,
           longitude: ad.longitude,
           location: { type: 'Point', coordinates: [ad.longitude, ad.latitude] },
-          status: 'ACTIVE',
+          status: AssayerStatus.ACTIVE,
           lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
-          skills: assayerSkillsMap[ad.code]?.skills || ['Gold', 'Gold Valuation'],
-          certifications: assayerSkillsMap[ad.code]?.certifications || [
-            { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
-          ],
           experienceYears: assayerSkillsMap[ad.code]?.experienceYears || 3,
           performanceRating: assayerSkillsMap[ad.code]?.performanceRating || 4.0,
           organizationId: defaultOrg.id,
@@ -1287,8 +1283,8 @@ async function seed() {
           name: 'SBI Corporate Audit 2026',
           description: 'Annual corporate reference audit for State Bank of India branches.',
           clientId: sbiClient.id,
-          status: 'PLANNING' as any,
-          priority: 'HIGH' as any,
+          status: ProjectStatus.PLANNING,
+          priority: Priority.HIGH,
           startDate: new Date('2026-07-01'),
           endDate: new Date('2026-07-31'),
           createdBy: 'system',
@@ -1307,8 +1303,8 @@ async function seed() {
           pb = projectBranchRepository.create({
             projectId: project.id,
             branchId: sb.id,
-            status: 'PLANNING' as any,
-            priority: 'HIGH' as any,
+            status: ProjectBranchStatus.PLANNING,
+            priority: Priority.HIGH,
             createdBy: 'system',
             updatedBy: 'system',
           });

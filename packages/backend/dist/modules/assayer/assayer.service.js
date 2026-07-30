@@ -753,23 +753,23 @@ let AssayerService = class AssayerService {
     async updateAssayerStats(assayerId) {
         const mgr = this.assayerRepository.manager;
         const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
-        const completed = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
-       JOIN project_branches pb ON pb.id = a.project_branch_id
+        const completedResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND pb.status IN ('CLOSED', 'VALIDATION_COMPLETED')`, [assayerId]);
+       AND (a.status IN ('COMPLETED', 'AUDIT_COMPLETED') OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`, [assayerId]);
+        const completed = Number(completedResult[0]?.cnt ?? 0);
         const cancelled = await mgr.count('assignments', {
             where: { assayerId, status: shared_1.AssignmentStatus.CANCELLED, isActive: true },
         });
         const onTimeResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
-       JOIN project_branches pb ON pb.id = a.project_branch_id
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')
-       AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
-       AND a.completion_date <= a.scheduled_date`, [assayerId]);
-        const earningsResult = await mgr.query(`SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
-       JOIN project_branches pb ON pb.id = a.project_branch_id
+       AND (a.status IN ('COMPLETED', 'AUDIT_COMPLETED') OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
+       AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`, [assayerId]);
+        const earningsResult = await mgr.query(`SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) as total FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')`, [assayerId]);
+       AND (a.status IN ('ACCEPTED', 'COMPLETED', 'AUDIT_COMPLETED') OR pb.status IN ('ASSIGNMENT_CONFIRMED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`, [assayerId]);
         const lastAssignment = await mgr.query(`SELECT updated_at FROM assignments a
        WHERE a.assayer_id = $1 AND a.is_active = true
        ORDER BY a.updated_at DESC LIMIT 1`, [assayerId]);
@@ -791,8 +791,32 @@ let AssayerService = class AssayerService {
         const assayer = await this.assayerRepository.findOne({ where });
         if (!assayer)
             throw new common_1.NotFoundException(`Assayer ${assayerId} not found.`);
-        await this.hydrateWorkforceAttributes(assayer);
-        return assayer;
+        await this.updateAssayerStats(assayer.id).catch(err => console.error('Failed to update assayer stats in profile:', err));
+        const updated = await this.assayerRepository.findOne({ where: { id: assayer.id } });
+        const target = updated || assayer;
+        await this.hydrateWorkforceAttributes(target);
+        const mgr = this.assayerRepository.manager;
+        const queryRes = await mgr.query(`SELECT COUNT(*) as cnt FROM validation_queries vq
+       JOIN assignments a ON a.id = vq.assignment_id
+       WHERE a.assayer_id = $1 AND vq.is_active = true`, [target.id]).catch(() => [{ cnt: 0 }]);
+        target.queryCount = Number(queryRes[0]?.cnt ?? 0);
+        const totalOffered = await mgr.count('assignments', { where: { assayerId: target.id, isActive: true } });
+        const acceptedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.COMPLETED]), isActive: true } });
+        const rejectedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: shared_1.AssignmentStatus.REJECTED, isActive: true } });
+        target.acceptanceRate = totalOffered > 0 ? Math.round((acceptedCount / totalOffered) * 100) : 100;
+        target.rejectionRate = totalOffered > 0 ? Math.round((rejectedCount / totalOffered) * 100) : 0;
+        const auditHistory = await mgr.query(`SELECT a.id, a.assignment_number, a.status, a.agreed_fee, a.proposed_fee, a.scheduled_date, a.completion_date,
+              b.name as branch_name, b.city as branch_city, b.state as branch_state, p.name as project_name
+       FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+       LEFT JOIN branches b ON b.id = pb.branch_id
+       LEFT JOIN projects p ON p.id = pb.project_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       ORDER BY a.created_at DESC LIMIT 20`, [target.id]).catch(() => []);
+        target.auditHistory = auditHistory;
+        const activeCommercial = await this.getActiveCommercialProfile(target.id, new Date()).catch(() => null);
+        target.activeCommercialProfile = activeCommercial;
+        return target;
     }
     async recordActivity(assayerId, eventType, previousState, newState, userId, remarks) {
         const activity = this.activityRepository.create({

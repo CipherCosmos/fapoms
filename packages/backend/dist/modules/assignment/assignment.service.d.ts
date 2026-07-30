@@ -11,12 +11,14 @@ import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { RoutingService } from '../geo/routing.provider';
+import { ValidationService } from '../validation/validation.service';
 import { AssignmentStatus } from '@fapoms/shared';
 export interface CreateAssignmentDto {
     projectBranchId: string;
     assayerId: string;
-    proposedFee: number;
-    scheduledDate: string;
+    proposedFee?: number;
+    scheduledDate?: string;
     remarks?: string;
 }
 export interface UpdateAssignmentDetailsDto {
@@ -44,13 +46,16 @@ export declare class AssignmentService {
     private readonly auditService;
     private readonly eventPublisher;
     private readonly constraintEvaluator;
+    private readonly routingService;
+    private readonly validationService;
     private readonly dataSource;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, assessmentRepository: Repository<AssessmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, dataSource: DataSource);
+    constructor(assignmentRepository: Repository<AssignmentEntity>, assessmentRepository: Repository<AssessmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, routingService: RoutingService, validationService: ValidationService, dataSource: DataSource);
     private syncAssessmentStatus;
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
     update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity>;
     private executeAssignmentTransition;
+    proposeCounterFee(id: string, userId: string, counterFee: number, remarks?: string): Promise<AssignmentEntity>;
     acceptOffer(id: string, userId: string, fee?: number, reason?: string): Promise<AssignmentEntity>;
     rejectOffer(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
     cancelAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;

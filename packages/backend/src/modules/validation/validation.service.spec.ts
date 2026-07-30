@@ -10,6 +10,7 @@ import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { AssessmentEntity } from '../project/assessment.entity';
 
 describe('ValidationService', () => {
   let service: ValidationService;
@@ -58,6 +59,10 @@ describe('ValidationService', () => {
         {
           provide: getRepositoryToken(ValidationCaseEntity),
           useValue: mockValidationCaseRepo,
+        },
+        {
+          provide: getRepositoryToken(AssessmentEntity),
+          useValue: { findOne: jest.fn(), save: jest.fn() },
         },
         {
           provide: ProjectQueryService,

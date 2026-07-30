@@ -26,14 +26,19 @@ let NotificationController = class NotificationController {
         this.pushService = pushService;
     }
     async findMyNotifications(req) {
-        const list = await this.notificationService.findByUser(req.user.id);
+        const userId = req?.user?.id;
+        if (!userId) {
+            return { success: true, data: [] };
+        }
+        const list = await this.notificationService.findByUser(userId);
         return {
             success: true,
             data: list,
         };
     }
     async markAsRead(id, req) {
-        const notif = await this.notificationService.markAsRead(id, req.user.id);
+        const userId = req?.user?.id || id;
+        const notif = await this.notificationService.markAsRead(id, userId);
         return {
             success: true,
             data: notif,
@@ -59,6 +64,7 @@ let NotificationController = class NotificationController {
 exports.NotificationController = NotificationController;
 __decorate([
     (0, common_1.Get)(),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get notifications for current user' }),
     __param(0, (0, common_1.Req)()),
     __metadata("design:type", Function),
@@ -67,6 +73,7 @@ __decorate([
 ], NotificationController.prototype, "findMyNotifications", null);
 __decorate([
     (0, common_1.Post)(':id/read'),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Mark notification as read' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),

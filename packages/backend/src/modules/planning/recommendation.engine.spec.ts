@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { AssignmentStatus } from '@fapoms/shared';
 import {
   RecommendationEngine,
   AvailabilityFilter,
+  ConsecutiveBranchAuditFilter,
   ClientRestrictionFilter,
   ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
@@ -11,6 +13,9 @@ import {
   TravelTimeScoreCalculator,
   WorkloadScoreCalculator,
   PerformanceScoreCalculator,
+  RejectionAcceptanceScoreCalculator,
+  DeliverySpeedScoreCalculator,
+  QueryVolumeScoreCalculator,
   ExperienceScoreCalculator,
   CostScoreCalculator,
   ClientPreferenceScoreCalculator,
@@ -32,6 +37,7 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { AssayerService } from '../assayer/assayer.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
@@ -83,6 +89,7 @@ describe('RecommendationEngine', () => {
       providers: [
         RecommendationEngine,
         AvailabilityFilter,
+        ConsecutiveBranchAuditFilter,
         ClientRestrictionFilter,
         ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
@@ -91,6 +98,9 @@ describe('RecommendationEngine', () => {
         TravelTimeScoreCalculator,
         WorkloadScoreCalculator,
         PerformanceScoreCalculator,
+        RejectionAcceptanceScoreCalculator,
+        DeliverySpeedScoreCalculator,
+        QueryVolumeScoreCalculator,
         ExperienceScoreCalculator,
         CostScoreCalculator,
         ClientPreferenceScoreCalculator,
@@ -124,6 +134,10 @@ describe('RecommendationEngine', () => {
         {
           provide: getRepositoryToken(ProjectBranchEntity),
           useValue: mockProjectBranchRepo,
+        },
+        {
+          provide: getRepositoryToken(ValidationQueryEntity),
+          useValue: { count: jest.fn().mockResolvedValue(0), find: jest.fn().mockResolvedValue([]) },
         },
         {
           provide: RoutingService,
@@ -244,6 +258,42 @@ describe('RecommendationEngine', () => {
     expect(results[0].score).toBeGreaterThan(results[1].score);
   });
 
+  it('should flag (not exclude) the assayer holding an unconfirmed pending offer on this branch', async () => {
+    const assayerPending = {
+      id: 'a-pending', status: 'ACTIVE', isActive: true, latitude: 19.08, longitude: 72.88,
+    };
+    const assayerFresh = {
+      id: 'a-fresh', status: 'ACTIVE', isActive: true, latitude: 19.09, longitude: 72.89,
+    };
+
+    mockAssayerRepo.find.mockResolvedValue([assayerPending, assayerFresh]);
+    mockAssignmentRepo.count.mockResolvedValue(0);
+    mockCommercialRepo.find.mockResolvedValue([]);
+    mockClientRepo.findOne.mockResolvedValue(null);
+    mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 5, durationMinutes: 10 });
+
+    // Distinguish the three different findOne() call shapes that share this mock:
+    // the new "pending offer on this branch" lookup (has status: PENDING), the
+    // ConsecutiveBranchAuditFilter lookup (no status filter), and checkDoubleBooking
+    // (status: In([ACCEPTED])) — only the first should report a match here.
+    mockAssignmentRepo.findOne.mockImplementation(async (opts: any) => {
+      if (opts?.where?.status === AssignmentStatus.PENDING) {
+        return { assayerId: 'a-pending', projectBranch: { branchId: 'b-1' } };
+      }
+      return null;
+    });
+
+    const branch = { id: 'b-1', latitude: 19.076, longitude: 72.877 } as any;
+
+    const results = await engine.recommend(branch, new Date());
+
+    expect(results).toHaveLength(2);
+    const pendingResult = results.find((r) => r.assayer.id === 'a-pending');
+    const freshResult = results.find((r) => r.assayer.id === 'a-fresh');
+    expect(pendingResult?.pendingOnThisBranch).toBe(true);
+    expect(freshResult?.pendingOnThisBranch).toBe(false);
+  });
+
   it('should handle missing coordinates gracefully by calculating fallback scores', async () => {
     const assayerNoCoords = {
       id: 'a-no-coords',
@@ -271,6 +321,101 @@ describe('RecommendationEngine', () => {
     expect(results).toHaveLength(1);
     expect(results[0].assayer.id).toBe('a-no-coords');
     expect(results[0].breakdown.distance).toBe(0);
+  });
+});
+
+describe('BranchFamiliarityScoreCalculator', () => {
+  const mockAssignmentRepo = {
+    count: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+  };
+
+  const calculator = new BranchFamiliarityScoreCalculator(mockAssignmentRepo as any);
+
+  const branch = { id: 'branch-1', latitude: 19.076, longitude: 72.877 } as any;
+  const assayer = { id: 'assayer-1' } as any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('scores an assayer with no prior visits to this branch at the baseline', async () => {
+    mockAssignmentRepo.count.mockResolvedValue(0);
+
+    const score = await calculator.calculate(assayer, { branch, client: null, scheduledDate: new Date(), weights: {} });
+
+    expect(score).toBe(50);
+    expect(mockAssignmentRepo.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          assayerId: 'assayer-1',
+          projectBranch: { branchId: 'branch-1' },
+        }),
+      }),
+    );
+  });
+
+  it('scores an assayer with prior accepted/completed visits to this branch higher than a stranger', async () => {
+    mockAssignmentRepo.count.mockResolvedValue(2);
+
+    const score = await calculator.calculate(assayer, { branch, client: null, scheduledDate: new Date(), weights: {} });
+
+    expect(score).toBe(50 + 2 * 15);
+    expect(score).toBeGreaterThan(50);
+  });
+
+  it('caps the branch-history bonus at 3+ prior visits', async () => {
+    mockAssignmentRepo.count.mockResolvedValue(10);
+
+    const score = await calculator.calculate(assayer, { branch, client: null, scheduledDate: new Date(), weights: {} });
+
+    expect(score).toBe(50 + 3 * 15);
+  });
+});
+
+describe('ConsecutiveBranchAuditFilter', () => {
+  const mockAssignmentRepo = {
+    findOne: jest.fn(),
+  };
+
+  const filter = new ConsecutiveBranchAuditFilter(mockAssignmentRepo as any);
+
+  const branch = { id: 'branch-1' } as any;
+  const assayer = { id: 'assayer-1' } as any;
+  const context = { branch, client: null, scheduledDate: new Date(), weights: {} };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('allows the candidate through when there is no prior assignment on this branch', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue(null);
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+
+  it('does NOT exclude the assayer whose offer on this branch is still PENDING', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.PENDING });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+
+  it('excludes the assayer once their assignment on this branch is ACCEPTED', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.ACCEPTED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
+  });
+
+  it('excludes the assayer who already COMPLETED the last audit of this branch', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.COMPLETED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
+  });
+
+  it('does not exclude a different assayer even if the last assignment was ACCEPTED', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'someone-else', status: AssignmentStatus.ACCEPTED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+
+  it('does not exclude the assayer whose prior offer on this branch was REJECTED', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.REJECTED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
   });
 });
 

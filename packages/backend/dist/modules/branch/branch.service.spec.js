@@ -12,6 +12,7 @@ const zone_entity_1 = require("../zone/zone.entity");
 const geo_entities_1 = require("../geo/geo.entities");
 const audit_service_1 = require("../../core/audit/audit.service");
 const branch_query_service_1 = require("./branch-query.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 describe('BranchService', () => {
     let service;
     const mockBranchRepo = {
@@ -59,6 +60,7 @@ describe('BranchService', () => {
                 { provide: client_service_1.ClientService, useValue: mockClientService },
                 { provide: audit_service_1.AuditService, useValue: mockAuditService },
                 { provide: branch_query_service_1.BranchQueryService, useValue: mockBranchQueryService },
+                { provide: domain_event_publisher_1.DomainEventPublisher, useValue: { publish: jest.fn() } },
             ],
         }).compile();
         service = module.get(branch_service_1.BranchService);

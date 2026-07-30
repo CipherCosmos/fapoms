@@ -32,6 +32,7 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     completionDate;
     remarks;
     syncToken;
+    negotiationCount;
     entityVersion;
     slaDueDate;
     slaStatus;
@@ -105,6 +106,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'sync_token', type: 'varchar', length: 100, nullable: true }),
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "syncToken", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'negotiation_count', type: 'integer', default: 0 }),
+    __metadata("design:type", Number)
+], AssignmentEntity.prototype, "negotiationCount", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'entity_version', type: 'integer', default: 1 }),
     __metadata("design:type", Number)

@@ -17,6 +17,7 @@ let HolidayEntity = class HolidayEntity extends base_entity_1.BaseEntity {
     date;
     type;
     applicableStates;
+    clientId;
     year;
 };
 exports.HolidayEntity = HolidayEntity;
@@ -46,6 +47,10 @@ __decorate([
     }),
     __metadata("design:type", Object)
 ], HolidayEntity.prototype, "applicableStates", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'client_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], HolidayEntity.prototype, "clientId", void 0);
 __decorate([
     (0, typeorm_1.Column)({ type: 'int' }),
     __metadata("design:type", Number)

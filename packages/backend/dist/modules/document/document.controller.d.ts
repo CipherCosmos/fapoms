@@ -57,11 +57,20 @@ export declare class DocumentController {
         data: import("./document.entity").DocumentEntity;
         message: string;
     }>;
+    downloadBranchPdf(projectBranchId: string, res: Response): Promise<void>;
+    findByProjectBranch(projectBranchId: string): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity[];
+    }>;
     findByAssessment(assessmentId: string): Promise<{
         success: boolean;
         data: import("./document.entity").DocumentEntity[];
     }>;
     findByProject(projectId: string): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity[];
+    }>;
+    findAll(): Promise<{
         success: boolean;
         data: import("./document.entity").DocumentEntity[];
     }>;
@@ -81,5 +90,15 @@ export declare class DocumentController {
             branch: string;
             documents: import("./document.entity").DocumentEntity[];
         }[];
+    }>;
+    sendToExternalOcr(id: string, req: any): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity;
+        message: string;
+    }>;
+    uploadExcelReport(file: any, assessmentId: string, req: any): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity;
+        message: string;
     }>;
 }

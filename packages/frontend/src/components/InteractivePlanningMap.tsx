@@ -204,10 +204,15 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       });
   }, [selectedAssayerForRouting, travelMode]);
 
-  // Reset routing if selected branch changes
+  // Resize Leaflet container whenever map visibility or container layout changes
   useEffect(() => {
-    setSelectedAssayerForRouting(null);
-  }, [selectedBranchId]);
+    const timer = setTimeout(() => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [branches, selectedBranchId, routePoints, selectedAssayerFromParent]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;

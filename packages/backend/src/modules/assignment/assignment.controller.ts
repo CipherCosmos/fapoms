@@ -70,7 +70,6 @@ export class AssignmentController {
   }
 
   @Post()
-  @Public()
   @ApiOperation({ summary: 'Create a new assignment in CREATED status' })
   async create(@Body() dto: CreateAssignmentDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
@@ -82,14 +81,15 @@ export class AssignmentController {
   }
 
   @Get()
-  @Public()
-  @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or assessmentStatus' })
+  @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, assessmentStatus, or priority' })
   async findAll(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('status') status?: string,
     @Query('projectBranchStatus') projectBranchStatus?: string,
     @Query('assessmentStatus') assessmentStatus?: string,
+    @Query('unscheduledOnly') unscheduledOnly?: string,
+    @Query('priority') priority?: string,
   ) {
     const result = await this.assignmentService.findAll(
       page ? Number(page) : 1,
@@ -97,6 +97,8 @@ export class AssignmentController {
       status,
       projectBranchStatus,
       assessmentStatus,
+      unscheduledOnly === 'true' || unscheduledOnly === '1',
+      priority,
     );
     return {
       success: true,
@@ -132,7 +134,6 @@ export class AssignmentController {
   }
 
   @Put(':id')
-  @Public()
   @ApiOperation({ summary: 'Update assignment details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -148,7 +149,6 @@ export class AssignmentController {
   }
 
   @Post(':id/transition')
-  @Public()
   @ApiOperation({ summary: 'Transition assignment status' })
   async transition(
     @Param('id') id: string,
@@ -174,6 +174,8 @@ export class AssignmentController {
       assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
     } else if (targetStatus === 'CANCELLED') {
       assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);
+    } else if (targetStatus === 'COMPLETED') {
+      assignment = await this.assignmentService.completeAssignment(id, userId, body.reason ?? body.remarks);
     } else {
       throw new BadRequestException(`Invalid transition: ${targetStatus}.`);
     }
@@ -183,8 +185,22 @@ export class AssignmentController {
     };
   }
 
+  @Post(':id/escalate')
+  @ApiOperation({ summary: 'Flag an assignment as urgent (sets priority to CRITICAL) and notify the assigning user' })
+  async escalate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { reason?: string },
+    @Req() req: any,
+  ) {
+    const userId = req?.user?.id || id;
+    const assignment = await this.assignmentService.escalate(id, userId, body?.reason);
+    return {
+      success: true,
+      data: assignment,
+    };
+  }
+
   @Get(':id/timeline')
-  @Public()
   @ApiOperation({ summary: 'Get unified activity timeline for an assignment' })
   async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
     const timeline = await this.assignmentService.getTimeline(id);

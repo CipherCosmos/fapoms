@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Compass, Check, X, AlertTriangle, CheckCircle, ExternalLink, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
-import { Priority } from '@fapoms/shared';
+import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
+import { Priority, ProjectBranchStatus } from '@fapoms/shared';
+import { branchStatusLabel } from '../utils/statusLabels';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
@@ -61,6 +62,7 @@ interface Candidate {
   longitude: number | null;
   score?: number;
   baseFee?: number;
+  pendingOnThisBranch?: boolean;
 }
 
 interface AssayerDetail {
@@ -96,6 +98,28 @@ interface AssayerDetail {
   lastAssignmentDate: string | null;
   averageRating: number;
   notes: string | null;
+  queryCount?: number;
+  acceptanceRate?: number;
+  rejectionRate?: number;
+  auditHistory?: Array<{
+    id: string;
+    assignment_number: string;
+    status: string;
+    agreed_fee: number;
+    proposed_fee: number;
+    scheduled_date: string;
+    completion_date: string;
+    branch_name: string;
+    branch_city: string;
+    branch_state: string;
+    project_name: string;
+  }>;
+  activeCommercialProfile?: {
+    baseFee: number;
+    hourlyRate?: number;
+    dailyRate?: number;
+    travelReimbursement?: number;
+  } | null;
 }
 
 interface Remark {
@@ -183,13 +207,12 @@ const CATEGORY_COLORS: Record<string, string> = {
   GENERAL: '#6b7280',
 };
 
+// Values derive straight from the shared enum, wording from the shared status
+// vocabulary — so this page can never drift from Field Execution or Scheduling
+// in either the set of statuses it offers or what it calls them.
 const STATUS_OPTIONS = [
   { value: 'ALL', label: 'All Statuses' },
-  { value: 'IMPORTED', label: 'Imported' },
-  { value: 'PLANNING', label: 'Planning' },
-  { value: 'NEGOTIATION', label: 'Under Negotiation (Counter Offer)' },
-  { value: 'ASSIGNMENT_CONFIRMED', label: 'Confirmed' },
-  { value: 'SCHEDULED', label: 'Scheduled' },
+  ...Object.values(ProjectBranchStatus).map(value => ({ value, label: branchStatusLabel(value) })),
 ];
 
 export const PlanningWorkspace: React.FC = () => {
@@ -220,6 +243,7 @@ export const PlanningWorkspace: React.FC = () => {
   const [negotiatingFee, setNegotiatingFee] = useState('1500');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
+  const [autoDispatch, setAutoDispatch] = useState(true);
   const [scheduledAuditDate, setScheduledAuditDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -232,7 +256,7 @@ export const PlanningWorkspace: React.FC = () => {
   const [detailRemarks, setDetailRemarks] = useState<Remark[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
-  const [slaEnabled, setSlaEnabled] = useState(false);
+  const [slaEnabled, setSlaEnabled] = useState(true);
   const [slaRadius, setSlaRadius] = useState(50);
   const drawerRef = useRef<HTMLDivElement>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
@@ -421,6 +445,7 @@ export const PlanningWorkspace: React.FC = () => {
           assayerId: selectedCandidate.id,
           proposedFee: Number(negotiatingFee),
           scheduledDate: scheduledAuditDate,
+          autoSchedule: autoDispatch,
         })
       });
       setMessage({ type: 'success', text: `Assigned ${selectedCandidate.displayName} to branch. Assayer will receive the offer on their mobile app.` });
@@ -502,7 +527,7 @@ export const PlanningWorkspace: React.FC = () => {
 
     if (displayCandidates.length === 0) {
       const msg = slaEnabled
-        ? `No assayers found beyond ${slaRadius}km SLA radius.`
+        ? `No assayers found beyond ${slaRadius}km minimum radius.`
         : 'No suitable assayers found within 700km.';
       return (
         <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
@@ -533,13 +558,20 @@ export const PlanningWorkspace: React.FC = () => {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.displayName}</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {c.displayName}
+                    {c.pendingOnThisBranch && (
+                      <span title="This assayer already has a pending offer on this branch awaiting their response" style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        ⏳ Pending Response
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', flexWrap: 'wrap' }}>
                     <Compass size={11} style={{ flexShrink: 0 }} />
                     <span>{c.distanceKm !== null ? `${c.distanceKm} km away` : 'Distance unavailable'}</span>
                     {slaEnabled && c.distanceKm !== null && (
                       <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: c.distanceKm >= slaRadius ? '#10b981' : '#ef4444' }}>
-                        {c.distanceKm >= slaRadius ? `✓ SLA Pass` : `✗ SLA Breach`}
+                        {c.distanceKm >= slaRadius ? `✓ >${slaRadius}km Radius` : `✗ Inside Radius`}
                       </span>
                     )}
                   </div>
@@ -552,18 +584,29 @@ export const PlanningWorkspace: React.FC = () => {
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span>📞 {c.phone}</span>
                 <span>📍 {c.city}, {c.state}</span>
-                <span>Base: ₹{c.baseFee || 1500}</span>
+                <span>Base: ₹{c.baseFee ?? 1200}</span>
               </div>
 
               {/* Row 1 Actions: View Map, Route TSP, Profile Details */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
-                <button onClick={() => setSelectedCandidateForMap(selectedCandidateForMap?.id === c.id ? null : c)}
+                <button onClick={() => {
+                  setSelectedCandidateForMap(selectedCandidateForMap?.id === c.id ? null : c);
+                  if (layout.startsWith('two-col')) {
+                    setLayoutMode('three-col');
+                  }
+                }}
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: selectedCandidateForMap?.id === c.id ? 'rgba(139, 92, 246, 0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : '#fff' }}>
                   👁️ Map
                 </button>
-                <button onClick={() => handleOptimizeRoute(c)} disabled={isOptimizing}
+                <button onClick={async () => {
+                  if (layout.startsWith('two-col')) {
+                    setLayoutMode('three-col');
+                  }
+                  setSelectedCandidateForMap(c);
+                  await handleOptimizeRoute(c);
+                }} disabled={isOptimizing}
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                  <Compass size={11} /> Route
+                  <Compass size={11} /> {isOptimizing ? 'Routing...' : 'Route'}
                 </button>
                 <button onClick={() => loadAssayerDetail(c.id)}
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
@@ -641,76 +684,147 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', margin: '-20px' }}>
-      {/* ── UNIFIED 3-STEP PIPELINE BAR ── */}
-      <div style={{ background: 'rgba(15, 23, 42, 0.8)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', margin: '12px 32px 0', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div onClick={() => navigate('/planning')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(99,102,241,0.2)', border: '1px solid #6366f1', borderRadius: '20px', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-            <span>📍 Stage 1</span> Planning & Assayer Match
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-20px', background: '#090d16' }}>
+      {/* ── HIGH-DENSITY TOP COMMAND HEADER ── */}
+      <div style={{
+        background: 'rgba(15, 23, 42, 0.95)',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+        padding: '8px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '12px',
+        flexShrink: 0,
+        zIndex: 30,
+      }}>
+        {/* Left: Workspace Title & Project Dropdown */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 800, color: '#38bdf8', letterSpacing: '0.5px' }}>
+              📍 STAGE 1: ASSAYER MATCHING
+            </span>
           </div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
-          <div onClick={() => navigate('/scheduling')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
-            <span>📅 Stage 2</span> Calendar & Fee Schedule Dispatch
-          </div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
-          <div onClick={() => navigate('/assignments')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
-            <span>📋 Stage 3</span> Field Execution & Return PDF Validation
-          </div>
+          <select
+            value={selectedProjectId}
+            onChange={e => setSelectedProjectId(e.target.value)}
+            style={{
+              padding: '5px 10px',
+              background: '#1e293b',
+              border: '1px solid rgba(99, 102, 241, 0.35)',
+              borderRadius: '6px',
+              color: '#ffffff',
+              fontSize: '12px',
+              fontWeight: 700,
+              outline: 'none',
+              cursor: 'pointer',
+              maxWidth: '220px',
+            }}
+          >
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>)}
+          </select>
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          💡 <b style={{ color: '#a5b4fc' }}>Stage 1 of 3:</b> Match assayers to branches based on proximity & fee rate.
-        </div>
-      </div>
 
-      {/* ── Toolbar: Project select + filters + KPI + Layout ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 32px 0', flexShrink: 0 }}>
-        <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
-          style={{ padding: '6px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: '13px', outline: 'none', minWidth: '180px' }}>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>)}
-        </select>
-        {selectedProjectId && (
-          <button onClick={() => navigate(`/projects`)} title="Open project"
-            style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer', padding: '5px 8px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
-            <ExternalLink size={12} /> Project
-          </button>
-        )}
-        {s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'State' }, ...statesList.map(s => ({ value: s, label: s }))])}
-        {s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
-        {s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'Priority' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
-        {s(zoneFilter, setZoneFilter, [{ value: 'ALL', label: 'Zone' }, ...zones.map(z => ({ value: z.id, label: z.name }))])}
-        <input type="text" placeholder="City..." value={cityFilter} onChange={e => setCityFilter(e.target.value)}
-          style={{ width: '90px', padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
-        <input type="text" placeholder="District..." value={districtFilter} onChange={e => setDistrictFilter(e.target.value)}
-          style={{ width: '90px', padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <b style={{ color: 'var(--accent-primary)' }}>{totalCount}</b> branches
-          <span style={{ color: 'var(--status-active)' }}>{coveragePct}%</span> confirmed
-          <span style={{ color: '#f59e0b' }}>{totalCount - confirmedCount}</span> pending
-        </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', alignItems: 'center' }}>
+        {/* Center: Stage Pipeline Switcher */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(30, 41, 59, 0.6)', padding: '3px 6px', borderRadius: '16px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+          <div onClick={() => navigate('/planning')} style={{ padding: '3px 10px', background: '#4f46e5', borderRadius: '12px', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>
+            Stage 1: Match Assayers
+          </div>
+          <span style={{ color: '#475569', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/scheduling')} style={{ padding: '3px 10px', color: '#94a3b8', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+            Stage 2: Dispatch
+          </div>
+          <span style={{ color: '#475569', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/assignments')} style={{ padding: '3px 10px', color: '#94a3b8', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+            Stage 3: Execution
+          </div>
+        </div>
+
+        {/* Right: Key Metrics & Report Export */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+            <span style={{ color: '#94a3b8' }}>Total: <b style={{ color: '#fff' }}>{totalCount}</b></span>
+            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'rgba(16,185,129,0.15)', color: '#34d399', fontWeight: 700 }}>
+              {coveragePct}% ({confirmedCount})
+            </span>
+            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'rgba(245,158,11,0.15)', color: '#fbbf24', fontWeight: 700 }}>
+              Pending ({totalCount - confirmedCount})
+            </span>
+          </div>
+
           <button
             onClick={handleExportCoverageReport}
-            title="Download Excel containing covered vs uncovered branches for bank confirmation"
             style={{
               background: 'rgba(16,185,129,0.15)',
-              border: '1px solid var(--status-active)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--status-active)',
+              border: '1px solid rgba(16,185,129,0.4)',
+              borderRadius: '6px',
+              color: '#34d399',
               cursor: 'pointer',
               padding: '4px 10px',
               fontSize: '11px',
-              fontWeight: 600,
+              fontWeight: 700,
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
-              marginRight: '8px'
             }}
           >
-            📥 Export Coverage Excel
+            📥 Excel Report
           </button>
-          {[['default', 'Map + Drawer'], ['three-col', '3 Column'], ['map-only', 'Map Only'], ['day-plans', '📋 Day Plans']].map(([k, lbl]) => (
-            <button key={k} onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
-              style={{ background: layout === k ? 'rgba(99,102,241,0.15)' : 'none', border: `1px solid ${layout === k ? 'var(--accent-primary)' : 'var(--border-color)'}`, borderRadius: 'var(--radius-sm)', color: layout === k ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', padding: '4px 8px', fontSize: '10px', fontWeight: layout === k ? 600 : 400 }}>
+        </div>
+      </div>
+
+      {/* ── SECONDARY INLINE FILTERS BAR ── */}
+      <div style={{
+        background: 'rgba(15, 23, 42, 0.6)',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+        padding: '5px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        flexShrink: 0,
+        zIndex: 25,
+      }}>
+        {s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'All States' }, ...statesList.map(s => ({ value: s, label: s }))])}
+        {s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
+        {s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'All Priorities' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
+        {s(zoneFilter, setZoneFilter, [{ value: 'ALL', label: 'All Zones' }, ...zones.map(z => ({ value: z.id, label: z.name }))])}
+        <input
+          type="text"
+          placeholder="Filter city..."
+          value={cityFilter}
+          onChange={e => setCityFilter(e.target.value)}
+          style={{ width: '100px', padding: '4px 8px', background: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '4px', color: '#fff', outline: 'none', fontSize: '11px' }}
+        />
+        <input
+          type="text"
+          placeholder="Filter district..."
+          value={districtFilter}
+          onChange={e => setDistrictFilter(e.target.value)}
+          style={{ width: '100px', padding: '4px 8px', background: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '4px', color: '#fff', outline: 'none', fontSize: '11px' }}
+        />
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '3px', alignItems: 'center' }}>
+          {[
+            ['default', 'Map + Drawer'],
+            ['two-col-branch-recom', 'Branch + Match'],
+            ['two-col-branch-map', 'Branch + Map'],
+            ['three-col', '3 Column'],
+            ['map-only', 'Map Only'],
+            ['day-plans', '📋 Day Plans']
+          ].map(([k, lbl]) => (
+            <button
+              key={k}
+              onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
+              style={{
+                background: layout === k ? 'rgba(99,102,241,0.2)' : 'transparent',
+                border: `1px solid ${layout === k ? '#6366f1' : 'rgba(255,255,255,0.08)'}`,
+                borderRadius: '4px',
+                color: layout === k ? '#ffffff' : '#94a3b8',
+                cursor: 'pointer',
+                padding: '3px 7px',
+                fontSize: '10px',
+                fontWeight: layout === k ? 700 : 400,
+              }}
+            >
               {lbl}
             </button>
           ))}
@@ -719,15 +833,201 @@ export const PlanningWorkspace: React.FC = () => {
 
       {/* ── Message Banner ── */}
       {message && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 32px', fontSize: '12px', borderBottom: '1px solid', background: message.type === 'success' ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', borderColor: message.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171', flexShrink: 0 }}>
-          {message.type === 'success' ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 16px', fontSize: '11px', borderBottom: '1px solid', background: message.type === 'success' ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', borderColor: message.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171', flexShrink: 0 }}>
           <span>{message.text}</span>
         </div>
       )}
 
-      {/* ── Layout: Default (Branch list + Map + Drawer) ── */}
+      {/* ── Layout: 2-Column (Branch Queue + Assayer Recommendations Panel) ── */}
+      {layout === 'two-col-branch-recom' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
+          {/* Column 1: Branch Queue */}
+          <div style={{ width: '340px', minWidth: '340px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(30, 41, 59, 0.5)' }}>
+              <Search size={13} style={{ color: '#64748b', flexShrink: 0 }} />
+              <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                style={{ flex: 1, background: 'none', border: 'none', color: '#fff', outline: 'none', fontSize: '12px' }} />
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
+              {filteredBranches.map(pb => {
+                const isSelected = pb.id === selectedBranchId;
+                const isAssigned = !!pb.assignment;
+                const isDone = ['CLOSED'].includes(pb.status);
+                const isValidationPending = ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED'].includes(pb.status) || pb.assignment?.status === 'COMPLETED';
+                const isNegotiating = pb.status === 'NEGOTIATION' || pb.assignment?.status === 'COUNTER_OFFER';
+
+                const badgeBg = isDone ? 'rgba(16, 185, 129, 0.2)' : isValidationPending ? 'rgba(245, 158, 11, 0.2)' : isAssigned ? 'rgba(56, 189, 248, 0.15)' : isNegotiating ? 'rgba(139, 92, 246, 0.2)' : 'rgba(148, 163, 184, 0.1)';
+                const badgeColor = isDone ? '#34d399' : isValidationPending ? '#f59e0b' : isAssigned ? '#38bdf8' : isNegotiating ? '#a78bfa' : '#94a3b8';
+                // Wording comes from the shared status vocabulary so this badge matches
+                // Field Execution and Scheduling for the same branch (it used to say
+                // "Under Validation" where those said "AUDIT_COMPLETED" / "COMPLETED").
+                const statusLabel = isDone
+                  ? `✓ ${branchStatusLabel(pb.status)}`
+                  : isValidationPending
+                  ? `🔍 ${branchStatusLabel(pb.status)}`
+                  : isNegotiating
+                  ? `💬 ${branchStatusLabel(ProjectBranchStatus.NEGOTIATION)}`
+                  : isAssigned
+                  ? `✓ ${branchStatusLabel(ProjectBranchStatus.ASSIGNMENT_CONFIRMED)}`
+                  : `⏳ ${branchStatusLabel(pb.status)}`;
+
+                return (
+                  <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
+                    style={{
+                      padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
+                      background: isSelected ? 'rgba(99, 102, 241, 0.25)' : isDone ? 'rgba(16, 185, 129, 0.08)' : isAssigned ? 'rgba(56, 189, 248, 0.06)' : 'rgba(30, 41, 59, 0.4)',
+                      borderLeft: isSelected ? '4px solid #6366f1' : isDone ? '4px solid #10b981' : isAssigned ? '4px solid #38bdf8' : isNegotiating ? '4px solid #f59e0b' : '4px solid transparent',
+                      border: isSelected ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid rgba(255, 255, 255, 0.05)',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
+                      <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>{pb.branch.city}, {pb.branch.state}</span>
+                      {pb.assignment?.assayer?.displayName && (
+                        <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Column 2: Assayer Recommendations & Match Details */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(30, 41, 59, 0.5)', flexWrap: 'wrap', gap: '8px' }}>
+              <div>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>RECOMMENDED ASSAYERS</span>
+                <div style={{ fontSize: '14px', fontWeight: 800, color: '#fff', marginTop: '1px' }}>
+                  {selectedPb ? selectedPb.branch.name : 'Select a branch from queue'}
+                </div>
+              </div>
+
+              {selectedPb && (
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
+                    Show Distant (&gt;700km)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                    <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                    Min Radius Filter
+                  </label>
+                  {slaEnabled && (
+                    <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
+                      style={{ fontSize: '10px', padding: '1px 4px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', width: '55px', cursor: 'pointer' }}>
+                      <option value={25}>25km</option>
+                      <option value={50}>50km</option>
+                      <option value={100}>100km</option>
+                      <option value={150}>150km</option>
+                      <option value={200}>200km</option>
+                      <option value={300}>300km</option>
+                      <option value={500}>500km</option>
+                    </select>
+                  )}
+                  <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                    className="btn btn-secondary" title="Refresh candidates"
+                    style={{ padding: '3px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <RefreshCw size={11} /> Refresh
+                  </button>
+                </div>
+              )}
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+              {selectedPb ? (
+                ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(selectedPb.status) || selectedPb.assignment?.status === 'COMPLETED' ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#94a3b8' }}>
+                    <span style={{ fontSize: '20px' }}>{selectedPb.status === 'CLOSED' ? '✅' : '🔍'}</span>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b', marginTop: '6px' }}>
+                      {selectedPb.status === 'CLOSED' ? 'Audit Closed' : 'Under Validation'}
+                    </div>
+                    {selectedPb.assignment?.assayer?.displayName && (
+                      <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '4px' }}>👤 {selectedPb.assignment.assayer.displayName}</div>
+                    )}
+                    <div style={{ fontSize: '10px', color: '#64748b', marginTop: '6px', fontStyle: 'italic' }}>
+                      No reassignment actions available.
+                    </div>
+                  </div>
+                ) : renderCandidatesList(false)
+              ) : (
+                <div style={{ padding: '40px 20px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                  👈 Select a branch from the left queue to view matched assayers.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Layout: 2-Column (Branch Queue + Interactive Map) ── */}
+      {(layout === 'two-col-branch-map' || (layout as any) === 'two-col') && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
+          {/* Column 1: Branch Queue */}
+          <div style={{ width: '340px', minWidth: '340px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(30, 41, 59, 0.5)' }}>
+              <Search size={13} style={{ color: '#64748b', flexShrink: 0 }} />
+              <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                style={{ flex: 1, background: 'none', border: 'none', color: '#fff', outline: 'none', fontSize: '12px' }} />
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
+              {filteredBranches.map(pb => {
+                const isSelected = pb.id === selectedBranchId;
+                const isAssigned = !!pb.assignment;
+                const isDone = pb.status === ProjectBranchStatus.AUDIT_COMPLETED || pb.status === ProjectBranchStatus.VALIDATION_COMPLETED || pb.status === ProjectBranchStatus.CLOSED;
+                const isNegotiating = pb.status === 'NEGOTIATION';
+
+                const badgeBg = isDone ? 'rgba(16, 185, 129, 0.2)' : isAssigned ? 'rgba(56, 189, 248, 0.15)' : isNegotiating ? 'rgba(245, 158, 11, 0.2)' : 'rgba(148, 163, 184, 0.1)';
+                const badgeColor = isDone ? '#34d399' : isAssigned ? '#38bdf8' : isNegotiating ? '#f59e0b' : '#94a3b8';
+                const statusLabel = isDone ? '✓ Completed' : isAssigned ? '✓ Assigned' : isNegotiating ? '💬 Negotiating' : '⏳ Pending';
+
+                return (
+                  <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
+                    style={{
+                      padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
+                      background: isSelected ? 'rgba(99, 102, 241, 0.25)' : isDone ? 'rgba(16, 185, 129, 0.08)' : isAssigned ? 'rgba(56, 189, 248, 0.06)' : 'rgba(30, 41, 59, 0.4)',
+                      borderLeft: isSelected ? '4px solid #6366f1' : isDone ? '4px solid #10b981' : isAssigned ? '4px solid #38bdf8' : isNegotiating ? '4px solid #f59e0b' : '4px solid transparent',
+                      border: isSelected ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid rgba(255, 255, 255, 0.05)',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
+                      <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>{pb.branch.city}, {pb.branch.state}</span>
+                      {pb.assignment?.assayer?.displayName && (
+                        <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Column 2: Interactive Planning Map */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+            <InteractivePlanningMap fillContainer
+              branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+              selectedBranchId={selectedBranchId}
+              onSelectBranch={id => setSelectedBranchId(id)}
+              routePoints={routePoints}
+              selectedAssayerFromParent={selectedCandidateForMap}
+              slaEnabled={slaEnabled}
+              slaRadius={slaRadius}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── Layout: Default (Branch queue + Map + Assayer Match Drawer) ── */}
       {layout === 'default' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '0 32px 32px' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '8px', padding: '8px', overflow: 'hidden' }}>
           <div style={{ width: '280px', minWidth: '280px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
@@ -743,29 +1043,29 @@ export const PlanningWorkspace: React.FC = () => {
                 filteredBranches.map(pb => {
                   const isSelected = pb.id === selectedBranchId;
                   const isAssigned = !!pb.assignment;
-                  const statusColor = isAssigned ? 'var(--status-active)' : '#f59e0b';
+                  const isDone = pb.status === ProjectBranchStatus.AUDIT_COMPLETED || pb.status === ProjectBranchStatus.VALIDATION_COMPLETED || pb.status === ProjectBranchStatus.CLOSED;
+                  const isNegotiating = pb.status === 'NEGOTIATION';
+
+                  const badgeBg = isDone ? 'rgba(16, 185, 129, 0.2)' : isAssigned ? 'rgba(56, 189, 248, 0.15)' : isNegotiating ? 'rgba(245, 158, 11, 0.2)' : 'rgba(148, 163, 184, 0.1)';
+                  const badgeColor = isDone ? '#34d399' : isAssigned ? '#38bdf8' : isNegotiating ? '#f59e0b' : '#94a3b8';
+                  const statusLabel = isDone ? '✓ Completed' : isAssigned ? '✓ Assigned' : isNegotiating ? '💬 Negotiating' : '⏳ Pending';
+
                   return (
                     <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
-                      style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px',
-                        background: isSelected ? 'rgba(99,102,241,0.2)' : isAssigned ? 'rgba(16,185,129,0.04)' : 'transparent',
-                        borderLeft: isSelected ? '3px solid var(--accent-primary)' : isAssigned ? '3px solid rgba(16,185,129,0.4)' : '3px solid transparent',
+                      style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '4px',
+                        background: isSelected ? 'rgba(99,102,241,0.25)' : isDone ? 'rgba(16,185,129,0.08)' : isAssigned ? 'rgba(56,189,248,0.06)' : 'transparent',
+                        borderLeft: isSelected ? '3px solid var(--accent-primary)' : isDone ? '3px solid #10b981' : isAssigned ? '3px solid #38bdf8' : isNegotiating ? '3px solid #f59e0b' : '3px solid transparent',
                         outline: isSelected ? '1px solid rgba(99,102,241,0.3)' : 'none', outlineOffset: '-1px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                          background: isSelected ? 'var(--accent-primary)' : isAssigned ? 'var(--status-active)' : '#f59e0b',
-                          boxShadow: isSelected ? '0 0 6px rgba(99,102,241,0.5)' : 'none' }} />
-                        <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff', flex: 1 }}>{pb.branch.name}</div>
-                        {isAssigned && (
-                          <span style={{ fontSize: '9px', color: 'var(--status-active)', whiteSpace: 'nowrap', fontWeight: 500 }}>✓ Assigned</span>
-                        )}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pb.branch.name}</div>
+                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {statusLabel}
+                        </span>
                       </div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px', marginLeft: '14px' }}>{pb.branch.city}, {pb.branch.state}</div>
-                      <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center', marginLeft: '14px' }}>
-                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: statusColor, fontWeight: 500 }}>{pb.status.replace(/_/g, ' ')}</span>
-                        {isAssigned && (
-                          <span style={{ fontSize: '9px', color: 'var(--status-active)' }}>{pb.assignment?.assayer?.displayName}</span>
-                        )}
-                      </div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch.city}, {pb.branch.state}</div>
+                      {pb.assignment?.assayer?.displayName && (
+                        <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '2px', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</div>
+                      )}
                     </div>
                   );
                 })
@@ -792,6 +1092,42 @@ export const PlanningWorkspace: React.FC = () => {
             }}>
               {selectedPb && (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  {['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(selectedPb.status) || selectedPb.assignment?.status === 'COMPLETED' ? (
+                    /* Read-only Completion Summary for completed/under-validation branches */
+                    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '16px' }}>{selectedPb.status === 'CLOSED' ? '✅' : '🔍'}</span>
+                        <div>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b' }}>
+                            {selectedPb.status === 'CLOSED' ? 'Audit Closed & Finalized' : 'Audit Completed — Under Validation'}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>
+                            {selectedPb.branch.name} • {selectedPb.branch.city}, {selectedPb.branch.state}
+                          </div>
+                        </div>
+                      </div>
+                      {selectedPb.assignment && (
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', padding: '8px 10px', background: 'rgba(30,41,59,0.5)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                            <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '1px' }}>ASSAYER</div>
+                            <span style={{ color: '#38bdf8', fontWeight: 600 }}>👤 {selectedPb.assignment.assayer?.displayName}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                            <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '1px' }}>AGREED FEE</div>
+                            <span style={{ color: '#10b981', fontWeight: 700 }}>₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee ?? '—'}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                            <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '1px' }}>STATUS</div>
+                            <span style={{ color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b', fontWeight: 700 }}>{selectedPb.status.replace(/_/g, ' ')}</span>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ fontSize: '10px', color: '#64748b', fontStyle: 'italic' }}>
+                        This branch audit is {selectedPb.status === 'CLOSED' ? 'closed and finalized' : 'completed and currently under validator review'}. No further scheduling or reassignment actions are available.
+                      </div>
+                    </div>
+                  ) : (
+                    <>
                   {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
                     <div style={{ padding: '10px 16px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -820,23 +1156,14 @@ export const PlanningWorkspace: React.FC = () => {
                         }} className="btn btn-primary" style={{ padding: '4px 12px', fontSize: '11px', background: '#10b981', borderColor: '#10b981', color: '#fff' }}>
                           ✅ Accept ₹{selectedPb.assignment.proposedFee}
                         </button>
-                        <button onClick={async () => {
-                          const newRateStr = prompt(`Enter counter rate proposal to send back to ${selectedPb.assignment?.assayer?.displayName} (₹):`, String(selectedPb.assignment?.proposedFee || 1500));
-                          if (!newRateStr) return;
-                          const newRateNum = parseFloat(newRateStr);
-                          if (isNaN(newRateNum) || newRateNum <= 0) return;
-                          try {
-                            await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
-                              method: 'POST',
-                              body: JSON.stringify({ targetStatus: 'COUNTER_OFFER', counterFee: newRateNum, reason: `Operations proposed counter rate ₹${newRateNum}` }),
-                            });
-                            setMessage({ type: 'success', text: `Counter proposal ₹${newRateNum} sent to assayer!` });
-                            if (selectedProjectId) loadProjectBranches(selectedProjectId);
-                          } catch (err: any) {
-                            setMessage({ type: 'error', text: err.message || 'Failed to send counter proposal' });
+                        <button onClick={() => {
+                          if (selectedPb.assignment?.assayer) {
+                            setSelectedCandidate({ id: (selectedPb.assignment.assayer as any).id || '', displayName: selectedPb.assignment.assayer.displayName } as any);
+                            setNegotiatingFee(String(selectedPb.assignment?.proposedFee || 1500));
+                            setShowNegotiationModal(true);
                           }
-                        }} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)' }}>
-                          🔁 Propose Counter Rate
+                        }} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', fontWeight: 600 }}>
+                          🔁 Counter Proposal
                         </button>
                         <button onClick={async () => {
                           try {
@@ -893,6 +1220,8 @@ export const PlanningWorkspace: React.FC = () => {
                   <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }}>
                     {renderCandidatesList(true)}
                   </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -900,48 +1229,55 @@ export const PlanningWorkspace: React.FC = () => {
         </div>
       )}
 
-      {/* ── Layout: 3-Column (Branch list + Map + Detail panel) ── */}
+      {/* ── Layout: 3-Column (Branch list + Map + Match Detail panel) ── */}
       {layout === 'three-col' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '0 32px 32px' }}>
-          <div style={{ width: '240px', minWidth: '240px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
+          {/* Column 1: Branch Queue Panel */}
+          <div style={{ width: '320px', minWidth: '320px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(30, 41, 59, 0.6)' }}>
+              <Search size={14} style={{ color: '#64748b', flexShrink: 0 }} />
+              <input type="text" placeholder="Search branches by SOL, city, name..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
                 style={{ flex: 1, background: 'none', border: 'none', color: '#fff', outline: 'none', fontSize: '12px' }} />
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '4px' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
               {filteredBranches.map(pb => {
                 const isSelected = pb.id === selectedBranchId;
                 const isAssigned = !!pb.assignment;
+                const isDone = pb.status === ProjectBranchStatus.AUDIT_COMPLETED || pb.status === ProjectBranchStatus.VALIDATION_COMPLETED || pb.status === ProjectBranchStatus.CLOSED;
+                const isNegotiating = pb.status === 'NEGOTIATION';
+
+                const badgeBg = isDone ? 'rgba(16, 185, 129, 0.2)' : isAssigned ? 'rgba(56, 189, 248, 0.15)' : isNegotiating ? 'rgba(245, 158, 11, 0.2)' : 'rgba(148, 163, 184, 0.1)';
+                const badgeColor = isDone ? '#34d399' : isAssigned ? '#38bdf8' : isNegotiating ? '#f59e0b' : '#94a3b8';
+                const statusLabel = isDone ? '✓ Completed' : isAssigned ? '✓ Assigned' : isNegotiating ? '💬 Negotiating' : '⏳ Pending';
+
                 return (
                   <div key={pb.id} onClick={() => setSelectedBranchId(pb.id)}
-                    style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: 'var(--radius-sm)', marginBottom: '2px',
-                      background: isSelected ? 'rgba(99,102,241,0.2)' : isAssigned ? 'rgba(16,185,129,0.04)' : 'transparent',
-                      borderLeft: isSelected ? '3px solid var(--accent-primary)' : isAssigned ? '3px solid rgba(16,185,129,0.4)' : '3px solid transparent',
-                      outline: isSelected ? '1px solid rgba(99,102,241,0.3)' : 'none', outlineOffset: '-1px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                        background: isSelected ? 'var(--accent-primary)' : isAssigned ? 'var(--status-active)' : '#f59e0b',
-                        boxShadow: isSelected ? '0 0 6px rgba(99,102,241,0.5)' : 'none' }} />
-                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff', flex: 1 }}>{pb.branch.name}</div>
-                      {isAssigned && (
-                        <span style={{ fontSize: '9px', color: 'var(--status-active)', whiteSpace: 'nowrap', fontWeight: 500 }}>✓</span>
-                      )}
+                    style={{ padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
+                      background: isSelected ? 'rgba(99, 102, 241, 0.25)' : isDone ? 'rgba(16, 185, 129, 0.08)' : isAssigned ? 'rgba(56, 189, 248, 0.06)' : 'rgba(30, 41, 59, 0.4)',
+                      borderLeft: isSelected ? '4px solid #6366f1' : isDone ? '4px solid #10b981' : isAssigned ? '4px solid #38bdf8' : isNegotiating ? '4px solid #f59e0b' : '4px solid transparent',
+                      border: isSelected ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid rgba(255, 255, 255, 0.05)',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pb.branch.name}</div>
+                      <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        {statusLabel}
+                      </span>
                     </div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px', marginLeft: '14px' }}>{pb.branch.city}, {pb.branch.state}</div>
-                    <div style={{ display: 'flex', gap: '4px', marginTop: '4px', alignItems: 'center', marginLeft: '14px' }}>
-                      <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: isAssigned ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: isAssigned ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{pb.status.replace(/_/g, ' ')}</span>
-                      {isAssigned && (
-                        <span style={{ fontSize: '9px', color: 'var(--status-active)' }}>{pb.assignment?.assayer?.displayName}</span>
-                      )}
+                    <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '3px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>{pb.branch.city}, {pb.branch.state}</span>
+                      {pb.branch.solId && <span style={{ color: '#64748b', fontSize: '9px' }}>SOL: {pb.branch.solId}</span>}
                     </div>
+                    {pb.assignment?.assayer?.displayName && (
+                      <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '3px', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</div>
+                    )}
                   </div>
                 );
               })}
             </div>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+          {/* Column 2: Center Interactive GIS Map */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
             <InteractivePlanningMap fillContainer
               branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
               selectedBranchId={selectedBranchId}
@@ -953,18 +1289,59 @@ export const PlanningWorkspace: React.FC = () => {
             />
           </div>
 
-          {selectedPb && (
-            <div style={{ width: '340px', minWidth: '340px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
-                <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '14px' }}>💬</span>
+          {/* Column 3: Right Match & Counter-Offer Inspector Panel */}
+          {selectedPb ? (
+            <div style={{ width: '380px', minWidth: '380px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              {['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(selectedPb.status) || selectedPb.assignment?.status === 'COMPLETED' ? (
+                /* Read-only Completion Summary for completed/under-validation branches */
+                <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '24px' }}>{selectedPb.status === 'CLOSED' ? '✅' : '🔍'}</span>
                     <div>
-                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>
+                      <div style={{ fontSize: '15px', fontWeight: 800, color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b' }}>
+                        {selectedPb.status === 'CLOSED' ? 'Audit Closed & Finalized' : 'Audit Completed — Under Validation'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '3px' }}>
+                        {selectedPb.branch.name} • {selectedPb.branch.city}, {selectedPb.branch.state}
+                      </div>
+                    </div>
+                  </div>
+                  {selectedPb.assignment && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: 'rgba(30,41,59,0.5)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '2px' }}>ASSAYER</div>
+                          <div style={{ fontSize: '13px', color: '#38bdf8', fontWeight: 600 }}>👤 {selectedPb.assignment.assayer?.displayName}</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '2px' }}>AGREED FEE</div>
+                          <div style={{ fontSize: '13px', color: '#10b981', fontWeight: 700 }}>₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee ?? '—'}</div>
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '2px' }}>BRANCH STATUS</div>
+                        <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '4px', background: selectedPb.status === 'CLOSED' ? 'rgba(52,211,153,0.15)' : 'rgba(245,158,11,0.15)', color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b', fontWeight: 700 }}>
+                          {selectedPb.status.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', lineHeight: 1.5 }}>
+                    This branch audit is {selectedPb.status === 'CLOSED' ? 'closed and finalized' : 'completed and currently under validator review'}. No further scheduling or reassignment actions are available.
+                  </div>
+                </div>
+              ) : (
+                <>
+              {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
+                <div style={{ padding: '12px 14px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '16px' }}>💬</span>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#f59e0b' }}>
                         Counter Offer from {selectedPb.assignment.assayer?.displayName}
                       </div>
-                      <div style={{ fontSize: '10px', color: '#fcd34d' }}>
-                        Proposed Fee: <b>₹{selectedPb.assignment.proposedFee}</b>
+                      <div style={{ fontSize: '11px', color: '#fcd34d' }}>
+                        Assayer Rate Proposal: <b>₹{selectedPb.assignment.proposedFee}</b>
                       </div>
                     </div>
                   </div>
@@ -975,31 +1352,22 @@ export const PlanningWorkspace: React.FC = () => {
                           method: 'POST',
                           body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
                         });
-                        setMessage({ type: 'success', text: `Counter fee ₹${selectedPb.assignment?.proposedFee} approved! Branch confirmed.` });
+                        setMessage({ type: 'success', text: `Counter fee ₹${selectedPb.assignment?.proposedFee} approved!` });
                         if (selectedProjectId) loadProjectBranches(selectedProjectId);
                       } catch (err: any) {
                         setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
                       }
-                    }} className="btn btn-primary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', background: '#10b981', borderColor: '#10b981', color: '#fff' }}>
+                    }} className="btn btn-primary" style={{ flex: 1, padding: '5px 8px', fontSize: '11px', background: '#10b981', borderColor: '#10b981', color: '#fff', fontWeight: 700 }}>
                       ✅ Accept ₹{selectedPb.assignment.proposedFee}
                     </button>
-                    <button onClick={async () => {
-                      const newRateStr = prompt(`Enter counter rate proposal to send back to ${selectedPb.assignment?.assayer?.displayName} (₹):`, String(selectedPb.assignment?.proposedFee || 1500));
-                      if (!newRateStr) return;
-                      const newRateNum = parseFloat(newRateStr);
-                      if (isNaN(newRateNum) || newRateNum <= 0) return;
-                      try {
-                        await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
-                          method: 'POST',
-                          body: JSON.stringify({ targetStatus: 'COUNTER_OFFER', counterFee: newRateNum, reason: `Operations proposed counter rate ₹${newRateNum}` }),
-                        });
-                        setMessage({ type: 'success', text: `Counter proposal ₹${newRateNum} sent to assayer!` });
-                        if (selectedProjectId) loadProjectBranches(selectedProjectId);
-                      } catch (err: any) {
-                        setMessage({ type: 'error', text: err.message || 'Failed to send counter proposal' });
+                    <button onClick={() => {
+                      if (selectedPb.assignment?.assayer) {
+                        setSelectedCandidate({ id: (selectedPb.assignment.assayer as any).id || '', displayName: selectedPb.assignment.assayer.displayName } as any);
+                        setNegotiatingFee(String(selectedPb.assignment?.proposedFee || 1500));
+                        setShowNegotiationModal(true);
                       }
-                    }} className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)' }}>
-                      🔁 Propose Counter
+                    }} className="btn btn-secondary" style={{ flex: 1, padding: '5px 8px', fontSize: '11px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', fontWeight: 600 }}>
+                      🔁 Counter
                     </button>
                     <button onClick={async () => {
                       try {
@@ -1007,60 +1375,66 @@ export const PlanningWorkspace: React.FC = () => {
                           method: 'POST',
                           body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
                         });
-                        setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
+                        setMessage({ type: 'success', text: 'Counter offer rejected.' });
                         if (selectedProjectId) loadProjectBranches(selectedProjectId);
                       } catch (err: any) {
                         setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
                       }
-                    }} className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)' }}>
+                    }} className="btn btn-secondary" style={{ flex: 1, padding: '5px 8px', fontSize: '11px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', fontWeight: 600 }}>
                       ❌ Decline
                     </button>
                   </div>
                 </div>
               )}
-              <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>BRANCH DETAILS</span>
-                  <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '1px' }}>{selectedPb.branch.name}</div>
-                </div>
-                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{selectedPb.branch.city}</span>
 
+              {/* Branch Header & SLA Controls Bar */}
+              <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'rgba(30, 41, 59, 0.6)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>MATCHING INSPECTOR</span>
+                    <div style={{ fontSize: '15px', fontWeight: 800, color: '#fff', marginTop: '1px' }}>{selectedPb.branch.name}</div>
+                  </div>
+                  <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                    className="btn btn-secondary" title="Refresh candidates"
+                    style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <RefreshCw size={11} /> Refresh
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                    <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
+                    Show Distant (&gt;700km)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                    <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                    Min Radius Filter
+                  </label>
+                  {slaEnabled && (
+                    <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
+                      style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', cursor: 'pointer' }}>
+                      <option value={25}>25km</option>
+                      <option value={50}>50km</option>
+                      <option value={100}>100km</option>
+                      <option value={150}>150km</option>
+                      <option value={200}>200km</option>
+                      <option value={300}>300km</option>
+                      <option value={500}>500km</option>
+                    </select>
+                  )}
                 </div>
               </div>
-              <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>RECOMMENDED ASSAYERS</span>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <button onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
-                      className="btn btn-secondary" title="Refresh candidates"
-                      style={{ padding: '2px 6px', fontSize: '9px', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <RefreshCw size={10} /> Refresh
-                    </button>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                      <input type="checkbox" checked={showAllCandidates} onChange={(e) => setShowAllCandidates(e.target.checked)} />
-                      Show Distant (&gt;700km)
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                      <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
-                      SLA
-                    </label>
-                    {slaEnabled && (
-                      <select value={slaRadius} onChange={e => setSlaRadius(Number(e.target.value))}
-                        style={{ fontSize: '9px', padding: '1px 3px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', width: '50px', cursor: 'pointer' }}>
-                        <option value={25}>25km</option>
-                        <option value={50}>50km</option>
-                        <option value={100}>100km</option>
-                        <option value={150}>150km</option>
-                        <option value={200}>200km</option>
-                        <option value={300}>300km</option>
-                        <option value={500}>500km</option>
-                      </select>
-                    )}
-                  </div>
-                </div>
+
+              {/* Scored Candidate Cards Container */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
                 {renderCandidatesList(false)}
               </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <div style={{ width: '380px', minWidth: '380px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+              👈 Select a branch from the left queue or click a map marker to inspect candidate matches.
             </div>
           )}
         </div>
@@ -1172,6 +1546,19 @@ export const PlanningWorkspace: React.FC = () => {
               </div>
             </div>
 
+            {/* Auto-Dispatch Toggle Option */}
+            <div style={{ padding: '10px 12px', background: 'rgba(30,41,59,0.5)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input type="checkbox" id="autoDispatchToggle" checked={autoDispatch} onChange={e => setAutoDispatch(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+              <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: '#fff', cursor: 'pointer', userSelect: 'none' }}>
+                <span style={{ fontWeight: 700, color: autoDispatch ? '#10b981' : '#f59e0b' }}>
+                  {autoDispatch ? '⚡ Fast-Track Direct Lock: ' : '📋 Send to Unscheduled Queue: '}
+                </span>
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  {autoDispatch ? 'Auto-creates calendar dispatch packet on acceptance' : 'Acceptance moves offer to Unscheduled Queue for manual dispatching'}
+                </span>
+              </label>
+            </div>
+
             {/* Action buttons */}
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
               <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
@@ -1201,10 +1588,12 @@ export const PlanningWorkspace: React.FC = () => {
               ) : (
                 <>
                   {(() => {
-                    const completionRate = detailAssayer.totalAssignments > 0
-                      ? Math.round((detailAssayer.completedAssignments / detailAssayer.totalAssignments) * 100) : 0;
-                    const onTimeRate = detailAssayer.completedAssignments > 0
-                      ? Math.round((detailAssayer.onTimeCompletions / detailAssayer.completedAssignments) * 100) : 0;
+                    const effectiveTotal = Math.max(detailAssayer.totalAssignments, detailAssayer.auditHistory?.length || 0);
+                    const effectiveCompleted = Math.max(detailAssayer.completedAssignments, detailAssayer.auditHistory?.filter(a => ['COMPLETED', 'AUDIT_COMPLETED', 'CLOSED', 'VALIDATION_COMPLETED'].includes(a.status)).length || 0);
+                    const completionRate = effectiveTotal > 0
+                      ? Math.round((effectiveCompleted / effectiveTotal) * 100) : 0;
+                    const onTimeRate = effectiveCompleted > 0
+                      ? Math.round((Math.max(detailAssayer.onTimeCompletions, effectiveCompleted) / effectiveCompleted) * 100) : 0;
                     return (
                       <>
                         {/* Header Card */}
@@ -1252,30 +1641,31 @@ export const PlanningWorkspace: React.FC = () => {
                         </div>
 
                         {/* KPI Cards */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px', marginBottom: '16px' }}>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><Briefcase size={10} /> Total</div>
-                            <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--accent-primary)' }}>{detailAssayer.totalAssignments}</div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><Briefcase size={10} /> Total Audits</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--accent-primary)' }}>{effectiveTotal}</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><CheckCircle size={10} /> Completed</div>
-                            <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--status-active)' }}>{detailAssayer.completedAssignments}</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--status-active)' }}>{effectiveCompleted}</div>
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>{completionRate}%</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><Clock size={10} /> On-Time</div>
-                            <div style={{ fontSize: '22px', fontWeight: 700, color: '#3b82f6' }}>{onTimeRate}%</div>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>{detailAssayer.onTimeCompletions} jobs</div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><TrendingUp size={10} /> Acceptance</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: '#38bdf8' }}>{detailAssayer.acceptanceRate ?? 100}%</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><DollarSign size={10} /> Earnings</div>
-                            <div style={{ fontSize: '22px', fontWeight: 700, color: '#f59e0b' }}>₹{Number(detailAssayer.totalEarnings).toLocaleString()}</div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><X size={10} /> Rejection Rate</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.rejectionRate || 0) > 15 ? '#ef4444' : '#34d399' }}>{detailAssayer.rejectionRate ?? 0}%</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><Calendar size={10} /> Last</div>
-                            <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>
-                              {detailAssayer.lastAssignmentDate ? new Date(detailAssayer.lastAssignmentDate).toLocaleDateString() : '—'}
-                            </div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><AlertTriangle size={10} /> Queries Raised</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.queryCount || 0) > 0 ? '#f59e0b' : '#34d399' }}>{detailAssayer.queryCount ?? 0}</div>
+                          </div>
+                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><DollarSign size={10} /> Total Paid</div>
+                            <div style={{ fontSize: '18px', fontWeight: 700, color: '#f59e0b' }}>₹{Number(detailAssayer.totalEarnings).toLocaleString()}</div>
                           </div>
                         </div>
 
@@ -1330,6 +1720,15 @@ export const PlanningWorkspace: React.FC = () => {
                                 </div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '1px' }}>{onTimeRate}%</div>
                               </div>
+                              {detailAssayer.activeCommercialProfile && (
+                                <div style={{ padding: '8px', background: 'rgba(56,189,248,0.1)', borderRadius: '6px', border: '1px solid rgba(56,189,248,0.2)' }}>
+                                  <div style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>₹{detailAssayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
+                                  <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '2px' }}>
+                                    Travel: ₹{detailAssayer.activeCommercialProfile.travelReimbursement || 0}/km | Daily: ₹{detailAssayer.activeCommercialProfile.dailyRate || 0}
+                                  </div>
+                                </div>
+                              )}
                               {detailAssayer.totalEarnings > 0 && (
                                 <div>
                                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>AVERAGE EARNINGS PER JOB</div>
@@ -1338,14 +1737,31 @@ export const PlanningWorkspace: React.FC = () => {
                                   </div>
                                 </div>
                               )}
-                              {detailAssayer.experienceYears > 0 && (
-                                <div>
-                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>EXPERIENCE</div>
-                                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{detailAssayer.experienceYears} years</div>
-                                </div>
-                              )}
                             </div>
                           </div>
+                        </div>
+
+                        {/* Audit History Timeline */}
+                        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)', marginTop: '14px' }}>
+                          <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Calendar size={13} /> Audit History & Fee Logs</h4>
+                          {detailAssayer.auditHistory && detailAssayer.auditHistory.length > 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                              {detailAssayer.auditHistory.map(ah => (
+                                <div key={ah.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid #6366f1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <div>
+                                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>{ah.branch_name || 'Branch Audit'}</div>
+                                    <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>{ah.branch_city}, {ah.branch_state} | {ah.project_name || 'GSS Project'}</div>
+                                  </div>
+                                  <div style={{ textAlign: 'right' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
+                                    <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(99,102,241,0.2)', color: '#818cf8', fontWeight: 600 }}>{ah.status}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-muted)', fontSize: '11px' }}>No audit history recorded.</div>
+                          )}
                         </div>
 
                         {/* Remarks */}

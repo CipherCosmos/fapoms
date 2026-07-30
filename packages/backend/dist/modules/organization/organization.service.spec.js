@@ -6,6 +6,7 @@ const common_1 = require("@nestjs/common");
 const organization_service_1 = require("./organization.service");
 const organization_entity_1 = require("./organization.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 describe('OrganizationService', () => {
     let service;
     let orgRepo;
@@ -24,6 +25,7 @@ describe('OrganizationService', () => {
                 organization_service_1.OrganizationService,
                 { provide: (0, typeorm_1.getRepositoryToken)(organization_entity_1.OrganizationEntity), useValue: mockOrgRepo },
                 { provide: audit_service_1.AuditService, useValue: mockAuditService },
+                { provide: domain_event_publisher_1.DomainEventPublisher, useValue: { publish: jest.fn() } },
             ],
         }).compile();
         service = module.get(organization_service_1.OrganizationService);

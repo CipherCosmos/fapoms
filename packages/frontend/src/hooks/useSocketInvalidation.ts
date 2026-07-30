@@ -8,14 +8,14 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:counter-offered', queryKeys.assignments.all, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
   ['assignment:created', queryKeys.assignments.all, queryKeys.dashboard.metrics, queryKeys.projects.all],
   ['assignment:fee-updated', queryKeys.assignments.all],
-  ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all],
-  ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all],
+  ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
+  ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
   ['ProjectCompleted', queryKeys.projects.all, queryKeys.dashboard.all],
   ['ProjectCancelled', queryKeys.projects.all, queryKeys.dashboard.all],
   ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.dashboard.all],
-  ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats],
-  ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry],
-  ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats],
+  ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
+  ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
+  ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
 ];
 
 export function useSocketInvalidation() {

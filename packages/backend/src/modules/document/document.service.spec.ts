@@ -11,6 +11,8 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { DocumentType } from '@fapoms/shared';
+import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 
 describe('DocumentService', () => {
   let service: DocumentService;
@@ -27,7 +29,7 @@ describe('DocumentService', () => {
   };
 
   const mockAssignmentRepo = {
-    findOne: jest.fn(),
+    findOne: jest.fn().mockResolvedValue(null),
   };
 
   const mockAuditService = {
@@ -52,11 +54,13 @@ describe('DocumentService', () => {
         DocumentService,
         { provide: getRepositoryToken(DocumentEntity), useValue: mockDocumentRepo },
         { provide: getRepositoryToken(AssessmentEntity), useValue: mockAssessmentRepo },
+        { provide: getRepositoryToken(ProjectBranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockEventPublisher },
         { provide: NotificationService, useValue: mockNotificationService },
         { provide: PushNotificationService, useValue: mockPushNotificationService },
+        { provide: LocalStorageService, useValue: { saveFile: jest.fn(), getFilePath: jest.fn() } },
       ],
     }).compile();
 

@@ -10,7 +10,7 @@ import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { AssignmentStatus, ProjectBranchStatus, EventCategory } from '@fapoms/shared';
+import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
@@ -18,6 +18,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
+import { ValidationService } from '../validation/validation.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -29,6 +30,7 @@ describe('AssignmentService', () => {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
+    find: jest.fn(),
     findAndCount: jest.fn(),
   };
 
@@ -79,6 +81,10 @@ describe('AssignmentService', () => {
     publish: jest.fn(),
   };
 
+  const mockUserRepoViaDataSource = {
+    findOne: jest.fn(),
+  };
+
   const mockDataSource = {
     transaction: jest.fn((cb) => cb({
       save: jest.fn((arg) => Promise.resolve(arg)),
@@ -86,6 +92,7 @@ describe('AssignmentService', () => {
         findOne: jest.fn(),
       }),
     })),
+    getRepository: jest.fn().mockReturnValue(mockUserRepoViaDataSource),
   };
 
   const mockConstraintEvaluator = {
@@ -113,6 +120,7 @@ describe('AssignmentService', () => {
         { provide: DataSource, useValue: mockDataSource },
         { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
         { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
+        { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
       ],
     }).compile();
 
@@ -187,7 +195,7 @@ describe('AssignmentService', () => {
     it('should accept and update project branch to ASSIGNMENT_CONFIRMED', async () => {
       const assignment = {
         id: 'asn-1', status: AssignmentStatus.PENDING, agreedFee: null,
-        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION, isActive: true },
       };
       mockAssignmentRepo.findOne.mockResolvedValue(assignment);
       mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
@@ -195,6 +203,13 @@ describe('AssignmentService', () => {
       const result = await service.acceptOffer('asn-1', 'user-1', 2000);
       expect(result.status).toBe(AssignmentStatus.ACCEPTED);
       expect(result.agreedFee).toBe(2000);
+      expect(assignment.projectBranch.status).toBe(ProjectBranchStatus.ASSIGNMENT_CONFIRMED);
+      // Confirming via the real ProjectBranchStateMachine (not a raw status mutation) must
+      // also publish the domain event so real-time subscribers get notified.
+      expect(mockDomainEventPublisher.publish).toHaveBeenCalledWith(
+        'ProjectBranchAssignmentConfirmedEvent',
+        expect.objectContaining({ aggregateId: 'pb-1' }),
+      );
     });
   });
 
@@ -250,6 +265,97 @@ describe('AssignmentService', () => {
       await expect(
         service.update('asn-1', { proposedFee: 600 }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('autoDeclineExpiredOffers', () => {
+    it('auto-declines a PENDING assignment past its slaDueDate', async () => {
+      const pastDue = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING, slaDueDate: pastDue,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
+      };
+      mockAssignmentRepo.find.mockResolvedValue([assignment]);
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const declinedCount = await service.autoDeclineExpiredOffers();
+
+      expect(declinedCount).toBe(1);
+      expect(assignment.status).toBe(AssignmentStatus.REJECTED);
+      expect((assignment as any).rejectReason).toBe('AUTO_DECLINED_SLA_EXPIRED');
+      expect(assignment.projectBranch.status).toBe(ProjectBranchStatus.CANDIDATE_SEARCH);
+    });
+
+    it('leaves a PENDING assignment untouched if its slaDueDate has not passed yet', async () => {
+      const notYetDue = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING, slaDueDate: notYetDue,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
+      };
+      mockAssignmentRepo.find.mockResolvedValue([assignment]);
+
+      const declinedCount = await service.autoDeclineExpiredOffers();
+
+      expect(declinedCount).toBe(0);
+      expect(assignment.status).toBe(AssignmentStatus.PENDING);
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('queries only active PENDING assignments, so non-PENDING assignments are never considered', async () => {
+      mockAssignmentRepo.find.mockResolvedValue([]);
+
+      const declinedCount = await service.autoDeclineExpiredOffers();
+
+      expect(declinedCount).toBe(0);
+      expect(mockAssignmentRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ status: AssignmentStatus.PENDING, isActive: true }),
+        }),
+      );
+    });
+  });
+
+  describe('escalate', () => {
+    it('bumps priority to CRITICAL and records an audit event', async () => {
+      const assignment = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        priority: Priority.MEDIUM, createdBy: 'ops-user-1',
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.escalate('asn-1', 'ops-user-2', 'Branch manager unresponsive');
+
+      expect(result.priority).toBe(Priority.CRITICAL);
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1' }),
+      );
+    });
+
+    it('notifies the assigning user the first time an assignment is escalated', async () => {
+      const assignment = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        priority: Priority.MEDIUM, createdBy: 'ops-user-1',
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-user-1' });
+
+      await service.escalate('asn-1', 'ops-user-2');
+
+      expect(mockNotificationService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'ops-user-1', title: 'Assignment Escalated' }),
+        'ops-user-2',
+      );
+    });
+
+    it('rejects escalating an assignment that is already COMPLETED', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.COMPLETED, priority: Priority.MEDIUM,
+      });
+
+      await expect(service.escalate('asn-1', 'ops-user-2')).rejects.toThrow(BadRequestException);
     });
   });
 });

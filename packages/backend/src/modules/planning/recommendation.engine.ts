@@ -1,17 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, calculateHaversineDistance } from '@fapoms/shared';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
 
 export interface PlanningContext {
@@ -61,6 +62,43 @@ export class AvailabilityFilter implements CandidateFilter {
 }
 
 @Injectable()
+export class ConsecutiveBranchAuditFilter implements CandidateFilter {
+  name = 'consecutiveBranchAudit';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    if (!context.branch?.id) return true;
+
+    // Find the most recent assignment for this branch
+    const lastAssignment = await this.assignmentRepository.findOne({
+      where: {
+        projectBranch: { branchId: context.branch.id },
+        isActive: true,
+      },
+      order: { createdAt: 'DESC' },
+      relations: ['projectBranch'],
+    });
+
+    if (!lastAssignment) return true; // No prior audit recorded for this branch
+
+    // Only block the assayer once they're actually locked in (ACCEPTED) or have already
+    // completed this branch's audit (anti-collusion / no-repeat-auditor rule). A still-PENDING
+    // offer awaiting response — or one that was REJECTED/CANCELLED — should not prevent the same
+    // assayer from still showing up as a recommendable backup candidate.
+    const locksOutCandidate = [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED].includes(lastAssignment.status);
+    if (lastAssignment.assayerId === assayer.id && locksOutCandidate) {
+      return false;
+    }
+
+    return true;
+  }
+}
+
+@Injectable()
 export class ClientRestrictionFilter implements CandidateFilter {
   name = 'clientRestriction';
 
@@ -91,13 +129,14 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
 
   constructor(private readonly ruleEngine: RuleEngine) {}
 
-  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+  async evaluate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
     const results = await this.ruleEngine.evaluate({
       subject: {
         id: assayer.id,
         state: assayer.state,
         skills: assayer.skills || [],
-        certifications: assayer.certifications || [],
+        certifications: (assayer.certifications || []).map((c) => ({ name: c.name, expiryDate: c.expiryDate ?? undefined })),
       },
       target: {
         id: context.branch.id,
@@ -201,8 +240,96 @@ export class PerformanceScoreCalculator implements ScoreCalculator {
   name = 'performance';
 
   async calculate(assayer: AssayerEntity): Promise<number> {
-    const rating = assayer.performanceRating || 5.0;
+    const rating = Number(assayer.performanceRating) || 5.0;
     return (rating / 5.0) * 100;
+  }
+}
+
+@Injectable()
+export class RejectionAcceptanceScoreCalculator implements ScoreCalculator {
+  name = 'acceptanceRate';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity): Promise<number> {
+    const totalDispatched = await this.assignmentRepository.count({
+      where: { assayerId: assayer.id, isActive: true },
+    });
+
+    if (totalDispatched === 0) return 85; // Baseline default for new assayers
+
+    const acceptedCount = await this.assignmentRepository.count({
+      where: {
+        assayerId: assayer.id,
+        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
+        isActive: true,
+      },
+    });
+
+    return Math.round((acceptedCount / totalDispatched) * 100);
+  }
+}
+
+@Injectable()
+export class DeliverySpeedScoreCalculator implements ScoreCalculator {
+  name = 'deliverySpeed';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity): Promise<number> {
+    const completedAssignments = await this.assignmentRepository.find({
+      where: {
+        assayerId: assayer.id,
+        status: AssignmentStatus.COMPLETED,
+        isActive: true,
+      },
+      take: 20,
+    });
+
+    if (completedAssignments.length === 0) return 80;
+
+    let totalScore = 0;
+    for (const a of completedAssignments) {
+      if (a.completionDate && a.createdAt) {
+        const diffHours = (new Date(a.completionDate).getTime() - new Date(a.createdAt).getTime()) / (1000 * 3600);
+        if (diffHours <= 24) totalScore += 100;
+        else if (diffHours <= 48) totalScore += 80;
+        else if (diffHours <= 72) totalScore += 60;
+        else totalScore += 40;
+      } else {
+        totalScore += 75;
+      }
+    }
+
+    return Math.round(totalScore / completedAssignments.length);
+  }
+}
+
+@Injectable()
+export class QueryVolumeScoreCalculator implements ScoreCalculator {
+  name = 'queryVolume';
+
+  constructor(
+    @InjectRepository(ValidationQueryEntity)
+    private readonly queryRepository: Repository<ValidationQueryEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity): Promise<number> {
+    const queries = await this.queryRepository.find({
+      where: { assayerId: assayer.id, isActive: true },
+      take: 50,
+    });
+
+    if (queries.length === 0) return 95; // Excellent score: 0 queries raised for this assayer
+
+    // Deduct points per raised validation query
+    return Math.max(20, Math.round(100 - (queries.length * 10)));
   }
 }
 
@@ -264,7 +391,8 @@ export class CostScoreCalculator implements ScoreCalculator {
 export class ClientPreferenceScoreCalculator implements ScoreCalculator {
   name = 'clientPreference';
 
-  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+  async calculate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<number> {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
     let score = 50;
 
     const isPreferred = context.client?.preferredAssayers?.includes(assayer.id);
@@ -359,16 +487,19 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    // 1. Client Familiarity score
-    const count = await this.assignmentRepository.count({
+    // 1. Branch History score — reward assayers who have previously audited this exact
+    // branch (accepted or completed assignments only; the currently-open PENDING offer
+    // being replaced is excluded since it isn't ACCEPTED/COMPLETED yet).
+    const priorVisits = await this.assignmentRepository.count({
       where: {
         assayerId: assayer.id,
-        projectId: context.branch.clientId ? context.branch.clientId : undefined,
-        status: AssignmentStatus.ACCEPTED,
+        projectBranch: { branchId: context.branch.id },
+        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
         isActive: true,
       },
+      relations: ['projectBranch'],
     });
-    let score = 50 + count * 10;
+    let score = 50 + Math.min(priorVisits, 3) * 15; // up to +45 for 3+ prior visits to this branch
 
     // 2. Same-Day Route Grouping Boost (for maximizing auditor utilization in one day)
     if (context.scheduledDate) {
@@ -542,6 +673,7 @@ export class RecommendationEngine {
 
   constructor(
     private readonly availabilityFilter: AvailabilityFilter,
+    private readonly consecutiveBranchAuditFilter: ConsecutiveBranchAuditFilter,
     private readonly clientRestrictionFilter: ClientRestrictionFilter,
     private readonly clientEligibilityFilter: ClientEligibilityFilter,
     private readonly ruleEngineEligibilityFilter: RuleEngineEligibilityFilter,
@@ -550,6 +682,9 @@ export class RecommendationEngine {
     private readonly travelTimeCalculator: TravelTimeScoreCalculator,
     private readonly workloadCalculator: WorkloadScoreCalculator,
     private readonly performanceCalculator: PerformanceScoreCalculator,
+    private readonly rejectionAcceptanceCalculator: RejectionAcceptanceScoreCalculator,
+    private readonly deliverySpeedCalculator: DeliverySpeedScoreCalculator,
+    private readonly queryVolumeCalculator: QueryVolumeScoreCalculator,
     private readonly experienceCalculator: ExperienceScoreCalculator,
     private readonly costCalculator: CostScoreCalculator,
     private readonly clientPreferenceCalculator: ClientPreferenceScoreCalculator,
@@ -563,11 +698,14 @@ export class RecommendationEngine {
     private readonly assayerRepository: Repository<AssayerEntity>,
     @InjectRepository(ClientEntity)
     private readonly clientRepository: Repository<ClientEntity>,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly constraintEvaluator: ConstraintEvaluator,
     private readonly assayerService: AssayerService,
   ) {
     this.filters.push(
       this.availabilityFilter,
+      this.consecutiveBranchAuditFilter,
       this.clientRestrictionFilter,
       this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
@@ -579,6 +717,9 @@ export class RecommendationEngine {
       this.travelTimeCalculator,
       this.workloadCalculator,
       this.performanceCalculator,
+      this.rejectionAcceptanceCalculator,
+      this.deliverySpeedCalculator,
+      this.queryVolumeCalculator,
       this.experienceCalculator,
       this.costCalculator,
       this.clientPreferenceCalculator,
@@ -609,9 +750,21 @@ export class RecommendationEngine {
     };
 
     const assayers = await this.assayerRepository.find({
-      where: { isActive: true, status: 'ACTIVE' },
+      where: { isActive: true, status: AssayerStatus.ACTIVE },
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+
+    // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this
+    // branch, so they can still be surfaced as a candidate (e.g. as their own backup reference,
+    // or simply visible while ops decides) but flagged distinctly rather than hidden outright.
+    const pendingOffer = await this.assignmentRepository.findOne({
+      where: {
+        projectBranch: { branchId: branch.id },
+        status: AssignmentStatus.PENDING,
+        isActive: true,
+      },
+      relations: ['projectBranch'],
+    });
 
     const candidates = [];
     for (const assayer of assayers) {
@@ -644,6 +797,7 @@ export class RecommendationEngine {
         assayer,
         score: parseFloat(finalScore.toFixed(2)),
         breakdown: scoreBreakdown,
+        pendingOnThisBranch: pendingOffer?.assayerId === assayer.id,
       });
     }
 

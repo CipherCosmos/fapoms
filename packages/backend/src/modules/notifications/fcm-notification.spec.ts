@@ -5,6 +5,7 @@ import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationEntity } from './notification.entity';
 import { DeviceTokenEntity } from './device-token.entity';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('FCM Notification & Routing E2E Test Suite', () => {
   let notificationService: NotificationService;
@@ -93,6 +94,7 @@ describe('FCM Notification & Routing E2E Test Suite', () => {
           },
         },
         { provide: getRepositoryToken(NotificationEntity), useValue: mockNotificationRepo },
+        { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: getRepositoryToken(DeviceTokenEntity), useValue: mockDeviceTokenRepo },
       ],
     }).compile();

@@ -27,12 +27,20 @@ export class AssignmentStateMachine {
     return { previousState: prev, newState: assignment.status, userId };
   }
 
+  // NOTE ON `isActive`: REJECTED and CANCELLED are terminal *states*, not deletions, and the
+  // ops UI deliberately surfaces them (the "Needs Attention" and "Cancelled/Rejected" views).
+  // These transitions used to also set `isActive = false`, which overloaded the soft-delete
+  // flag to mean "terminal". That made every isActive-filtered reader disagree with every
+  // unfiltered one for the same records — e.g. the dashboard summary counted 3 assignments
+  // while the assignments list counted 5, and `cancelledAssignments` could never be anything
+  // but 0 (its query filters isActive=true, which the cancel itself had just cleared).
+  // Terminal state is expressed by `status` alone; `isActive` stays reserved for real deletion.
+
   static rejectOffer(assignment: AssignmentEntity, userId: string, reason?: string) {
     AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.REJECTED);
     const prev = assignment.status;
     assignment.status = AssignmentStatus.REJECTED;
     assignment.rejectReason = reason ?? 'Rejected';
-    assignment.isActive = false;
     return { previousState: prev, newState: assignment.status, userId };
   }
 
@@ -41,7 +49,6 @@ export class AssignmentStateMachine {
     const prev = assignment.status;
     assignment.status = AssignmentStatus.CANCELLED;
     assignment.cancelReason = reason ?? 'Cancelled';
-    assignment.isActive = false;
     return { previousState: prev, newState: assignment.status, userId };
   }
 }

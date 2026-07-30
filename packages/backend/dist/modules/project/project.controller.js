@@ -169,7 +169,10 @@ let ProjectController = class ProjectController {
     async getProjectBranches(id) {
         const branches = await this.projectService.findProjectBranches(id);
         const data = branches.map(b => {
-            const activeAssignment = b.assignments?.find(a => a.status !== 'CANCELLED' && a.status !== 'REJECTED');
+            const activeAssignment = b.assignments
+                ?.filter(a => a.status !== 'CANCELLED' && a.status !== 'REJECTED')
+                ?.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+                ?.find(a => a.status === 'COMPLETED' || a.status === 'ACCEPTED' || true);
             return {
                 ...b,
                 assignment: activeAssignment ? {

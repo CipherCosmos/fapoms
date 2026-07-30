@@ -6,7 +6,9 @@ export const queryKeys = {
   },
   assignments: {
     all: ['assignments'] as const,
-    list: (page: number) => ['assignments', 'list', page] as const,
+    list: (page: number, filter?: string) => ['assignments', 'list', page, filter ?? 'ALL'] as const,
+    count: (filter: string) => ['assignments', 'count', filter] as const,
+    needsAttention: ['assignments', 'needs-attention'] as const,
     detail: (id: string) => ['assignments', 'detail', id] as const,
     timeline: (id: string) => ['assignments', 'timeline', id] as const,
   },

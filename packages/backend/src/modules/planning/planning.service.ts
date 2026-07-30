@@ -32,6 +32,7 @@ export interface AssayerRecommendation {
   longitude?: number | null;
   baseFee?: number;
   readableReasons?: ExplanationReason[];
+  pendingOnThisBranch?: boolean;
 }
 
 export interface CreateBusinessRuleDto {
@@ -110,6 +111,7 @@ export class PlanningService {
         longitude: r.assayer.longitude,
         baseFee,
         readableReasons,
+        pendingOnThisBranch: r.pendingOnThisBranch,
       });
     }
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Platform } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
+import { Ionicons } from '@expo/vector-icons';
 
 interface NotificationDetailModalProps {
   visible: boolean;
@@ -51,7 +52,7 @@ export const NotificationDetailModal: React.FC<NotificationDetailModalProps> = (
               <Text style={badgeText}>ASSIGNMENT DETAILS</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={{ padding: 4 }}>
-              <Text style={{ color: '#94a3b8', fontSize: 18, fontWeight: '700' }}>✕</Text>
+              <Ionicons name="close" size={18} color="#94a3b8" />
             </TouchableOpacity>
           </View>
 
@@ -91,10 +92,12 @@ export const NotificationDetailModal: React.FC<NotificationDetailModalProps> = (
                   {assignment.agreedTravelFee > 0 ? ` + ₹${assignment.agreedTravelFee}` : ''}
                 </Text>
               </View>
-              <View style={detailBox}>
-                <Text style={detailLabel}>Duration</Text>
-                <Text style={detailValue}>{assignment.estimatedAuditHours || 8}h</Text>
-              </View>
+              {assignment.estimatedAuditHours > 0 && (
+                <View style={detailBox}>
+                  <Text style={detailLabel}>Duration</Text>
+                  <Text style={detailValue}>{assignment.estimatedAuditHours}h</Text>
+                </View>
+              )}
               <View style={detailBox}>
                 <Text style={detailLabel}>Status</Text>
                 <Text style={detailValue}>{assignment.status}</Text>

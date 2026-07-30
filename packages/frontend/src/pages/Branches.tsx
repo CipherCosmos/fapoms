@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Search, Upload, AlertCircle, CheckCircle, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown } from 'lucide-react';
+import { Search, Upload, AlertCircle, CheckCircle, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map } from 'lucide-react';
 import { api } from '../services/api';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { connectSocket } from '../services/socket';
@@ -405,7 +405,7 @@ export const Branches: React.FC = () => {
                       <a href={`https://www.google.com/maps/search/?api=1&query=${branchDetail.latitude},${branchDetail.longitude}`}
                         target="_blank" rel="noopener noreferrer"
                         style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
-                        🗺️ Verify on Google Maps
+                        <Map size={14} /> Verify on Google Maps
                       </a>
                     </div>
                   </div>

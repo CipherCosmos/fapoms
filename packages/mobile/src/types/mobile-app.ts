@@ -24,7 +24,8 @@ export interface ValidationQuery {
   validatorName: string;
   queryText: string;
   assayerResponse?: string;
-  status: 'OPEN' | 'RESOLVED';
+  // RESPONDED = assayer has submitted a response but a validator hasn't closed it yet.
+  status: 'OPEN' | 'RESPONDED' | 'RESOLVED';
   createdAt: string;
 }
 

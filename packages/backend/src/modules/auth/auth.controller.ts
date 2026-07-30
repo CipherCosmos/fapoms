@@ -38,7 +38,7 @@ class RefreshDto {
 class BiometricLoginDto {
   @IsString()
   @IsNotEmpty()
-  assayerCode: string;
+  refreshToken: string;
 }
 
 @ApiTags('Authentication')
@@ -92,13 +92,13 @@ export class AuthController {
 
   @Post('biometric-login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Biometric/assayer-code login without password (for mobile)' })
+  @ApiOperation({ summary: 'Resume a session via biometric unlock — redeems a refresh token from a prior real login (for mobile)' })
   async biometricLogin(@Body() dto: BiometricLoginDto, @Req() req: any) {
     const ipAddress = req.ip || req.connection?.remoteAddress;
     const userAgent = req.headers['user-agent'];
 
     const result = await this.authService.biometricLogin(
-      dto.assayerCode,
+      dto.refreshToken,
       ipAddress,
       userAgent,
     );

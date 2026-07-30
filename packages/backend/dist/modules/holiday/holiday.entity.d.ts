@@ -4,5 +4,6 @@ export declare class HolidayEntity extends BaseEntity {
     date: Date;
     type: string;
     applicableStates: string[] | null;
+    clientId: string | null;
     year: number;
 }

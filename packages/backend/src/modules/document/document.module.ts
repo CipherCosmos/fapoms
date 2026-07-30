@@ -12,6 +12,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
 import { OcrModule } from '../../infrastructure/ocr/ocr.module';
 
+import { ValidationModule } from '../validation/validation.module';
+import { AssignmentModule } from '../assignment/assignment.module';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([DocumentEntity, AssessmentEntity, ProjectBranchEntity, AssignmentEntity]),
@@ -19,6 +22,8 @@ import { OcrModule } from '../../infrastructure/ocr/ocr.module';
     NotificationsModule,
     StorageModule,
     OcrModule,
+    ValidationModule,
+    AssignmentModule,
   ],
   controllers: [DocumentController],
   providers: [DocumentService, DocumentDispatchWorker],

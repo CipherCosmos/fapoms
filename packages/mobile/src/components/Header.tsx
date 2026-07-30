@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { styles } from '../theme/styles';
+import { Ionicons } from '@expo/vector-icons';
 
 interface HeaderProps {
   assayerName: string;
@@ -28,7 +29,7 @@ export const Header: React.FC<HeaderProps> = ({ assayerName, unreadNotifCount, o
           onPress={onNotificationsPress}
           activeOpacity={0.7}
         >
-          <Text style={{ fontSize: 18 }}>🔔</Text>
+          <Ionicons name="notifications" size={18} color="#f8fafc" />
           {unreadNotifCount > 0 && (
             <View style={styles.notifBadge}>
               <Text style={styles.notifBadgeText}>
@@ -38,10 +39,16 @@ export const Header: React.FC<HeaderProps> = ({ assayerName, unreadNotifCount, o
           )}
         </TouchableOpacity>
         <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh}>
-          <Text style={styles.refreshBtnText}>🔄 Sync</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="sync" size={12} color="#38bdf8" />
+            <Text style={styles.refreshBtnText}>Sync</Text>
+          </View>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.refreshBtn, { borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.15)' }]} onPress={onLogout}>
-          <Text style={{ color: '#f87171', fontSize: 12, fontWeight: '800' }}>🚪 Exit</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="exit" size={12} color="#f87171" />
+            <Text style={{ color: '#f87171', fontSize: 12, fontWeight: '800' }}>Exit</Text>
+          </View>
         </TouchableOpacity>
       </View>
     </View>

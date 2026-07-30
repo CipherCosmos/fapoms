@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { AssayerEntity } from './assayer.entity';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus } from '@fapoms/shared';
 import {
   AssayerDocumentVerificationStartedEvent,
   AssayerBackgroundCheckInitiatedEvent,
@@ -27,10 +27,10 @@ const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
   [AssayerLifecycleStatus.TERMINATED]: [AssayerLifecycleStatus.ARCHIVED],
 };
 
-function mapLifecycleToOperationalStatus(lifecycle: string): string {
-  if (lifecycle === AssayerLifecycleStatus.ACTIVE || lifecycle === AssayerLifecycleStatus.ON_LEAVE) return 'ACTIVE';
-  if (lifecycle === AssayerLifecycleStatus.SUSPENDED) return 'SUSPENDED';
-  return 'INACTIVE';
+function mapLifecycleToOperationalStatus(lifecycle: string): AssayerStatus {
+  if (lifecycle === AssayerLifecycleStatus.ACTIVE || lifecycle === AssayerLifecycleStatus.ON_LEAVE) return AssayerStatus.ACTIVE;
+  if (lifecycle === AssayerLifecycleStatus.SUSPENDED) return AssayerStatus.SUSPENDED;
+  return AssayerStatus.INACTIVE;
 }
 
 export class AssayerStateMachine {

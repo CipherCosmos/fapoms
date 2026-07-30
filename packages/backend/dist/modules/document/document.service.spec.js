@@ -12,6 +12,8 @@ const domain_event_publisher_1 = require("../../core/events/domain-event.publish
 const notification_service_1 = require("../notifications/notification.service");
 const push_notification_service_1 = require("../notifications/push-notification.service");
 const shared_1 = require("@fapoms/shared");
+const project_branch_entity_1 = require("../project/project-branch.entity");
+const local_storage_service_1 = require("../../infrastructure/storage/local-storage.service");
 describe('DocumentService', () => {
     let service;
     const mockDocumentRepo = {
@@ -24,7 +26,7 @@ describe('DocumentService', () => {
         findOne: jest.fn(),
     };
     const mockAssignmentRepo = {
-        findOne: jest.fn(),
+        findOne: jest.fn().mockResolvedValue(null),
     };
     const mockAuditService = {
         recordEvent: jest.fn(),
@@ -44,11 +46,13 @@ describe('DocumentService', () => {
                 document_service_1.DocumentService,
                 { provide: (0, typeorm_1.getRepositoryToken)(document_entity_1.DocumentEntity), useValue: mockDocumentRepo },
                 { provide: (0, typeorm_1.getRepositoryToken)(assessment_entity_1.AssessmentEntity), useValue: mockAssessmentRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
                 { provide: (0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity), useValue: mockAssignmentRepo },
                 { provide: audit_service_1.AuditService, useValue: mockAuditService },
                 { provide: domain_event_publisher_1.DomainEventPublisher, useValue: mockEventPublisher },
                 { provide: notification_service_1.NotificationService, useValue: mockNotificationService },
                 { provide: push_notification_service_1.PushNotificationService, useValue: mockPushNotificationService },
+                { provide: local_storage_service_1.LocalStorageService, useValue: { saveFile: jest.fn(), getFilePath: jest.fn() } },
             ],
         }).compile();
         service = module.get(document_service_1.DocumentService);

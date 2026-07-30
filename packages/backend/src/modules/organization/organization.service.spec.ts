@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { OrganizationService } from './organization.service';
 import { OrganizationEntity } from './organization.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory } from '@fapoms/shared';
 
 describe('OrganizationService', () => {
@@ -28,6 +29,7 @@ describe('OrganizationService', () => {
         OrganizationService,
         { provide: getRepositoryToken(OrganizationEntity), useValue: mockOrgRepo },
         { provide: AuditService, useValue: mockAuditService },
+        { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
       ],
     }).compile();
 

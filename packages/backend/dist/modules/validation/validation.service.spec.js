@@ -11,6 +11,7 @@ const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
+const assessment_entity_1 = require("../project/assessment.entity");
 describe('ValidationService', () => {
     let service;
     let validationCaseRepo;
@@ -50,6 +51,10 @@ describe('ValidationService', () => {
                 {
                     provide: (0, typeorm_1.getRepositoryToken)(validation_case_entity_1.ValidationCaseEntity),
                     useValue: mockValidationCaseRepo,
+                },
+                {
+                    provide: (0, typeorm_1.getRepositoryToken)(assessment_entity_1.AssessmentEntity),
+                    useValue: { findOne: jest.fn(), save: jest.fn() },
                 },
                 {
                     provide: project_query_service_1.ProjectQueryService,

@@ -5,10 +5,11 @@ import { GeoCoordinate } from '../../core/value-objects/geo-coordinate.value-obj
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BranchEntity } from '../branch/branch.entity';
-import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssayerStatus } from '@fapoms/shared';
 
 @Injectable()
 export class PlanningAntiCorruptionLayer
@@ -48,11 +49,11 @@ export class PlanningAntiCorruptionLayer
 
   async getAvailableAssayers(date: Date): Promise<PlanningAssayer[]> {
     const assayers = await this.assayerRepository.find({
-      where: { isActive: true, status: 'ACTIVE' },
+      where: { isActive: true, status: AssayerStatus.ACTIVE },
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
-    return assayers.map((a) => {
+    return (assayers as AssayerWithWorkforceAttributes[]).map((a) => {
       return {
         assayerId: new AssayerId(a.id),
         displayName: a.displayName,

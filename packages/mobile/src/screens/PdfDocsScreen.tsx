@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Linking, ActivityIndicator } from 'react-
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { styles } from '../theme/styles';
+import { Ionicons } from '@expo/vector-icons';
 
 interface PdfDocsScreenProps {
   activeAssignment: AssayerAssignment | null;
@@ -67,7 +68,10 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
                 }}
               >
                 <Text style={{ fontSize: 14, color: '#818cf8', fontWeight: '600', flex: 1 }}>{doc.fileName || doc.documentType || 'Document'}</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8' }}>⬇ Download</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="download" size={11} color="#94a3b8" />
+                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>Download</Text>
+                </View>
               </TouchableOpacity>
             ))}
           </View>
@@ -77,7 +81,10 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
           style={styles.saveBtn}
           onPress={() => Linking.openURL(branchDocUrl)}
         >
-          <Text style={styles.btnTextWhite}>📄 View All Branch Documents</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="document-text" size={14} color="#fff" />
+            <Text style={styles.btnTextWhite}>View All Branch Documents</Text>
+          </View>
         </TouchableOpacity>
       </View>
 
@@ -96,10 +103,16 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
 
         <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
           <TouchableOpacity style={[styles.mapBtn, { flex: 1, backgroundColor: '#6366f1' }]} onPress={onOpenScanner || onSelectPdfFile}>
-            <Text style={styles.btnTextWhite}>📸 Camera Scan Pages</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="camera" size={14} color="#fff" />
+            <Text style={styles.btnTextWhite}>Camera Scan Pages</Text>
+          </View>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.mapBtn, { flex: 1, backgroundColor: '#334155' }]} onPress={onSelectPdfFile}>
-            <Text style={styles.btnTextWhite}>📁 Pick PDF File</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="folder" size={14} color="#fff" />
+            <Text style={styles.btnTextWhite}>Pick PDF File</Text>
+          </View>
           </TouchableOpacity>
         </View>
 
@@ -111,13 +124,19 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
           {uploadingPdf ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
-            <Text style={styles.btnTextWhite}>✅ Submit Completed PDF & Finalize Audit</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="checkmark-circle" size={14} color="#fff" />
+            <Text style={styles.btnTextWhite}>Submit Completed PDF & Finalize Audit</Text>
+          </View>
           )}
         </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={styles.addExpBtn} onPress={onOpenExpenseModal}>
-        <Text style={styles.btnTextDark}>➕ Add Travel / Additional Expense</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Ionicons name="add" size={14} color="#0f172a" />
+        <Text style={styles.btnTextDark}>Add Travel / Additional Expense</Text>
+      </View>
       </TouchableOpacity>
     </View>
   );

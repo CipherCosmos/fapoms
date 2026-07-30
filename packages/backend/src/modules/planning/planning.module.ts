@@ -47,6 +47,7 @@ import { ClientEntity } from '../client/client.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import {
   AvailabilityFilter,
+  ConsecutiveBranchAuditFilter,
   ClientRestrictionFilter,
   ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
@@ -55,6 +56,9 @@ import {
   TravelTimeScoreCalculator,
   WorkloadScoreCalculator,
   PerformanceScoreCalculator,
+  RejectionAcceptanceScoreCalculator,
+  DeliverySpeedScoreCalculator,
+  QueryVolumeScoreCalculator,
   ExperienceScoreCalculator,
   CostScoreCalculator,
   ClientPreferenceScoreCalculator,
@@ -66,12 +70,15 @@ import {
   RecommendationEngine,
 } from './recommendation.engine';
 
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       BranchEntity,
       AssayerEntity,
       AssignmentEntity,
+      ValidationQueryEntity,
       ScheduleEntity,
       ProjectBranchEntity,
       ProjectEntity,
@@ -118,6 +125,7 @@ import {
     { provide: 'WorkloadProvider', useClass: PlanningAntiCorruptionLayer },
     { provide: 'OperationsControlServiceInterface', useClass: OperationsPlanningService },
     AvailabilityFilter,
+    ConsecutiveBranchAuditFilter,
     ClientRestrictionFilter,
     ClientEligibilityFilter,
     RuleEngineEligibilityFilter,
@@ -126,6 +134,9 @@ import {
     TravelTimeScoreCalculator,
     WorkloadScoreCalculator,
     PerformanceScoreCalculator,
+    RejectionAcceptanceScoreCalculator,
+    DeliverySpeedScoreCalculator,
+    QueryVolumeScoreCalculator,
     ExperienceScoreCalculator,
     CostScoreCalculator,
     ClientPreferenceScoreCalculator,

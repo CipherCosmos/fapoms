@@ -10,7 +10,7 @@ export interface WebNotification {
 class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;
 
-  async request<T>(endpoint: string, options?: RequestInit & { raw?: boolean }): Promise<T> {
+  async request<T>(endpoint: string, options?: RequestInit & { raw?: boolean; withMeta?: boolean }): Promise<T> {
     let token = localStorage.getItem('fapoms_token');
     const headers: Record<string, string> = {
       ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
@@ -67,6 +67,9 @@ class ApiClient {
     }
 
     const res = await response.json();
+    if ((options as any)?.withMeta) {
+      return res as T;
+    }
     return res.data as T;
   }
 

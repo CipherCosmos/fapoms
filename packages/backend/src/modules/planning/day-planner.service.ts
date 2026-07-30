@@ -18,14 +18,14 @@ import { Repository, In } from 'typeorm';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { BranchEntity } from '../branch/branch.entity';
-import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { ClientEntity } from '../client/client.entity';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { RoutingService, DestinationCoords } from '../geo/routing.provider';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
-import { calculateHaversineDistance } from '@fapoms/shared';
+import { calculateHaversineDistance, AssayerStatus } from '@fapoms/shared';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -179,7 +179,7 @@ export class DayPlannerService {
 
     // 3. Get all active assayers
     const assayers = await this.assayerRepository.find({
-      where: { isActive: true, status: 'ACTIVE' },
+      where: { isActive: true, status: AssayerStatus.ACTIVE },
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
@@ -401,7 +401,8 @@ export class DayPlannerService {
 
     const candidates: DayPlanCandidate[] = [];
 
-    for (const assayer of assayers) {
+    for (const assayerEntity of assayers) {
+      const assayer = assayerEntity as AssayerWithWorkforceAttributes;
       // ─── Hard Filter: Client Preferences ───────────────────────────────
       if (!assayer.latitude || !assayer.longitude) continue;
 

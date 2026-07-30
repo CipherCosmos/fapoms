@@ -13,7 +13,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
-import { EventCategory, AssayerLifecycleStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
   const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -370,7 +370,7 @@ export class AssayerService implements OnModuleInit {
       longitude: lng,
       location,
       lifecycleStatus: AssayerLifecycleStatus.INVITED,
-      status: 'INACTIVE',
+      status: AssayerStatus.INACTIVE,
       organizationId: organizationId ?? null,
       createdBy: userId,
       updatedBy: userId,
@@ -889,13 +889,18 @@ export class AssayerService implements OnModuleInit {
 
     const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
 
-    const completed = await mgr.query(
+    // NOTE: 'AUDIT_COMPLETED'/'VALIDATION_COMPLETED'/'CLOSED' are ProjectBranchStatus values,
+    // not AssignmentStatus values — they belong only in the pb.status clause. Putting them in
+    // a.status IN (...) makes Postgres reject the whole query (invalid enum value for
+    // assignments_status_enum), which silently no-ops every call via the caller's catch block.
+    const completedResult = await mgr.query(
       `SELECT COUNT(*) as cnt FROM assignments a
-       JOIN project_branches pb ON pb.id = a.project_branch_id
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND pb.status IN ('CLOSED', 'VALIDATION_COMPLETED')`,
+       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`,
       [assayerId],
     );
+    const completed = Number(completedResult[0]?.cnt ?? 0);
 
     const cancelled = await mgr.count('assignments', {
       where: { assayerId, status: AssignmentStatus.CANCELLED, isActive: true },
@@ -903,19 +908,18 @@ export class AssayerService implements OnModuleInit {
 
     const onTimeResult = await mgr.query(
       `SELECT COUNT(*) as cnt FROM assignments a
-       JOIN project_branches pb ON pb.id = a.project_branch_id
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')
-       AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
-       AND a.completion_date <= a.scheduled_date`,
+       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
+       AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`,
       [assayerId],
     );
 
     const earningsResult = await mgr.query(
-      `SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
-       JOIN project_branches pb ON pb.id = a.project_branch_id
+      `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) as total FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')`,
+       AND (a.status IN ('ACCEPTED', 'COMPLETED') OR pb.status IN ('ASSIGNMENT_CONFIRMED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`,
       [assayerId],
     );
 
@@ -944,8 +948,54 @@ export class AssayerService implements OnModuleInit {
       : [{ assayerCode: assayerId, isActive: true }, { employeeId: assayerId, isActive: true }];
     const assayer = await this.assayerRepository.findOne({ where });
     if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
-    await this.hydrateWorkforceAttributes(assayer);
-    return assayer;
+
+    // Live update stats & ratings from real DB tables
+    await this.updateAssayerStats(assayer.id).catch(err => console.error('Failed to update assayer stats in profile:', err));
+
+    // Refetch to get fresh metrics
+    const updated = await this.assayerRepository.findOne({ where: { id: assayer.id } });
+    const target = updated || assayer;
+
+    await this.hydrateWorkforceAttributes(target);
+
+    const mgr = this.assayerRepository.manager;
+
+    // 1. Query Count raised against this assayer
+    const queryRes = await mgr.query(
+      `SELECT COUNT(*) as cnt FROM validation_queries vq
+       JOIN assignments a ON a.id = vq.assignment_id
+       WHERE a.assayer_id = $1 AND vq.is_active = true`,
+      [target.id],
+    ).catch(() => [{ cnt: 0 }]);
+    (target as any).queryCount = Number(queryRes[0]?.cnt ?? 0);
+
+    // 2. Acceptance vs Rejection Rate Breakdown
+    const totalOffered = await mgr.count('assignments', { where: { assayerId: target.id, isActive: true } });
+    const acceptedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]), isActive: true } });
+    const rejectedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: AssignmentStatus.REJECTED, isActive: true } });
+    
+    (target as any).acceptanceRate = totalOffered > 0 ? Math.round((acceptedCount / totalOffered) * 100) : 100;
+    (target as any).rejectionRate = totalOffered > 0 ? Math.round((rejectedCount / totalOffered) * 100) : 0;
+
+    // 3. Full Audit History with branch details & fees
+    const auditHistory = await mgr.query(
+      `SELECT a.id, a.assignment_number, a.status, a.agreed_fee, a.proposed_fee, a.scheduled_date, a.completion_date,
+              b.name as branch_name, b.city as branch_city, b.state as branch_state, p.name as project_name
+       FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+       LEFT JOIN branches b ON b.id = pb.branch_id
+       LEFT JOIN projects p ON p.id = pb.project_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       ORDER BY a.created_at DESC LIMIT 20`,
+      [target.id],
+    ).catch(() => []);
+    (target as any).auditHistory = auditHistory;
+
+    // 4. Attach active commercial profile
+    const activeCommercial = await this.getActiveCommercialProfile(target.id, new Date()).catch(() => null);
+    (target as any).activeCommercialProfile = activeCommercial;
+
+    return target;
   }
 
   // ---- Activity Timeline ----

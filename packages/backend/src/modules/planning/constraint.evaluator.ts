@@ -4,7 +4,7 @@ import { Repository, In } from 'typeorm';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { HolidayService } from '../holiday/holiday.service';
-import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssignmentStatus } from '@fapoms/shared';
@@ -118,9 +118,10 @@ export class ConstraintEvaluator {
   /**
    * Evaluates if the assayer possesses all required skills and certifications.
    */
-  checkSkillsAndCertifications(assayer: AssayerEntity, project: ProjectEntity): ConstraintResult {
+  checkSkillsAndCertifications(assayerEntity: AssayerEntity, project: ProjectEntity): ConstraintResult {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
     if (project.requiredSkills && project.requiredSkills.length > 0) {
-      const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
+      const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
       const missingSkills = project.requiredSkills.filter(
         (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
       );

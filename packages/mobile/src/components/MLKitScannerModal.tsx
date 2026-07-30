@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet, Image, ScrollView, Alert, ActivityIndicator, Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import { Ionicons } from '@expo/vector-icons';
 
 export interface MLKitScannerModalProps {
   visible: boolean;
@@ -188,7 +189,10 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.title}>📷 Google MLKit Live Document Viewfinder</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="camera" size={16} color="#38bdf8" />
+              <Text style={styles.title}>Google MLKit Live Document Viewfinder</Text>
+            </View>
             <Text style={styles.subtitle}>Real-Time Camera Stream, Auto Boundary & Perspective Correction</Text>
           </View>
           <TouchableOpacity onPress={onClose} style={styles.closeBtn}>

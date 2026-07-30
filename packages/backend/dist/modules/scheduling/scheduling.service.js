@@ -64,9 +64,17 @@ let SchedulingService = class SchedulingService {
         if (!holidayCheck.passed) {
             throw new common_1.BadRequestException(holidayCheck.reason);
         }
-        const doubleBookedCheck = await this.constraintEvaluator.checkDoubleBooking(assignment.assayerId, scheduledDateObj);
-        if (!doubleBookedCheck.passed) {
-            throw new common_1.ConflictException(doubleBookedCheck.reason);
+        const existingSchedule = await this.scheduleRepository.findOne({
+            where: { assignmentId: assignment.id, isActive: true },
+        }).catch(() => null);
+        if (existingSchedule) {
+            existingSchedule.scheduledDate = scheduledDateObj;
+            if (dto.remarks)
+                existingSchedule.remarks = dto.remarks;
+            existingSchedule.updatedBy = userId;
+            const updated = await this.scheduleRepository.save(existingSchedule);
+            await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate).catch(() => { });
+            return updated;
         }
         const schedule = this.scheduleRepository.create({
             assignmentId: assignment.id,
@@ -139,6 +147,12 @@ let SchedulingService = class SchedulingService {
     async transition(id, targetStatus, userId, remarks, newScheduledDate) {
         const schedule = await this.findOne(id);
         const prevStatus = schedule.status;
+        if (schedule.assignment?.projectBranch) {
+            const pbStatus = schedule.assignment.projectBranch.status;
+            if (['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(pbStatus) || schedule.assignment.status === 'COMPLETED' || prevStatus === shared_1.ScheduleStatus.COMPLETED) {
+                throw new common_1.BadRequestException('Cannot reschedule an audit that has already been completed or is under validation review.');
+            }
+        }
         if (!(0, shared_1.isValidTransition)(shared_1.SCHEDULE_TRANSITIONS, prevStatus, targetStatus)) {
             throw new common_1.BadRequestException(`Invalid Transition: Cannot transition schedule from ${prevStatus} to ${targetStatus}.`);
         }

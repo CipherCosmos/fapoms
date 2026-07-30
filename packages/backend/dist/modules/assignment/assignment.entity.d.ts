@@ -19,6 +19,7 @@ export declare class AssignmentEntity extends BaseEntity {
     completionDate: Date | null;
     remarks: string | null;
     syncToken: string | null;
+    negotiationCount: number;
     entityVersion: number;
     slaDueDate: Date | null;
     slaStatus: string;

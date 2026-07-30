@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, ScrollView, RefreshControl } from 'react-native';
 import { AppNotification } from '../types/mobile-app';
 import { styles } from '../theme/styles';
+import { Ionicons } from '@expo/vector-icons';
 
 interface NotificationsScreenProps {
   notifications: AppNotification[];
@@ -59,7 +60,7 @@ export const NotificationsScreen: React.FC<NotificationsScreenProps> = ({
 
       {notifications.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={{ fontSize: 32, marginBottom: 8 }}>🔔</Text>
+          <Ionicons name="notifications" size={32} color="#94a3b8" style={{ marginBottom: 8 }} />
           <Text style={styles.emptyText}>No notifications yet</Text>
           <Text style={{ color: '#64748b', fontSize: 13, marginTop: 4, textAlign: 'center' }}>
             Assignment updates and alerts will appear here
@@ -81,7 +82,11 @@ export const NotificationsScreen: React.FC<NotificationsScreenProps> = ({
           >
             <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
               <View style={[localStyles.iconBox, !n.isRead && localStyles.iconBoxUnread]}>
-                <Text style={{ fontSize: 16 }}>{n.title.includes('Assignment') || n.title.includes('audit') ? '📋' : '🔔'}</Text>
+                <Ionicons
+                  name={n.title.includes('Assignment') || n.title.includes('audit') ? 'clipboard' : 'notifications'}
+                  size={16}
+                  color="#f8fafc"
+                />
               </View>
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>

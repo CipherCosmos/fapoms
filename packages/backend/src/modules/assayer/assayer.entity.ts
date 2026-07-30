@@ -67,10 +67,10 @@ export class AssayerEntity extends BaseEntity {
   location: any | null;
 
   @Column({ type: 'varchar', length: 50, default: AssayerStatus.ACTIVE })
-  status: string;
+  status: AssayerStatus;
 
   @Column({ name: 'lifecycle_status', type: 'varchar', length: 50, default: AssayerLifecycleStatus.INVITED })
-  lifecycleStatus: string;
+  lifecycleStatus: AssayerLifecycleStatus;
 
   @Column({ name: 'organization_id', type: 'uuid', nullable: true })
   organizationId: string | null;
@@ -123,11 +123,6 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'preferred_regions', type: 'jsonb', nullable: true })
   preferredRegions: string[] | null;
 
-  skills: string[] | null;
-  certifications: { name: string; expiryDate: string }[] | null;
-  languages: string[] | null;
-  specializations: string[] | null;
-
   @Column({ name: 'experience_years', type: 'int', default: 0 })
   experienceYears: number;
 
@@ -173,3 +168,17 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, default: 0 })
   runningBalance: number;
 }
+
+/**
+ * Skills/certifications/languages/specializations live in the normalized
+ * `workforce_attributes` table (see WorkforceAttributeEntity), not as columns on
+ * AssayerEntity itself. AssayerService.hydrateWorkforceAttributes/hydrateAllWorkforceAttributes
+ * attach them onto an already-loaded AssayerEntity in memory before candidate-matching code
+ * reads them — this type documents that shape for the read side instead of scattering `as any`.
+ */
+export type AssayerWithWorkforceAttributes = AssayerEntity & {
+  skills?: string[];
+  certifications?: { name: string; expiryDate?: string | null }[];
+  languages?: string[];
+  specializations?: string[];
+};

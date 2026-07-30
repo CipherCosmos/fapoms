@@ -5,6 +5,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { AssayerAssignment, ValidationQuery, AssayerExpense, AppNotification } from './src/types/mobile-app';
 import { MobileApiService } from './src/services/api.service';
+import { getAssignmentTotalFee } from './src/utils/fees';
 import { registerForPushNotificationsAsync, setupNotificationListeners } from './src/services/notification.service';
 import { connectMobileSocket, disconnectMobileSocket, getMobileSocket } from './src/services/socket';
 
@@ -425,9 +426,11 @@ export default function App() {
       // Web / Fallback mode compatibility
     }
 
-    // 3. Complete server session authentication
+    // 3. Complete server session authentication — resumes the session saved from this
+    // device's last real password login; biometrics gate the attempt but the server
+    // itself verifies the saved refresh token, not the biometric prompt.
     setAuthenticating(true);
-    const res = await MobileApiService.biometricLogin(loginUsername);
+    const res = await MobileApiService.biometricLogin();
     setAuthenticating(false);
 
     if (res.success && res.token) {
@@ -613,29 +616,48 @@ export default function App() {
     setExpenseDescription('');
   };
 
-  // Computations — using real backend data & commercial base fee fallbacks
-  const getAssignmentTotalFee = (a: any) => {
-    const fee = a.agreedBaseFee > 0 ? a.agreedBaseFee : (a.proposedFee > 0 ? a.proposedFee : (a.standardBaseFee || 1200));
-    const travel = a.agreedTravelFee || 0;
-    return fee + travel;
-  };
+  // Computations — using real backend data & commercial base fee fallbacks.
+  // getAssignmentTotalFee lives in src/utils/fees.ts so App.tsx, EarningsScreen, and
+  // ScheduleScreen all share the exact same fee formula (no more diverging totals).
 
   const totalCompleted = profile.completedAssignments || assignments.filter((a) => a.status === 'COMPLETED').length;
   const completedEarnings = Number(profile.totalEarnings) || assignments.reduce((sum, a) => sum + (a.status === 'COMPLETED' ? getAssignmentTotalFee(a) : 0), 0);
-  const pendingEarnings = assignments.reduce((sum, a) => sum + (a.status !== 'COMPLETED' ? getAssignmentTotalFee(a) : 0), 0);
-  const openQueries = activeAssignment?.queries.filter((q) => q.status === 'OPEN') || [];
+  // Only assignments still on track to be paid out count as "pending" — a rejected
+  // assignment (mobile status also covers backend CANCELLED, see BACKEND_TO_MOBILE_STATUS
+  // in api.service.ts) never gets billed, so its fee isn't money awaiting payout.
+  const pendingEarnings = assignments.reduce(
+    (sum, a) => sum + (a.status !== 'COMPLETED' && a.status !== 'REJECTED' ? getAssignmentTotalFee(a) : 0),
+    0,
+  );
+  // Open queries across ALL assignments (for the "Clarifications" tab badge) — NOT scoped
+  // to whichever assignment happened to load first into activeAssignment, otherwise the
+  // badge can read 0 while other assignments actually have open queries.
+  const openQueriesCount = assignments.reduce(
+    (sum, a) => sum + (a.queries?.filter((q) => q.status === 'OPEN').length || 0),
+    0,
+  );
 
   const totalQueriesCount = assignments.reduce((sum, a) => sum + (a.queries?.length || 0), 0);
   const resolvedQueriesCount = assignments.reduce((sum, a) => sum + (a.queries?.filter((q) => q.status === 'RESOLVED').length || 0), 0);
   const queryResolutionRate = totalQueriesCount > 0 ? Math.round((resolvedQueriesCount / totalQueriesCount) * 100) : 0;
 
-  const totalCustCount = assignments.reduce((sum, a) => sum + (a.customers?.length || 0), 0);
-  const auditedCustCount = assignments.reduce((sum, a) => sum + (a.customers?.filter((c) => c.status === 'AUDITED').length || 0), 0);
-  const qualityScore = totalCustCount > 0 ? Math.round((auditedCustCount / totalCustCount) * 100) : 0;
+  // Quality Score — derived from the assayer's real backend performance/average rating
+  // (a 0-5 scale, see AssayerEntity.performanceRating / averageRating), expressed as a %.
+  // Not a fabricated value: falls back from performanceRating to averageRating, and to
+  // null (rendered as "—") only when neither has been set yet.
+  const performanceRatingNum = Number(profile.performanceRating) || 0;
+  const ratingBasis = performanceRatingNum > 0
+    ? performanceRatingNum
+    : (profile.averageRating > 0 ? profile.averageRating : null);
+  const qualityScore = ratingBasis != null ? Math.round((ratingBasis / 5) * 100) : null;
 
-  const avgAuditHours = assignments.length > 0 && assignments.some((a) => a.estimatedAuditHours > 0)
-    ? (assignments.reduce((sum, a) => sum + a.estimatedAuditHours, 0) / assignments.length).toFixed(1)
-    : '—';
+  // Avg Hours — real per-branch estimated audit duration (branches.estimated_duration_hours,
+  // surfaced via api.service.ts as estimatedAuditHours), averaged only over assignments that
+  // actually have that data. Null (rendered as "—") if no assignment has real duration data.
+  const assignmentsWithAuditHours = assignments.filter((a) => a.estimatedAuditHours > 0);
+  const avgAuditHours = assignmentsWithAuditHours.length > 0
+    ? assignmentsWithAuditHours.reduce((sum, a) => sum + a.estimatedAuditHours, 0) / assignmentsWithAuditHours.length
+    : null;
 
   if (!isAuthenticated) {
     return (
@@ -660,7 +682,7 @@ export default function App() {
         onLogout={handleLogout}
         onNotificationsPress={() => setNotifModalVisible(true)}
       />
-      <TabBar selectedTab={selectedTab} onSelectTab={setSelectedTab} openQueriesCount={openQueries.length} unreadNotifCount={unreadNotifCount} />
+      <TabBar selectedTab={selectedTab} onSelectTab={setSelectedTab} openQueriesCount={openQueriesCount} unreadNotifCount={unreadNotifCount} />
 
       {loading ? (
         <View style={styles.centerContainer}>
@@ -803,6 +825,9 @@ export default function App() {
               runningBalance={Number(profile.runningBalance) || 0}
               assignments={assignments}
               onOpenExpenseModal={() => setExpenseModalVisible(true)}
+              qualityScore={qualityScore}
+              queryResolutionRate={queryResolutionRate}
+              avgAuditHours={avgAuditHours}
             />
           )}
 
@@ -813,6 +838,7 @@ export default function App() {
               profile={profile}
               savingProfile={savingProfile}
               onUpdateProfileField={updateProfileField}
+              onLogout={handleLogout}
               onSaveProfile={async () => {
                 setSavingProfile(true);
                 // 1. Instantly cache locally

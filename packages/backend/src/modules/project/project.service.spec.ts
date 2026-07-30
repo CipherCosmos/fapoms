@@ -13,6 +13,7 @@ import { ClientEntity } from '../client/client.entity';
 import { BranchService } from '../branch/branch.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { AssessmentEntity } from './assessment.entity';
 import { ProjectQueryService } from './project-query.service';
 
 describe('ProjectService', () => {
@@ -88,6 +89,10 @@ describe('ProjectService', () => {
         {
           provide: getRepositoryToken(ProjectBranchEntity),
           useValue: mockProjectBranchRepo,
+        },
+        {
+          provide: getRepositoryToken(AssessmentEntity),
+          useValue: { findOne: jest.fn(), save: jest.fn() },
         },
         {
           provide: getRepositoryToken(ClientEntity),

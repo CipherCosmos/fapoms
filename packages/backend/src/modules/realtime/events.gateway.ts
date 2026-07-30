@@ -59,13 +59,10 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       try {
         payload = await this.jwtService.verifyAsync(token as string);
       } catch {
-        // Fallback for dev mode / mock tokens
-        const decoded = this.jwtService.decode(token as string) as any;
-        if (decoded) {
-          payload = decoded;
-        } else {
-          payload = { sub: token, id: token, roles: ['FIELD_ASSAYER'] };
-        }
+        // No valid, signed JWT — never trust an unsigned decode or the raw token string.
+        client.emit('error', { message: 'Invalid or expired token' });
+        client.disconnect();
+        return;
       }
 
       const userId = payload.id || payload.sub || payload.userId;

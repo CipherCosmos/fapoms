@@ -36,6 +36,7 @@ let HolidayService = class HolidayService {
             date: holidayDate,
             type: dto.type,
             applicableStates: dto.applicableStates ?? null,
+            clientId: dto.clientId ?? null,
             year: holidayDate.getFullYear(),
             createdBy: userId,
             updatedBy: userId,
@@ -71,6 +72,7 @@ let HolidayService = class HolidayService {
         holiday.date = holidayDate;
         holiday.type = dto.type;
         holiday.applicableStates = dto.applicableStates ?? null;
+        holiday.clientId = dto.clientId ?? null;
         holiday.year = holidayDate.getFullYear();
         holiday.updatedBy = userId;
         const saved = await this.holidayRepository.save(holiday);
@@ -90,11 +92,14 @@ let HolidayService = class HolidayService {
         });
         return saved;
     }
-    async findAll(page = 1, limit = 50, year) {
+    async findAll(page = 1, limit = 50, year, clientId) {
         const query = this.holidayRepository.createQueryBuilder('holiday')
             .where('holiday.is_active = :isActive', { isActive: true });
         if (year) {
             query.andWhere('holiday.year = :year', { year });
+        }
+        if (clientId) {
+            query.andWhere('(holiday.client_id = :clientId OR holiday.client_id IS NULL)', { clientId });
         }
         const [holidays, total] = await query
             .orderBy('holiday.date', 'ASC')
@@ -103,11 +108,23 @@ let HolidayService = class HolidayService {
             .getManyAndCount();
         return { holidays, total };
     }
-    async isHoliday(date, stateCode) {
+    async isHoliday(date, stateCode, clientId) {
+        const dayOfWeek = date.getDay();
+        const dayOfMonth = date.getDate();
+        if (dayOfWeek === 0)
+            return true;
+        if (dayOfWeek === 6) {
+            const weekIndex = Math.ceil(dayOfMonth / 7);
+            if (weekIndex === 2 || weekIndex === 4)
+                return true;
+        }
         const formattedDate = date.toISOString().split('T')[0];
         const query = this.holidayRepository.createQueryBuilder('holiday')
             .where('holiday.is_active = :isActive', { isActive: true })
             .andWhere('holiday.date = :date', { date: formattedDate });
+        if (clientId) {
+            query.andWhere('(holiday.client_id = :clientId OR holiday.client_id IS NULL)', { clientId });
+        }
         const holidays = await query.getMany();
         if (holidays.length === 0)
             return false;

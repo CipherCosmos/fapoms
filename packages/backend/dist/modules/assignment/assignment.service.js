@@ -26,14 +26,20 @@ const user_entity_1 = require("../user/user.entity");
 const notification_service_1 = require("../notifications/notification.service");
 const push_notification_service_1 = require("../notifications/push-notification.service");
 const holiday_service_1 = require("../holiday/holiday.service");
+const validation_query_entity_1 = require("../validation-query/validation-query.entity");
+const validation_case_entity_1 = require("../validation/validation-case.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const assayer_service_1 = require("../assayer/assayer.service");
+const assayer_commercial_profile_entity_1 = require("../assayer/assayer-commercial-profile.entity");
 const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const assignment_state_machine_1 = require("./assignment.state-machine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const constraint_evaluator_1 = require("../planning/constraint.evaluator");
+const routing_provider_1 = require("../geo/routing.provider");
+const validation_service_1 = require("../validation/validation.service");
 const shared_1 = require("@fapoms/shared");
+const TRAVEL_FEE_PER_KM = 8;
 const ASSESSMENT_STATUS_MAP = {
     [shared_1.ProjectBranchStatus.IMPORTED]: shared_1.AssessmentStatus.PENDING_PLANNING,
     [shared_1.ProjectBranchStatus.PLANNING]: shared_1.AssessmentStatus.PENDING_PLANNING,
@@ -61,8 +67,10 @@ let AssignmentService = class AssignmentService {
     auditService;
     eventPublisher;
     constraintEvaluator;
+    routingService;
+    validationService;
     dataSource;
-    constructor(assignmentRepository, assessmentRepository, projectQueryService, projectService, assayerService, notificationService, pushNotificationService, holidayService, auditService, eventPublisher, constraintEvaluator, dataSource) {
+    constructor(assignmentRepository, assessmentRepository, projectQueryService, projectService, assayerService, notificationService, pushNotificationService, holidayService, auditService, eventPublisher, constraintEvaluator, routingService, validationService, dataSource) {
         this.assignmentRepository = assignmentRepository;
         this.assessmentRepository = assessmentRepository;
         this.projectQueryService = projectQueryService;
@@ -74,6 +82,8 @@ let AssignmentService = class AssignmentService {
         this.auditService = auditService;
         this.eventPublisher = eventPublisher;
         this.constraintEvaluator = constraintEvaluator;
+        this.routingService = routingService;
+        this.validationService = validationService;
         this.dataSource = dataSource;
     }
     async syncAssessmentStatus(assignment) {
@@ -111,10 +121,34 @@ let AssignmentService = class AssignmentService {
             order: { createdAt: 'DESC' },
         });
         if (existingAssignment &&
-            [shared_1.AssignmentStatus.ACCEPTED].includes(existingAssignment.status)) {
-            throw new common_1.ConflictException(`Branch Busy: An active assignment (${existingAssignment.assignmentNumber}) already exists for this branch.`);
+            [
+                shared_1.AssignmentStatus.ACCEPTED,
+                shared_1.AssignmentStatus.CHECKED_IN,
+                shared_1.AssignmentStatus.IN_PROGRESS,
+                shared_1.AssignmentStatus.COMPLETED,
+            ].includes(existingAssignment.status)) {
+            throw new common_1.ConflictException(`Branch Busy: An active/completed assignment (${existingAssignment.assignmentNumber}) already exists for this branch in state ${existingAssignment.status}.`);
         }
-        const scheduledDateObj = dto.scheduledDate ? new Date(dto.scheduledDate) : null;
+        const targetDateStr = dto.scheduledDate || (projectBranch.scheduledDate ? (typeof projectBranch.scheduledDate === 'string' ? projectBranch.scheduledDate.slice(0, 10) : projectBranch.scheduledDate.toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10));
+        const scheduledDateObj = new Date(targetDateStr);
+        let resolvedProposedFee = dto.proposedFee;
+        let calculatedTravelFee = 0;
+        let distanceKm = 0;
+        const commProfile = await this.assayerService.getActiveCommercialProfile(assayer.id, scheduledDateObj || new Date()).catch(() => null);
+        const baseFee = commProfile?.baseFee ? Number(commProfile.baseFee) : 1200;
+        if (projectBranch.branch?.latitude && projectBranch.branch?.longitude && assayer.latitude && assayer.longitude) {
+            try {
+                const route = await this.routingService.calculateRoute({ latitude: Number(projectBranch.branch.latitude), longitude: Number(projectBranch.branch.longitude) }, { latitude: Number(assayer.latitude), longitude: Number(assayer.longitude) });
+                distanceKm = route.distanceKm || 0;
+                const chargeableKm = Math.max(0, distanceKm - 10);
+                calculatedTravelFee = Math.round(chargeableKm * TRAVEL_FEE_PER_KM);
+            }
+            catch (e) {
+            }
+        }
+        if (resolvedProposedFee === undefined || resolvedProposedFee === null) {
+            resolvedProposedFee = baseFee + calculatedTravelFee;
+        }
         if (scheduledDateObj) {
             const holidayCheck = await this.constraintEvaluator.checkHoliday(projectBranch.branch.state, scheduledDateObj);
             if (!holidayCheck.passed) {
@@ -137,7 +171,7 @@ let AssignmentService = class AssignmentService {
             assignment = existingAssignment;
             assignment.assayerId = dto.assayerId;
             assignment.status = shared_1.AssignmentStatus.PENDING;
-            assignment.proposedFee = dto.proposedFee;
+            assignment.proposedFee = resolvedProposedFee;
             assignment.agreedFee = null;
             assignment.scheduledDate = scheduledDateObj;
             assignment.cancelReason = null;
@@ -160,7 +194,7 @@ let AssignmentService = class AssignmentService {
                 assayerId: dto.assayerId,
                 status: shared_1.AssignmentStatus.PENDING,
                 priority: projectBranch.priority,
-                proposedFee: dto.proposedFee,
+                proposedFee: resolvedProposedFee,
                 agreedFee: null,
                 scheduledDate: scheduledDateObj,
                 syncToken: `SYNC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -172,6 +206,10 @@ let AssignmentService = class AssignmentService {
             });
         }
         return this.dataSource.transaction(async (manager) => {
+            if (projectBranch && !projectBranch.scheduledDate && scheduledDateObj) {
+                projectBranch.scheduledDate = scheduledDateObj;
+                await manager.save(projectBranch);
+            }
             const savedAssignment = await manager.save(assignment);
             await this.projectService.initiateBranchPlanning(projectBranch.id, userId, manager);
             await this.auditService.recordEvent({
@@ -283,16 +321,39 @@ let AssignmentService = class AssignmentService {
     async executeAssignmentTransition(id, targetStatus, userId, reason, fee) {
         const assignment = await this.findOne(id);
         const prevStatus = assignment.status;
-        if (prevStatus === targetStatus) {
+        if (prevStatus === targetStatus && fee === undefined) {
             return { saved: assignment, event: null };
         }
         let event;
         if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
-            event = assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, userId);
-            if (fee !== undefined)
+            if (prevStatus !== targetStatus) {
+                event = assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, userId);
+            }
+            if (fee !== undefined && fee !== null) {
+                assignment.proposedFee = fee;
                 assignment.agreedFee = fee;
+            }
+            else if (!assignment.agreedFee && assignment.proposedFee) {
+                assignment.agreedFee = assignment.proposedFee;
+            }
             if (assignment.projectBranch) {
                 assignment.projectBranch.status = shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
+            }
+            if (assignment.scheduledDate) {
+                const scheduleRepo = this.dataSource.getRepository('schedules');
+                const existing = await scheduleRepo.findOne({ where: { assignmentId: assignment.id, isActive: true } }).catch(() => null);
+                if (!existing) {
+                    await scheduleRepo.save({
+                        assignmentId: assignment.id,
+                        projectId: assignment.projectId,
+                        assayerId: assignment.assayerId,
+                        scheduledDate: assignment.scheduledDate,
+                        status: 'CONFIRMED',
+                        remarks: 'Auto-created upon assayer acceptance',
+                        createdBy: userId,
+                        updatedBy: userId,
+                    }).catch(() => { });
+                }
             }
         }
         else if (targetStatus === shared_1.AssignmentStatus.REJECTED) {
@@ -305,6 +366,14 @@ let AssignmentService = class AssignmentService {
             event = assignment_state_machine_1.AssignmentStateMachine.cancel(assignment, userId, reason);
             if (assignment.projectBranch) {
                 assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+            }
+        }
+        else if (targetStatus === shared_1.AssignmentStatus.COMPLETED) {
+            event = { previousState: prevStatus, newState: shared_1.AssignmentStatus.COMPLETED, userId };
+            assignment.status = shared_1.AssignmentStatus.COMPLETED;
+            assignment.completionDate = new Date();
+            if (assignment.projectBranch) {
+                assignment.projectBranch.status = shared_1.ProjectBranchStatus.AUDIT_COMPLETED;
             }
         }
         else {
@@ -357,15 +426,72 @@ let AssignmentService = class AssignmentService {
         catch (err) {
             console.error('Failed to dispatch transition notification', err);
         }
-        if (targetStatus === shared_1.AssignmentStatus.CANCELLED || targetStatus === shared_1.AssignmentStatus.REJECTED) {
+        if (targetStatus === shared_1.AssignmentStatus.COMPLETED) {
             try {
-                await this.assayerService.updateAssayerStats(saved.assayerId);
+                if (saved.projectBranchId) {
+                    await this.validationService.create({
+                        projectBranchId: saved.projectBranchId,
+                        assessmentId: saved.assessmentId || undefined,
+                    }, userId);
+                }
             }
             catch (err) {
-                console.error('Failed to update assayer stats', err);
+                console.error('Failed to auto-create validation case on completion:', err);
             }
         }
+        try {
+            await this.assayerService.updateAssayerStats(saved.assayerId);
+        }
+        catch (err) {
+            console.error('Failed to update assayer stats', err);
+        }
         return { saved, event };
+    }
+    async proposeCounterFee(id, userId, counterFee, remarks) {
+        const assignment = await this.findOne(id);
+        const currentCount = assignment.negotiationCount || 0;
+        if (currentCount >= 3) {
+            assignment.status = shared_1.AssignmentStatus.REJECTED;
+            assignment.rejectReason = 'Negotiation limit reached (3 counter-offers max). Offer auto-declined.';
+            assignment.remarks = `Negotiation limit reached. Auto-declined.`;
+            assignment.updatedBy = userId;
+            if (assignment.projectBranch) {
+                assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+            }
+            return this.dataSource.transaction(async (manager) => {
+                if (assignment.projectBranch) {
+                    await manager.save(assignment.projectBranch);
+                }
+                return manager.save(assignment);
+            });
+        }
+        assignment.negotiationCount = currentCount + 1;
+        assignment.proposedFee = counterFee;
+        assignment.remarks = remarks ?? `Counter offer #${assignment.negotiationCount} proposed: ₹${counterFee}`;
+        assignment.updatedBy = userId;
+        if (assignment.projectBranch) {
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.NEGOTIATION;
+        }
+        const saved = await this.dataSource.transaction(async (manager) => {
+            if (assignment.projectBranch) {
+                await manager.save(assignment.projectBranch);
+            }
+            return manager.save(assignment);
+        });
+        try {
+            this.eventPublisher.publish('assignment:counter-offered', {
+                eventType: 'assignment:counter-offered',
+                assignmentId: saved.id,
+                assayerId: saved.assayerId,
+                proposedFee: counterFee,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish counter offer event', err);
+        }
+        return saved;
     }
     async acceptOffer(id, userId, fee, reason) {
         const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.ACCEPTED, userId, reason, fee);
@@ -466,7 +592,15 @@ let AssignmentService = class AssignmentService {
         const assignments = await this.assignmentRepository.find({
             where: {
                 assayerId,
-                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED]),
+                status: (0, typeorm_2.In)([
+                    shared_1.AssignmentStatus.PENDING,
+                    shared_1.AssignmentStatus.ACCEPTED,
+                    shared_1.AssignmentStatus.CHECKED_IN,
+                    shared_1.AssignmentStatus.IN_PROGRESS,
+                    shared_1.AssignmentStatus.COMPLETED,
+                    shared_1.AssignmentStatus.REJECTED,
+                    shared_1.AssignmentStatus.CANCELLED,
+                ]),
             },
             relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project'],
             order: { createdAt: 'DESC' },
@@ -482,19 +616,44 @@ let AssignmentService = class AssignmentService {
             });
             projectVersions.set(projectId, version);
         }
+        const commercialProfileRepo = this.dataSource.getRepository(assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity);
+        const commProfile = await commercialProfileRepo.findOne({ where: { assayerId, isActive: true } }).catch(() => null);
+        const baseFeeAmount = commProfile?.baseFee ? Number(commProfile.baseFee) : 1200;
+        const queryRepo = this.dataSource.getRepository(validation_query_entity_1.ValidationQueryEntity);
+        const caseRepo = this.dataSource.getRepository(validation_case_entity_1.ValidationCaseEntity);
         for (const assignment of assignments) {
+            assignment.baseFee = baseFeeAmount;
             const version = projectVersions.get(assignment.projectBranch.projectId);
             if (version) {
                 const branchId = assignment.projectBranch.branchId;
                 const records = await recordRepo.find({
                     where: { customerMasterVersionId: version.id, branchId, isActive: true },
                 });
-                assignment.customerCount = records.length;
+                assignment.customerCount = records.length > 0 ? records.length : (assignment.projectBranch?.packetCount || 15);
                 assignment.customers = records;
             }
             else {
-                assignment.customerCount = 0;
+                assignment.customerCount = assignment.projectBranch?.packetCount || 15;
                 assignment.customers = [];
+            }
+            if (assignment.projectBranchId) {
+                const valCases = await caseRepo.find({
+                    where: { projectBranchId: assignment.projectBranchId, isActive: true },
+                });
+                if (valCases.length > 0) {
+                    const caseIds = valCases.map((c) => c.id);
+                    const queries = await queryRepo.find({
+                        where: { validationCaseId: (0, typeorm_2.In)(caseIds), isActive: true },
+                        order: { createdAt: 'DESC' },
+                    });
+                    assignment.queries = queries;
+                }
+                else {
+                    assignment.queries = [];
+                }
+            }
+            else {
+                assignment.queries = [];
             }
         }
         return assignments;
@@ -628,15 +787,19 @@ let AssignmentService = class AssignmentService {
         const timeStr = new Date().toISOString();
         const checkInRemarks = `GPS Checked in at (${lat}, ${lng}) on ${timeStr}`;
         assignment.remarks = assignment.remarks ? `${assignment.remarks} | ${checkInRemarks}` : checkInRemarks;
+        assignment.status = shared_1.AssignmentStatus.CHECKED_IN;
         assignment.updatedBy = userId || assignment.assayerId || id;
         assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
         if (assignment.projectBranch) {
             assignment.projectBranch.status = shared_1.ProjectBranchStatus.SCHEDULED;
+            if (!assignment.projectBranch.scheduledDate) {
+                assignment.projectBranch.scheduledDate = assignment.scheduledDate || new Date();
+            }
             assignment.projectBranch.updatedBy = userId || assignment.assayerId || id;
         }
         if (assignment.assessment) {
             assignment.assessment.status = shared_1.AssessmentStatus.ASSIGNED_AND_SCHEDULED;
-            assignment.assessment.auditDate = assignment.scheduledDate;
+            assignment.assessment.auditDate = assignment.scheduledDate || new Date();
         }
         const saved = await this.dataSource.transaction(async (manager) => {
             if (assignment.projectBranch) {
@@ -688,7 +851,7 @@ exports.AssignmentService = AssignmentService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(assessment_entity_1.AssessmentEntity)),
-    __param(11, (0, typeorm_3.InjectDataSource)()),
+    __param(13, (0, typeorm_3.InjectDataSource)()),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
         project_query_service_1.ProjectQueryService,
@@ -700,6 +863,8 @@ exports.AssignmentService = AssignmentService = __decorate([
         audit_service_1.AuditService,
         domain_event_publisher_1.DomainEventPublisher,
         constraint_evaluator_1.ConstraintEvaluator,
+        routing_provider_1.RoutingService,
+        validation_service_1.ValidationService,
         typeorm_2.DataSource])
 ], AssignmentService);
 //# sourceMappingURL=assignment.service.js.map

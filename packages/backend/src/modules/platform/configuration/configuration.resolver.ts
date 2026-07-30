@@ -20,7 +20,7 @@ const DEFAULT_RECOMMENDATION_CONFIG: RecommendationConfig = {
     experience: 0.05,
     cost: 0.05,
     clientPreference: 0.05,
-    branchFamiliarity: 0.05,
+    branchFamiliarity: 0.08,
   },
   defaultRadius: 50.0,
 };

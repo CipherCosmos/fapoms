@@ -7,7 +7,13 @@ import {
   Percent, 
   AlertTriangle,
   ArrowRight,
-  TrendingUp
+  TrendingUp,
+  Map,
+  Zap,
+  MapPin,
+  CheckCircle,
+  FileText,
+  Clock
 } from 'lucide-react';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
@@ -99,7 +105,7 @@ export const Dashboard: React.FC = () => {
           </p>
         </div>
         <button onClick={() => navigate('/executive-map')} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 600 }}>
-          🗺️ Command Center Map <ArrowRight size={14} />
+          <Map size={14} /> Command Center Map <ArrowRight size={14} />
         </button>
       </div>
 
@@ -113,24 +119,24 @@ export const Dashboard: React.FC = () => {
           <div className="glass-card" style={{ padding: '20px', background: 'linear-gradient(90deg, rgba(99,102,241,0.08) 0%, rgba(16,185,129,0.06) 100%)', border: '1px solid rgba(99,102,241,0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>⚡ 3-Stage Operational Workflow Pipeline</h4>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}><Zap size={14} style={{ display: 'inline' }} /> 3-Stage Operational Workflow Pipeline</h4>
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Follow the audit pipeline from planning & matching through schedule dispatch to field execution.</span>
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
               <div onClick={() => navigate('/planning')} style={{ padding: '14px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
                 <div style={{ fontSize: '11px', fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase' }}>STAGE 1</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Planning & Matching ➔</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Planning & Matching <ArrowRight size={12} style={{ display: 'inline' }} /></div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Scope branches, SLA risk radius, & match auditors.</div>
               </div>
               <div onClick={() => navigate('/scheduling')} style={{ padding: '14px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
                 <div style={{ fontSize: '11px', fontWeight: 800, color: '#c084fc', textTransform: 'uppercase' }}>STAGE 2</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Schedule Dispatch ➔</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Schedule Dispatch <ArrowRight size={12} style={{ display: 'inline' }} /></div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Assign audit dates, dispatch PDF packets, track collection.</div>
               </div>
               <div onClick={() => navigate('/assignments')} style={{ padding: '14px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
                 <div style={{ fontSize: '11px', fontWeight: 800, color: '#6ee7b7', textTransform: 'uppercase' }}>STAGE 3</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Field Execution ➔</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Field Execution <ArrowRight size={12} style={{ display: 'inline' }} /></div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Acceptance, GPS check-in, audit submission, closure.</div>
               </div>
             </div>
@@ -238,19 +244,19 @@ export const Dashboard: React.FC = () => {
                   <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Lifecycle Status Breakdown</span>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
                     <div style={{ padding: '8px 10px', background: 'rgba(6, 182, 212, 0.08)', borderRadius: '6px', color: '#06b6d4', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>📍 Checked In:</span>
+                      <span><MapPin size={12} style={{ display: 'inline' }} /> Checked In:</span>
                       <b>{slaSummary?.statusCounts?.CHECKED_IN ?? slaSummary?.statusCounts?.SCHEDULED ?? 0}</b>
                     </div>
                     <div style={{ padding: '8px 10px', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '6px', color: '#10b981', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>✅ Accepted:</span>
+                      <span><CheckCircle size={12} style={{ display: 'inline' }} /> Accepted:</span>
                       <b>{slaSummary?.statusCounts?.ACCEPTED ?? 0}</b>
                     </div>
                     <div style={{ padding: '8px 10px', background: 'rgba(168, 85, 247, 0.08)', borderRadius: '6px', color: '#a855f7', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>📄 Audit Done:</span>
+                      <span><FileText size={12} style={{ display: 'inline' }} /> Audit Done:</span>
                       <b>{slaSummary?.statusCounts?.AUDIT_COMPLETED ?? 0}</b>
                     </div>
                     <div style={{ padding: '8px 10px', background: 'rgba(245, 158, 11, 0.08)', borderRadius: '6px', color: '#f59e0b', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>⏳ Planning:</span>
+                      <span><Clock size={12} style={{ display: 'inline' }} /> Planning:</span>
                       <b>{slaSummary?.statusCounts?.CREATED ?? slaSummary?.statusCounts?.CONTACT_INITIATED ?? 0}</b>
                     </div>
                   </div>

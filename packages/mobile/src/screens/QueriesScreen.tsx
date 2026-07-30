@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
+import { Ionicons } from '@expo/vector-icons';
 
 interface QueriesScreenProps {
   assignments: AssayerAssignment[];
@@ -17,18 +18,21 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({
 
   return (
     <View style={{ gap: 14 }}>
-      <Text style={styles.sectionHeading}>💬 Data Entry Validation Queries</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Ionicons name="chatbubble" size={16} color="#f8fafc" />
+        <Text style={styles.sectionHeading}>Data Entry Validation Queries</Text>
+      </View>
       
       {activeQueryAssignments.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={{ fontSize: 44, marginBottom: 12 }}>🎉</Text>
+          <Ionicons name="happy" size={44} color="#94a3b8" style={{ marginBottom: 12 }} />
           <Text style={styles.emptyText}>No clarification queries raised by Data Entry team yet.</Text>
         </View>
       ) : (
         activeQueryAssignments.map((assignment) => {
           const hasOpenQueries = (assignment.queries || []).some((q) => q.status === 'OPEN');
-          const hasRespondedQueries = (assignment.queries || []).some((q) => (q.status as any) === 'RESPONDED');
-          const isFullyResolved = (assignment.queries || []).length > 0 && (assignment.queries || []).every((q) => (q.status as any) === 'RESOLVED');
+          const hasRespondedQueries = (assignment.queries || []).some((q) => q.status === 'RESPONDED');
+          const isFullyResolved = (assignment.queries || []).length > 0 && (assignment.queries || []).every((q) => q.status === 'RESOLVED');
           
           return (
             <View key={assignment.id} style={[styles.card, (hasOpenQueries || hasRespondedQueries) && { borderColor: '#6366f1', borderWidth: 1.5 }]}>
@@ -41,11 +45,17 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({
                     </View>
                   ) : hasRespondedQueries ? (
                     <View style={{ backgroundColor: 'rgba(245,158,11,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}>
-                      <Text style={{ color: '#fbbf24', fontSize: 10, fontWeight: '800' }}>💬 RESPONDED</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                        <Ionicons name="chatbubble" size={10} color="#fbbf24" />
+                        <Text style={{ color: '#fbbf24', fontSize: 10, fontWeight: '800' }}>RESPONDED</Text>
+                      </View>
                     </View>
                   ) : isFullyResolved ? (
                     <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
-                      <Text style={{ color: '#34d399', fontSize: 10, fontWeight: '800' }}>🔒 CLOSED / RESOLVED</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                        <Ionicons name="lock-closed" size={10} color="#34d399" />
+                        <Text style={{ color: '#34d399', fontSize: 10, fontWeight: '800' }}>CLOSED / RESOLVED</Text>
+                      </View>
                     </View>
                   ) : null}
                 </View>
@@ -68,9 +78,16 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({
                 }}
                 onPress={() => onOpenQueryChat(assignment)}
               >
-                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
-                  {isFullyResolved ? '👁️ View Closed Chat History (Read Only)' : '💬 Open Live Query Room'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons
+                    name={isFullyResolved ? 'eye' : 'chatbubble'}
+                    size={14}
+                    color="#fff"
+                  />
+                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
+                    {isFullyResolved ? 'View Closed Chat History (Read Only)' : 'Open Live Query Room'}
+                  </Text>
+                </View>
               </TouchableOpacity>
             </View>
           );

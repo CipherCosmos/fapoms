@@ -11,6 +11,7 @@ import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('BranchService', () => {
   let service: BranchService;
@@ -67,6 +68,7 @@ describe('BranchService', () => {
         { provide: ClientService, useValue: mockClientService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: BranchQueryService, useValue: mockBranchQueryService },
+        { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
       ],
     }).compile();
 

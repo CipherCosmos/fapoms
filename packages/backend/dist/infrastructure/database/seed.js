@@ -20,6 +20,7 @@ const branch_contact_entity_1 = require("../../modules/branch/branch-contact.ent
 const project_entity_1 = require("../../modules/project/project.entity");
 const project_branch_entity_1 = require("../../modules/project/project-branch.entity");
 const holiday_entity_1 = require("../../modules/holiday/holiday.entity");
+const validation_case_entity_1 = require("../../modules/validation/validation-case.entity");
 const shared_1 = require("@fapoms/shared");
 const bcrypt = require("bcrypt");
 async function seed() {
@@ -75,6 +76,8 @@ async function seed() {
             { resource: shared_1.PermissionResource.DOCUMENT, action: shared_1.PermissionAction.UPLOAD, scope: shared_1.AuthorizationScope.ORGANIZATION, description: 'Upload documents' },
             { resource: shared_1.PermissionResource.DOCUMENT, action: shared_1.PermissionAction.GENERATE, scope: shared_1.AuthorizationScope.ORGANIZATION, description: 'Generate documents' },
             { resource: shared_1.PermissionResource.DOCUMENT, action: shared_1.PermissionAction.DOWNLOAD, scope: shared_1.AuthorizationScope.PLATFORM, description: 'Download all documents' },
+            { resource: shared_1.PermissionResource.VALIDATION, action: shared_1.PermissionAction.CREATE, scope: shared_1.AuthorizationScope.ORGANIZATION, description: 'Create validation cases' },
+            { resource: shared_1.PermissionResource.VALIDATION, action: shared_1.PermissionAction.EDIT, scope: shared_1.AuthorizationScope.ORGANIZATION, description: 'Edit validation cases' },
             { resource: shared_1.PermissionResource.VALIDATION, action: shared_1.PermissionAction.ASSIGN, scope: shared_1.AuthorizationScope.ORGANIZATION, description: 'Assign validation cases' },
             { resource: shared_1.PermissionResource.VALIDATION, action: shared_1.PermissionAction.REVIEW, scope: shared_1.AuthorizationScope.ASSIGNED_RECORDS, description: 'Review assigned validation cases' },
             { resource: shared_1.PermissionResource.VALIDATION, action: shared_1.PermissionAction.APPROVE, scope: shared_1.AuthorizationScope.ORGANIZATION, description: 'Approve validations' },
@@ -1233,8 +1236,19 @@ async function seed() {
         console.log('Seeding holiday calendar...');
         const holidayRepository = data_source_1.AppDataSource.getRepository(holiday_entity_1.HolidayEntity);
         const holidaysData = [
-            { name: 'Independence Day', date: new Date('2026-08-15'), type: 'NATIONAL', states: null },
+            { name: 'Republic Day', date: new Date('2026-01-26'), type: 'NATIONAL', states: null },
+            { name: 'Holi', date: new Date('2026-03-04'), type: 'BANK', states: null },
+            { name: 'Good Friday', date: new Date('2026-04-03'), type: 'BANK', states: null },
+            { name: 'Dr. Ambedkar Jayanti', date: new Date('2026-04-14'), type: 'NATIONAL', states: null },
             { name: 'Maharashtra Day', date: new Date('2026-05-01'), type: 'STATE', states: ['Maharashtra'] },
+            { name: 'Id-ul-Fitr', date: new Date('2026-03-20'), type: 'BANK', states: null },
+            { name: 'Bakrid / Eid al-Adha', date: new Date('2026-05-27'), type: 'BANK', states: null },
+            { name: 'Independence Day', date: new Date('2026-08-15'), type: 'NATIONAL', states: null },
+            { name: 'Ganesh Chaturthi', date: new Date('2026-09-14'), type: 'STATE', states: ['Maharashtra', 'Gujarat', 'Karnataka'] },
+            { name: 'Mahatma Gandhi Jayanti', date: new Date('2026-10-02'), type: 'NATIONAL', states: null },
+            { name: 'Dussehra / Vijayadashami', date: new Date('2026-10-20'), type: 'BANK', states: null },
+            { name: 'Diwali (Laxmi Pujan)', date: new Date('2026-11-08'), type: 'NATIONAL', states: null },
+            { name: 'Guru Nanak Jayanti', date: new Date('2026-11-24'), type: 'BANK', states: null },
             { name: 'Christmas Day', date: new Date('2026-12-25'), type: 'NATIONAL', states: null },
         ];
         for (const hd of holidaysData) {
@@ -1251,6 +1265,23 @@ async function seed() {
                 });
                 await holidayRepository.save(holiday);
                 console.log(`Seeded holiday: ${holiday.name} (${hd.date.toISOString().split('T')[0]})`);
+            }
+        }
+        console.log('Seeding validation cases...');
+        const validationRepo = data_source_1.AppDataSource.getRepository(validation_case_entity_1.ValidationCaseEntity);
+        const pbRepo = data_source_1.AppDataSource.getRepository(project_branch_entity_1.ProjectBranchEntity);
+        const branches = await pbRepo.find();
+        for (const b of branches) {
+            const existing = await validationRepo.findOne({ where: { projectBranchId: b.id } });
+            if (!existing) {
+                await validationRepo.save(validationRepo.create({
+                    projectBranchId: b.id,
+                    status: shared_1.ValidationStatus.PENDING,
+                    remarks: 'Auto-seeded for Data Entry Review',
+                    createdBy: 'system',
+                    updatedBy: 'system',
+                }));
+                console.log(`Seeded validation case for project branch ${b.id}`);
             }
         }
         console.log('Seeding completed successfully!');

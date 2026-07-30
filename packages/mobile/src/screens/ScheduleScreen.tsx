@@ -3,6 +3,8 @@ import { View, Text, TouchableOpacity, Platform, Linking } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
 import { MobileApiService } from '../services/api.service';
+import { getAssignmentTotalFee } from '../utils/fees';
+import { Ionicons } from '@expo/vector-icons';
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
@@ -60,7 +62,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
       {displayedAssignments.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={{ fontSize: 44, marginBottom: 12 }}>{filterTab === 'ACTIVE' ? '📋' : '📜'}</Text>
+          <Ionicons
+            name={filterTab === 'ACTIVE' ? 'clipboard' : 'document-text'}
+            size={44}
+            color="#94a3b8"
+            style={{ marginBottom: 12 }}
+          />
           <Text style={styles.emptyText}>No {filterTab.toLowerCase()} audit assignments found</Text>
         </View>
       ) : (
@@ -82,9 +89,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
             {/* Audit Date & Bank Info Banner */}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, marginBottom: 10, backgroundColor: 'rgba(99,102,241,0.1)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(99,102,241,0.25)' }}>
-              <Text style={{ fontSize: 12, color: '#a5b4fc', fontWeight: '800' }}>
-                📅 Scheduled: {assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }) : 'Today'}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="calendar" size={12} color="#a5b4fc" />
+                  <Text style={{ fontSize: 12, color: '#a5b4fc', fontWeight: '800' }}>
+                    Scheduled: {assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }) : 'Today'}
+                  </Text>
+                </View>
               {assignment.bankName ? (
                 <View style={{ backgroundColor: 'rgba(15,23,42,0.6)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
                   <Text style={{ fontSize: 11, color: '#38bdf8', fontWeight: '700' }}>{assignment.bankName}</Text>
@@ -96,21 +106,27 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             <View style={styles.metricsRow}>
               <View style={styles.metricBox}>
                 <Text style={styles.metricLabel}>Distance</Text>
-                <Text style={styles.metricVal}>
-                  {assignment.distanceKm != null ? `📍 ${assignment.distanceKm} km` : '📍 Nearby'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                    <Ionicons name="location" size={12} color="#f8fafc" />
+                    <Text style={styles.metricVal}>
+                      {assignment.distanceKm != null ? `${assignment.distanceKm} km` : 'Nearby'}
+                    </Text>
+                  </View>
               </View>
               <View style={styles.metricBox}>
                 <Text style={styles.metricLabel}>Gold Packets</Text>
-                <Text style={styles.metricVal}>📦 {assignment.estimatedCustomerCount || 15} Pkts</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                    <Ionicons name="cube" size={12} color="#f8fafc" />
+                    <Text style={styles.metricVal}>{assignment.estimatedCustomerCount || 15} Pkts</Text>
+                  </View>
               </View>
               <View style={styles.metricBox}>
                 <Text style={styles.metricLabel}>Audit Fee</Text>
-                {assignment.agreedBaseFee > 0 ? (
-                  <Text style={[styles.metricVal, { color: '#34d399' }]}>₹{assignment.agreedBaseFee}</Text>
-                ) : (
-                  <Text style={[styles.metricVal, { color: '#fbbf24' }]}>₹{assignment.proposedFee}</Text>
-                )}
+                {/* Same fallback-applied total shown in Earnings, so the price shown here
+                    at accept-time matches what's actually paid out later. */}
+                <Text style={[styles.metricVal, { color: assignment.agreedBaseFee > 0 ? '#34d399' : '#fbbf24' }]}>
+                  ₹{getAssignmentTotalFee(assignment)}
+                </Text>
               </View>
             </View>
 
@@ -120,9 +136,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 {assignment.negotiationCount && assignment.negotiationCount > 0 ? (
                   <View style={{ padding: 10, backgroundColor: 'rgba(245,158,11,0.12)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)', gap: 4 }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={{ fontSize: 12, fontWeight: '800', color: '#fbbf24' }}>
-                        💬 Counter Offer Round #{assignment.negotiationCount}/3
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Ionicons name="chatbubble" size={12} color="#fbbf24" />
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#fbbf24' }}>
+                          Counter Offer Round #{assignment.negotiationCount}/3
+                        </Text>
+                      </View>
                       <Text style={{ fontSize: 11, color: '#fcd34d', fontWeight: '700' }}>
                         Proposed: ₹{assignment.proposedFee}
                       </Text>
@@ -135,7 +154,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
                 <View style={styles.actionGrid}>
                   <TouchableOpacity style={styles.acceptBtn} onPress={() => onAcceptAssignment(assignment.id)}>
-                    <Text style={styles.btnTextWhite}>Accept Audit ₹{assignment.proposedFee}</Text>
+                    <Text style={styles.btnTextWhite}>Accept Audit ₹{getAssignmentTotalFee(assignment)}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.rejectBtn} onPress={() => onOpenRejectModal(assignment.id)}>
                     <Text style={styles.btnTextWhite}>Decline</Text>
@@ -155,11 +174,18 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     disabled={(assignment.negotiationCount || 0) >= 3}
                     onPress={() => onCounterOffer(assignment)}
                   >
-                    <Text style={{ color: (assignment.negotiationCount || 0) >= 3 ? '#94a3b8' : '#c084fc', fontSize: 12, fontWeight: '800' }}>
-                      {(assignment.negotiationCount || 0) >= 3
-                        ? '🔒 Max Negotiation Limit Reached (3/3)'
-                        : `💬 Propose Counter Fee Rate (${assignment.negotiationCount || 0}/3 Rounds)`}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Ionicons
+                        name={(assignment.negotiationCount || 0) >= 3 ? 'lock-closed' : 'chatbubble'}
+                        size={12}
+                        color={(assignment.negotiationCount || 0) >= 3 ? '#94a3b8' : '#c084fc'}
+                      />
+                      <Text style={{ color: (assignment.negotiationCount || 0) >= 3 ? '#94a3b8' : '#c084fc', fontSize: 12, fontWeight: '800' }}>
+                        {(assignment.negotiationCount || 0) >= 3
+                          ? 'Max Negotiation Limit Reached (3/3)'
+                          : `Propose Counter Fee Rate (${assignment.negotiationCount || 0}/3 Rounds)`}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 )}
               </View>
@@ -172,13 +198,19 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                   style={[styles.mapBtn, { flex: 1, backgroundColor: 'rgba(234,88,12,0.2)', borderColor: '#ea580c' }]}
                   onPress={() => openGoogleMaps(assignment.latitude, assignment.longitude)}
                 >
-                  <Text style={{ color: '#ff8c00', fontSize: 13, fontWeight: '800' }}>
-                    {Platform.OS === 'ios' ? '🗺️ Apple Maps' : '🗺️ Google Maps'}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Ionicons name="map" size={14} color="#ff8c00" />
+                    <Text style={{ color: '#ff8c00', fontSize: 13, fontWeight: '800' }}>
+                      {Platform.OS === 'ios' ? 'Apple Maps' : 'Google Maps'}
+                    </Text>
+                  </View>
                 </TouchableOpacity>
 
                 <TouchableOpacity style={[styles.checkInBtn, { flex: 1 }]} onPress={() => onCheckIn(assignment)}>
-                  <Text style={styles.btnTextWhite}>📍 Check-In at Branch</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="location" size={14} color="#fff" />
+                    <Text style={styles.btnTextWhite}>Check-In at Branch</Text>
+                  </View>
                 </TouchableOpacity>
               </View>
             )}
@@ -191,7 +223,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     style={[styles.primaryBtn, { backgroundColor: '#6366f1' }]}
                     onPress={() => onOpenScanner ? onOpenScanner(assignment) : onOpenPdfDocs(assignment)}
                   >
-                    <Text style={styles.primaryBtnText}>📸 Document Scanner</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="camera" size={14} color="#fff" />
+                    <Text style={styles.primaryBtnText}>Document Scanner</Text>
+                  </View>
                   </TouchableOpacity>
 
                   <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -199,14 +234,20 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                       style={[styles.secondaryBtn, { flex: 1 }]}
                       onPress={() => Linking.openURL(`${MobileApiService.getBaseUrl()}/documents/project-branch/${assignment.projectBranchId}/download-pdf`)}
                     >
-                      <Text style={styles.secondaryBtnText}>⬇ Download PDF</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="download" size={14} color="#f8fafc" />
+                        <Text style={styles.secondaryBtnText}>Download PDF</Text>
+                      </View>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                       style={[styles.primaryBtn, { flex: 1, backgroundColor: '#10b981' }]}
                       onPress={() => onOpenPdfDocs(assignment)}
                     >
-                      <Text style={styles.primaryBtnText}>📁 Upload Docs</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="folder" size={14} color="#fff" />
+                        <Text style={styles.primaryBtnText}>Upload Docs</Text>
+                      </View>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -216,18 +257,24 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             {/* Status: COMPLETED */}
             {assignment.status === 'COMPLETED' && (
               <View style={{ marginTop: 12, padding: 12, backgroundColor: 'rgba(16,185,129,0.12)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)', gap: 6 }}>
-                <Text style={{ fontSize: 13, fontWeight: '800', color: '#34d399' }}>
-                  ✅ Audit Completed
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="checkmark-circle" size={14} color="#34d399" />
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#34d399' }}>
+                    Audit Completed
+                  </Text>
+                </View>
 
                 {assignment.queries && assignment.queries.length > 0 ? (
                   <TouchableOpacity
                     style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#00a884', borderRadius: 10, alignItems: 'center', marginTop: 4 }}
                     onPress={() => onOpenQueryChat ? onOpenQueryChat(assignment) : onOpenPdfDocs(assignment)}
                   >
-                    <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
-                      💬 Open Query Chat
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="chatbubble" size={14} color="#fff" />
+                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
+                        Open Query Chat
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 ) : null}
               </View>

@@ -128,7 +128,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   ) : (
     <View style={{ position: 'relative', height: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0f172a' }}>
       <View style={{ flex: 1, padding: 16, justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ fontSize: 32, marginBottom: 6 }}>📍</Text>
+        <Ionicons name="location" size={32} color="#38bdf8" style={{ marginBottom: 6 }} />
         <Text style={{ color: '#38bdf8', fontSize: 14, fontWeight: '700' }}>GPS Coordinates: {latitude.toFixed(4)}, {longitude.toFixed(4)}</Text>
         <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>Coverage Radius: {radiusKm} km</Text>
       </View>

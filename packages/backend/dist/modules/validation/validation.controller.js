@@ -143,8 +143,7 @@ __decorate([
 ], ValidationController.prototype, "findOne", null);
 __decorate([
     (0, common_1.Post)(':id/assign'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER),
-    (0, guards_1.RequirePermissions)('validation:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR),
     (0, swagger_1.ApiOperation)({ summary: 'Assign a validation case to a validator reviewer' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -156,7 +155,6 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR),
-    (0, guards_1.RequirePermissions)('validation:update:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition validation case status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),

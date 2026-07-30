@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { styles } from '../theme/styles';
+import { Ionicons } from '@expo/vector-icons';
 
 export type TabType = 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
 
@@ -12,11 +13,11 @@ interface TabBarProps {
 }
 
 export const TabBar: React.FC<TabBarProps> = ({ selectedTab, onSelectTab, openQueriesCount, unreadNotifCount }) => {
-  const tabs: { key: TabType; label: string; icon: string; badge?: number }[] = [
-    { key: 'SCHEDULE', label: 'Audit Route', icon: '📍' },
-    { key: 'QUERIES', label: 'Clarifications', icon: '⚡' },
-    { key: 'EARNINGS', label: 'Financial Ledger', icon: '💳' },
-    { key: 'MY_PROFILE', label: 'Account & Security', icon: '⚙️' },
+  const tabs: { key: TabType; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; badge?: number }[] = [
+    { key: 'SCHEDULE', label: 'Audit Route', icon: 'location' },
+    { key: 'QUERIES', label: 'Clarifications', icon: 'flash' },
+    { key: 'EARNINGS', label: 'Financial Ledger', icon: 'card' },
+    { key: 'MY_PROFILE', label: 'Settings', icon: 'settings-outline' },
   ];
 
   return (
@@ -27,10 +28,12 @@ export const TabBar: React.FC<TabBarProps> = ({ selectedTab, onSelectTab, openQu
           style={[styles.tabItem, selectedTab === tab.key && styles.activeTabItem]}
           onPress={() => onSelectTab(tab.key)}
         >
-          <View style={{ position: 'relative' }}>
-            <Text style={[styles.tabLabel, selectedTab === tab.key && styles.activeTabLabel]}>
-              {tab.icon}
-            </Text>
+          <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons
+              name={tab.icon}
+              size={16}
+              color={selectedTab === tab.key ? '#6366f1' : '#94a3b8'}
+            />
             {tab.badge ? (
               <View style={{
                 position: 'absolute',

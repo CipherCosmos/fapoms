@@ -52,6 +52,9 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'scheduled_date', type: 'date', nullable: true })
   scheduledDate: Date | null;
 
+  @Column({ name: 'auto_schedule', type: 'boolean', default: true })
+  autoSchedule: boolean;
+
   @Column({ name: 'completion_date', type: 'date', nullable: true })
   completionDate: Date | null;
 

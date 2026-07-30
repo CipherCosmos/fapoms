@@ -122,6 +122,13 @@ export class ValidationQueryController {
   // QUERY CRUD
   // ───────────────────────────────────────────────────────────────────────────
 
+  @Get()
+  @ApiOperation({ summary: 'List validation queries' })
+  async findAll() {
+    const list = await this.validationQueryService.findByAssayer('');
+    return { success: true, data: list };
+  }
+
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
   @ApiOperation({ summary: 'Raise a new validation query to an assayer (Data Entry / Admin)' })

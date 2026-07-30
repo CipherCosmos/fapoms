@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardList, AlertCircle, RefreshCw, Calendar, MessageSquare, Clock, Send, Search, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle } from 'lucide-react';
+import { ClipboardList, AlertCircle, RefreshCw, Calendar, MessageSquare, Clock, Send, Search, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
+import { ProjectBranchStatus } from '@fapoms/shared';
+import { anyStatusLabel, branchStatusLabel, assessmentStatusLabel } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
@@ -13,9 +15,12 @@ interface Assignment {
   projectId: string;
   assayerId: string;
   status: string;
+  rejectReason?: string | null;
+  priority: string;
   proposedFee: number;
   agreedFee: number | null;
   scheduledDate: string | null;
+  createdAt: string;
   project: { name: string };
   assayer: { displayName: string };
   projectBranch: { status?: string; branch: { name: string; state: string } };
@@ -29,6 +34,112 @@ interface TimelineEvent {
   user: string;
 }
 
+// Intentional subset — the 5 "stage-3" (field execution) branch statuses this
+// page's filter UI scopes to, not the full ProjectBranchStatus enum. Spelled
+// via enum members so a rename of any of these is caught at compile time.
+const STAGE3_STATUSES = [
+  ProjectBranchStatus.SCHEDULED,
+  ProjectBranchStatus.AUDIT_COMPLETED,
+  ProjectBranchStatus.VALIDATION_COMPLETED,
+  ProjectBranchStatus.CLOSED,
+  ProjectBranchStatus.CANCELLED,
+];
+const ACTIVE_STATUSES = 'SCHEDULED,AUDIT_COMPLETED,VALIDATION_COMPLETED';
+// Sentinel filter value: switches the main query from filtering by branch status
+// (projectBranchStatus=) to filtering by assignment status (status=PENDING,REJECTED),
+// surfacing not-yet-accepted/auto-declined assignments through the same table,
+// filter dropdown, and detail panel — no separate section or components.
+const NEEDS_ATTENTION_FILTER = 'PENDING,REJECTED';
+// Second sentinel: switches the same query mechanism to the priority axis
+// (priority=CRITICAL) for manually-escalated assignments.
+const ESCALATED_FILTER = 'CRITICAL';
+// Third sentinel, also on the assignment-status axis. Rejecting or cancelling an
+// assignment returns its branch to CANDIDATE_SEARCH so it can be re-offered — it does
+// NOT set the branch to CANCELLED. Counting this tile on the branch axis therefore
+// always yielded 0 while real rejected/cancelled assignments existed.
+const TERMINAL_FILTER = 'REJECTED,CANCELLED';
+const PAGE_SIZE = 25;
+
+// ── Shared status badge — single source of truth, used by both the list rows
+// and the detail panel header (previously duplicated as two separate inline IIFEs).
+function getStatusBadgeProps(status: string): { bg: string; color: string; icon: React.ReactNode } {
+  const isCheckedIn = status === 'SCHEDULED';
+  const isAccepted = status === 'ACCEPTED' || status === 'ASSIGNMENT_CONFIRMED';
+  const isClosed = status === 'CLOSED';
+  const isCancelled = status === 'CANCELLED';
+  const isDone = status === 'AUDIT_COMPLETED' || status === 'VALIDATION_COMPLETED';
+
+  const bg = isCheckedIn ? 'rgba(6, 182, 212, 0.15)' : isAccepted ? 'rgba(16, 185, 129, 0.15)' : isClosed ? 'rgba(16, 185, 129, 0.2)' : isDone ? 'rgba(168, 85, 247, 0.15)' : isCancelled ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+  const color = isCheckedIn ? '#06b6d4' : isAccepted ? '#10b981' : isClosed ? '#10b981' : isDone ? '#a855f7' : isCancelled ? '#ef4444' : '#f59e0b';
+  const icon = isCheckedIn ? <MapPin size={13} /> : isDone ? <FileText size={13} /> : isClosed ? <Lock size={13} /> : null;
+  return { bg, color, icon };
+}
+
+function StatusBadge({ status, size = 'md' }: { status: string; size?: 'sm' | 'md' }) {
+  const { bg, color, icon } = getStatusBadgeProps(status);
+  return (
+    <span className="badge" style={{ background: bg, color, padding: size === 'sm' ? '3px 8px' : '4px 12px', fontWeight: 700, borderRadius: '6px', fontSize: size === 'sm' ? '11px' : '12px', display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+      {icon}{anyStatusLabel(status)}
+    </span>
+  );
+}
+
+function AutoDeclinedChip() {
+  return (
+    <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', padding: '3px 8px', fontWeight: 700, fontSize: '10.5px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+      <Hourglass size={11} /> Auto-declined
+    </span>
+  );
+}
+
+// Only rendered for HIGH/CRITICAL — the default MEDIUM/LOW stay invisible so
+// this doesn't turn into visual noise on every ordinary row.
+function PriorityBadge({ priority }: { priority?: string }) {
+  if (priority !== 'CRITICAL' && priority !== 'HIGH') return null;
+  const isCritical = priority === 'CRITICAL';
+  return (
+    <span className="badge" style={{ background: isCritical ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)', color: isCritical ? '#ef4444' : '#f97316', padding: '3px 8px', fontWeight: 700, fontSize: '10.5px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+      <Flame size={11} /> {priority}
+    </span>
+  );
+}
+
+// ── Compact workflow breadcrumb — replaces the old pipeline-bar + gradient
+// banner + h2 (three separate blocks all stating "Stage 3 / Field Execution").
+// Uses client-side navigation instead of window.location.href full reloads.
+function WorkflowBreadcrumb({ onNavigate }: { onNavigate: (path: string) => void }) {
+  const steps = [
+    { n: 1, label: 'Planning & Matching', path: '/planning' },
+    { n: 2, label: 'Schedule Dispatch', path: '/scheduling' },
+    { n: 3, label: 'Field Execution', path: '/assignments' },
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+      {steps.map((s, i) => {
+        const active = s.n === 3;
+        return (
+          <React.Fragment key={s.n}>
+            <button
+              onClick={() => onNavigate(s.path)}
+              className="btn"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px',
+                background: active ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.03)',
+                border: `1px solid ${active ? '#10b981' : 'var(--border-color)'}`,
+                borderRadius: '20px', color: active ? '#fff' : 'var(--text-secondary)',
+                fontSize: '11px', fontWeight: active ? 700 : 600, cursor: 'pointer',
+              }}
+            >
+              <span>{s.n}</span> {s.label}
+            </button>
+            {i < steps.length - 1 && <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 export const Assignments: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -39,21 +150,128 @@ export const Assignments: React.FC = () => {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-
-  const [page] = useState(1);
-
-  const selectedRef = useRef(selectedAsnId);
-  selectedRef.current = selectedAsnId;
+  const [page, setPage] = useState(1);
 
   useSocketInvalidation();
 
-  const stage3BranchStatuses = ['SCHEDULED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED', 'CANCELLED'];
+  const applyFilter = (value: string) => {
+    setStatusFilter(value);
+    setPage(1);
+  };
 
-  const { data: assignments = [], isLoading } = useQuery({
-    queryKey: queryKeys.assignments.list(page),
-    queryFn: () => api.request<Assignment[]>(`/assignments?page=${page}&limit=100`),
+  // ── Lifecycle actions — the only mutation this page had was posting a
+  // comment. Accept/Reject/Cancel/Complete/Escalate call the same endpoints
+  // PlanningWorkspace and the SLA scanner already use; a plain un-countered
+  // PENDING offer had no manual override anywhere in the frontend before this.
+  const [actionMode, setActionMode] = useState<'REJECT' | 'CANCEL' | null>(null);
+  const [actionReason, setActionReason] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const resetActionState = () => {
+    setActionMode(null);
+    setActionReason('');
+    setActionError(null);
+  };
+
+  useEffect(() => {
+    resetActionState();
+  }, [selectedAsnId]);
+
+  const runTransition = async (targetStatus: string, reason?: string) => {
+    if (!selectedAsnId) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await api.request(`/assignments/${selectedAsnId}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus, reason }),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
+      resetActionState();
+    } catch (err: any) {
+      setActionError(err?.message || 'Action failed.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const runEscalate = async () => {
+    if (!selectedAsnId) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await api.request(`/assignments/${selectedAsnId}/escalate`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Manually escalated by ops' }),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
+    } catch (err: any) {
+      setActionError(err?.message || 'Escalate failed.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  // ── Main table — one unified list driven by one filter, whether the axis is
+  // branch status (the normal stage-3 views), assignment status (Needs Attention),
+  // or priority (Escalated).
+  const isAttentionView = statusFilter === NEEDS_ATTENTION_FILTER;
+  const isEscalatedView = statusFilter === ESCALATED_FILTER;
+  const isTerminalView = statusFilter === TERMINAL_FILTER;
+  // 'ALL' means genuinely unfiltered. It used to constrain to the five stage-3 branch
+  // statuses, which silently hid every rejected/cancelled assignment (their branch is back
+  // at CANDIDATE_SEARCH) — so this page reported 3 while the dashboard reported 5.
+  const queryString = isAttentionView
+    ? `status=${NEEDS_ATTENTION_FILTER}`
+    : isEscalatedView
+    ? `priority=${ESCALATED_FILTER}`
+    : isTerminalView
+    ? `status=${TERMINAL_FILTER}`
+    : statusFilter === 'ALL'
+    ? ''
+    : `projectBranchStatus=${statusFilter}`;
+
+  const { data: mainData, isLoading } = useQuery({
+    queryKey: queryKeys.assignments.list(page, statusFilter),
+    queryFn: () => api.request<{ data: Assignment[]; meta: { pagination: { total: number } } }>(
+      `/assignments?page=${page}&limit=${PAGE_SIZE}&${queryString}`,
+      { withMeta: true },
+    ),
     staleTime: 15_000,
   });
+  const assignments = mainData?.data ?? [];
+  const total = mainData?.meta?.pagination?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // ── Lightweight KPI counts — cheap limit=1 requests reusing the same
+  // paginated endpoint purely for its `meta.pagination.total`, rather than
+  // recomputing counts by filtering whatever single page happens to be loaded.
+  const useCount = (params: string) => useQuery({
+    queryKey: queryKeys.assignments.count(params),
+    queryFn: () => api.request<{ meta: { pagination: { total: number } } }>(
+      `/assignments?page=1&limit=1&${params}`,
+      { withMeta: true },
+    ),
+    staleTime: 15_000,
+  });
+  const grandTotalQ = useCount('');
+  const activeCountQ = useCount(`projectBranchStatus=${ACTIVE_STATUSES}`);
+  const closedCountQ = useCount(`projectBranchStatus=CLOSED`);
+  const cancelledCountQ = useCount(`status=${TERMINAL_FILTER}`);
+  const attentionCountQ = useCount(`status=${NEEDS_ATTENTION_FILTER}`);
+  const escalatedCountQ = useCount(`priority=${ESCALATED_FILTER}`);
+  const activeCount = activeCountQ.data?.meta?.pagination?.total ?? 0;
+  const closedCount = closedCountQ.data?.meta?.pagination?.total ?? 0;
+  const cancelledCount = cancelledCountQ.data?.meta?.pagination?.total ?? 0;
+  const needsAttentionCount = attentionCountQ.data?.meta?.pagination?.total ?? 0;
+  const escalatedCount = escalatedCountQ.data?.meta?.pagination?.total ?? 0;
+  // Queried directly rather than summing the tiles below. The tiles overlap (an escalated
+  // assignment is also active) and don't cover everything, so summing them under-reported
+  // the total and disagreed with the dashboard.
+  const totalCount = grandTotalQ.data?.meta?.pagination?.total ?? 0;
+
+  const selectedAsn = assignments.find(a => a.id === selectedAsnId);
 
   const { data: timeline = [], isLoading: isLoadingTimeline } = useQuery({
     queryKey: queryKeys.assignments.timeline(selectedAsnId || ''),
@@ -63,10 +281,12 @@ export const Assignments: React.FC = () => {
   });
 
   useEffect(() => {
-    if (assignmentIdParam && assignments.length > 0) {
-      const found = assignments.find(a => a.id === assignmentIdParam);
-      if (found) setSelectedAsnId(assignmentIdParam);
+    if (assignmentIdParam) {
+      setSelectedAsnId(assignmentIdParam);
+    } else if (assignments.length > 0 && !selectedAsnId) {
+      setSelectedAsnId(assignments[0].id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentIdParam, assignments]);
 
   const formatRelativeTime = (ts: string): string => {
@@ -142,16 +362,6 @@ export const Assignments: React.FC = () => {
     });
   };
 
-  useEffect(() => {
-    if (assignmentIdParam && assignments.length > 0) {
-      const found = assignments.find(a => a.id === assignmentIdParam);
-      if (found) setSelectedAsnId(assignmentIdParam);
-    }
-    if (assignments.length > 0 && !selectedAsnId) {
-      setSelectedAsnId(assignments[0].id);
-    }
-  }, [assignmentIdParam, assignments]);
-
   const invalidateTimeline = (id: string) => {
     queryClient.invalidateQueries({ queryKey: queryKeys.assignments.timeline(id) });
   };
@@ -171,84 +381,40 @@ export const Assignments: React.FC = () => {
     }
   };
 
-  const stage3Assignments = assignments.filter(a => stage3BranchStatuses.includes(a.projectBranch?.status || ''));
-  const totalCount = stage3Assignments.length;
-  const activeCount = stage3Assignments.filter(a => !['CLOSED', 'CANCELLED'].includes(a.projectBranch?.status || '')).length;
-  const closedCount = stage3Assignments.filter(a => a.projectBranch?.status === 'CLOSED').length;
-  const cancelledCount = stage3Assignments.filter(a => a.projectBranch?.status === 'CANCELLED').length;
-
-  const selectedAsn = assignments.find(a => a.id === selectedAsnId);
-
-  const filteredAssignments = stage3Assignments.filter(a => {
-    const matchesSearch = a.assignmentNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          a.project?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          a.assayer?.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          a.projectBranch?.branch?.name?.toLowerCase().includes(searchTerm.toLowerCase());
-    const branchSt = a.projectBranch?.status || '';
-    const matchesStatus = statusFilter === 'ALL' || branchSt === statusFilter;
-    return matchesSearch && matchesStatus;
+  const filteredAssignments = assignments.filter(a => {
+    if (!searchTerm) return true;
+    return a.assignmentNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      a.project?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      a.assayer?.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      a.projectBranch?.branch?.name?.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
+  const selectAndShow = (id: string) => {
+    setSelectedAsnId(id);
+    navigate(`/assignments?id=${id}`, { replace: true });
+  };
+
+  const pageStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const pageEnd = Math.min(page * PAGE_SIZE, total);
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* ── UNIFIED 3-STEP PIPELINE BAR ── */}
-      <div style={{ background: 'rgba(15, 23, 42, 0.8)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div onClick={() => window.location.href = '/planning'} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
-            <span>1</span> Planning & Matching
-          </div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
-          <div onClick={() => window.location.href = '/scheduling'} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
-            <span>2</span> Schedule Dispatch
-          </div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
-          <div onClick={() => window.location.href = '/assignments'} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(16,185,129,0.2)', border: '1px solid #10b981', borderRadius: '20px', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-            <span>3</span> Field Execution
-          </div>
-        </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          💡 Step 3 of 3: Track field audit progress — acceptance, check-in, report submission & closure.
-        </div>
-      </div>
-      {/* ── STAGE 3 WORKFLOW HEADER BANNER ── */}
-      <div style={{ background: 'linear-gradient(90deg, rgba(16,185,129,0.12) 0%, rgba(99,102,241,0.06) 100%)', border: '1px solid rgba(16,185,129,0.25)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ backgroundColor: '#10b981', color: '#000', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Stage 3 of 3
-          </span>
-          <div>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-              Field Execution & Audit Completion
-            </h3>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Track field audit progress — acceptance, live GPS check-in, report submission, and closure.
-            </span>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button 
-            onClick={() => window.location.href = '/planning'} 
-            style={{ padding: '6px 12px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '6px', color: '#a5b4fc', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
-          >
-            ← Stage 1: Planning
-          </button>
-          <button 
-            onClick={() => window.location.href = '/scheduling'} 
-            style={{ padding: '6px 12px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: '6px', color: '#c084fc', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
-          >
-            ← Stage 2: Schedule Dispatch
-          </button>
-        </div>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      {/* Consolidated header — one breadcrumb, one title. Replaces the old
+          pipeline-bar + gradient banner + h2 (three blocks, same fact repeated). */}
+      <WorkflowBreadcrumb onNavigate={navigate} />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Field Execution Workspace</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
-            Track and manage live field audits — from scheduling to report submission.
+            Track and manage live field audits — acceptance through check-in, submission, and closure.
           </p>
         </div>
-        <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all })} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button
+          onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all })}
+          className="btn btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
@@ -260,18 +426,34 @@ export const Assignments: React.FC = () => {
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+      {/* KPI Cards — clickable, filter the single table below. "Needs Attention"
+          is not a separate list: it's the same filter mechanism switched to the
+          assignment-status axis, so PENDING/auto-declined assignments (previously
+          invisible on this page entirely) surface in the exact same table/detail
+          panel as everything else. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
         {[
-          { label: 'Total Assignments', value: totalCount, icon: ClipboardList, color: 'var(--accent-primary)' },
-          { label: 'Active / In Progress', value: activeCount, icon: RefreshCw, color: 'var(--accent-secondary)' },
-          { label: 'Closed', value: closedCount, icon: CheckCircle, color: 'var(--status-active)' },
-          { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: '#ef4444' },
+          { label: 'Total Assignments', value: totalCount, icon: ClipboardList, color: 'var(--accent-primary)', filter: 'ALL' },
+          { label: 'Active / In Progress', value: activeCount, icon: RefreshCw, color: 'var(--accent-secondary)', filter: ACTIVE_STATUSES },
+          { label: 'Closed', value: closedCount, icon: CheckCircle, color: 'var(--status-active)', filter: 'CLOSED' },
+          { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: '#ef4444', filter: TERMINAL_FILTER },
+          { label: 'Needs Attention', value: needsAttentionCount, icon: AlertTriangle, color: '#f59e0b', filter: NEEDS_ATTENTION_FILTER },
+          { label: 'Escalated', value: escalatedCount, icon: Flame, color: '#ef4444', filter: ESCALATED_FILTER },
         ].map(card => {
           const Icon = card.icon;
+          const isActive = statusFilter === card.filter;
           return (
-            <div key={card.label} className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color }}>
+            <div
+              key={card.label}
+              className="glass-card"
+              onClick={() => applyFilter(card.filter)}
+              style={{
+                padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer',
+                border: isActive ? `1px solid ${card.color}` : '1px solid var(--border-color)',
+                background: isActive ? `${card.color}10` : undefined,
+              }}
+            >
+              <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color, flexShrink: 0 }}>
                 <Icon size={22} />
               </div>
               <div>
@@ -287,18 +469,21 @@ export const Assignments: React.FC = () => {
       <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-          <input type="text" placeholder="Search by ID, project, assayer, branch..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '100%', padding: '8px 12px 8px 36px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
+          <input type="text" placeholder="Search this page by ID, project, assayer, branch..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '100%', padding: '8px 12px 8px 36px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <Filter size={14} style={{ color: 'var(--text-muted)' }} />
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
+          <select value={statusFilter} onChange={(e) => applyFilter(e.target.value)} style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
             <option value="ALL">All Statuses</option>
-            {stage3BranchStatuses.map(s => (<option key={s} value={s}>{s}</option>))}
+            {STAGE3_STATUSES.map(s => (<option key={s} value={s}>{branchStatusLabel(s)}</option>))}
+            <option value={TERMINAL_FILTER}>Cancelled / Rejected</option>
+            <option value={NEEDS_ATTENTION_FILTER}>Needs Attention (awaiting response / auto-declined)</option>
+            <option value={ESCALATED_FILTER}>Escalated (Critical priority)</option>
           </select>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px', alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr minmax(340px, 420px)', gap: '20px', alignItems: 'start' }}>
         {/* Left Column - Assignments List */}
         <div className="glass-card" style={{ padding: 0, overflowX: 'auto' }}>
           {isLoading ? (
@@ -316,12 +501,12 @@ export const Assignments: React.FC = () => {
                   <th style={{ padding: '16px 24px' }}>Project / Branch</th>
                   <th style={{ padding: '16px 24px' }}>Assayer</th>
                   <th style={{ padding: '16px 24px' }}>Status</th>
-                  <th style={{ padding: '16px 24px' }}>Branch Status</th>
+                  <th style={{ padding: '16px 24px' }}>{isAttentionView ? 'Waiting' : 'Branch Status'}</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredAssignments.map((asn) => (
-                  <tr key={asn.id} onClick={() => { setSelectedAsnId(asn.id); navigate(`/assignments?id=${asn.id}`, { replace: true }); }} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
+                  <tr key={asn.id} onClick={() => selectAndShow(asn.id)} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
                     <td style={{ padding: '16px 24px', fontWeight: 600 }}>{asn.assignmentNumber}</td>
                     <td style={{ padding: '16px 24px' }}>
                       <div><b>{asn.projectBranch?.branch?.name}</b></div>
@@ -329,36 +514,56 @@ export const Assignments: React.FC = () => {
                     </td>
                     <td style={{ padding: '16px 24px' }}>{asn.assayer?.displayName}</td>
                     <td style={{ padding: '16px 24px' }}>
-                      {(() => {
-                        const st = String(asn.projectBranch?.status || asn.status);
-                        const isCheckedIn = st === 'SCHEDULED';
-                        const isAccepted = st === 'ACCEPTED' || st === 'ASSIGNMENT_CONFIRMED';
-                        const isClosed = st === 'CLOSED';
-                        const isCancelled = st === 'CANCELLED';
-                        const isDone = st === 'AUDIT_COMPLETED' || st === 'VALIDATION_COMPLETED';
-
-                        const bg = isCheckedIn ? 'rgba(6, 182, 212, 0.15)' : isAccepted ? 'rgba(16, 185, 129, 0.15)' : isClosed ? 'rgba(16, 185, 129, 0.2)' : isDone ? 'rgba(168, 85, 247, 0.15)' : isCancelled ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)';
-                        const color = isCheckedIn ? '#06b6d4' : isAccepted ? '#10b981' : isClosed ? '#10b981' : isDone ? '#a855f7' : isCancelled ? '#ef4444' : '#f59e0b';
-                        const icon = isCheckedIn ? '📍 ' : isDone ? '📄 ' : isClosed ? '🔒 ' : '';
-
-                        return (
-                          <span className="badge" style={{ background: bg, color: color, padding: '4px 10px', fontWeight: 700, borderRadius: '6px' }}>
-                            {icon}{asn.projectBranch?.status || asn.status}
-                          </span>
-                        );
-                      })()}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <StatusBadge status={String(asn.projectBranch?.status || asn.status)} size="sm" />
+                        {asn.status === 'REJECTED' && asn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && <AutoDeclinedChip />}
+                        <PriorityBadge priority={asn.priority} />
+                      </div>
                     </td>
-                    <td style={{ padding: '16px 24px' }} onClick={(e) => e.stopPropagation()}>
-                      {asn.assessment?.status ? (
-                        <span className="badge" style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#818cf8', padding: '2px 8px', fontWeight: 600, borderRadius: '4px', fontSize: '11px' }}>
-                          {asn.assessment.status}
-                        </span>
-                      ) : '-'}
+                    <td style={{ padding: '16px 24px', color: isAttentionView ? 'var(--text-muted)' : undefined, fontSize: isAttentionView ? '12px' : undefined }} onClick={(e) => e.stopPropagation()}>
+                      {isAttentionView
+                        ? formatRelativeTime(asn.createdAt)
+                        : (asn.assessment?.status ? (
+                          <span className="badge" style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#818cf8', padding: '2px 8px', fontWeight: 600, borderRadius: '4px', fontSize: '11px' }}>
+                            {assessmentStatusLabel(asn.assessment.status)}
+                          </span>
+                        ) : '-')}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+
+          {/* Pagination — wired to the server pagination that already existed on
+              the backend and was never used (fixed limit=100, no controls). */}
+          {!isLoading && total > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px', borderTop: '1px solid var(--border-color)' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                Showing {pageStart}–{pageEnd} of {total}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="btn btn-secondary"
+                  style={{ padding: '5px 8px', opacity: page <= 1 ? 0.4 : 1, cursor: page <= 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', padding: '0 6px' }}>
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  className="btn btn-secondary"
+                  style={{ padding: '5px 8px', opacity: page >= totalPages ? 0.4 : 1, cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
@@ -367,34 +572,89 @@ export const Assignments: React.FC = () => {
           {selectedAsn ? (
             <>
               {/* Header */}
-          <div style={{
-            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(6, 182, 212, 0.06) 100%)',
-            borderBottom: '1px solid var(--border-color)',
-            padding: '14px 16px 12px',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.5px' }}>DETAILS PANEL</span>
-                <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '1px 0' }}>{selectedAsn.assignmentNumber}</h4>
-                  </div>
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(6, 182, 212, 0.06) 100%)',
+                borderBottom: '1px solid var(--border-color)',
+                padding: '14px 16px 12px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    {(() => {
-                      const st = String(selectedAsn.projectBranch?.status || selectedAsn.status);
-                      const isScheduled = st === 'SCHEDULED';
-                      const isDone = st === 'AUDIT_COMPLETED' || st === 'VALIDATION_COMPLETED';
-                      const isClosed = st === 'CLOSED';
-                      const isCancelled = st === 'CANCELLED';
-                      const bg = isScheduled ? 'rgba(6, 182, 212, 0.2)' : isDone ? 'rgba(168, 85, 247, 0.2)' : isClosed ? 'rgba(16, 185, 129, 0.25)' : isCancelled ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)';
-                      const color = isScheduled ? '#06b6d4' : isDone ? '#a855f7' : isClosed ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
-                      return (
-                        <span className="badge" style={{ background: bg, color, padding: '4px 12px', fontWeight: 700, fontSize: '12px' }}>
-                          {selectedAsn.projectBranch?.status || selectedAsn.status}
-                        </span>
-                      );
-                    })()}
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.5px' }}>DETAILS PANEL</span>
+                    <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '1px 0' }}>{selectedAsn.assignmentNumber}</h4>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <StatusBadge status={String(selectedAsn.projectBranch?.status || selectedAsn.status)} />
+                    {selectedAsn.status === 'REJECTED' && selectedAsn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && <AutoDeclinedChip />}
+                    <PriorityBadge priority={selectedAsn.priority} />
                   </div>
                 </div>
               </div>
+
+              {/* Lifecycle actions — contextual to the current status. This is the
+                  page's actual management console, not just a viewer. */}
+              {selectedAsn.status !== 'COMPLETED' && (
+                <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {selectedAsn.status === 'PENDING' && (
+                      <>
+                        <button onClick={() => runTransition('ACCEPTED')} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: '#10b981', borderColor: '#10b981' }}>
+                          ✓ Accept
+                        </button>
+                        <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)' }}>
+                          ✕ Reject
+                        </button>
+                      </>
+                    )}
+                    {['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
+                      <button onClick={() => runTransition('COMPLETED')} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: '#10b981', borderColor: '#10b981' }}>
+                        ✓ Mark Complete
+                      </button>
+                    )}
+                    {['PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
+                      <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                        Cancel
+                      </button>
+                    )}
+                    {['REJECTED', 'CANCELLED'].includes(selectedAsn.status) && (
+                      <button onClick={() => navigate('/planning')} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                        Reassign →
+                      </button>
+                    )}
+                    {selectedAsn.priority !== 'CRITICAL' && (
+                      <button onClick={runEscalate} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)', marginLeft: 'auto' }}>
+                        ⚠ Escalate
+                      </button>
+                    )}
+                  </div>
+
+                  {actionMode && (
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <input
+                        type="text"
+                        value={actionReason}
+                        onChange={(e) => setActionReason(e.target.value)}
+                        placeholder={actionMode === 'REJECT' ? 'Reason for rejecting...' : 'Reason for cancelling...'}
+                        style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '11.5px' }}
+                      />
+                      <button
+                        onClick={() => runTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
+                        disabled={actionBusy}
+                        className="btn btn-primary"
+                        style={{ padding: '5px 10px', fontSize: '11px', background: '#ef4444', borderColor: '#ef4444' }}
+                      >
+                        Confirm
+                      </button>
+                      <button onClick={resetActionState} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11px' }}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {actionError && (
+                    <div style={{ fontSize: '11px', color: '#ef4444' }}>{actionError}</div>
+                  )}
+                </div>
+              )}
 
               {/* Details Grid */}
               <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', borderBottom: '1px solid var(--border-color)' }}>
@@ -611,8 +871,6 @@ export const Assignments: React.FC = () => {
           )}
         </div>
       </div>
-
-      {/* Schedule Modal removed — scheduling is now done in Stage 2 (Schedule Dispatch) */}
     </div>
   );
 };

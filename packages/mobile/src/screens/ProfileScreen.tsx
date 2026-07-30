@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform, Switch, Alert } from 'react-native';
 import { styles } from '../theme/styles';
 import { InteractiveMap } from '../components/InteractiveMap';
+import { Ionicons as IoniconsRaw } from '@expo/vector-icons';
+const Ionicons = IoniconsRaw as any;
 
 export interface ProfileDataState {
   phone: string;
@@ -38,6 +40,10 @@ export interface ProfileDataState {
   assayerCode: string;
   biometricsEnabled?: boolean;
   pinCode?: string;
+  offlineSyncEnabled?: boolean;
+  pushNotificationsEnabled?: boolean;
+  soundAlertsEnabled?: boolean;
+  appTheme?: 'DARK' | 'LIGHT' | 'SYSTEM';
 }
 
 interface ProfileScreenProps {
@@ -47,6 +53,7 @@ interface ProfileScreenProps {
   savingProfile: boolean;
   onUpdateProfileField: (field: keyof ProfileDataState, value: any) => void;
   onSaveProfile: () => void;
+  onLogout?: () => void;
 }
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
@@ -56,8 +63,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   savingProfile,
   onUpdateProfileField,
   onSaveProfile,
+  onLogout,
 }) => {
-  const [activeTab, setActiveTab] = useState<'CONTACT' | 'SKILLS' | 'EMERGENCY' | 'BANKING' | 'SETTINGS'>('CONTACT');
+  const [activeCategory, setActiveCategory] = useState<'ACCOUNT' | 'SECURITY' | 'LOCATION' | 'WORKLOAD' | 'PREFERENCES' | 'SUPPORT'>('ACCOUNT');
   const [capturingGps, setCapturingGps] = useState<boolean>(false);
   const [gpsStatus, setGpsStatus] = useState<string>('GPS LOCKED 🛰️ (Precision ±5m)');
 
@@ -100,111 +108,110 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           processPosition(lat, lon, pos.coords.accuracy || 5);
         },
         (_err: any) => {
-          const lat = parseFloat((28.6315000 + (Math.random() - 0.5) * 0.005).toFixed(7));
-          const lon = parseFloat((77.2167000 + (Math.random() - 0.5) * 0.005).toFixed(7));
-          processPosition(lat, lon, 8);
+          setCapturingGps(false);
+          setGpsStatus('GPS acquisition timed out. Please check location permissions.');
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
       );
     } else {
-      const lat = parseFloat((28.6315000 + (Math.random() - 0.5) * 0.005).toFixed(7));
-      const lon = parseFloat((77.2167000 + (Math.random() - 0.5) * 0.005).toFixed(7));
-      processPosition(lat, lon, 10);
+      setCapturingGps(false);
+      setGpsStatus('Geolocation not supported on this device.');
     }
   };
 
-  const onTimePercentage = profile.totalAssignments > 0
-    ? Math.round((profile.onTimeCompletions / profile.totalAssignments) * 100)
-    : 0;
-
-  const displayRating = profile.averageRating || profile.performanceRating || 0;
+  const categories = [
+    { key: 'ACCOUNT', label: 'Account & Identity', icon: 'person-outline' as const },
+    { key: 'SECURITY', label: 'Security & Auth', icon: 'shield-checkmark-outline' as const },
+    { key: 'LOCATION', label: 'Location & Radius', icon: 'location-outline' as const },
+    { key: 'WORKLOAD', label: 'Audit & Workload', icon: 'briefcase-outline' as const },
+    { key: 'PREFERENCES', label: 'App Preferences', icon: 'options-outline' as const },
+    { key: 'SUPPORT', label: 'Help & Support', icon: 'help-circle-outline' as const },
+  ];
 
   return (
-    <ScrollView style={{ flex: 1 }}>
-      {/* ── Ultra-Modern Hero Header Badge ── */}
-      <View style={[styles.card, { padding: 20, marginBottom: 16, backgroundColor: '#1e293b', borderColor: '#334155', borderRadius: 14 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-          <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: '#6366f1', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#818cf8' }}>
-            <Text style={{ fontSize: 24, fontWeight: '800', color: '#ffffff' }}>
-              {assayerName.split(' ').map(n => n[0]).join('') || 'AS'}
+    <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false}>
+      {/* ── User Header Card ── */}
+      <View style={[styles.card, { padding: 16, backgroundColor: 'rgba(30,41,59,0.95)', borderColor: 'rgba(99,102,241,0.25)', marginBottom: 16 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <View style={{
+            width: 56,
+            height: 56,
+            borderRadius: 28,
+            backgroundColor: '#4f46e5',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 2,
+            borderColor: 'rgba(255,255,255,0.2)',
+          }}>
+            <Text style={{ fontSize: 24, fontWeight: '900', color: '#ffffff' }}>
+              {(assayerName || 'A').charAt(0).toUpperCase()}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <Text style={{ fontSize: 19, fontWeight: '800', color: '#ffffff' }}>{assayerName}</Text>
-              <View style={{ backgroundColor: 'rgba(16,185,129,0.2)', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12, borderWidth: 1, borderColor: '#10b981' }}>
-                <Text style={{ fontSize: 10, fontWeight: '800', color: '#34d399' }}>VERIFIED ACTIVE</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: '#ffffff' }}>{assayerName || 'Authorized Assayer'}</Text>
+              <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
+                <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '800' }}>VERIFIED</Text>
               </View>
             </View>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 3 }}>
-              Code: <Text style={{ color: '#e2e8f0', fontWeight: '700' }}>{assayerCode}</Text> • Employment: <Text style={{ color: '#818cf8', fontWeight: '700' }}>{profile.employmentType || 'INTERNAL'}</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+              Code: <Text style={{ color: '#38bdf8', fontWeight: '700' }}>{assayerCode || profile.assayerCode || 'N/A'}</Text> • BIS Certified
             </Text>
-            <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
-              BIS Hallmark Certified Assayer • {profile.experienceYears || 0} Years Gold Assay Experience
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Dynamic Performance Scorecard Bar ── */}
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' }}>
-          <View style={{ flex: 1, backgroundColor: 'rgba(99,102,241,0.1)', padding: 10, borderRadius: 8, alignItems: 'center' }}>
-            <Text style={{ fontSize: 10, color: '#94a3b8', fontWeight: '700' }}>TOTAL AUDITS</Text>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: '#ffffff', marginTop: 2 }}>{profile.totalAssignments}</Text>
-          </View>
-          <View style={{ flex: 1, backgroundColor: 'rgba(16,185,129,0.1)', padding: 10, borderRadius: 8, alignItems: 'center' }}>
-            <Text style={{ fontSize: 10, color: '#94a3b8', fontWeight: '700' }}>ON-TIME %</Text>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: '#34d399', marginTop: 2 }}>{onTimePercentage}%</Text>
-          </View>
-          <View style={{ flex: 1, backgroundColor: 'rgba(245,158,11,0.1)', padding: 10, borderRadius: 8, alignItems: 'center' }}>
-            <Text style={{ fontSize: 10, color: '#94a3b8', fontWeight: '700' }}>RATING</Text>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: '#fbbf24', marginTop: 2 }}>{displayRating} ⭐</Text>
-          </View>
-          <View style={{ flex: 1, backgroundColor: 'rgba(168,85,247,0.1)', padding: 10, borderRadius: 8, alignItems: 'center' }}>
-            <Text style={{ fontSize: 10, color: '#94a3b8', fontWeight: '700' }}>EARNINGS</Text>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: '#c084fc', marginTop: 2 }}>₹{profile.totalEarnings || profile.runningBalance || 0}</Text>
           </View>
         </View>
       </View>
 
-      {/* ── Sub-Tab Navigation Bar ── */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
-        <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: 2 }}>
-          {[
-            { id: 'CONTACT', label: '📱 Contact & GPS Map' },
-            { id: 'SECURITY', label: '🔒 Security & PIN' },
-            { id: 'SKILLS', label: '📜 Skills & BIS' },
-            { id: 'EMERGENCY', label: '🆘 Emergency' },
-            { id: 'BANKING', label: '🏦 Bank & Tax' },
-            { id: 'SETTINGS', label: '⚙️ Workload' },
-          ].map(t => (
+      {/* ── Settings Category Selection Menu ── */}
+      <Text style={{ fontSize: 12, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, marginLeft: 2 }}>
+        Settings & Configuration
+      </Text>
+
+      <View style={{ gap: 8, marginBottom: 16 }}>
+        {categories.map((cat) => {
+          const isActive = activeCategory === cat.key;
+          return (
             <TouchableOpacity
-              key={t.id}
-              onPress={() => setActiveTab(t.id as any)}
+              key={cat.key}
+              onPress={() => setActiveCategory(cat.key as any)}
               style={{
-                paddingHorizontal: 14,
-                paddingVertical: 9,
-                borderRadius: 8,
-                backgroundColor: activeTab === t.id ? '#6366f1' : '#1e293b',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: 14,
+                backgroundColor: isActive ? 'rgba(99, 102, 241, 0.15)' : 'rgba(30, 41, 59, 0.7)',
+                borderRadius: 14,
                 borderWidth: 1,
-                borderColor: activeTab === t.id ? '#818cf8' : '#334155',
+                borderColor: isActive ? '#6366f1' : 'rgba(255, 255, 255, 0.08)',
               }}
             >
-              <Text style={{ fontSize: 12, fontWeight: '700', color: activeTab === t.id ? '#ffffff' : '#94a3b8' }}>
-                {t.label}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  backgroundColor: isActive ? '#4f46e5' : 'rgba(15, 23, 42, 0.6)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <Ionicons name={cat.icon} size={18} color={isActive ? '#ffffff' : '#a5b4fc'} />
+                </View>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: isActive ? '#ffffff' : '#cbd5e1' }}>
+                  {cat.label}
+                </Text>
+              </View>
+              <Ionicons name={isActive ? 'chevron-down' : 'chevron-forward'} size={18} color={isActive ? '#818cf8' : '#64748b'} />
             </TouchableOpacity>
-          ))}
-        </View>
-      </ScrollView>
+          );
+        })}
+      </View>
 
-      {/* ── Sub-Tab Content Cards ── */}
-      <View style={[styles.card, { padding: 18, backgroundColor: '#1e293b', borderColor: '#334155' }]}>
-        {activeTab === 'CONTACT' && (
+      {/* ── Settings Content Card ── */}
+      <View style={[styles.card, { padding: 18, backgroundColor: 'rgba(30, 41, 59, 0.9)', borderColor: 'rgba(99, 102, 241, 0.2)', marginBottom: 24 }]}>
+        {/* 1. ACCOUNT & IDENTITY */}
+        {activeCategory === 'ACCOUNT' && (
           <View>
-            <Text style={styles.cardTitle}>Primary Contact & Precision Map Location</Text>
-            <Text style={styles.branchSubText}>
-              Keep your contact numbers, registered address, and live map location pin updated for field coordinators.
-            </Text>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Account & Personal Identity</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Manage your contact numbers and official credentials.</Text>
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Mobile Phone Number:</Text>
@@ -217,134 +224,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Base City & District:</Text>
-              <TextInput style={styles.textInput} value={profile.city} onChangeText={(val) => onUpdateProfileField('city', val)} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Registered Base Address:</Text>
-              <TextInput style={styles.textInput} value={profile.address} onChangeText={(val) => onUpdateProfileField('address', val)} multiline />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Postal Pincode:</Text>
-              <TextInput style={styles.textInput} value={profile.pincode} onChangeText={(val) => onUpdateProfileField('pincode', val)} keyboardType="number-pad" />
-            </View>
-
-            {/* ── Interactive Map with Region Radius ── */}
-            <View style={{ marginTop: 16, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#334155', backgroundColor: '#0f172a' }}>
-              <View style={{ padding: 12, backgroundColor: 'rgba(99,102,241,0.12)', borderBottomWidth: 1, borderBottomColor: '#334155' }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}>🗺️ Drag Pin to Set Base Location</Text>
-                    <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>
-                      {profile.latitude?.toFixed(4)}, {profile.longitude?.toFixed(4)} • {profile.preferredRadius || 10}km service radius
-                    </Text>
-                  </View>
-                  <View style={{ backgroundColor: 'rgba(16,185,129,0.2)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 }}>
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#34d399' }}>📍 PIN ACTIVE</Text>
-                  </View>
-                </View>
-              </View>
-
-              {Platform.OS === 'web' ? (
-                <InteractiveMap
-                  latitude={profile.latitude || 28.6315}
-                  longitude={profile.longitude || 77.2167}
-                  radiusKm={profile.preferredRadius || 10}
-                  onLocationChange={(lat, lng) => {
-                    onUpdateProfileField('latitude', lat);
-                    onUpdateProfileField('longitude', lng);
-                  }}
-                  onRadiusChange={(km) => onUpdateProfileField('preferredRadius', km)}
-                />
-              ) : (
-                <View style={{ height: 180, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ color: '#94a3b8', fontSize: 12 }}>Map available on web</Text>
-                </View>
-              )}
-
-              <View style={{ padding: 14 }}>
-                <Text style={{ fontSize: 11, color: '#94a3b8', fontWeight: '700' }}>DETECTED STREET ADDRESS PREVIEW</Text>
-                <Text style={{ fontSize: 13, color: '#e2e8f0', fontWeight: '600', marginTop: 3, lineHeight: 18 }}>
-                  📍 {profile.address || ''}, {profile.city || ''}, {profile.pincode || ''}
-                </Text>
-
-                {/* ── Radius Controls ── */}
-                <View style={{ marginTop: 12, backgroundColor: 'rgba(15,23,42,0.6)', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#334155' }}>
-                  <Text style={{ fontSize: 11, color: '#94a3b8', fontWeight: '700', marginBottom: 8 }}>📏 PREFERRED SERVICE RADIUS</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <TouchableOpacity
-                      onPress={() => onUpdateProfileField('preferredRadius', Math.max(1, (profile.preferredRadius || 10) - 5))}
-                      style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '700' }}>−</Text>
-                    </TouchableOpacity>
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 22, fontWeight: '800', color: '#818cf8' }}>{profile.preferredRadius || 10}</Text>
-                      <Text style={{ fontSize: 10, color: '#64748b' }}>kilometers</Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => onUpdateProfileField('preferredRadius', Math.min(100, (profile.preferredRadius || 10) + 5))}
-                      style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '700' }}>+</Text>
-                    </TouchableOpacity>
-                    <View style={{ width: 1, height: 30, backgroundColor: '#334155' }} />
-                    <View style={{ flexDirection: 'row', gap: 4 }}>
-                      {[5, 10, 25, 50].map(v => (
-                        <TouchableOpacity
-                          key={v}
-                          onPress={() => onUpdateProfileField('preferredRadius', v)}
-                          style={{
-                            paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4,
-                            backgroundColor: (profile.preferredRadius || 10) === v ? '#6366f1' : '#1e293b',
-                            borderWidth: 1, borderColor: (profile.preferredRadius || 10) === v ? '#818cf8' : '#334155',
-                          }}
-                        >
-                          <Text style={{ fontSize: 10, fontWeight: '700', color: (profile.preferredRadius || 10) === v ? '#ffffff' : '#94a3b8' }}>{v}km</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                </View>
-
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-                  <TouchableOpacity
-                    onPress={handleCaptureGps}
-                    disabled={capturingGps}
-                    style={{
-                      flex: 1, backgroundColor: '#6366f1', paddingVertical: 10, borderRadius: 8,
-                      alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6,
-                    }}
-                  >
-                    {capturingGps ? (
-                      <ActivityIndicator color="#ffffff" size="small" />
-                    ) : (
-                      <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 12 }}>📍 GPS Auto-Detect</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {activeTab === 'SKILLS' && (
-          <View>
-            <Text style={styles.cardTitle}>BIS Hallmark Certification & Metallurgical Skills</Text>
-            <Text style={styles.branchSubText}>
-              Verified metallurgical certifications and languages spoken for client communication.
-            </Text>
-
-            <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>BIS Hallmark License Number:</Text>
               <TextInput style={styles.textInput} value={profile.licenseNo} onChangeText={(val) => onUpdateProfileField('licenseNo', val)} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Assaying Specializations & Tech:</Text>
-              <TextInput style={styles.textInput} value={profile.skills} onChangeText={(val) => onUpdateProfileField('skills', val)} multiline />
             </View>
 
             <View style={styles.inputGroup}>
@@ -353,108 +234,38 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Experience (Years):</Text>
-              <TextInput style={styles.textInput} value={String(profile.experienceYears)} onChangeText={(val) => onUpdateProfileField('experienceYears', parseInt(val) || 0)} keyboardType="number-pad" />
-            </View>
-          </View>
-        )}
-
-        {activeTab === 'EMERGENCY' && (
-          <View>
-            <Text style={styles.cardTitle}>Emergency Contact Information</Text>
-            <Text style={styles.branchSubText}>
-              In case of field emergencies during branch vault audits, operations team will contact this person immediately.
-            </Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Emergency Contact Person Name:</Text>
-              <TextInput style={styles.textInput} value={profile.emergencyName} onChangeText={(val) => onUpdateProfileField('emergencyName', val)} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Emergency Contact Mobile Phone:</Text>
-              <TextInput style={styles.textInput} value={profile.emergencyPhone} onChangeText={(val) => onUpdateProfileField('emergencyPhone', val)} keyboardType="phone-pad" />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Relationship:</Text>
-              <TextInput style={styles.textInput} value={profile.emergencyRelation || ''} onChangeText={(val) => onUpdateProfileField('emergencyRelation', val)} />
-            </View>
-          </View>
-        )}
-
-        {activeTab === 'BANKING' && (
-          <View>
-            <Text style={styles.cardTitle}>Tax & Bank Identity Verification</Text>
-            <Text style={styles.branchSubText}>
-              Financial details verified for direct payout transfer. (Read-only for security; contact HR to modify).
-            </Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>PAN Card Number:</Text>
+              <Text style={styles.inputLabel}>PAN Card (Verified):</Text>
               <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.panNumber ? `${profile.panNumber} (Verified ✅)` : 'NOT REGISTERED'} editable={false} />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Bank Account Number:</Text>
+              <Text style={styles.inputLabel}>Bank Account (Verified):</Text>
               <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.bankAccountNumber ? `XXXX-XXXX-${profile.bankAccountNumber.slice(-4)}` : 'NOT REGISTERED'} editable={false} />
             </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Bank IFSC Code:</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.ifscCode || 'NOT REGISTERED'} editable={false} />
-            </View>
           </View>
         )}
 
-        {activeTab === 'SETTINGS' && (
+        {/* 2. SECURITY & AUTHENTICATION */}
+        {activeCategory === 'SECURITY' && (
           <View>
-            <Text style={styles.cardTitle}>Operational Workload Capacity</Text>
-            <Text style={styles.branchSubText}>
-              Your assigned audit capacities configured by FAPOMS Operations Control Center.
-            </Text>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Security & Quick Login</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Configure biometric hardware and 4-digit passcode authentication.</Text>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Max Daily Audit Workload Limit:</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxDailyWorkload || 0} Audits / Day`} editable={false} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Max Weekly Audit Workload Limit:</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxWeeklyWorkload || 0} Audits / Week`} editable={false} />
-            </View>
-          </View>
-        )}
-
-        {(activeTab as any) === 'SECURITY' && (
-          <View>
-            <Text style={styles.cardTitle}>Security & Quick Sign-In Settings</Text>
-            <Text style={styles.branchSubText}>
-              Configure your hardware Face ID / Fingerprint sensor and quick 4-Digit Security PIN for rapid login.
-            </Text>
-
-            {/* Biometric Toggle */}
+            {/* Biometrics Switch */}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 14 }}>
               <View style={{ flex: 1, paddingRight: 10 }}>
-                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Fingerprint / Face ID Login</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Allow sign-in using device biometric hardware</Text>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Face ID / Fingerprint Auth</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Allow rapid sign-in via device biometric hardware</Text>
               </View>
-              <TouchableOpacity
-                style={{
-                  backgroundColor: profile.biometricsEnabled !== false ? '#10b981' : '#475569',
-                  paddingHorizontal: 14,
-                  paddingVertical: 8,
-                  borderRadius: 10,
-                }}
-                onPress={() => onUpdateProfileField('biometricsEnabled', !(profile.biometricsEnabled !== false))}
-              >
-                <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>
-                  {profile.biometricsEnabled !== false ? 'ENABLED ✅' : 'DISABLED 🔒'}
-                </Text>
-              </TouchableOpacity>
+              <Switch
+                value={profile.biometricsEnabled !== false}
+                onValueChange={(val) => onUpdateProfileField('biometricsEnabled', val)}
+                trackColor={{ false: '#475569', true: '#4f46e5' }}
+                thumbColor={profile.biometricsEnabled !== false ? '#38bdf8' : '#cbd5e1'}
+              />
             </View>
 
-            {/* Quick PIN Setup */}
+            {/* Quick 4-Digit PIN */}
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>4-Digit Quick Passcode / PIN:</Text>
               <TextInput
@@ -470,16 +281,224 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           </View>
         )}
 
-        {/* ── Save Action Button ── */}
+        {/* 3. LOCATION & RADIUS */}
+        {activeCategory === 'LOCATION' && (
+          <View>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Base Location & Service Radius</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Set your registered base address and preferred audit distance.</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Base City & District:</Text>
+              <TextInput style={styles.textInput} value={profile.city} onChangeText={(val) => onUpdateProfileField('city', val)} />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Registered Street Address:</Text>
+              <TextInput style={styles.textInput} value={profile.address} onChangeText={(val) => onUpdateProfileField('address', val)} multiline />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Postal Pincode:</Text>
+              <TextInput style={styles.textInput} value={profile.pincode} onChangeText={(val) => onUpdateProfileField('pincode', val)} keyboardType="number-pad" />
+            </View>
+
+            {/* Service Radius Selector */}
+            <View style={{ marginTop: 12, backgroundColor: 'rgba(15,23,42,0.6)', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+              <Text style={{ fontSize: 11, color: '#94a3b8', fontWeight: '800', marginBottom: 8 }}>PREFERRED SERVICE RADIUS</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <TouchableOpacity
+                  onPress={() => onUpdateProfileField('preferredRadius', Math.max(1, (profile.preferredRadius || 10) - 5))}
+                  style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '800' }}>−</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 22, fontWeight: '800', color: '#38bdf8' }}>{profile.preferredRadius || 10}</Text>
+                  <Text style={{ fontSize: 10, color: '#64748b' }}>kilometers</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => onUpdateProfileField('preferredRadius', Math.min(100, (profile.preferredRadius || 10) + 5))}
+                  style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '800' }}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Map Preview */}
+            <View style={{ marginTop: 14, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: '#0f172a' }}>
+              {Platform.OS === 'web' ? (
+                <InteractiveMap
+                  latitude={profile.latitude || 28.6315}
+                  longitude={profile.longitude || 77.2167}
+                  radiusKm={profile.preferredRadius || 10}
+                  onLocationChange={(lat, lng) => {
+                    onUpdateProfileField('latitude', lat);
+                    onUpdateProfileField('longitude', lng);
+                  }}
+                  onRadiusChange={(km) => onUpdateProfileField('preferredRadius', km)}
+                />
+              ) : (
+                <View style={{ height: 160, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ color: '#94a3b8', fontSize: 12 }}>Map rendering enabled for Web & Native</Text>
+                </View>
+              )}
+            </View>
+
+            <TouchableOpacity
+              onPress={handleCaptureGps}
+              disabled={capturingGps}
+              style={{
+                marginTop: 14, backgroundColor: '#4f46e5', paddingVertical: 12, borderRadius: 10,
+                alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
+              }}
+            >
+              {capturingGps ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13 }}>📍 Auto-Detect GPS Satellite Fix</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* 4. WORKLOAD & CAPACITY */}
+        {activeCategory === 'WORKLOAD' && (
+          <View>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Audit & Operational Capacity</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Configured daily and weekly workload limits set by Sumeru Operations.</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Max Daily Audit Limit:</Text>
+              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxDailyWorkload || 0} Audits / Day`} editable={false} />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Max Weekly Audit Limit:</Text>
+              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxWeeklyWorkload || 0} Audits / Week`} editable={false} />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Assayer Employment Type:</Text>
+              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.employmentType || 'CONTRACTOR'} editable={false} />
+            </View>
+          </View>
+        )}
+
+        {/* 5. APP PREFERENCES */}
+        {activeCategory === 'PREFERENCES' && (
+          <View>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Application Preferences</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Customize app behavior, notifications, and offline data sync.</Text>
+
+            {/* Offline Data Sync */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 12 }}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Offline Audit Caching</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Auto-save audit reports locally when offline</Text>
+              </View>
+              <Switch
+                value={profile.offlineSyncEnabled !== false}
+                onValueChange={(val) => onUpdateProfileField('offlineSyncEnabled', val)}
+                trackColor={{ false: '#475569', true: '#4f46e5' }}
+                thumbColor={profile.offlineSyncEnabled !== false ? '#38bdf8' : '#cbd5e1'}
+              />
+            </View>
+
+            {/* Push Notifications */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 12 }}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Dispatch Push Notifications</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Receive instant alerts for new audit invites</Text>
+              </View>
+              <Switch
+                value={profile.pushNotificationsEnabled !== false}
+                onValueChange={(val) => onUpdateProfileField('pushNotificationsEnabled', val)}
+                trackColor={{ false: '#475569', true: '#4f46e5' }}
+                thumbColor={profile.pushNotificationsEnabled !== false ? '#38bdf8' : '#cbd5e1'}
+              />
+            </View>
+
+            {/* Audio Alerts */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Sound & Chime Alerts</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Play audio chime when new dispatch is assigned</Text>
+              </View>
+              <Switch
+                value={profile.soundAlertsEnabled !== false}
+                onValueChange={(val) => onUpdateProfileField('soundAlertsEnabled', val)}
+                trackColor={{ false: '#475569', true: '#4f46e5' }}
+                thumbColor={profile.soundAlertsEnabled !== false ? '#38bdf8' : '#cbd5e1'}
+              />
+            </View>
+          </View>
+        )}
+
+        {/* 6. HELP & SUPPORT */}
+        {activeCategory === 'SUPPORT' && (
+          <View>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Sumeru Support & Emergency</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Direct hotline to Sumeru Operations & Control Center.</Text>
+
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12,
+                borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 10,
+              }}
+              onPress={() => Alert.alert('Support Helpline', 'Contacting Sumeru Operations Helpline: +91 1800-123-4567')}
+            >
+              <Ionicons name="call-outline" size={20} color="#38bdf8" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#ffffff' }}>Operations Control Desk</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8' }}>Toll-free 24/7 Helpline: 1800-123-4567</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12,
+                borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 10,
+              }}
+              onPress={() => Alert.alert('App Information', 'Sumeru Global Audit & Support Suite v2.4.0 (Build 2026.07)')}
+            >
+              <Ionicons name="information-circle-outline" size={20} color="#a5b4fc" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#ffffff' }}>App Build & Version</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8' }}>v2.4.0 • Enterprise Production Engine</Text>
+              </View>
+            </TouchableOpacity>
+
+            {onLogout && (
+              <TouchableOpacity
+                style={{
+                  marginTop: 10, backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                  paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.3)',
+                  alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
+                }}
+                onPress={onLogout}
+              >
+                <Ionicons name="log-out-outline" size={18} color="#f87171" />
+                <Text style={{ color: '#f87171', fontWeight: '800', fontSize: 14 }}>Sign Out of App Session</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* ── Save Settings Action Button ── */}
         <TouchableOpacity
-          style={[styles.saveBtn, { marginTop: 22, backgroundColor: '#6366f1', paddingVertical: 14, borderRadius: 10 }]}
+          style={[styles.saveBtn, { marginTop: 22, backgroundColor: '#4f46e5', paddingVertical: 14, borderRadius: 12 }]}
           disabled={savingProfile}
           onPress={onSaveProfile}
         >
           {savingProfile ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
-            <Text style={[styles.btnTextWhite, { fontSize: 14, fontWeight: '700' }]}>💾 Save Profile & Map Pin Permanently</Text>
+            <Text style={[styles.btnTextWhite, { fontSize: 14, fontWeight: '800', letterSpacing: 0.3 }]}>
+              💾 Save Settings Permanently
+            </Text>
           )}
         </TouchableOpacity>
       </View>

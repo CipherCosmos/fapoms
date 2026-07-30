@@ -9,6 +9,7 @@ const assignment_service_1 = require("../assignment/assignment.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const constraint_evaluator_1 = require("../planning/constraint.evaluator");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 describe('SchedulingService', () => {
     let service;
@@ -61,6 +62,10 @@ describe('SchedulingService', () => {
                 {
                     provide: constraint_evaluator_1.ConstraintEvaluator,
                     useValue: mockConstraintEvaluator,
+                },
+                {
+                    provide: domain_event_publisher_1.DomainEventPublisher,
+                    useValue: { publish: jest.fn() },
                 },
             ],
         }).compile();
