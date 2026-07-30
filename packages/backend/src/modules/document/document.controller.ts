@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, Res, Body } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, Res, Body, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
@@ -14,6 +14,8 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, 
 import { SystemRole, DocumentStatus, DocumentType, AssessmentStatus, AssignmentStatus } from '@fapoms/shared';
 
 import { ValidationService } from '../validation/validation.service';
+import { DocumentAccessTokenService } from './document-access-token.service';
+import { ChunkedUploadService } from './chunked-upload.service';
 import { AssignmentService } from '../assignment/assignment.service';
 
 @ApiTags('Documents')
@@ -31,10 +33,12 @@ export class DocumentController {
     private readonly assessmentRepository: Repository<AssessmentEntity>,
     private readonly validationService: ValidationService,
     private readonly assignmentService: AssignmentService,
+    private readonly documentAccessTokenService: DocumentAccessTokenService,
+    private readonly chunkedUploadService: ChunkedUploadService,
   ) {}
 
   @Post('upload')
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file for an assessment' })
@@ -65,7 +69,7 @@ export class DocumentController {
   }
 
   @Post('mobile-upload')
-  @Public()
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Mobile JSON-based document upload (no multipart)' })
   async mobileUpload(@Body() body: any, @Req() req: any) {
     let targetId = body.projectBranchId || body.assessmentId || body.assignmentId;
@@ -77,9 +81,21 @@ export class DocumentController {
     }
 
     const fileName = body.fileName || `audited_report_${Date.now()}.pdf`;
-    const buffer = body.fileData
-      ? Buffer.from(body.fileData, 'base64')
-      : Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 90 >>\nstream\nBT\n/F1 18 Tf\n50 720 Td\n(FAPOMS AUDITED RETURN REPORT) Tj\n0 -30 Td\n/F1 12 Tf\n(File: ${fileName}) Tj\nET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000384 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n462\n%%EOF`);
+
+    // The audited return PDF is the assayer's actual field paperwork — the artifact the whole
+    // data-entry pipeline consumes. This used to fall back to synthesizing a placeholder PDF
+    // when `fileData` was absent, so a failed or empty upload still produced a document that
+    // looked genuine and marked the assignment complete. Reject instead: a missing file is an
+    // error, never something to invent.
+    if (!body.fileData) {
+      throw new BadRequestException(
+        'No file content received (fileData is required, base64-encoded). The audited return PDF must be a real uploaded file.',
+      );
+    }
+    const buffer = Buffer.from(body.fileData, 'base64');
+    if (buffer.length === 0) {
+      throw new BadRequestException('Uploaded file is empty.');
+    }
 
     const savedFilePath = await this.localStorageService.saveFile(fileName, buffer);
 
@@ -92,33 +108,262 @@ export class DocumentController {
       type: DocumentType.AUDITED_RETURN_PDF,
     }, req?.user?.id || '00000000-0000-0000-0000-000000000000');
 
-    await this.documentService.receiveDocument(doc.id, req?.user?.id || 'SYSTEM').catch(() => {});
+    // Marks the assayer's paperwork as returned, which is what puts it into the Data Entry
+    // Head's queue. This was `.catch(() => {})` — and since receiveDocument used to reject
+    // anything not already DISPATCHED, every audited return failed here invisibly and never
+    // reached the queue. Surface failures instead of swallowing them.
+    try {
+      await this.documentService.receiveDocument(doc.id, req?.user?.id || 'SYSTEM');
+    } catch (err: any) {
+      console.error(
+        `Audited return ${doc.id} uploaded but could not be marked received — it will not appear in the data-entry queue:`,
+        err?.message,
+      );
+    }
 
+    await this.completeAssignmentForReturn(doc, body.assignmentId, targetId, req?.user?.id || 'SYSTEM', fileName);
+
+    return { success: true, data: doc, documentUrl: `/documents/${doc.id}/download` };
+  }
+
+  /**
+   * Binary audited-return upload for the assayer app.
+   *
+   * The JSON/base64 sibling above inflates every upload by 33% (base64 expansion) and forces
+   * the whole file into a JS string on the device before sending — punishing on a low-end
+   * handset and on a rural 2G link, where that overhead is minutes of extra transfer per scan.
+   * Multipart sends the raw bytes and lets the client stream them straight off disk.
+   *
+   * Same post-upload behaviour as the JSON path — both delegate to the shared helper.
+   */
+  @Post('mobile-upload-binary')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Binary audited-return upload (no base64 inflation)' })
+  async mobileUploadBinary(
+    @UploadedFile() file: any,
+    @Query('assessmentId') assessmentId: string,
+    @Query('assignmentId') assignmentId: string,
+    @Req() req: any,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file content received.');
+    }
+    let targetId = assessmentId || assignmentId;
+    if (assignmentId && !assessmentId) {
+      const assignment = await this.assignmentRepository
+        .findOne({ where: { id: assignmentId } })
+        .catch(() => null);
+      if (assignment?.projectBranchId) targetId = assignment.projectBranchId;
+    }
+
+    const savedFilePath = await this.localStorageService.saveFile(file.originalname, file.buffer);
+    const doc = await this.documentService.create(
+      {
+        assessmentId: targetId,
+        fileName: file.originalname,
+        filePath: savedFilePath,
+        fileSize: file.size,
+        mimeType: file.mimetype || 'application/pdf',
+        type: DocumentType.AUDITED_RETURN_PDF,
+      },
+      req.user.id,
+    );
+
+    try {
+      await this.documentService.receiveDocument(doc.id, req.user.id);
+    } catch (err: any) {
+      console.error(`Audited return ${doc.id} could not be marked received:`, err?.message);
+    }
+
+    await this.completeAssignmentForReturn(doc, assignmentId, targetId, req.user.id, file.originalname);
+
+    return { success: true, data: doc };
+  }
+
+  // ── Resumable chunked upload ───────────────────────────────────────────────────
+  // Field uploads happen on rural 2G/weak-3G where a multi-minute single-request upload
+  // frequently drops and, previously, restarted from zero. These three endpoints let a client
+  // send fixed-size chunks, ask what survived a disconnect, and transmit only the gaps.
+
+  @Post('upload/session')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: 'Open a resumable upload session' })
+  async createUploadSession(
+    @Body() body: { assessmentId: string; fileName: string; fileSize: number; chunkSize?: number },
+    @Req() req: any,
+  ) {
+    if (!body?.assessmentId || !body?.fileName) {
+      throw new BadRequestException('assessmentId and fileName are required.');
+    }
+    const session = this.chunkedUploadService.createSession({
+      assessmentId: body.assessmentId,
+      fileName: body.fileName,
+      fileSize: Number(body.fileSize),
+      chunkSize: body.chunkSize ? Number(body.chunkSize) : undefined,
+      createdBy: req.user.id,
+    });
+    return { success: true, data: session };
+  }
+
+  /**
+   * What the client calls after a reconnect: returns which chunks are already stored so it can
+   * skip them. This is the difference between resuming a 90%-complete upload and repeating it.
+   */
+  @Get('upload/session/:uploadId')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: 'Resume: report which chunks the server already holds' })
+  async getUploadSession(@Param('uploadId') uploadId: string) {
+    const session = this.chunkedUploadService.getSession(uploadId);
+    const received = this.chunkedUploadService.receivedChunks(uploadId);
+    const missing: number[] = [];
+    for (let i = 0; i < session.totalChunks; i++) if (!received.includes(i)) missing.push(i);
+    return {
+      success: true,
+      data: {
+        ...session,
+        receivedChunks: received,
+        missingChunks: missing,
+        progress: Math.round((received.length / session.totalChunks) * 100),
+      },
+    };
+  }
+
+  @Put('upload/session/:uploadId/chunk/:index')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @UseInterceptors(FileInterceptor('chunk'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload one chunk (binary, resumable)' })
+  async uploadChunk(
+    @Param('uploadId') uploadId: string,
+    @Param('index') index: string,
+    @UploadedFile() chunk: any,
+  ) {
+    if (!chunk?.buffer) {
+      throw new BadRequestException('No chunk content received.');
+    }
+    const progress = this.chunkedUploadService.saveChunk(uploadId, Number(index), chunk.buffer);
+    return { success: true, data: { ...progress, index: Number(index) } };
+  }
+
+  @Post('upload/session/:uploadId/complete')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: 'Assemble the chunks into the final document' })
+  async completeUpload(
+    @Param('uploadId') uploadId: string,
+    @Body() body: { type?: DocumentType; assignmentId?: string },
+    @Req() req: any,
+  ) {
+    const { buffer, session } = this.chunkedUploadService.assemble(uploadId);
+    const type = body?.type && (Object.values(DocumentType) as string[]).includes(body.type)
+      ? body.type
+      : DocumentType.AUDITED_RETURN_PDF;
+
+    const savedFilePath = await this.localStorageService.saveFile(session.fileName, buffer);
+    const doc = await this.documentService.create(
+      {
+        assessmentId: session.assessmentId,
+        fileName: session.fileName,
+        filePath: savedFilePath,
+        fileSize: buffer.length,
+        mimeType: 'application/pdf',
+        type,
+      },
+      req.user.id,
+    );
+
+    // Staging space is only released once the document is safely persisted — if create()
+    // throws, the chunks survive and the client can retry completion without re-uploading.
+    this.chunkedUploadService.discard(uploadId);
+
+    if (type === DocumentType.AUDITED_RETURN_PDF) {
+      try {
+        await this.documentService.receiveDocument(doc.id, req.user.id);
+      } catch (err: any) {
+        console.error(`Chunked audited return ${doc.id} could not be marked received:`, err?.message);
+      }
+      await this.completeAssignmentForReturn(doc, body?.assignmentId, session.assessmentId, req.user.id, session.fileName);
+    }
+
+    return { success: true, data: doc };
+  }
+
+  /**
+   * Completes the assignment once the assayer's audited return has landed.
+   *
+   * Shared by the single-shot and resumable-chunked upload paths so both behave identically —
+   * duplicating this is exactly how the original cross-view status drift arose.
+   *
+   * Completion goes through AssignmentService.completeAssignment(), the single owner of that
+   * transition: it cascades the project branch (via the state machine, so the domain event
+   * fires), the schedule, the assessment status, the validation case, the audit trail, the
+   * notification and the assayer stats.
+   */
+  private async completeAssignmentForReturn(
+    doc: { id: string; assessmentId: string | null },
+    assignmentId: string | undefined,
+    fallbackTargetId: string | undefined,
+    userId: string,
+    fileName: string,
+  ): Promise<void> {
     let targetAsn = null;
-    if (body.assignmentId) {
-      targetAsn = await this.assignmentRepository.findOne({ where: { id: body.assignmentId }, relations: ['projectBranch'] }).catch(() => null);
+    if (assignmentId) {
+      targetAsn = await this.assignmentRepository
+        .findOne({ where: { id: assignmentId }, relations: ['projectBranch'] })
+        .catch(() => null);
     }
     if (!targetAsn && doc.assessmentId) {
-      targetAsn = await this.assignmentRepository.findOne({ where: { assessmentId: doc.assessmentId }, relations: ['projectBranch'] }).catch(() => null);
+      targetAsn = await this.assignmentRepository
+        .findOne({ where: { assessmentId: doc.assessmentId }, relations: ['projectBranch'] })
+        .catch(() => null);
     }
-    if (!targetAsn && targetId) {
-      targetAsn = await this.assignmentRepository.findOne({ where: { projectBranchId: targetId }, relations: ['projectBranch'] }).catch(() => null);
+    if (!targetAsn && fallbackTargetId) {
+      targetAsn = await this.assignmentRepository
+        .findOne({ where: { projectBranchId: fallbackTargetId }, relations: ['projectBranch'] })
+        .catch(() => null);
     }
 
     if (targetAsn && targetAsn.status !== AssignmentStatus.COMPLETED) {
-      // Completion must go through the single owner of that transition. It cascades the
-      // project branch (via ProjectBranchStateMachine, so the domain event fires), the
-      // schedule, the assessment status, the validation case, the audit trail, the
-      // notification and the assayer stats — all in one place.
-      //
-      // This used to be hand-rolled here with direct writes + raw SQL, each wrapped in a
-      // silent `.catch(() => {})`, so a single failure left the assignment COMPLETED while
-      // its branch stayed SCHEDULED and its schedule stayed RESCHEDULED — the exact
-      // cross-view status drift this replaced.
       try {
         await this.assignmentService.completeAssignment(
           targetAsn.id,
-          req?.user?.id || 'SYSTEM',
+          userId,
           `Audited return PDF uploaded (${fileName})`,
         );
       } catch (err: any) {
@@ -128,8 +373,6 @@ export class DocumentController {
         );
       }
     }
-
-    return { success: true, data: doc, documentUrl: `/documents/${doc.id}/download` };
   }
 
   @Post('validate-customer-excel')
@@ -183,7 +426,6 @@ export class DocumentController {
   }
 
   @Get(':id')
-  @Public()
   @ApiOperation({ summary: 'Get document metadata' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const doc = await this.documentService.findOne(id);
@@ -191,21 +433,131 @@ export class DocumentController {
   }
 
   @Get(':id/download')
+  // Reachable without a bearer token *only* with a valid signed token bound to this exact
+  // document (see DocumentAccessTokenService). The assayer app opens PDFs via
+  // Linking.openURL(), which delegates to the OS browser and cannot send an Authorization
+  // header — that constraint is why this endpoint was fully public, exposing bank customer
+  // paperwork to anyone who could reach the API.
   @Public()
-  @ApiOperation({ summary: 'Download physical file from storage' })
-  async downloadFile(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+  @ApiOperation({ summary: 'Download a document using a short-lived signed token' })
+  async downloadFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('token') token: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    this.documentAccessTokenService.verify(id, token);
     const doc = await this.documentService.findOne(id);
+
+    let stat: { size: number; mtimeMs: number };
     try {
-      const fileStream = await this.localStorageService.getFileStream(doc.filePath);
-      res.setHeader('Content-Type', doc.mimeType || 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${doc.fileName}"`);
-      fileStream.pipe(res);
+      stat = await this.localStorageService.statFile(doc.filePath);
     } catch {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${doc.fileName}"`);
-      const pdfContent = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 120 >>\nstream\nBT\n/F1 18 Tf\n50 720 Td\n(FAPOMS PRE-AUDIT CUSTOMER MASTER PDF) Tj\n0 -30 Td\n/F1 12 Tf\n(Document ID: ${doc.id}) Tj\n0 -20 Td\n(Branch Audit Pre-File Dispatched) Tj\nET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000414 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n492\n%%EOF`;
-      res.send(Buffer.from(pdfContent));
+      // Previously this fell back to sending a synthesized placeholder PDF, so a document
+      // whose file was missing from storage still "downloaded" successfully — the assayer
+      // received a stub believing it was their branch's customer data, and the underlying
+      // storage failure stayed invisible. A missing file is a real error; surface it.
+      throw new NotFoundException(
+        `File for document ${id} is missing from storage (${doc.filePath}). It may not have been uploaded successfully.`,
+      );
     }
+
+    // Stored documents are immutable once written, so a strong validator is safe. A field
+    // assayer reopening the same pre-field PDF then transfers 0 bytes instead of re-pulling
+    // several MB over 2G.
+    const etag = `"${id}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', new Date(stat.mtimeMs).toUTCString());
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    // Advertises resumability so clients know they may request a byte range.
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', doc.mimeType || 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${doc.fileName}"`);
+
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return;
+    }
+
+    // Range support is what lets an interrupted download resume from where it stopped rather
+    // than re-transferring the whole file — the difference between a recoverable blip and a
+    // restart on a 5-minute 2G download.
+    const range = req.headers.range as string | undefined;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+      if (match) {
+        const start = match[1] ? parseInt(match[1], 10) : 0;
+        const end = match[2] ? parseInt(match[2], 10) : stat.size - 1;
+
+        if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= stat.size) {
+          res.status(416).setHeader('Content-Range', `bytes */${stat.size}`);
+          res.end();
+          return;
+        }
+
+        const clampedEnd = Math.min(end, stat.size - 1);
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${clampedEnd}/${stat.size}`);
+        res.setHeader('Content-Length', clampedEnd - start + 1);
+        const partial = await this.localStorageService.getFileStream(doc.filePath, start, clampedEnd);
+        partial.pipe(res);
+        return;
+      }
+    }
+
+    // Content-Length lets the client show real progress and detect a truncated transfer.
+    res.setHeader('Content-Length', stat.size);
+    const fileStream = await this.localStorageService.getFileStream(doc.filePath);
+    fileStream.pipe(res);
+  }
+
+  /**
+   * Authenticated callers exchange their session for a short-lived, document-scoped download
+   * token. Clients that can send a bearer token (the web app) never need this; it exists for
+   * the assayer app's OS-browser download handoff.
+   */
+  @Get(':id/download-token')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+    SystemRole.DATA_ENTRY_HEAD,
+  )
+  @ApiOperation({ summary: 'Issue a short-lived signed download URL for a document' })
+  async issueDownloadToken(@Param('id', ParseUUIDPipe) id: string) {
+    // Confirms the document exists (and 404s if not) before minting a token for it.
+    await this.documentService.findOne(id);
+    const { token, expiresAt } = this.documentAccessTokenService.issue(id);
+    return {
+      success: true,
+      data: { downloadUrl: `/documents/${id}/download?token=${token}`, token, expiresAt },
+    };
+  }
+
+  /**
+   * Spec §8.6: the chain-of-custody view for one document — who moved it, when, and by what
+   * method — which is what answers "where is branch X's paperwork right now".
+   */
+  @Get(':id/trail')
+  @ApiOperation({ summary: 'Full transport/chain-of-custody trail for a document' })
+  async getTransportTrail(@Param('id', ParseUUIDPipe) id: string) {
+    const doc = await this.documentService.findOne(id);
+    return {
+      success: true,
+      data: {
+        documentId: doc.id,
+        fileName: doc.fileName,
+        type: doc.type,
+        status: doc.status,
+        assessmentId: doc.assessmentId,
+        branch: doc.assessment?.branch?.name ?? null,
+        project: doc.assessment?.project?.name ?? null,
+        trail: this.documentService.buildTransportTrail(doc),
+      },
+    };
   }
 
   @Patch(':id/status')
@@ -218,7 +570,7 @@ export class DocumentController {
   }
 
   @Post(':id/dispatch')
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Dispatch a document to the assigned assessor' })
   async dispatchDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const userId = req?.user?.id || id;
@@ -227,7 +579,7 @@ export class DocumentController {
   }
 
   @Post(':id/receive')
-  @Public()
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Mark a dispatched document as received back' })
   async receiveDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const userId = req?.user?.id || id;
@@ -236,9 +588,8 @@ export class DocumentController {
   }
 
   @Get('project-branch/:projectBranchId/download-pdf')
-  @Public()
   @ApiOperation({ summary: 'Directly download the Pre-Audit PDF file for a project branch' })
-  async downloadBranchPdf(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Res() res: Response) {
+  async downloadBranchPdf(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any, @Res() res: Response) {
     const list = await this.documentService.findByProjectBranch(projectBranchId);
     const doc = list.find(d => d.type === DocumentType.PRE_FIELD_AUDIT_PDF) ||
                 list.find(d => d.type === DocumentType.CUSTOMER_MASTER_DATA) ||
@@ -247,11 +598,14 @@ export class DocumentController {
       res.status(404).send('Document not found for branch');
       return;
     }
-    return this.downloadFile(doc.id, res);
+    // Internal re-dispatch to the token-protected handler: the caller already passed this
+    // controller's guards, so mint a token for the resolved document rather than requiring
+    // the client to make a second round-trip.
+    const { token } = this.documentAccessTokenService.issue(doc.id);
+    return this.downloadFile(doc.id, token, req, res);
   }
 
   @Get('project-branch/:projectBranchId')
-  @Public()
   @ApiOperation({ summary: 'Get documents for a project branch' })
   async findByProjectBranch(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
     const list = await this.documentService.findByProjectBranch(projectBranchId);
@@ -259,7 +613,6 @@ export class DocumentController {
   }
 
   @Get('assessment/:assessmentId')
-  @Public()
   @ApiOperation({ summary: 'Get documents for an assessment' })
   async findByAssessment(@Param('assessmentId', ParseUUIDPipe) assessmentId: string) {
     const list = await this.documentService.findByAssessment(assessmentId);
@@ -267,7 +620,6 @@ export class DocumentController {
   }
 
   @Get('project/:projectId')
-  @Public()
   @ApiOperation({ summary: 'Get all documents for a project' })
   async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const list = await this.documentService.findByProject(projectId);
@@ -275,7 +627,7 @@ export class DocumentController {
   }
 
   @Get()
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Get all system documents' })
   async findAll() {
     const list = await this.documentService.findAll();
@@ -283,7 +635,6 @@ export class DocumentController {
   }
 
   @Get('stats/summary')
-  @Public()
   @ApiOperation({ summary: 'Get document statistics' })
   async getStats() {
     const stats = await this.documentService.getDocumentStats();
@@ -291,7 +642,7 @@ export class DocumentController {
   }
 
   @Get('queue/data-entry')
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Get data entry queue — all received PDFs grouped by assessment' })
   async getDataEntryQueue() {
     const queue = await this.documentService.findDataEntryQueue();
@@ -299,19 +650,19 @@ export class DocumentController {
   }
 
   @Post(':id/send-external-ocr')
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Mark an audited PDF as sent to External OCR application' })
   async sendToExternalOcr(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    const userId = req?.user?.id || 'SYSTEM';
-    const doc = await this.documentService.updateStatus(id, DocumentStatus.SENT_TO_EXTERNAL_OCR, userId);
-    if (doc.assessmentId) {
-      await this.assessmentRepository.update(doc.assessmentId, { status: AssessmentStatus.DATA_ENTRY_IN_PROGRESS });
-    }
+    // Was a raw `assessmentRepository.update(...)` alongside a status write — the same
+    // hand-rolled pattern that produced the cross-view drift repaired earlier. The service
+    // owns the transition: it validates the source status, stamps the transport trail, writes
+    // the audit event, and advances the assessment through the one pipeline mapping.
+    const doc = await this.documentService.markSentToExternalOcr(id, req.user.id);
     return { success: true, data: doc, message: 'Audited PDF marked as sent to External OCR application.' };
   }
 
   @Post('upload-excel')
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload generated Excel report for an assessment from External OCR' })

@@ -4,6 +4,8 @@ import { PushNotificationService } from './push-notification.service';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationEntity } from './notification.entity';
+import { UserEntity } from '../user/user.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { DeviceTokenEntity } from './device-token.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
@@ -96,6 +98,10 @@ describe('FCM Notification & Routing E2E Test Suite', () => {
         { provide: getRepositoryToken(NotificationEntity), useValue: mockNotificationRepo },
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: getRepositoryToken(DeviceTokenEntity), useValue: mockDeviceTokenRepo },
+        // NotificationService resolves assayer -> user for notifyAssayer(); both repos are
+        // required for DI even though these tests exercise only the push path.
+        { provide: getRepositoryToken(UserEntity), useValue: { findOne: jest.fn() } },
+        { provide: getRepositoryToken(AssayerEntity), useValue: { findOne: jest.fn() } },
       ],
     }).compile();
 

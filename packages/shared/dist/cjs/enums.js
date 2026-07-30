@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.AssessmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
+exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DispatchMethod = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.AssessmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
 var ProjectStatus;
 (function (ProjectStatus) {
     ProjectStatus["DRAFT"] = "DRAFT";
@@ -79,6 +79,16 @@ var DocumentStatus;
     DocumentStatus["COMPLETED"] = "COMPLETED";
     DocumentStatus["ARCHIVED"] = "ARCHIVED";
 })(DocumentStatus || (exports.DocumentStatus = DocumentStatus = {}));
+/**
+ * How a document reached the assayer. Recorded per dispatch so the audit trail can answer
+ * "was this sent automatically the day before the audit, or pushed manually by an operator,
+ * and by whom" — spec §8.2/§8.3.
+ */
+var DispatchMethod;
+(function (DispatchMethod) {
+    DispatchMethod["AUTO"] = "AUTO";
+    DispatchMethod["MANUAL"] = "MANUAL";
+})(DispatchMethod || (exports.DispatchMethod = DispatchMethod = {}));
 var DocumentType;
 (function (DocumentType) {
     DocumentType["BRANCH_LIST"] = "BRANCH_LIST";
@@ -150,6 +160,13 @@ var SystemRole;
     SystemRole["VALIDATION_MANAGER"] = "VALIDATION_MANAGER";
     SystemRole["VALIDATOR"] = "VALIDATOR";
     SystemRole["DOCUMENT_EXECUTIVE"] = "DOCUMENT_EXECUTIVE";
+    /**
+     * Owns the collected-paperwork queue. Per spec §12.8 the application does NOT assign work
+     * to individual data-entry operators: every returned PDF lands with the Head, who downloads
+     * it and distributes work through the existing manual process. The system tracks lifecycle,
+     * ownership and progress — it does not route to individuals.
+     */
+    SystemRole["DATA_ENTRY_HEAD"] = "DATA_ENTRY_HEAD";
     SystemRole["ASSAYER"] = "ASSAYER";
     SystemRole["CLIENT_USER"] = "CLIENT_USER";
     SystemRole["READ_ONLY_AUDITOR"] = "READ_ONLY_AUDITOR";

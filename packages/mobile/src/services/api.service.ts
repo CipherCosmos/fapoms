@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system';
 import { AssayerAssignment, AppNotification } from '../types/mobile-app';
 
 const API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000/api/v1' : 'http://localhost:3000/api/v1';
@@ -451,26 +452,147 @@ export class MobileApiService {
     };
   }
 
-  static async uploadCompletedAuditPdf(targetId: string, fileName: string, fileBase64OrBlob?: string, assignmentId?: string): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
+  /**
+   * Uploads the assayer's completed audit PDF as raw binary.
+   *
+   * Previously this sent base64 inside a JSON body, which inflates every upload by 33% and
+   * required the whole file as a JS string on the device first — on a rural 2G link that is
+   * minutes of extra transfer per scan, and on a low-end handset the in-memory copy could
+   * fail the upload outright.
+   *
+   * All three sources end up as binary on the wire:
+   *   - `uri`    (document picker)  streamed straight off disk
+   *   - `blob`   (web file input)   sent as multipart
+   *   - `base64` (in-app scanner)   staged to a temp file first, so even though the scanner
+   *                                 can only hand us base64, we never *transmit* base64
+   *
+   * Retries with exponential backoff, since field connections drop transiently and a single
+   * failure used to force the assayer to redo the upload by hand.
+   */
+  static async uploadCompletedAuditPdf(
+    targetId: string,
+    fileName: string,
+    source: { uri?: string; blob?: any; base64?: string } | string | undefined,
+    assignmentId?: string,
+  ): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
+    // A bare string is legacy base64 from older call sites.
+    const src = typeof source === 'string' ? { base64: source } : source || {};
+
+    const url =
+      `${API_BASE_URL}/documents/mobile-upload-binary` +
+      `?assessmentId=${encodeURIComponent(targetId)}` +
+      (assignmentId ? `&assignmentId=${encodeURIComponent(assignmentId)}` : '');
+
+    const MAX_ATTEMPTS = 4;
+    let lastError = 'Upload failed';
+    let tempUri: string | null = null;
+
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/mobile-upload`, {
-        method: 'POST',
-        body: JSON.stringify({
-          assignmentId: assignmentId || targetId,
-          assessmentId: targetId,
-          projectBranchId: targetId,
-          documentType: 'AUDITED_RETURN_PDF',
-          fileName,
-          fileData: fileBase64OrBlob,
-        }),
-      });
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const ok = await this.sendBinaryUpload(url, fileName, src, () => tempUri, (u) => { tempUri = u; });
+          if (ok.done) return ok.result;
+          lastError = ok.error || lastError;
+          if (ok.fatal) return { success: false, error: lastError };
+        } catch (err: any) {
+          lastError = err?.message || 'Network error during upload';
+        }
+
+        if (attempt < MAX_ATTEMPTS) {
+          // 1s, 2s, 4s — rides out a brief signal loss without stalling the user.
+          await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+        }
+      }
+      return { success: false, error: `${lastError} (after ${MAX_ATTEMPTS} attempts)` };
+    } finally {
+      if (tempUri) {
+        await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
+      }
+    }
+  }
+
+  /** One upload attempt. Split out so the retry loop above stays readable. */
+  private static async sendBinaryUpload(
+    url: string,
+    fileName: string,
+    src: { uri?: string; blob?: any; base64?: string },
+    getTemp: () => string | null,
+    setTemp: (u: string) => void,
+  ): Promise<{ done: boolean; fatal?: boolean; error?: string; result?: any }> {
+    const isWeb = Platform.OS === 'web';
+
+    if (isWeb) {
+      // On web, FormData with a Blob is already binary — no base64 needed on the wire.
+      let blob = src.blob;
+      if (!blob && src.base64) {
+        // React Native's Blob typings differ from the DOM's; on web this runs against the
+        // real browser Blob, so cast rather than fight the RN type surface.
+        const bytes = Uint8Array.from(atob(src.base64), (c) => c.charCodeAt(0));
+        blob = new (globalThis as any).Blob([bytes], { type: 'application/pdf' });
+      }
+      if (!blob) return { done: false, fatal: true, error: 'No file content to upload.' };
+
+      const form = new FormData();
+      (form as any).append('file', blob, fileName);
+      const response = await this.fetchWithAuth(url, { method: 'POST', body: form as any });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success) {
-        return { success: true, documentUrl: data.data?.filePath || data.documentUrl || `/documents/${data.data?.id}/download` };
+        return { done: true, result: { success: true, documentUrl: `/documents/${data.data?.id}/download` } };
       }
-      return { success: false, error: data.message || 'Failed to upload audit PDF document' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error during document upload' };
+      return {
+        done: false,
+        fatal: response.status >= 400 && response.status < 500 && ![401, 408, 429].includes(response.status),
+        error: data.message || `Upload failed (${response.status})`,
+      };
+    }
+
+    // Native: resolve to a file URI so the bytes stream from disk instead of through memory.
+    let uri = src.uri || getTemp();
+    if (!uri && src.base64) {
+      const staged = `${FileSystem.cacheDirectory}upload_${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      await FileSystem.writeAsStringAsync(staged, src.base64, { encoding: FileSystem.EncodingType.Base64 });
+      setTemp(staged);
+      uri = staged;
+    }
+    if (!uri) return { done: false, fatal: true, error: 'No file content to upload.' };
+
+    const result = await FileSystem.uploadAsync(url, uri, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: 'file',
+      mimeType: 'application/pdf',
+      parameters: { fileName },
+      headers: this.getHeaders() as Record<string, string>,
+    });
+
+    const data = JSON.parse(result.body || '{}');
+    if (result.status >= 200 && result.status < 300 && data.success) {
+      return { done: true, result: { success: true, documentUrl: `/documents/${data.data?.id}/download` } };
+    }
+    return {
+      done: false,
+      fatal: result.status >= 400 && result.status < 500 && ![401, 408, 429].includes(result.status),
+      error: data.message || `Upload failed (${result.status})`,
+    };
+  }
+
+  /**
+   * Resolves a browser-openable download URL for a document.
+   *
+   * The document download endpoint is no longer public — it previously exposed bank customer
+   * paperwork to anyone who could reach the API. It now requires a short-lived token bound to
+   * that one document, because `Linking.openURL()` hands the URL to the OS browser, which
+   * cannot send our Authorization header. So we exchange the authenticated session for a
+   * scoped token first, then open the signed URL.
+   */
+  static async getDocumentDownloadUrl(documentId: string): Promise<string | null> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/${documentId}/download-token`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success || !data?.data?.token) return null;
+      return `${this.getBaseUrl()}/documents/${documentId}/download?token=${data.data.token}`;
+    } catch {
+      return null;
     }
   }
 

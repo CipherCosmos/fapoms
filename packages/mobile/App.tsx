@@ -48,7 +48,7 @@ export default function App() {
   const [activeAssignment, setActiveAssignment] = useState<AssayerAssignment | null>(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [uploadedPdfName, setUploadedPdfName] = useState<string | null>(null);
-  const [selectedPdfData, setSelectedPdfData] = useState<string | undefined>(undefined);
+  const [selectedPdfData, setSelectedPdfData] = useState<{ uri?: string; blob?: any; base64?: string } | undefined>(undefined);
   const [scannerModalVisible, setScannerModalVisible] = useState(false);
   const [queryChatModalVisible, setQueryChatModalVisible] = useState(false);
   const [queryChatAssignment, setQueryChatAssignment] = useState<AssayerAssignment | null>(null);
@@ -514,12 +514,11 @@ export default function App() {
         input.onchange = async (e: any) => {
           const file = e.target?.files?.[0];
           if (!file) return;
-          const reader = new FileReader();
-          reader.onload = async () => {
-            const base64 = (reader.result as string).split(',')[1];
+          {
+            // Send the File itself — FormData transmits it as binary, so no base64 inflation.
             setUploadingPdf(true);
             const targetId = assignment.projectBranchId || assignment.id;
-            const res = await MobileApiService.uploadCompletedAuditPdf(targetId, file.name, base64, assignment.id);
+            const res = await MobileApiService.uploadCompletedAuditPdf(targetId, file.name, { blob: file }, assignment.id);
             setUploadingPdf(false);
             if (res.success) {
               Alert.alert('Audit Uploaded!', `Scanned audit report "${file.name}" uploaded successfully. Assignment marked COMPLETED.`);
@@ -527,8 +526,7 @@ export default function App() {
             } else {
               Alert.alert('Upload Failed', res.error || 'Could not upload PDF document.');
             }
-          };
-          reader.readAsDataURL(file);
+          }
         };
         input.click();
         return;
@@ -540,12 +538,12 @@ export default function App() {
       });
       if (!result.canceled && result.assets?.[0]) {
         const asset = result.assets[0];
-        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        // Pass the file URI, not base64. The upload now streams the raw bytes off disk —
+        // reading the whole PDF into a base64 string first added 33% to the transfer and
+        // could exhaust memory on low-end handsets.
         setUploadingPdf(true);
         const targetId = assignment.projectBranchId || assignment.id;
-        const res = await MobileApiService.uploadCompletedAuditPdf(targetId, asset.name, base64, assignment.id);
+        const res = await MobileApiService.uploadCompletedAuditPdf(targetId, asset.name, asset.uri, assignment.id);
         setUploadingPdf(false);
         if (res.success) {
           Alert.alert('Audit Uploaded!', `Scanned audit report "${asset.name}" uploaded successfully. Assignment marked COMPLETED.`);
@@ -754,13 +752,8 @@ export default function App() {
                       const file = e.target?.files?.[0];
                       if (!file) return;
                       setUploadedPdfName(file.name);
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        const base64 = (reader.result as string).split(',')[1];
-                        setSelectedPdfData(base64);
-                        Alert.alert('PDF Selected', file.name);
-                      };
-                      reader.readAsDataURL(file);
+                      setSelectedPdfData({ blob: file });
+                      Alert.alert('PDF Selected', file.name);
                     };
                     input.click();
                     return;
@@ -773,10 +766,9 @@ export default function App() {
                   if (!result.canceled && result.assets?.[0]) {
                     const asset = result.assets[0];
                     setUploadedPdfName(asset.name);
-                    const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-                      encoding: FileSystem.EncodingType.Base64,
-                    });
-                    setSelectedPdfData(base64);
+                    // Keep the URI; the uploader streams from disk. Reading the file into a
+                    // base64 string here cost 33% extra transfer and a full in-memory copy.
+                    setSelectedPdfData({ uri: asset.uri });
                     Alert.alert('PDF Selected', asset.name);
                   }
                 } catch (e: any) {
@@ -918,7 +910,9 @@ export default function App() {
         onClose={() => setScannerModalVisible(false)}
         onPdfGenerated={(pdfName, base64Pdf) => {
           setUploadedPdfName(pdfName);
-          setSelectedPdfData(base64Pdf);
+          // Scanner can only emit base64; the uploader stages it to a temp file so the
+          // wire transfer is still binary.
+          setSelectedPdfData({ base64: base64Pdf });
           Alert.alert('📄 Scanned PDF Ready', `${pdfName} compiled successfully! Tap "Submit Completed PDF" to upload.`);
         }}
       />

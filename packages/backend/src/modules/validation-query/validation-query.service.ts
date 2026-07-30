@@ -86,17 +86,20 @@ export class ValidationQueryService {
 
     // Create persistent text & push notification for the Assayer
     try {
-      await this.notificationService.create({
-        userId: resolvedAssayerId,
-        title: '❓ New Clarification Query Raised',
-        message: `Data Entry Team: "${dto.queryText.slice(0, 100)}${dto.queryText.length > 100 ? '...' : ''}"`,
-      }, userId);
-
-      await this.pushNotificationService.sendToUser(
+      // `resolvedAssayerId` is an assayer id. It used to be passed as `userId` into
+      // notificationService.create(), which foreign-keys to `users` — so this threw a FK
+      // violation that the catch below swallowed, and the assayer was never actually told a
+      // clarification had been raised (spec Phase 11). notifyAssayer() handles the id
+      // translation and resolves the email itself.
+      await this.notificationService.notifyAssayer(
         resolvedAssayerId,
-        '❓ New Clarification Query Raised',
-        `Data Entry Team: "${dto.queryText.slice(0, 80)}"`,
-        { queryId: saved.id, validationCaseId: saved.validationCaseId },
+        undefined,
+        {
+          title: '❓ New Clarification Query Raised',
+          message: `Data Entry Team: "${dto.queryText.slice(0, 100)}${dto.queryText.length > 100 ? '...' : ''}"`,
+          data: { queryId: saved.id, validationCaseId: saved.validationCaseId },
+        },
+        userId,
       );
     } catch (err) {
       console.error('Failed to create/send notification for raised query:', err);

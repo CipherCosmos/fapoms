@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, Linking, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, TouchableOpacity, Linking, ActivityIndicator, Alert } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { styles } from '../theme/styles';
@@ -27,21 +27,21 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   const [branchDocuments, setBranchDocuments] = useState<any[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
 
+  const branchId = activeAssignment?.projectBranchId;
+
+  const loadDocuments = useCallback(async () => {
+    if (!branchId) return;
+    setLoadingDocs(true);
+    const res = await MobileApiService.getBranchDocuments(branchId);
+    setBranchDocuments(res.success && res.data ? res.data : []);
+    setLoadingDocs(false);
+  }, [branchId]);
+
   useEffect(() => {
-    if (activeAssignment?.projectBranchId) {
-      setLoadingDocs(true);
-      MobileApiService.getBranchDocuments(activeAssignment.projectBranchId).then((res) => {
-        if (res.success && res.data) {
-          setBranchDocuments(res.data);
-        }
-        setLoadingDocs(false);
-      });
-    }
-  }, [activeAssignment?.projectBranchId]);
+    loadDocuments();
+  }, [loadDocuments]);
 
   if (!activeAssignment) return null;
-
-  const branchDocUrl = `${MobileApiService.getBaseUrl()}/documents/project-branch/${activeAssignment.projectBranchId}`;
 
   return (
     <View>
@@ -56,14 +56,38 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
 
         {loadingDocs && <ActivityIndicator color="#6366f1" style={{ marginBottom: 10 }} />}
 
+        {/* Explicit empty state. The list used to silently render nothing here, which was
+            indistinguishable from "still loading" — and previously the backend papered over it
+            by fabricating a placeholder PDF on read, so this case never appeared at all. */}
+        {!loadingDocs && branchDocuments.length === 0 && (
+          <View style={{ paddingVertical: 14, alignItems: 'center' }}>
+            <Ionicons name="document-outline" size={22} color="#64748b" />
+            <Text style={{ color: '#94a3b8', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
+              No audit paperwork has been dispatched for this branch yet.
+            </Text>
+            <Text style={{ color: '#64748b', fontSize: 11, marginTop: 2, textAlign: 'center' }}>
+              You'll be notified as soon as operations sends it.
+            </Text>
+          </View>
+        )}
+
         {branchDocuments.length > 0 && (
           <View style={{ marginBottom: 12 }}>
             {branchDocuments.map((doc: any) => (
               <TouchableOpacity
                 key={doc.id}
                 style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#334155' }}
-                onPress={() => {
-                  const url = doc.downloadUrl || `${MobileApiService.getBaseUrl()}/documents/${doc.id}/download`;
+                onPress={async () => {
+                  // Downloads are no longer an open URL — the endpoint requires a short-lived
+                  // token scoped to this document, so fetch one with our session first.
+                  const url = await MobileApiService.getDocumentDownloadUrl(doc.id);
+                  if (!url) {
+                    Alert.alert(
+                      'Download unavailable',
+                      'Could not authorise this download. Please check your connection and try again.',
+                    );
+                    return;
+                  }
                   Linking.openURL(url);
                 }}
               >
@@ -77,13 +101,16 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
           </View>
         )}
 
-        <TouchableOpacity
-          style={styles.saveBtn}
-          onPress={() => Linking.openURL(branchDocUrl)}
-        >
+        {/* Was `Linking.openURL()` onto the documents *API* endpoint, which opened raw JSON in
+            the browser rather than any document — and now returns 401, since that endpoint is
+            no longer public. The documents are already listed above, so the useful action here
+            is refreshing that list. */}
+        <TouchableOpacity style={styles.saveBtn} onPress={loadDocuments} disabled={loadingDocs}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="document-text" size={14} color="#fff" />
-            <Text style={styles.btnTextWhite}>View All Branch Documents</Text>
+            <Ionicons name="refresh" size={14} color="#fff" />
+            <Text style={styles.btnTextWhite}>
+              {loadingDocs ? 'Checking for documents…' : 'Check for New Documents'}
+            </Text>
           </View>
         </TouchableOpacity>
       </View>

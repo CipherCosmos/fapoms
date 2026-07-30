@@ -19,8 +19,9 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
+import { SystemRole } from '@fapoms/shared';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, RequirePermissions, Public } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 
 @ApiTags('Assignments')
 @ApiBearerAuth()
@@ -42,14 +43,19 @@ export class AssignmentController {
     return { success: true, items };
   }
 
+  // Was @Public(). JwtAuthGuard short-circuits public routes without running the JWT
+  // strategy, so `req.user` was always undefined here and `userId` fell back to the
+  // *assignment id* — every GPS check-in was attributed to the assignment itself rather than
+  // the assayer who performed it, making the check-in audit trail meaningless. It also let
+  // anyone check in on any assignment without authenticating.
   @Post(':id/check-in')
-  @Public()
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' })
   async checkIn(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
     const body = dto || {};
     const lat = body.lat ?? body.latitude ?? 0;
     const lng = body.lng ?? body.longitude ?? 0;
-    const userId = req?.user?.id || id;
+    const userId = req.user.id;
 
     const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId);
     if (!result.success) {
@@ -160,7 +166,7 @@ export class AssignmentController {
     if (!targetStatus) {
       throw new BadRequestException('targetStatus is required for assignment transition');
     }
-    const userId = req?.user?.id || id;
+    const userId = req.user.id;
     let assignment: any;
     if (targetStatus === 'COUNTER_OFFER') {
       const feeVal = body.counterFee ?? body.fee ?? body.proposedFee;
@@ -192,7 +198,7 @@ export class AssignmentController {
     @Body() body: { reason?: string },
     @Req() req: any,
   ) {
-    const userId = req?.user?.id || id;
+    const userId = req.user.id;
     const assignment = await this.assignmentService.escalate(id, userId, body?.reason);
     return {
       success: true,

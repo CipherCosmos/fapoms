@@ -70,6 +70,15 @@ export declare enum DocumentStatus {
     COMPLETED = "COMPLETED",
     ARCHIVED = "ARCHIVED"
 }
+/**
+ * How a document reached the assayer. Recorded per dispatch so the audit trail can answer
+ * "was this sent automatically the day before the audit, or pushed manually by an operator,
+ * and by whom" — spec §8.2/§8.3.
+ */
+export declare enum DispatchMethod {
+    AUTO = "AUTO",
+    MANUAL = "MANUAL"
+}
 export declare enum DocumentType {
     BRANCH_LIST = "BRANCH_LIST",
     CUSTOMER_MASTER_DATA = "CUSTOMER_MASTER_DATA",
@@ -133,6 +142,13 @@ export declare enum SystemRole {
     VALIDATION_MANAGER = "VALIDATION_MANAGER",
     VALIDATOR = "VALIDATOR",
     DOCUMENT_EXECUTIVE = "DOCUMENT_EXECUTIVE",
+    /**
+     * Owns the collected-paperwork queue. Per spec §12.8 the application does NOT assign work
+     * to individual data-entry operators: every returned PDF lands with the Head, who downloads
+     * it and distributes work through the existing manual process. The system tracks lifecycle,
+     * ownership and progress — it does not route to individuals.
+     */
+    DATA_ENTRY_HEAD = "DATA_ENTRY_HEAD",
     ASSAYER = "ASSAYER",
     CLIENT_USER = "CLIENT_USER",
     READ_ONLY_AUDITOR = "READ_ONLY_AUDITOR"

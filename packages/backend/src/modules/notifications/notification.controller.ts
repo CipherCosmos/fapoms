@@ -15,15 +15,17 @@ export class NotificationController {
     private readonly pushService: PushNotificationService,
   ) {}
 
+  // These were @Public(). JwtAuthGuard short-circuits public routes with `return true` and
+  // never calls super.canActivate(), so the JWT strategy never runs and `req.user` is
+  // undefined even when a valid token is sent. This endpoint therefore hit its
+  // `if (!userId) return []` guard on every single request and returned an empty list to
+  // everyone — the notifications screen could never display anything.
+  //
+  // Authentication is required here regardless: these return one recipient's own data.
   @Get()
-  @Public()
-  @ApiOperation({ summary: 'Get notifications for current user' })
+  @ApiOperation({ summary: 'Get notifications for the authenticated user or assayer' })
   async findMyNotifications(@Req() req: any) {
-    const userId = req?.user?.id;
-    if (!userId) {
-      return { success: true, data: [] };
-    }
-    const list = await this.notificationService.findByUser(userId);
+    const list = await this.notificationService.findByUser(req.user.id);
     return {
       success: true,
       data: list,
@@ -31,11 +33,11 @@ export class NotificationController {
   }
 
   @Post(':id/read')
-  @Public()
-  @ApiOperation({ summary: 'Mark notification as read' })
+  @ApiOperation({ summary: 'Mark one of your own notifications as read' })
   async markAsRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    const userId = req?.user?.id || id;
-    const notif = await this.notificationService.markAsRead(id, userId);
+    // Previously `req?.user?.id || id`, which fell back to using the *notification id* as the
+    // recipient id — letting anyone mark any notification read by knowing its id.
+    const notif = await this.notificationService.markAsRead(id, req.user.id);
     return {
       success: true,
       data: notif,

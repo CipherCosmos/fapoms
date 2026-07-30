@@ -64,6 +64,19 @@ async function apiGet<T>(endpoint: string): Promise<T> {
   return json.data as T;
 }
 
+/**
+ * Opens a document download.
+ *
+ * The download endpoint is no longer public — it previously served bank customer paperwork to
+ * anyone who could reach the API. It now requires a short-lived token bound to that one
+ * document, so a bare `<a href>` (which cannot send our Authorization header) would just 401.
+ * Exchange the session for a scoped token first, then open the signed URL.
+ */
+async function openDocumentDownload(documentId: string): Promise<void> {
+  const { downloadUrl } = await apiGet<{ downloadUrl: string }>(`/documents/${documentId}/download-token`);
+  window.open(`/api/v1${downloadUrl}`, '_blank', 'noopener,noreferrer');
+}
+
 async function apiPost(endpoint: string, body?: any): Promise<any> {
   const token = localStorage.getItem('fapoms_token');
   const res = await fetch(`/api/v1${endpoint}`, {
@@ -414,10 +427,10 @@ export const Documents: React.FC = () => {
                           <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(doc.createdAt).toLocaleDateString()}</td>
                           <td>
                             <div style={{ display: 'flex', gap: '6px' }}>
-                              <a href={`/api/v1/documents/${doc.id}/download`} target="_blank" rel="noreferrer"
-                                style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '11px', textDecoration: 'none' }}>
+                              <button type="button" onClick={() => { openDocumentDownload(doc.id).catch(e => setError(e.message)); }}
+                                style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '11px', textDecoration: 'none' , border: 'none', cursor: 'pointer' }}>
                                 <Download size={12} />
-                              </a>
+                              </button>
                               {doc.status === 'UPLOADED' && (
                                 <button onClick={() => handleDispatch(doc.id)} disabled={dispatching === doc.id}
                                   style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px', background: 'rgba(245,158,11,0.1)', borderRadius: 'var(--radius-sm)', color: '#f59e0b', fontSize: '11px', border: 'none', cursor: 'pointer' }}>
@@ -549,10 +562,10 @@ export const Documents: React.FC = () => {
                             <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(doc.createdAt).toLocaleDateString()}</td>
                             <td>
                               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <a href={`/api/v1/documents/${doc.id}/download`} target="_blank" rel="noreferrer"
-                                  style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '12px', textDecoration: 'none' }}>
+                                <button type="button" onClick={() => { openDocumentDownload(doc.id).catch(e => setError(e.message)); }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '12px', textDecoration: 'none' , border: 'none', cursor: 'pointer' }}>
                                   <Download size={12} /> Download PDF
-                                </a>
+                                </button>
 
                                 {doc.status !== 'SENT_TO_EXTERNAL_OCR' && doc.status !== 'COMPLETED' && (
                                   <button onClick={async () => {
@@ -654,10 +667,10 @@ export const Documents: React.FC = () => {
                         </td>
                         <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(doc.createdAt).toLocaleDateString()}</td>
                         <td>
-                          <a href={`/api/v1/documents/${doc.id}/download`} target="_blank" rel="noreferrer"
-                            style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '12px', textDecoration: 'none' }}>
+                          <button type="button" onClick={() => { openDocumentDownload(doc.id).catch(e => setError(e.message)); }}
+                            style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '12px', textDecoration: 'none' , border: 'none', cursor: 'pointer' }}>
                             <Download size={12} /> Download
-                          </a>
+                          </button>
                         </td>
                       </tr>
                     );

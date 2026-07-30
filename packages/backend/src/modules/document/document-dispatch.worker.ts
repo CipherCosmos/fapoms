@@ -6,7 +6,7 @@ import { Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentService } from './document.service';
-import { DocumentStatus, DocumentType, AssignmentStatus } from '@fapoms/shared';
+import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod } from '@fapoms/shared';
 
 @Injectable()
 @Processor('document-dispatch')
@@ -56,7 +56,7 @@ export class DocumentDispatchWorker {
 
       if (assignment && isDueTomorrow) {
         try {
-          await this.documentService.dispatchDocument(doc.id, 'SYSTEM');
+          await this.documentService.dispatchDocument(doc.id, 'SYSTEM', DispatchMethod.AUTO);
           dispatchedCount++;
           this.logger.log(`Auto-dispatched document ${doc.id} for assessment ${doc.assessment.id} (Scheduled: ${auditDate})`);
         } catch (err) {

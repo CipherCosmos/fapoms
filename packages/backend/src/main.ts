@@ -9,6 +9,7 @@ import { AppModule } from './app.module';
 import { setupBullBoard } from './infrastructure/queue/bull-board.setup';
 
 import * as express from 'express';
+import * as compression from 'compression';
 
 async function bootstrap() {
   const nodeEnv = process.env.NODE_ENV;
@@ -19,7 +20,29 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
 
-  // Increase payload limit for base64 mobile PDF uploads
+  // ── Response compression ──────────────────────────────────────────────────────
+  // Field assayers work on rural 2G/weak-3G links, and the app polls JSON constantly
+  // (assignments, schedules, documents, notifications). JSON compresses ~70-80%, so this is
+  // the single cheapest latency win on a slow connection.
+  //
+  // Files are deliberately skipped: PDFs and images are already compressed, so re-compressing
+  // burns CPU for ~0% gain and, worse, forces chunked encoding that breaks the Content-Length
+  // and HTTP Range handling the resumable download path depends on.
+  app.use(
+    compression({
+      threshold: 1024, // below ~1KB the header overhead outweighs the saving
+      filter: (req: any, res: any) => {
+        const type = String(res.getHeader('Content-Type') || '');
+        if (/^(application\/pdf|image\/|video\/|application\/zip|application\/octet-stream)/.test(type)) {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+    }),
+  );
+
+  // Payload limit. Large scans should go through the resumable chunked upload endpoints
+  // rather than a single body, but this ceiling still covers legacy single-shot uploads.
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
