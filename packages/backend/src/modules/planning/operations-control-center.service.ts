@@ -44,11 +44,11 @@ export class OperationsControlCenterService {
     const deployedPBs = branchCounts.deployed;
     const deploymentPercentage = totalPBs > 0 ? parseFloat(((deployedPBs / totalPBs) * 100).toFixed(1)) : 0;
 
-    const acceptedCount = assignments.filter((a) => a.status === AssignmentStatus.ACCEPTED || a.status === AssignmentStatus.SCHEDULED).length;
+    const acceptedCount = assignments.filter((a) => a.status === AssignmentStatus.ACCEPTED).length;
     const totalAssignments = assignments.length;
     const acceptancePercentage = totalAssignments > 0 ? parseFloat(((acceptedCount / totalAssignments) * 100).toFixed(1)) : 0;
 
-    const pendingAssignmentsCount = assignments.filter((a) => a.status === AssignmentStatus.CREATED || a.status === AssignmentStatus.CONTACT_INITIATED).length;
+    const pendingAssignmentsCount = assignments.filter((a) => a.status === AssignmentStatus.PENDING).length;
     const delayedCount = assignments.filter((a) => a.slaStatus === 'BREACHED').length;
 
     const openTasks = await this.taskRepository.find({ where: { status: OperationsTaskStatus.OPEN } });

@@ -75,8 +75,8 @@ describe('SchedulingService', () => {
             mockAssignmentService.findOne.mockResolvedValue(null);
             await expect(service.create({ assignmentId: 'asn-missing', scheduledDate: '2026-08-01' }, 'user-1')).rejects.toThrow(common_1.NotFoundException);
         });
-        it('should throw BadRequestException if assignment status is not ACCEPTED', async () => {
-            const mockAsn = { id: 'asn-1', status: shared_1.AssignmentStatus.CREATED };
+        it('should throw BadRequestException if assignment status is not schedulable (e.g. CANCELLED)', async () => {
+            const mockAsn = { id: 'asn-1', status: shared_1.AssignmentStatus.CANCELLED };
             mockAssignmentService.findOne.mockResolvedValue(mockAsn);
             await expect(service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-01' }, 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });

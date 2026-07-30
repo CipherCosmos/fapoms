@@ -2,6 +2,7 @@ import { ValidationService, CreateValidationCaseDto } from './validation.service
 import { ValidationStatus } from '@fapoms/shared';
 declare class CreateValidationCaseRequestDto implements CreateValidationCaseDto {
     projectBranchId: string;
+    assessmentId?: string;
 }
 declare class AssignReviewerDto {
     reviewerId: string;

@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
 import { BranchService } from '../branch/branch.service';
@@ -18,7 +19,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole } from '@fapoms/shared';
+import { EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -135,10 +136,12 @@ export class ProjectService implements OnModuleInit {
   constructor(
      @InjectRepository(ProjectEntity)
      private readonly projectRepository: Repository<ProjectEntity>,
-     @InjectRepository(ProjectBranchEntity)
-     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
-     @InjectRepository(ClientEntity)
-     private readonly clientRepository: Repository<ClientEntity>,
+      @InjectRepository(ProjectBranchEntity)
+      private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+      @InjectRepository(AssessmentEntity)
+      private readonly assessmentRepository: Repository<AssessmentEntity>,
+      @InjectRepository(ClientEntity)
+      private readonly clientRepository: Repository<ClientEntity>,
      private readonly branchQueryService: BranchQueryService,
      private readonly branchService: BranchService,
      private readonly auditService: AuditService,
@@ -210,6 +213,14 @@ export class ProjectService implements OnModuleInit {
       remarks: `Created project: ${saved.name} (${saved.projectNumber})`,
     });
 
+    this.eventPublisher.publish('project:created', {
+      eventType: 'project:created',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, name: saved.name, projectNumber: saved.projectNumber, clientId: saved.clientId },
+    });
+
     return saved;
   }
 
@@ -271,6 +282,14 @@ export class ProjectService implements OnModuleInit {
       remarks: `Updated project: ${saved.name} (${saved.projectNumber})`,
     });
 
+    this.eventPublisher.publish('project:updated', {
+      eventType: 'project:updated',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, name: saved.name, status: saved.status },
+    });
+
     return saved;
   }
 
@@ -287,6 +306,14 @@ export class ProjectService implements OnModuleInit {
       entityId: id,
       userId,
       remarks: `Soft deleted project ${project.name}`,
+    });
+
+    this.eventPublisher.publish('project:deleted', {
+      eventType: 'project:deleted',
+      aggregateId: id,
+      userId,
+      organizationId: project.organizationId,
+      payload: { id, name: project.name, projectNumber: project.projectNumber },
     });
   }
 
@@ -316,6 +343,21 @@ export class ProjectService implements OnModuleInit {
           });
           const savedPb = await this.projectBranchRepository.save(pb);
           addedBranches.push(savedPb);
+
+          const existingAsmt = await this.assessmentRepository.findOne({
+            where: { projectId: project.id, branchId: branch.id, isActive: true },
+          });
+          if (!existingAsmt) {
+            const asmt = this.assessmentRepository.create({
+              projectId: project.id,
+              branchId: branch.id,
+              zoneId: branch.zoneId,
+              status: AssessmentStatus.PENDING_PLANNING,
+              createdBy: userId,
+              updatedBy: userId,
+            });
+            await this.assessmentRepository.save(asmt);
+          }
         }
       }
     }
@@ -484,6 +526,22 @@ export class ProjectService implements OnModuleInit {
         });
         const savedPb = await this.projectBranchRepository.save(pb);
         addedBranches.push(savedPb);
+
+        const existingAsmt = await this.assessmentRepository.findOne({
+          where: { projectId: project.id, branchId: branch.id, isActive: true },
+        });
+        if (!existingAsmt) {
+          const asmt = this.assessmentRepository.create({
+            projectId: project.id,
+            branchId: branch.id,
+            zoneId: branch.zoneId,
+            status: AssessmentStatus.PENDING_PLANNING,
+            packetSize: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
+            createdBy: userId,
+            updatedBy: userId,
+          });
+          await this.assessmentRepository.save(asmt);
+        }
       } else if (!isNaN(packetCount) && packetCount > 0) {
         // Update packet count on existing project-branch
         pb.packetCount = packetCount;

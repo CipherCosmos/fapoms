@@ -23,7 +23,14 @@ class ApiClient {
       headers,
     });
 
-    if (response.status === 401 || response.status === 403) {
+    // 403 Forbidden from RolesGuard/PermissionsGuard means user IS authenticated
+    // but lacks the required role/permission — do NOT attempt token refresh, throw immediately
+    if (response.status === 403) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Forbidden: insufficient permissions for ${endpoint}`);
+    }
+
+    if (response.status === 401) {
       if (!this.refreshPromise) {
         this.refreshPromise = this.doRefresh();
       }
@@ -42,7 +49,7 @@ class ApiClient {
         });
       }
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         localStorage.removeItem('fapoms_token');
         localStorage.removeItem('fapoms_refresh_token');
         window.location.href = '/login';

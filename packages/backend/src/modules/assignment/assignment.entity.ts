@@ -1,12 +1,7 @@
-/**
- * FAPOMS — Assignment Entity
- *
- * Represents an operational commitment assigning an assayer to a project branch (Part 2 §8, Part 6 §5).
- */
-
-import { Entity, Column, Index, ManyToOne, JoinColumn, OneToOne } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { OperationsExecutionGroupEntity } from '../planning/operations-execution-group.entity';
@@ -15,14 +10,18 @@ import { AssignmentStatus, Priority } from '@fapoms/shared';
 @Entity('assignments')
 @Index(['assignmentNumber'])
 @Index(['projectBranchId'])
+@Index(['assessmentId'])
 @Index(['projectId'])
 @Index(['assayerId'])
 export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'assignment_number', length: 50, unique: true })
   assignmentNumber: string;
 
-  @Column({ name: 'project_branch_id', type: 'uuid' })
-  projectBranchId: string;
+  @Column({ name: 'project_branch_id', type: 'uuid', nullable: true })
+  projectBranchId: string | null;
+
+  @Column({ name: 'assessment_id', type: 'uuid', nullable: true })
+  assessmentId: string | null;
 
   @Column({ name: 'project_id', type: 'uuid' })
   projectId: string;
@@ -33,7 +32,7 @@ export class AssignmentEntity extends BaseEntity {
   @Column({
     type: 'enum',
     enum: AssignmentStatus,
-    default: AssignmentStatus.CREATED,
+    default: AssignmentStatus.PENDING,
   })
   status: AssignmentStatus;
 
@@ -62,6 +61,9 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'sync_token', type: 'varchar', length: 100, nullable: true })
   syncToken: string | null;
 
+  @Column({ name: 'negotiation_count', type: 'integer', default: 0 })
+  negotiationCount: number;
+
   @Column({ name: 'entity_version', type: 'integer', default: 1 })
   entityVersion: number;
 
@@ -77,9 +79,13 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'reject_reason', type: 'text', nullable: true })
   rejectReason: string | null;
 
-  @ManyToOne(() => ProjectBranchEntity, (pb) => pb.assignments, { onDelete: 'CASCADE' })
+  @ManyToOne(() => ProjectBranchEntity, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'project_branch_id' })
-  projectBranch: ProjectBranchEntity;
+  projectBranch: ProjectBranchEntity | null;
+
+  @ManyToOne(() => AssessmentEntity, (a) => a.assignments, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'assessment_id' })
+  assessment: AssessmentEntity | null;
 
   @ManyToOne(() => ProjectEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'project_id' })
@@ -94,5 +100,5 @@ export class AssignmentEntity extends BaseEntity {
 
   @ManyToOne(() => OperationsExecutionGroupEntity, (eg) => eg.assignments, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'execution_group_id' })
-  executionGroup: OperationsExecutionGroupEntity;
+  executionGroup: OperationsExecutionGroupEntity | null;
 }

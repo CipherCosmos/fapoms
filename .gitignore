@@ -53,6 +53,9 @@ coverage/
 *.xlsx
 *.xls
 
+# Geocoding cache (auto-generated, machine-specific)
+**/geocoding-cache.json
+
 # Firebase config files (root copies)
 google-services.json
 GoogleService-Info.plist

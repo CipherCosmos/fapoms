@@ -36,6 +36,9 @@ class CreateHolidayRequestDto implements CreateHolidayDto {
 
   @IsOptional() @IsArray()
   applicableStates?: string[];
+
+  @IsOptional() @IsString()
+  clientId?: string;
 }
 
 @ApiTags('Holidays')
@@ -63,8 +66,9 @@ export class HolidayController {
     @Query('page') page = 1,
     @Query('limit') limit = 50,
     @Query('year') year?: number,
+    @Query('clientId') clientId?: string,
   ) {
-    const { holidays, total } = await this.holidayService.findAll(page, limit, year);
+    const { holidays, total } = await this.holidayService.findAll(page, limit, year, clientId);
     return {
       success: true,
       data: holidays,
@@ -86,12 +90,13 @@ export class HolidayController {
   async checkHoliday(
     @Query('date') dateString: string,
     @Query('stateCode') stateCode?: string,
+    @Query('clientId') clientId?: string,
   ) {
     const date = new Date(dateString);
     if (isNaN(date.getTime())) {
       return { success: false, error: 'Invalid date parameter' };
     }
-    const isHoliday = await this.holidayService.isHoliday(date, stateCode);
+    const isHoliday = await this.holidayService.isHoliday(date, stateCode, clientId);
     return {
       success: true,
       data: { isHoliday },

@@ -1,19 +1,26 @@
 import { Response } from 'express';
+import { Repository } from 'typeorm';
 import { DocumentService } from './document.service';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
+import { AssessmentEntity } from '../project/assessment.entity';
+import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentStatus, DocumentType } from '@fapoms/shared';
-declare class UpdateDocumentStatusDto {
-    status: DocumentStatus;
-}
 export declare class DocumentController {
     private readonly documentService;
     private readonly localStorageService;
     private readonly ocrProcessingService;
-    constructor(documentService: DocumentService, localStorageService: LocalStorageService, ocrProcessingService: OcrProcessingService);
-    uploadFile(file: any, projectBranchId: string, type: DocumentType, req: any): Promise<{
+    private readonly assignmentRepository;
+    private readonly assessmentRepository;
+    constructor(documentService: DocumentService, localStorageService: LocalStorageService, ocrProcessingService: OcrProcessingService, assignmentRepository: Repository<AssignmentEntity>, assessmentRepository: Repository<AssessmentEntity>);
+    uploadFile(file: any, assessmentId: string, type: DocumentType, req: any): Promise<{
         success: boolean;
         data: import("./document.entity").DocumentEntity;
+    }>;
+    mobileUpload(body: any, req: any): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity;
+        documentUrl: string;
     }>;
     validateCustomerExcel(file: any): Promise<{
         success: boolean;
@@ -24,7 +31,6 @@ export declare class DocumentController {
                 duplicateAccountsCount: number;
                 uniqueBranchesCount: number;
                 missingBranchCodesCount: number;
-                isReplacementUpload: boolean;
                 status: string;
             };
             recommendation: string;
@@ -35,13 +41,45 @@ export declare class DocumentController {
         data: import("./document.entity").DocumentEntity;
     }>;
     downloadFile(id: string, res: Response): Promise<void>;
-    updateStatus(id: string, dto: UpdateDocumentStatusDto, req: any): Promise<{
+    updateStatus(id: string, dto: {
+        status: DocumentStatus;
+    }, req: any): Promise<{
         success: boolean;
         data: import("./document.entity").DocumentEntity;
     }>;
-    findByProjectBranch(projectBranchId: string): Promise<{
+    dispatchDocument(id: string, req: any): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity;
+        message: string;
+    }>;
+    receiveDocument(id: string, req: any): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity;
+        message: string;
+    }>;
+    findByAssessment(assessmentId: string): Promise<{
         success: boolean;
         data: import("./document.entity").DocumentEntity[];
     }>;
+    findByProject(projectId: string): Promise<{
+        success: boolean;
+        data: import("./document.entity").DocumentEntity[];
+    }>;
+    getStats(): Promise<{
+        success: boolean;
+        data: {
+            total: number;
+            uploaded: number;
+            dispatched: number;
+            received: number;
+        };
+    }>;
+    getDataEntryQueue(): Promise<{
+        success: boolean;
+        data: {
+            project: string;
+            branch: string;
+            documents: import("./document.entity").DocumentEntity[];
+        }[];
+    }>;
 }
-export {};

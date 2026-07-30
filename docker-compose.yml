@@ -133,6 +133,7 @@ services:
       - ./packages/mobile/src:/app/packages/mobile/src
       - ./packages/mobile/App.tsx:/app/packages/mobile/App.tsx
       - ./packages/mobile/tsconfig.json:/app/packages/mobile/tsconfig.json
+      - ./packages/mobile/assets:/app/packages/mobile/assets
       # Bind-mount shared source
       - ./packages/shared/src:/app/packages/shared/src
       # Anonymous volume: keep container's node_modules

@@ -18,13 +18,16 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const organization_entity_1 = require("./organization.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 let OrganizationService = class OrganizationService {
     organizationRepository;
     auditService;
-    constructor(organizationRepository, auditService) {
+    eventPublisher;
+    constructor(organizationRepository, auditService, eventPublisher) {
         this.organizationRepository = organizationRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId) {
         const existing = await this.organizationRepository.findOne({
@@ -47,6 +50,19 @@ let OrganizationService = class OrganizationService {
             userId,
             remarks: `Created organization: ${saved.name} (${saved.code})`,
         });
+        try {
+            this.eventPublisher.publish('organization:created', {
+                eventType: 'organization:created',
+                organizationId: saved.id,
+                code: saved.code,
+                name: saved.name,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish organization:created event:', err);
+        }
         return saved;
     }
     async findAll(page = 1, limit = 50) {
@@ -80,6 +96,18 @@ let OrganizationService = class OrganizationService {
             userId,
             remarks: `Updated organization: ${org.name}`,
         });
+        try {
+            this.eventPublisher.publish('organization:updated', {
+                eventType: 'organization:updated',
+                organizationId: saved.id,
+                name: saved.name,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish organization:updated event:', err);
+        }
         return saved;
     }
     async remove(id, userId) {
@@ -102,6 +130,7 @@ exports.OrganizationService = OrganizationService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(organization_entity_1.OrganizationEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], OrganizationService);
 //# sourceMappingURL=organization.service.js.map

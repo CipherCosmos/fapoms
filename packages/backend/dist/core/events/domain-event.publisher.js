@@ -10,8 +10,11 @@ exports.DomainEventPublisher = void 0;
 const common_1 = require("@nestjs/common");
 let DomainEventPublisher = class DomainEventPublisher {
     listeners = {};
+    globalCallbacks = [];
+    onPublish(callback) {
+        this.globalCallbacks.push(callback);
+    }
     publish(eventName, payload) {
-        console.log(`[DomainEventPublisher] Publishing event: ${eventName}`, payload);
         const list = this.listeners[eventName] || [];
         for (const cb of list) {
             try {
@@ -19,6 +22,14 @@ let DomainEventPublisher = class DomainEventPublisher {
             }
             catch (err) {
                 console.error(`Error handling event ${eventName}`, err);
+            }
+        }
+        for (const cb of this.globalCallbacks) {
+            try {
+                cb(eventName, payload);
+            }
+            catch (err) {
+                console.error(`Error in global callback for event ${eventName}`, err);
             }
         }
     }

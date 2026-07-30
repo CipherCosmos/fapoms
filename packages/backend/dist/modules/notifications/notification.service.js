@@ -18,12 +18,15 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const notification_entity_1 = require("./notification.entity");
 const push_notification_service_1 = require("./push-notification.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 let NotificationService = class NotificationService {
     notificationRepository;
     pushNotificationService;
-    constructor(notificationRepository, pushNotificationService) {
+    eventPublisher;
+    constructor(notificationRepository, pushNotificationService, eventPublisher) {
         this.notificationRepository = notificationRepository;
         this.pushNotificationService = pushNotificationService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, systemUser) {
         const notif = this.notificationRepository.create({
@@ -37,6 +40,20 @@ let NotificationService = class NotificationService {
         const saved = await this.notificationRepository.save(notif);
         try {
             await this.pushNotificationService.sendToUser(dto.userId, dto.title, dto.message, dto.data || (dto.link ? { link: dto.link } : undefined));
+        }
+        catch (err) {
+        }
+        try {
+            this.eventPublisher.publish('notification:new', {
+                eventType: 'notification:new',
+                id: saved.id,
+                userId: dto.userId,
+                title: dto.title,
+                message: dto.message,
+                link: dto.link,
+                isRead: false,
+                createdAt: saved.createdAt?.toISOString?.() || new Date().toISOString(),
+            });
         }
         catch (err) {
         }
@@ -66,6 +83,7 @@ exports.NotificationService = NotificationService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(notification_entity_1.NotificationEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        push_notification_service_1.PushNotificationService])
+        push_notification_service_1.PushNotificationService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], NotificationService);
 //# sourceMappingURL=notification.service.js.map

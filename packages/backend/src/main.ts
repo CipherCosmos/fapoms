@@ -8,6 +8,8 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { setupBullBoard } from './infrastructure/queue/bull-board.setup';
 
+import * as express from 'express';
+
 async function bootstrap() {
   const nodeEnv = process.env.NODE_ENV;
   const jwtSecret = process.env.JWT_SECRET;
@@ -16,6 +18,10 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create(AppModule);
+
+  // Increase payload limit for base64 mobile PDF uploads
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // Global prefix for all API routes
   app.setGlobalPrefix('api/v1');
@@ -32,9 +38,12 @@ async function bootstrap() {
     }),
   );
 
-  // CORS configuration — allows frontend web (5173) and mobile app (8081)
+  // CORS configuration — allows frontend web and mobile app
+  const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:8081,http://localhost:19006')
+    .split(',')
+    .map(s => s.trim());
   app.enableCors({
-    origin: ['http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
+    origin: corsOrigins,
     credentials: true,
   });
 

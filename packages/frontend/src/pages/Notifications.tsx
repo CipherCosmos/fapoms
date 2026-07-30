@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Bell, CheckCheck, RefreshCw } from 'lucide-react';
 import { api, WebNotification } from '../services/api';
+import { connectSocket, getSocket } from '../services/socket';
 
 export const Notifications: React.FC = () => {
   const [notifications, setNotifications] = useState<WebNotification[]>([]);
@@ -15,6 +16,22 @@ export const Notifications: React.FC = () => {
 
   useEffect(() => {
     load();
+    connectSocket();
+    const socket = getSocket();
+    if (socket) {
+      socket.on('notification:new', (data: any) => {
+        if (data?.payload) {
+          setNotifications(prev => [data.payload, ...prev]);
+        } else {
+          load();
+        }
+      });
+    }
+    return () => {
+      if (socket) {
+        socket.off('notification:new');
+      }
+    };
   }, []);
 
   const handleMarkRead = async (id: string) => {

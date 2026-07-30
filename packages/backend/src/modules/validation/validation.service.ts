@@ -2,16 +2,18 @@ import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { ValidationStateMachine } from './validation.state-machine';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ValidationStatus, ProjectBranchStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 
 export interface CreateValidationCaseDto {
   projectBranchId: string;
+  assessmentId?: string;
 }
 
 @Injectable()
@@ -19,6 +21,8 @@ export class ValidationService implements OnModuleInit {
   constructor(
     @InjectRepository(ValidationCaseEntity)
     private readonly validationCaseRepository: Repository<ValidationCaseEntity>,
+    @InjectRepository(AssessmentEntity)
+    private readonly assessmentRepository: Repository<AssessmentEntity>,
     private readonly projectQueryService: ProjectQueryService,
     private readonly projectService: ProjectService,
     private readonly auditService: AuditService,
@@ -42,8 +46,17 @@ export class ValidationService implements OnModuleInit {
       throw new NotFoundException(`ProjectBranch ${dto.projectBranchId} not found.`);
     }
 
+    let assessmentId: string | null = dto.assessmentId ?? null;
+    if (!assessmentId) {
+      const asmt = await this.assessmentRepository.findOne({
+        where: { projectId: projectBranch.projectId, branchId: projectBranch.branchId, isActive: true },
+      });
+      if (asmt) assessmentId = asmt.id;
+    }
+
     const validationCase = this.validationCaseRepository.create({
       projectBranchId: projectBranch.id,
+      assessmentId,
       status: ValidationStatus.PENDING,
       createdBy: userId,
       updatedBy: userId,
@@ -66,7 +79,7 @@ export class ValidationService implements OnModuleInit {
   async findOne(id: string): Promise<ValidationCaseEntity> {
     const validationCase = await this.validationCaseRepository.findOne({
       where: { id, isActive: true },
-      relations: ['projectBranch', 'projectBranch.branch'],
+      relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
     });
     if (!validationCase) {
       throw new NotFoundException(`ValidationCase ${id} not found.`);
@@ -77,7 +90,7 @@ export class ValidationService implements OnModuleInit {
   async findAll(page = 1, limit = 50): Promise<{ validationCases: ValidationCaseEntity[]; total: number }> {
     const [validationCases, total] = await this.validationCaseRepository.findAndCount({
       where: { isActive: true },
-      relations: ['projectBranch', 'projectBranch.branch'],
+      relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
       order: { createdAt: 'DESC' },
       take: limit,
       skip: (page - 1) * limit,
@@ -174,6 +187,18 @@ export class ValidationService implements OnModuleInit {
           await this.projectService.closeBranchProject(validationCase.projectBranch.id, userId);
         } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
           await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
+        }
+
+        if (validationCase.assessmentId && validationCase.assessment) {
+          if (targetStatus === ValidationStatus.APPROVED) {
+            validationCase.assessment.status = AssessmentStatus.REPORT_FINALIZED;
+          } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
+            validationCase.assessment.status = AssessmentStatus.DATA_ENTRY_IN_PROGRESS;
+          } else if (targetStatus === ValidationStatus.SUBMITTED) {
+            validationCase.assessment.status = AssessmentStatus.PENDING_HEAD_APPROVAL;
+          }
+          validationCase.assessment.updatedBy = userId;
+          await this.assessmentRepository.save(validationCase.assessment);
         }
 
         validationCase.updatedBy = userId;

@@ -9,10 +9,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DocumentModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
+const bull_1 = require("@nestjs/bull");
 const document_service_1 = require("./document.service");
 const document_controller_1 = require("./document.controller");
+const document_dispatch_worker_1 = require("./document-dispatch.worker");
 const document_entity_1 = require("./document.entity");
-const project_branch_entity_1 = require("../project/project-branch.entity");
+const assessment_entity_1 = require("../project/assessment.entity");
+const assignment_entity_1 = require("../assignment/assignment.entity");
+const notifications_module_1 = require("../notifications/notifications.module");
 const storage_module_1 = require("../../infrastructure/storage/storage.module");
 const ocr_module_1 = require("../../infrastructure/ocr/ocr.module");
 let DocumentModule = class DocumentModule {
@@ -21,12 +25,14 @@ exports.DocumentModule = DocumentModule;
 exports.DocumentModule = DocumentModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([document_entity_1.DocumentEntity, project_branch_entity_1.ProjectBranchEntity]),
+            typeorm_1.TypeOrmModule.forFeature([document_entity_1.DocumentEntity, assessment_entity_1.AssessmentEntity, assignment_entity_1.AssignmentEntity]),
+            bull_1.BullModule.registerQueue({ name: 'document-dispatch' }),
+            notifications_module_1.NotificationsModule,
             storage_module_1.StorageModule,
             ocr_module_1.OcrModule,
         ],
         controllers: [document_controller_1.DocumentController],
-        providers: [document_service_1.DocumentService],
+        providers: [document_service_1.DocumentService, document_dispatch_worker_1.DocumentDispatchWorker],
         exports: [document_service_1.DocumentService],
     })
 ], DocumentModule);

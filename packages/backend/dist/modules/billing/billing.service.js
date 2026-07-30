@@ -17,10 +17,13 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const billing_record_entity_1 = require("./billing-record.entity");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 let BillingService = class BillingService {
     billingRepository;
-    constructor(billingRepository) {
+    eventPublisher;
+    constructor(billingRepository, eventPublisher) {
         this.billingRepository = billingRepository;
+        this.eventPublisher = eventPublisher;
     }
     async createBillingRecord(dto) {
         const base = Number(dto.baseFee || 0);
@@ -42,7 +45,23 @@ let BillingService = class BillingService {
             netPayable: netVal,
             invoiceStatus: dto.invoiceStatus || 'DRAFT',
         });
-        return this.billingRepository.save(record);
+        const saved = await this.billingRepository.save(record);
+        try {
+            this.eventPublisher.publish('billing:created', {
+                eventType: 'billing:created',
+                billingId: saved.id,
+                assayerId: saved.assayerId,
+                assignmentId: saved.assignmentId,
+                baseFee: saved.baseFee,
+                netPayable: saved.netPayable,
+                invoiceStatus: saved.invoiceStatus,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish billing:created event:', err);
+        }
+        return saved;
     }
     async getAssayerBilling(assayerId) {
         return this.billingRepository.find({ where: { assayerId } });
@@ -52,6 +71,7 @@ exports.BillingService = BillingService;
 exports.BillingService = BillingService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(billing_record_entity_1.BillingRecord)),
-    __metadata("design:paramtypes", [typeorm_2.Repository])
+    __metadata("design:paramtypes", [typeorm_2.Repository,
+        domain_event_publisher_1.DomainEventPublisher])
 ], BillingService);
 //# sourceMappingURL=billing.service.js.map

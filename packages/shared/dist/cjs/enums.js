@@ -1,18 +1,6 @@
 "use strict";
-/**
- * FAPOMS — Canonical Business Enumerations
- *
- * These enumerations represent the reference data and state values
- * defined in the business specifications (Parts 6, 7, 8).
- *
- * Every enum value corresponds to a business concept.
- * Do not rename without explicit business specification approval.
- */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
-// ---------------------------------------------------------------------------
-// Project Lifecycle (Part 6 §3)
-// ---------------------------------------------------------------------------
+exports.Priority = exports.ContractStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.AssessmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
 var ProjectStatus;
 (function (ProjectStatus) {
     ProjectStatus["DRAFT"] = "DRAFT";
@@ -25,9 +13,6 @@ var ProjectStatus;
     ProjectStatus["CANCELLED"] = "CANCELLED";
     ProjectStatus["ON_HOLD"] = "ON_HOLD";
 })(ProjectStatus || (exports.ProjectStatus = ProjectStatus = {}));
-// ---------------------------------------------------------------------------
-// Project Branch Lifecycle (Part 6 §4)
-// ---------------------------------------------------------------------------
 var ProjectBranchStatus;
 (function (ProjectBranchStatus) {
     ProjectBranchStatus["IMPORTED"] = "IMPORTED";
@@ -44,25 +29,37 @@ var ProjectBranchStatus;
     ProjectBranchStatus["ON_HOLD"] = "ON_HOLD";
     ProjectBranchStatus["CANCELLED"] = "CANCELLED";
 })(ProjectBranchStatus || (exports.ProjectBranchStatus = ProjectBranchStatus = {}));
-// ---------------------------------------------------------------------------
-// Assignment Lifecycle (Part 6 §5)
-// ---------------------------------------------------------------------------
+var AssessmentStatus;
+(function (AssessmentStatus) {
+    AssessmentStatus["PENDING_PLANNING"] = "PENDING_PLANNING";
+    AssessmentStatus["ASSESSOR_RECOMMENDED"] = "ASSESSOR_RECOMMENDED";
+    AssessmentStatus["IN_NEGOTIATION"] = "IN_NEGOTIATION";
+    AssessmentStatus["ASSIGNED_AND_SCHEDULED"] = "ASSIGNED_AND_SCHEDULED";
+    AssessmentStatus["UNASSIGNED"] = "UNASSIGNED";
+    AssessmentStatus["AWAITING_CLIENT_DATA"] = "AWAITING_CLIENT_DATA";
+    AssessmentStatus["CLIENT_DATA_RECEIVED"] = "CLIENT_DATA_RECEIVED";
+    AssessmentStatus["PDF_GENERATED"] = "PDF_GENERATED";
+    AssessmentStatus["READY_FOR_DISPATCH"] = "READY_FOR_DISPATCH";
+    AssessmentStatus["DISPATCHED_TO_ASSESSOR"] = "DISPATCHED_TO_ASSESSOR";
+    AssessmentStatus["AUDITED_PDF_RECEIVED"] = "AUDITED_PDF_RECEIVED";
+    AssessmentStatus["SENT_TO_DATA_ENTRY"] = "SENT_TO_DATA_ENTRY";
+    AssessmentStatus["DATA_ENTRY_IN_PROGRESS"] = "DATA_ENTRY_IN_PROGRESS";
+    AssessmentStatus["CLARIFICATION_NEEDED"] = "CLARIFICATION_NEEDED";
+    AssessmentStatus["REPORT_FINALIZED"] = "REPORT_FINALIZED";
+    AssessmentStatus["PENDING_HEAD_APPROVAL"] = "PENDING_HEAD_APPROVAL";
+    AssessmentStatus["DELIVERED_TO_CLIENT"] = "DELIVERED_TO_CLIENT";
+    AssessmentStatus["COMPLETED"] = "COMPLETED";
+})(AssessmentStatus || (exports.AssessmentStatus = AssessmentStatus = {}));
 var AssignmentStatus;
 (function (AssignmentStatus) {
-    AssignmentStatus["CREATED"] = "CREATED";
-    AssignmentStatus["CANDIDATE_SELECTED"] = "CANDIDATE_SELECTED";
-    AssignmentStatus["CONTACT_INITIATED"] = "CONTACT_INITIATED";
-    AssignmentStatus["NEGOTIATION"] = "NEGOTIATION";
+    AssignmentStatus["PENDING"] = "PENDING";
     AssignmentStatus["ACCEPTED"] = "ACCEPTED";
-    AssignmentStatus["SCHEDULED"] = "SCHEDULED";
-    AssignmentStatus["AUDIT_COMPLETED"] = "AUDIT_COMPLETED";
-    AssignmentStatus["CLOSED"] = "CLOSED";
+    AssignmentStatus["CHECKED_IN"] = "CHECKED_IN";
+    AssignmentStatus["IN_PROGRESS"] = "IN_PROGRESS";
+    AssignmentStatus["COMPLETED"] = "COMPLETED";
     AssignmentStatus["REJECTED"] = "REJECTED";
     AssignmentStatus["CANCELLED"] = "CANCELLED";
 })(AssignmentStatus || (exports.AssignmentStatus = AssignmentStatus = {}));
-// ---------------------------------------------------------------------------
-// Schedule Lifecycle (Part 6 §6)
-// ---------------------------------------------------------------------------
 var ScheduleStatus;
 (function (ScheduleStatus) {
     ScheduleStatus["TENTATIVE"] = "TENTATIVE";
@@ -70,30 +67,27 @@ var ScheduleStatus;
     ScheduleStatus["RESCHEDULED"] = "RESCHEDULED";
     ScheduleStatus["COMPLETED"] = "COMPLETED";
 })(ScheduleStatus || (exports.ScheduleStatus = ScheduleStatus = {}));
-// ---------------------------------------------------------------------------
-// Document Lifecycle (Part 6 §7)
-// ---------------------------------------------------------------------------
 var DocumentStatus;
 (function (DocumentStatus) {
     DocumentStatus["UPLOADED"] = "UPLOADED";
-    DocumentStatus["PROCESSED"] = "PROCESSED";
-    DocumentStatus["GENERATED"] = "GENERATED";
     DocumentStatus["DISPATCHED"] = "DISPATCHED";
     DocumentStatus["RECEIVED"] = "RECEIVED";
+    DocumentStatus["SENT_TO_DATA_ENTRY"] = "SENT_TO_DATA_ENTRY";
+    DocumentStatus["SENT_TO_EXTERNAL_OCR"] = "SENT_TO_EXTERNAL_OCR";
+    DocumentStatus["EXCEL_GENERATED"] = "EXCEL_GENERATED";
+    DocumentStatus["PROCESSED"] = "PROCESSED";
+    DocumentStatus["COMPLETED"] = "COMPLETED";
     DocumentStatus["ARCHIVED"] = "ARCHIVED";
 })(DocumentStatus || (exports.DocumentStatus = DocumentStatus = {}));
 var DocumentType;
 (function (DocumentType) {
     DocumentType["BRANCH_LIST"] = "BRANCH_LIST";
     DocumentType["CUSTOMER_MASTER_DATA"] = "CUSTOMER_MASTER_DATA";
-    DocumentType["GENERATED_PDF"] = "GENERATED_PDF";
-    DocumentType["RETURNED_AUDIT_PDF"] = "RETURNED_AUDIT_PDF";
+    DocumentType["PRE_FIELD_AUDIT_PDF"] = "PRE_FIELD_AUDIT_PDF";
+    DocumentType["AUDITED_RETURN_PDF"] = "AUDITED_RETURN_PDF";
     DocumentType["GENERATED_EXCEL"] = "GENERATED_EXCEL";
     DocumentType["FINAL_REPORT"] = "FINAL_REPORT";
 })(DocumentType || (exports.DocumentType = DocumentType = {}));
-// ---------------------------------------------------------------------------
-// Validation Lifecycle (Part 6 §8)
-// ---------------------------------------------------------------------------
 var ValidationStatus;
 (function (ValidationStatus) {
     ValidationStatus["PENDING"] = "PENDING";
@@ -104,9 +98,6 @@ var ValidationStatus;
     ValidationStatus["APPROVED"] = "APPROVED";
     ValidationStatus["SUBMITTED"] = "SUBMITTED";
 })(ValidationStatus || (exports.ValidationStatus = ValidationStatus = {}));
-// ---------------------------------------------------------------------------
-// Customer Master Lifecycle (Sprint 1 Priority 1)
-// ---------------------------------------------------------------------------
 var CustomerMasterStatus;
 (function (CustomerMasterStatus) {
     CustomerMasterStatus["DRAFT"] = "DRAFT";
@@ -115,27 +106,18 @@ var CustomerMasterStatus;
     CustomerMasterStatus["SUPERSEDED"] = "SUPERSEDED";
     CustomerMasterStatus["REJECTED"] = "REJECTED";
 })(CustomerMasterStatus || (exports.CustomerMasterStatus = CustomerMasterStatus = {}));
-// ---------------------------------------------------------------------------
-// Validation Query Lifecycle (Sprint 1 Priority 2)
-// ---------------------------------------------------------------------------
 var ValidationQueryStatus;
 (function (ValidationQueryStatus) {
     ValidationQueryStatus["OPEN"] = "OPEN";
     ValidationQueryStatus["RESPONDED"] = "RESPONDED";
     ValidationQueryStatus["RESOLVED"] = "RESOLVED";
 })(ValidationQueryStatus || (exports.ValidationQueryStatus = ValidationQueryStatus = {}));
-// ---------------------------------------------------------------------------
-// Assayer Operational Status
-// ---------------------------------------------------------------------------
 var AssayerStatus;
 (function (AssayerStatus) {
     AssayerStatus["ACTIVE"] = "ACTIVE";
     AssayerStatus["INACTIVE"] = "INACTIVE";
     AssayerStatus["SUSPENDED"] = "SUSPENDED";
 })(AssayerStatus || (exports.AssayerStatus = AssayerStatus = {}));
-// ---------------------------------------------------------------------------
-// Assayer Enterprise Lifecycle
-// ---------------------------------------------------------------------------
 var AssayerLifecycleStatus;
 (function (AssayerLifecycleStatus) {
     AssayerLifecycleStatus["INVITED"] = "INVITED";
@@ -150,9 +132,6 @@ var AssayerLifecycleStatus;
     AssayerLifecycleStatus["TERMINATED"] = "TERMINATED";
     AssayerLifecycleStatus["ARCHIVED"] = "ARCHIVED";
 })(AssayerLifecycleStatus || (exports.AssayerLifecycleStatus = AssayerLifecycleStatus = {}));
-// ---------------------------------------------------------------------------
-// User Status (Part 8 §5)
-// ---------------------------------------------------------------------------
 var UserStatus;
 (function (UserStatus) {
     UserStatus["INVITED"] = "INVITED";
@@ -162,9 +141,6 @@ var UserStatus;
     UserStatus["DISABLED"] = "DISABLED";
     UserStatus["ARCHIVED"] = "ARCHIVED";
 })(UserStatus || (exports.UserStatus = UserStatus = {}));
-// ---------------------------------------------------------------------------
-// System Roles (Part 8 §6)
-// ---------------------------------------------------------------------------
 var SystemRole;
 (function (SystemRole) {
     SystemRole["SUPER_ADMINISTRATOR"] = "SUPER_ADMINISTRATOR";
@@ -178,9 +154,6 @@ var SystemRole;
     SystemRole["CLIENT_USER"] = "CLIENT_USER";
     SystemRole["READ_ONLY_AUDITOR"] = "READ_ONLY_AUDITOR";
 })(SystemRole || (exports.SystemRole = SystemRole = {}));
-// ---------------------------------------------------------------------------
-// Permission Actions (Part 8 §7)
-// ---------------------------------------------------------------------------
 var PermissionAction;
 (function (PermissionAction) {
     PermissionAction["VIEW"] = "VIEW";
@@ -207,9 +180,6 @@ var PermissionAction;
     PermissionAction["MODIFY"] = "MODIFY";
     PermissionAction["RESCHEDULE"] = "RESCHEDULE";
 })(PermissionAction || (exports.PermissionAction = PermissionAction = {}));
-// ---------------------------------------------------------------------------
-// Permission Resources (Part 8 §7)
-// ---------------------------------------------------------------------------
 var PermissionResource;
 (function (PermissionResource) {
     PermissionResource["PROJECT"] = "PROJECT";
@@ -226,9 +196,6 @@ var PermissionResource;
     PermissionResource["REFERENCE_DATA"] = "REFERENCE_DATA";
     PermissionResource["AUDIT_LOG"] = "AUDIT_LOG";
 })(PermissionResource || (exports.PermissionResource = PermissionResource = {}));
-// ---------------------------------------------------------------------------
-// Authorization Scopes (Part 8 §9)
-// ---------------------------------------------------------------------------
 var AuthorizationScope;
 (function (AuthorizationScope) {
     AuthorizationScope["SELF"] = "SELF";
@@ -241,9 +208,6 @@ var AuthorizationScope;
     AuthorizationScope["ORGANIZATION"] = "ORGANIZATION";
     AuthorizationScope["PLATFORM"] = "PLATFORM";
 })(AuthorizationScope || (exports.AuthorizationScope = AuthorizationScope = {}));
-// ---------------------------------------------------------------------------
-// Communication Types (Part 2 §13)
-// ---------------------------------------------------------------------------
 var CommunicationType;
 (function (CommunicationType) {
     CommunicationType["PHONE"] = "PHONE";
@@ -251,9 +215,6 @@ var CommunicationType;
     CommunicationType["EMAIL"] = "EMAIL";
     CommunicationType["SYSTEM"] = "SYSTEM";
 })(CommunicationType || (exports.CommunicationType = CommunicationType = {}));
-// ---------------------------------------------------------------------------
-// Travel Mode (Part 2 §14)
-// ---------------------------------------------------------------------------
 var TravelMode;
 (function (TravelMode) {
     TravelMode["CAR"] = "CAR";
@@ -263,9 +224,6 @@ var TravelMode;
     TravelMode["TWO_WHEELER"] = "TWO_WHEELER";
     TravelMode["OTHER"] = "OTHER";
 })(TravelMode || (exports.TravelMode = TravelMode = {}));
-// ---------------------------------------------------------------------------
-// Business Event Categories (Part 6 §10)
-// ---------------------------------------------------------------------------
 var EventCategory;
 (function (EventCategory) {
     EventCategory["OPERATIONAL"] = "OPERATIONAL";
@@ -273,9 +231,6 @@ var EventCategory;
     EventCategory["WORKFLOW"] = "WORKFLOW";
     EventCategory["SYSTEM"] = "SYSTEM";
 })(EventCategory || (exports.EventCategory = EventCategory = {}));
-// ---------------------------------------------------------------------------
-// Client Lifecycle (Enterprise)
-// ---------------------------------------------------------------------------
 var ClientLifecycleStatus;
 (function (ClientLifecycleStatus) {
     ClientLifecycleStatus["PROSPECT"] = "PROSPECT";
@@ -305,9 +260,6 @@ var ContractStatus;
     ContractStatus["TERMINATED"] = "TERMINATED";
     ContractStatus["RENEWED"] = "RENEWED";
 })(ContractStatus || (exports.ContractStatus = ContractStatus = {}));
-// ---------------------------------------------------------------------------
-// Priority Levels
-// ---------------------------------------------------------------------------
 var Priority;
 (function (Priority) {
     Priority["LOW"] = "LOW";

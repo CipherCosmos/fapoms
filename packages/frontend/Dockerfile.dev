@@ -19,7 +19,7 @@ COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/mobile/package.json ./packages/mobile/
 
 # ---- 3. Install ALL workspace dependencies ----
-RUN npm ci --ignore-scripts
+RUN npm ci && npm install @rollup/rollup-linux-arm64-musl --no-save
 
 # ---- 4. Copy and build the shared package ----
 COPY packages/shared/ ./packages/shared/

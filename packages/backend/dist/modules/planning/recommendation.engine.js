@@ -186,7 +186,7 @@ let WorkloadScoreCalculator = class WorkloadScoreCalculator {
         const activeCount = await this.assignmentRepository.count({
             where: {
                 assayerId: assayer.id,
-                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.SCHEDULED]),
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED]),
                 isActive: true,
             },
         });
@@ -341,7 +341,7 @@ let BranchFamiliarityScoreCalculator = class BranchFamiliarityScoreCalculator {
             where: {
                 assayerId: assayer.id,
                 projectId: context.branch.clientId ? context.branch.clientId : undefined,
-                status: shared_1.AssignmentStatus.CLOSED,
+                status: shared_1.AssignmentStatus.ACCEPTED,
                 isActive: true,
             },
         });
@@ -404,7 +404,7 @@ let SLAComplianceScoreCalculator = class SLAComplianceScoreCalculator {
                 where: {
                     assayerId: assayer.id,
                     scheduledDate: context.scheduledDate,
-                    status: (0, typeorm_2.In)([shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.SCHEDULED]),
+                    status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED]),
                     isActive: true,
                 },
             });

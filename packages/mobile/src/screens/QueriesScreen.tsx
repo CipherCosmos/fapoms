@@ -1,71 +1,80 @@
 import React from 'react';
-import { View, Text, TextInput, TouchableOpacity } from 'react-native';
-import { ValidationQuery } from '../types/mobile-app';
+import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
 
 interface QueriesScreenProps {
-  queries: ValidationQuery[];
-  activeQuery: ValidationQuery | null;
-  queryResponseText: string;
-  onSelectQuery: (q: ValidationQuery) => void;
-  onChangeResponseText: (text: string) => void;
-  onRespond: () => void;
+  assignments: AssayerAssignment[];
+  onOpenQueryChat: (assignment: AssayerAssignment) => void;
 }
 
 export const QueriesScreen: React.FC<QueriesScreenProps> = ({
-  queries,
-  activeQuery,
-  queryResponseText,
-  onSelectQuery,
-  onChangeResponseText,
-  onRespond,
+  assignments,
+  onOpenQueryChat,
 }) => {
+  // Extract only assignments that have actual query history initiated by Data Entry
+  const activeQueryAssignments = assignments.filter((a) => a.queries && a.queries.length > 0);
+
   return (
-    <View>
-      <Text style={styles.sectionHeading}>Validator Clarification Queries</Text>
-      {queries.length === 0 ? (
+    <View style={{ gap: 14 }}>
+      <Text style={styles.sectionHeading}>💬 Data Entry Validation Queries</Text>
+      
+      {activeQueryAssignments.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Text style={styles.emptyText}>🎉 No open queries for this branch.</Text>
+          <Text style={{ fontSize: 44, marginBottom: 12 }}>🎉</Text>
+          <Text style={styles.emptyText}>No clarification queries raised by Data Entry team yet.</Text>
         </View>
       ) : (
-        queries.map((q) => (
-          <View key={q.id} style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.queryValidator}>Validator: {q.validatorName}</Text>
-              <Text style={styles.queryStatus}>{q.status}</Text>
-            </View>
-            <Text style={styles.queryCust}>Customer: {q.customerName} ({q.accountNumber})</Text>
-            <Text style={styles.queryBody}>"{q.queryText}"</Text>
+        activeQueryAssignments.map((assignment) => {
+          const hasOpenQueries = (assignment.queries || []).some((q) => q.status === 'OPEN');
+          const hasRespondedQueries = (assignment.queries || []).some((q) => (q.status as any) === 'RESPONDED');
+          const isFullyResolved = (assignment.queries || []).length > 0 && (assignment.queries || []).every((q) => (q.status as any) === 'RESOLVED');
+          
+          return (
+            <View key={assignment.id} style={[styles.card, (hasOpenQueries || hasRespondedQueries) && { borderColor: '#6366f1', borderWidth: 1.5 }]}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.queryValidator}>{assignment.bankName}</Text>
+                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                  {hasOpenQueries ? (
+                    <View style={{ backgroundColor: 'rgba(239,68,68,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
+                      <Text style={{ color: '#f87171', fontSize: 10, fontWeight: '800' }}>● OPEN QUERY</Text>
+                    </View>
+                  ) : hasRespondedQueries ? (
+                    <View style={{ backgroundColor: 'rgba(245,158,11,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}>
+                      <Text style={{ color: '#fbbf24', fontSize: 10, fontWeight: '800' }}>💬 RESPONDED</Text>
+                    </View>
+                  ) : isFullyResolved ? (
+                    <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
+                      <Text style={{ color: '#34d399', fontSize: 10, fontWeight: '800' }}>🔒 CLOSED / RESOLVED</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
 
-            {q.assayerResponse ? (
-              <View style={styles.responseBox}>
-                <Text style={styles.responseTextTitle}>Your Response:</Text>
-                <Text style={styles.responseText}>{q.assayerResponse}</Text>
-              </View>
-            ) : (
-              <View>
-                {activeQuery?.id === q.id ? (
-                  <View style={{ marginTop: 10 }}>
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="Type clarification response..."
-                      placeholderTextColor="#94a3b8"
-                      value={queryResponseText}
-                      onChangeText={onChangeResponseText}
-                    />
-                    <TouchableOpacity style={styles.respondBtn} onPress={onRespond}>
-                      <Text style={styles.btnTextWhite}>Send Clarification Response</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <TouchableOpacity style={styles.respondBtn} onPress={() => onSelectQuery(q)}>
-                    <Text style={styles.btnTextWhite}>💬 Respond to Query</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-          </View>
-        ))
+              <Text style={styles.queryCust}>Branch: {assignment.branchName} ({assignment.branchCode})</Text>
+              <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Assessment #{assignment.assignmentCode} • Audit Date: {assignment.scheduledDate}</Text>
+
+              <TouchableOpacity
+                style={{
+                  marginTop: 14,
+                  paddingVertical: 12,
+                  paddingHorizontal: 16,
+                  backgroundColor: isFullyResolved ? 'rgba(51,65,85,0.8)' : '#00a884',
+                  borderRadius: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+                onPress={() => onOpenQueryChat(assignment)}
+              >
+                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
+                  {isFullyResolved ? '👁️ View Closed Chat History (Read Only)' : '💬 Open Live Query Room'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          );
+        })
       )}
     </View>
   );

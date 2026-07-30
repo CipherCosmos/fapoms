@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Linking, Platform } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Linking, Platform, Modal, TouchableOpacity } from 'react-native';
 import { registerRootComponent } from 'expo';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { AssayerAssignment, ValidationQuery, AssayerExpense, AppNotification } from './src/types/mobile-app';
 import { MobileApiService } from './src/services/api.service';
 import { registerForPushNotificationsAsync, setupNotificationListeners } from './src/services/notification.service';
+import { connectMobileSocket, disconnectMobileSocket, getMobileSocket } from './src/services/socket';
 
 // Modular Theme & Layout Components
 import { styles } from './src/theme/styles';
@@ -22,8 +25,9 @@ import { StatsScreen } from './src/screens/StatsScreen';
 import { ProfileScreen, ProfileDataState } from './src/screens/ProfileScreen';
 import { NotificationsScreen } from './src/screens/NotificationsScreen';
 
-// Modular Modals & Navigation
 import { NotificationDetailModal } from './src/components/NotificationDetailModal';
+import { MLKitScannerModal } from './src/components/MLKitScannerModal';
+import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
 
 export default function App() {
   // Authentication State (Read saved session synchronously to prevent flash on refresh)
@@ -43,6 +47,11 @@ export default function App() {
   const [activeAssignment, setActiveAssignment] = useState<AssayerAssignment | null>(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [uploadedPdfName, setUploadedPdfName] = useState<string | null>(null);
+  const [selectedPdfData, setSelectedPdfData] = useState<string | undefined>(undefined);
+  const [scannerModalVisible, setScannerModalVisible] = useState(false);
+  const [queryChatModalVisible, setQueryChatModalVisible] = useState(false);
+  const [queryChatAssignment, setQueryChatAssignment] = useState<AssayerAssignment | null>(null);
+  const [notifModalVisible, setNotifModalVisible] = useState(false);
 
   // Notification Detail Modal State
   const [notifDetailAssignment, setNotifDetailAssignment] = useState<AssayerAssignment | null>(null);
@@ -135,6 +144,9 @@ export default function App() {
     setNotifLoading(false);
   }, []);
 
+  const notifDetailRef = useRef(notifDetailAssignment);
+  notifDetailRef.current = notifDetailAssignment;
+
   useEffect(() => {
     if (isAuthenticated) {
       loadAssignments().then(() => {
@@ -142,6 +154,102 @@ export default function App() {
         registerForPushNotificationsAsync();
         loadNotifications();
       });
+
+      const socket = connectMobileSocket();
+
+      const playNewAssignmentRingtone = () => {
+        try {
+          const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+          if (g.window && (g.AudioContext || g.webkitAudioContext)) {
+            const AudioCtx = g.AudioContext || g.webkitAudioContext;
+            const ctx = new AudioCtx();
+            const playChime = (freq: number, startTime: number, duration: number) => {
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(freq, ctx.currentTime + startTime);
+              gain.gain.setValueAtTime(0.3, ctx.currentTime + startTime);
+              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + duration);
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.start(ctx.currentTime + startTime);
+              osc.stop(ctx.currentTime + startTime + duration);
+            };
+            playChime(587.33, 0, 0.2);   // D5
+            playChime(880, 0.15, 0.25);   // A5
+            playChime(1174.66, 0.35, 0.5); // D6
+          }
+        } catch (e) {}
+      };
+
+      const handlers: Record<string, (data?: any) => void> = {
+        'assignment:status-changed': () => { loadAssignments(); loadNotifications(); },
+        'assignment:counter-offered': (data: any) => {
+          playNewAssignmentRingtone();
+          loadAssignments();
+          loadNotifications();
+          Alert.alert(
+            '💬 COUNTER OFFER UPDATE!',
+            `Counter rate proposal update received (₹${data?.proposedFee || ''}).`,
+            [{ text: 'View Update', onPress: () => setSelectedTab('SCHEDULE') }]
+          );
+        },
+        'assignment:created': (data: any) => {
+          playNewAssignmentRingtone();
+          loadAssignments();
+          loadNotifications();
+          const branchName = data?.branchName || 'Bank Branch';
+          Alert.alert(
+            '🔔 NEW ASSIGNMENT INVITE!',
+            `You have received a direct app invitation for ${branchName}. Check your schedule to Accept or Reject.`,
+            [{ text: 'View Invitation', onPress: () => setSelectedTab('SCHEDULE') }]
+          );
+        },
+        'assignment:fee-updated': () => { loadAssignments(); },
+        'notification:new': () => {
+          playNewAssignmentRingtone();
+          loadNotifications();
+        },
+        'query:raised': (data: any) => {
+          playNewAssignmentRingtone();
+          loadAssignments();
+          loadNotifications();
+          Alert.alert(
+            '❓ NEW VALIDATION QUERY RAISED!',
+            `Data entry team raised a query: "${data?.queryText || 'Clarification required for audit'}". Tap to respond.`,
+            [{ text: 'Open Query Chat', onPress: () => setSelectedTab('SCHEDULE') }]
+          );
+        },
+        'query:responded': () => { loadAssignments(); loadNotifications(); },
+        'schedule:created': () => { loadAssignments(); },
+        'schedule:updated': () => { loadAssignments(); },
+        'document:uploaded': () => { loadAssignments(); loadNotifications(); },
+        'document:status-changed': () => { loadAssignments(); },
+        'communication:created': () => { loadAssignments(); },
+        'billing:created': () => { loadAssignments(); },
+      };
+
+      if (socket) {
+        for (const [event, handler] of Object.entries(handlers)) {
+          socket.on(event, handler);
+        }
+        socket.on('comment:added', (data: any) => {
+          if (notifDetailRef.current?.id === data.assignmentId) {
+            loadAssignments();
+          }
+        });
+      }
+
+      return () => {
+        if (socket) {
+          for (const [event, handler] of Object.entries(handlers)) {
+            socket.off(event, handler);
+          }
+          socket.off('comment:added');
+        }
+      };
+    } else {
+      disconnectMobileSocket();
     }
   }, [isAuthenticated]);
 
@@ -283,16 +391,52 @@ export default function App() {
 
   const handleBiometricLogin = async () => {
     if (!loginUsername) {
-      Alert.alert('Required Field', 'Please enter your assayer code.');
+      Alert.alert('Required Field', 'Please enter your assayer code / phone number first.');
       return;
     }
+
+    try {
+      const LocalAuthentication = require('expo-local-authentication');
+      
+      // 1. Check if hardware supports biometrics
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+
+      if (!hasHardware || !isEnrolled) {
+        Alert.alert(
+          'Biometrics Unavailable',
+          'Biometric hardware (FaceID / Fingerprint) is not configured or registered on this device. Using secure fallback authentication...'
+        );
+      } else {
+        // 2. Trigger real OS Native Biometric Prompt (Face ID / Touch ID / Fingerprint)
+        const bioResult = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Authenticate with FaceID / Fingerprint for Sumeru Audit',
+          fallbackLabel: 'Use Password Instead',
+          cancelLabel: 'Cancel',
+          disableDeviceFallback: false,
+        });
+
+        if (!bioResult.success) {
+          Alert.alert('Biometric Error', bioResult.error || 'Biometric authentication was cancelled.');
+          return;
+        }
+      }
+    } catch (e) {
+      // Web / Fallback mode compatibility
+    }
+
+    // 3. Complete server session authentication
     setAuthenticating(true);
     const res = await MobileApiService.biometricLogin(loginUsername);
     setAuthenticating(false);
 
     if (res.success && res.token) {
-      setAssayerName(res.user?.name || loginUsername);
+      const assayerId = res.user?.id || loginUsername;
+      const name = res.user?.name || loginUsername;
+      MobileApiService.setAuthToken(res.token, assayerId, name);
+      setAssayerName(name);
       setIsAuthenticated(true);
+      Alert.alert('Biometric Sign-In Successful', `Welcome back, ${name}!`);
     } else {
       Alert.alert('Biometric Login Failed', res.error || 'Assayer not found or inactive.');
     }
@@ -352,9 +496,63 @@ export default function App() {
       };
       setActiveAssignment(updated);
       setAssignments(assignments.map((a) => (a.id === assignment.id ? updated : a)));
-      Alert.alert('Check-In Successful', `GPS check-in recorded at ${now}.`);
     } else {
       Alert.alert('Check-In Failed', res.error || 'Could not record check-in. Please try again.');
+    }
+  };
+
+  const handlePickAndUploadPdf = async (assignment: AssayerAssignment) => {
+    try {
+      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+      if (Platform.OS === 'web' && g.document) {
+        const input = g.document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/pdf';
+        input.onchange = async (e: any) => {
+          const file = e.target?.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = async () => {
+            const base64 = (reader.result as string).split(',')[1];
+            setUploadingPdf(true);
+            const targetId = assignment.projectBranchId || assignment.id;
+            const res = await MobileApiService.uploadCompletedAuditPdf(targetId, file.name, base64, assignment.id);
+            setUploadingPdf(false);
+            if (res.success) {
+              Alert.alert('Audit Uploaded!', `Scanned audit report "${file.name}" uploaded successfully. Assignment marked COMPLETED.`);
+              loadAssignments();
+            } else {
+              Alert.alert('Upload Failed', res.error || 'Could not upload PDF document.');
+            }
+          };
+          reader.readAsDataURL(file);
+        };
+        input.click();
+        return;
+      }
+
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0];
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        setUploadingPdf(true);
+        const targetId = assignment.projectBranchId || assignment.id;
+        const res = await MobileApiService.uploadCompletedAuditPdf(targetId, asset.name, base64, assignment.id);
+        setUploadingPdf(false);
+        if (res.success) {
+          Alert.alert('Audit Uploaded!', `Scanned audit report "${asset.name}" uploaded successfully. Assignment marked COMPLETED.`);
+          loadAssignments();
+        } else {
+          Alert.alert('Upload Failed', res.error || 'Could not upload PDF document.');
+        }
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to select PDF file.');
     }
   };
 
@@ -415,10 +613,16 @@ export default function App() {
     setExpenseDescription('');
   };
 
-  // Computations — using real backend data
+  // Computations — using real backend data & commercial base fee fallbacks
+  const getAssignmentTotalFee = (a: any) => {
+    const fee = a.agreedBaseFee > 0 ? a.agreedBaseFee : (a.proposedFee > 0 ? a.proposedFee : (a.standardBaseFee || 1200));
+    const travel = a.agreedTravelFee || 0;
+    return fee + travel;
+  };
+
   const totalCompleted = profile.completedAssignments || assignments.filter((a) => a.status === 'COMPLETED').length;
-  const completedEarnings = Number(profile.totalEarnings) || assignments.reduce((sum, a) => sum + (a.agreedBaseFee || 0), 0);
-  const pendingEarnings = assignments.reduce((sum, a) => sum + (a.status !== 'COMPLETED' ? (a.agreedBaseFee || 0) : 0), 0);
+  const completedEarnings = Number(profile.totalEarnings) || assignments.reduce((sum, a) => sum + (a.status === 'COMPLETED' ? getAssignmentTotalFee(a) : 0), 0);
+  const pendingEarnings = assignments.reduce((sum, a) => sum + (a.status !== 'COMPLETED' ? getAssignmentTotalFee(a) : 0), 0);
   const openQueries = activeAssignment?.queries.filter((q) => q.status === 'OPEN') || [];
 
   const totalQueriesCount = assignments.reduce((sum, a) => sum + (a.queries?.length || 0), 0);
@@ -454,7 +658,7 @@ export default function App() {
         unreadNotifCount={unreadNotifCount}
         onRefresh={loadAssignments}
         onLogout={handleLogout}
-        onNotificationsPress={() => setSelectedTab('NOTIFICATIONS')}
+        onNotificationsPress={() => setNotifModalVisible(true)}
       />
       <TabBar selectedTab={selectedTab} onSelectTab={setSelectedTab} openQueriesCount={openQueries.length} unreadNotifCount={unreadNotifCount} />
 
@@ -471,19 +675,91 @@ export default function App() {
               onAcceptAssignment={handleAcceptAssignment}
               onOpenRejectModal={(id) => { setRejectAssignmentId(id); setRejectModalVisible(true); }}
               onCheckIn={handleCheckIn}
-              onOpenPdfDocs={(a) => { setActiveAssignment(a); setSelectedTab('PDF_DOCUMENTS'); }}
+              onOpenPdfDocs={(a) => {
+                setActiveAssignment(a);
+                handlePickAndUploadPdf(a);
+              }}
+              onOpenScanner={(a) => {
+                setActiveAssignment(a);
+                setScannerModalVisible(true);
+              }}
+              onOpenQueryChat={(a) => {
+                setQueryChatAssignment(a);
+                setQueryChatModalVisible(true);
+              }}
+              onCounterOffer={async (a) => {
+                const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+                const promptFn = g.prompt || null;
+                const promptVal = promptFn
+                  ? promptFn(`Enter your proposed fee rate (₹) for ${a.branchName}:`, String(a.proposedFee || 1500))
+                  : null;
+                if (!promptVal) return;
+                const feeNum = parseFloat(promptVal);
+                if (isNaN(feeNum) || feeNum <= 0) {
+                  Alert.alert('Invalid Fee', 'Please enter a valid numeric fee amount.');
+                  return;
+                }
+                const success = await MobileApiService.updateAssignmentStatus(
+                  a.id,
+                  'COUNTER_OFFER' as any,
+                  `Assayer proposed rate: ₹${feeNum}`,
+                  feeNum,
+                );
+                if (success) {
+                  Alert.alert('Counter Rate Sent!', `Negotiated fee proposal ₹${feeNum} submitted to Operations Manager. Awaiting operations review.`);
+                  loadAssignments();
+                } else {
+                  Alert.alert('Submission Failed', 'Could not submit counter offer.');
+                }
+              }}
             />
           )}
 
-          {selectedTab === 'PDF_DOCUMENTS' && (
+          {(selectedTab as any) === 'PDF_DOCUMENTS' && (
             <PdfDocsScreen
               activeAssignment={activeAssignment}
               uploadedPdfName={uploadedPdfName}
               uploadingPdf={uploadingPdf}
-              onSelectPdfFile={() => {
-                const sampleName = `audited_report_${activeAssignment?.branchCode || 'BR'}_${Date.now()}.pdf`;
-                setUploadedPdfName(sampleName);
-                Alert.alert('PDF Document Selected', `Selected: ${sampleName}`);
+              onOpenScanner={() => setScannerModalVisible(true)}
+              onSelectPdfFile={async () => {
+                try {
+                  const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+                  if (Platform.OS === 'web' && g.document) {
+                    const input = g.document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'application/pdf';
+                    input.onchange = (e: any) => {
+                      const file = e.target?.files?.[0];
+                      if (!file) return;
+                      setUploadedPdfName(file.name);
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const base64 = (reader.result as string).split(',')[1];
+                        setSelectedPdfData(base64);
+                        Alert.alert('PDF Selected', file.name);
+                      };
+                      reader.readAsDataURL(file);
+                    };
+                    input.click();
+                    return;
+                  }
+
+                  const result = await DocumentPicker.getDocumentAsync({
+                    type: 'application/pdf',
+                    copyToCacheDirectory: true,
+                  });
+                  if (!result.canceled && result.assets?.[0]) {
+                    const asset = result.assets[0];
+                    setUploadedPdfName(asset.name);
+                    const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+                      encoding: FileSystem.EncodingType.Base64,
+                    });
+                    setSelectedPdfData(base64);
+                    Alert.alert('PDF Selected', asset.name);
+                  }
+                } catch (e: any) {
+                  Alert.alert('Error', e?.message || 'Failed to select PDF file.');
+                }
               }}
               onSubmitCompletedPdf={async () => {
                 if (!activeAssignment || !uploadedPdfName) {
@@ -491,10 +767,16 @@ export default function App() {
                   return;
                 }
                 setUploadingPdf(true);
-                const res = await MobileApiService.uploadCompletedAuditPdf(activeAssignment.id, uploadedPdfName);
+                const res = await MobileApiService.uploadCompletedAuditPdf(
+                  activeAssignment.id,
+                  uploadedPdfName,
+                  selectedPdfData,
+                );
                 setUploadingPdf(false);
                 if (res.success) {
-                  Alert.alert('Success 🎉', 'Audit PDF uploaded successfully! Assignment transitioned to COMPLETED.');
+                  setUploadedPdfName(null);
+                  setSelectedPdfData(undefined);
+                  Alert.alert('Success', 'Audit PDF uploaded successfully! Assignment transitioned to COMPLETED.');
                   loadAssignments();
                 } else {
                   Alert.alert('Upload Status', res.error || 'Audit PDF recorded and synced.');
@@ -506,12 +788,11 @@ export default function App() {
 
           {selectedTab === 'QUERIES' && (
             <QueriesScreen
-              queries={activeAssignment?.queries || []}
-              activeQuery={activeQuery}
-              queryResponseText={queryResponseText}
-              onSelectQuery={(q) => { setActiveQuery(q); setQueryResponseText(q.assayerResponse || ''); }}
-              onChangeResponseText={setQueryResponseText}
-              onRespond={handleRespondToQuery}
+              assignments={assignments}
+              onOpenQueryChat={(a) => {
+                setQueryChatAssignment(a);
+                setQueryChatModalVisible(true);
+              }}
             />
           )}
 
@@ -522,29 +803,6 @@ export default function App() {
               runningBalance={Number(profile.runningBalance) || 0}
               assignments={assignments}
               onOpenExpenseModal={() => setExpenseModalVisible(true)}
-            />
-          )}
-
-          {selectedTab === 'PERFORMANCE' && (
-            <StatsScreen
-              qualityScore={qualityScore}
-              totalCompleted={totalCompleted}
-              queryResolutionRate={queryResolutionRate}
-              avgAuditHours={avgAuditHours}
-              totalAssignments={profile.totalAssignments}
-              averageRating={profile.averageRating}
-              onTimePercentage={profile.totalAssignments > 0 ? Math.round((profile.onTimeCompletions / profile.totalAssignments) * 100) : 0}
-            />
-          )}
-
-          {selectedTab === 'NOTIFICATIONS' && (
-            <NotificationsScreen
-              notifications={notifications}
-              loading={notifLoading}
-              unreadCount={unreadNotifCount}
-              onRefresh={loadNotifications}
-              onMarkRead={handleMarkNotificationRead}
-              onTapNotification={handleTapNotification}
             />
           )}
 
@@ -564,11 +822,12 @@ export default function App() {
                   }
                 } catch (e) {}
 
-                // 2. Synchronize with NestJS PostgreSQL backend
+                // 2. Synchronize with backend via MobileApiService
                 const userId = MobileApiService.getCurrentUserId();
                 if (userId) {
                   try {
-                    await fetch(`http://localhost:3000/api/v1/assayers/${userId}`, {
+                    const baseUrl = MobileApiService.getBaseUrl();
+                    await MobileApiService.fetchWithAuth(`${baseUrl}/assayers/${userId}`, {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
@@ -628,7 +887,45 @@ export default function App() {
           openGoogleMaps(assignment.latitude, assignment.longitude);
         }}
       />
-
+      <MLKitScannerModal
+        visible={scannerModalVisible}
+        onClose={() => setScannerModalVisible(false)}
+        onPdfGenerated={(pdfName, base64Pdf) => {
+          setUploadedPdfName(pdfName);
+          setSelectedPdfData(base64Pdf);
+          Alert.alert('📄 Scanned PDF Ready', `${pdfName} compiled successfully! Tap "Submit Completed PDF" to upload.`);
+        }}
+      />
+      <AssayerQueryChatModal
+        visible={queryChatModalVisible}
+        assignment={queryChatAssignment}
+        onClose={() => setQueryChatModalVisible(false)}
+      />
+      
+      {/* ── Slide-over Notifications Drawer Modal ── */}
+      {notifModalVisible && (
+        <Modal animationType="slide" transparent={false} visible={notifModalVisible} onRequestClose={() => setNotifModalVisible(false)}>
+          <SafeAreaView style={{ flex: 1, backgroundColor: '#090d16' }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, backgroundColor: '#0f172a', borderBottomWidth: 1, borderBottomColor: 'rgba(99,102,241,0.2)' }}>
+              <Text style={{ fontSize: 18, fontWeight: '900', color: '#ffffff' }}>🔔 Notifications & Dispatch Alerts</Text>
+              <TouchableOpacity onPress={() => setNotifModalVisible(false)} style={{ backgroundColor: 'rgba(239,68,68,0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
+                <Text style={{ color: '#f87171', fontWeight: '800', fontSize: 13 }}>✕ Close</Text>
+              </TouchableOpacity>
+            </View>
+            <NotificationsScreen
+              notifications={notifications}
+              loading={notifLoading}
+              unreadCount={unreadNotifCount}
+              onRefresh={loadNotifications}
+              onMarkRead={handleMarkNotificationRead}
+              onTapNotification={(n) => {
+                setNotifModalVisible(false);
+                handleTapNotification(n);
+              }}
+            />
+          </SafeAreaView>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }

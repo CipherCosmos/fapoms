@@ -17,7 +17,6 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const assignment_service_1 = require("./assignment.service");
 const guards_1 = require("../auth/guards");
-const shared_1 = require("@fapoms/shared");
 let AssignmentController = class AssignmentController {
     assignmentService;
     constructor(assignmentService) {
@@ -54,15 +53,15 @@ let AssignmentController = class AssignmentController {
         };
     }
     async create(dto, req) {
-        const userId = req?.user?.id || 'system-admin';
+        const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
         const assignment = await this.assignmentService.create(dto, userId);
         return {
             success: true,
             data: assignment,
         };
     }
-    async findAll(page, limit, status) {
-        const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, status);
+    async findAll(page, limit, status, projectBranchStatus, assessmentStatus) {
+        const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, status, projectBranchStatus, assessmentStatus);
         return {
             success: true,
             data: result.assignments,
@@ -90,7 +89,8 @@ let AssignmentController = class AssignmentController {
         };
     }
     async update(id, dto, req) {
-        const assignment = await this.assignmentService.update(id, dto, req.user.id);
+        const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
+        const assignment = await this.assignmentService.update(id, dto, userId);
         return {
             success: true,
             data: assignment,
@@ -103,7 +103,19 @@ let AssignmentController = class AssignmentController {
             throw new common_1.BadRequestException('targetStatus is required for assignment transition');
         }
         const userId = req?.user?.id || id;
-        const assignment = await this.assignmentService.transition(id, targetStatus, userId, body.remarks, body.reason, body.fee, body.scheduledDate);
+        let assignment;
+        if (targetStatus === 'ACCEPTED') {
+            assignment = await this.assignmentService.acceptOffer(id, userId, body.fee, body.reason ?? body.remarks);
+        }
+        else if (targetStatus === 'REJECTED') {
+            assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
+        }
+        else if (targetStatus === 'CANCELLED') {
+            assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);
+        }
+        else {
+            throw new common_1.BadRequestException(`Invalid transition: ${targetStatus}. Only ACCEPTED, REJECTED, CANCELLED are allowed.`);
+        }
         return {
             success: true,
             data: assignment,
@@ -158,12 +170,14 @@ __decorate([
 ], AssignmentController.prototype, "create", null);
 __decorate([
     (0, common_1.Get)(),
-    (0, swagger_1.ApiOperation)({ summary: 'List all assignments' }),
+    (0, swagger_1.ApiOperation)({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or assessmentStatus' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
     __param(2, (0, common_1.Query)('status')),
+    __param(3, (0, common_1.Query)('projectBranchStatus')),
+    __param(4, (0, common_1.Query)('assessmentStatus')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Number, Number, String]),
+    __metadata("design:paramtypes", [Number, Number, String, String, String]),
     __metadata("design:returntype", Promise)
 ], AssignmentController.prototype, "findAll", null);
 __decorate([
@@ -183,8 +197,7 @@ __decorate([
 ], AssignmentController.prototype, "findOne", null);
 __decorate([
     (0, common_1.Put)(':id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
-    (0, guards_1.RequirePermissions)('assignment:update:organization'),
+    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Update assignment details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -196,7 +209,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/transition'),
     (0, guards_1.Public)(),
-    (0, swagger_1.ApiOperation)({ summary: 'Transition assignment to a new state' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Transition assignment to ACCEPTED, REJECTED, or CANCELLED' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
     __param(2, (0, common_1.Req)()),

@@ -10,6 +10,10 @@ class CreateValidationCaseRequestDto implements CreateValidationCaseDto {
   @IsUUID()
   @IsNotEmpty()
   projectBranchId: string;
+
+  @IsUUID()
+  @IsOptional()
+  assessmentId?: string;
 }
 
 class AssignReviewerDto {
@@ -80,8 +84,7 @@ export class ValidationController {
   }
 
   @Post(':id/assign')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER)
-  @RequirePermissions('validation:update:organization')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
   @ApiOperation({ summary: 'Assign a validation case to a validator reviewer' })
   async assign(
     @Param('id', ParseUUIDPipe) id: string,
@@ -97,7 +100,6 @@ export class ValidationController {
 
   @Post(':id/transition')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
-  @RequirePermissions('validation:update:organization')
   @ApiOperation({ summary: 'Transition validation case status' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

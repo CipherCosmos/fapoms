@@ -19,7 +19,7 @@ COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/mobile/package.json ./packages/mobile/
 
 # ---- 3. Install ALL workspace dependencies ----
-RUN npm install --ignore-scripts
+RUN npm install --legacy-peer-deps
 
 # ---- 4. Copy and build the shared package ----
 COPY packages/shared/ ./packages/shared/

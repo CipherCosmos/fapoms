@@ -20,15 +20,18 @@ const bcrypt = require("bcrypt");
 const user_entity_1 = require("./user.entity");
 const role_entity_1 = require("./role.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 let UserService = class UserService {
     userRepository;
     roleRepository;
     auditService;
-    constructor(userRepository, roleRepository, auditService) {
+    eventPublisher;
+    constructor(userRepository, roleRepository, auditService, eventPublisher) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
     }
     async createUser(dto, createdById) {
         const existing = await this.userRepository.findOne({
@@ -67,6 +70,21 @@ let UserService = class UserService {
             newState: shared_1.UserStatus.ACTIVE,
             userId: createdById,
         });
+        try {
+            this.eventPublisher.publish('user:created', {
+                eventType: 'user:created',
+                userId: savedUser.id,
+                username: savedUser.username,
+                email: savedUser.email,
+                displayName: savedUser.displayName,
+                roleIds: dto.roleIds || [],
+                createdBy: createdById,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish user:created event:', err);
+        }
         return savedUser;
     }
     async findById(id) {
@@ -117,6 +135,19 @@ let UserService = class UserService {
             newState: user.status,
             userId: updatedById,
         });
+        try {
+            this.eventPublisher.publish('user:updated', {
+                eventType: 'user:updated',
+                userId: saved.id,
+                status: saved.status,
+                previousStatus,
+                updatedBy: updatedById,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish user:updated event:', err);
+        }
         return saved;
     }
     async assignRoles(userId, roleIds, assignedById) {
@@ -135,6 +166,18 @@ let UserService = class UserService {
             userId: assignedById,
             metadata: { roleIds },
         });
+        try {
+            this.eventPublisher.publish('user:role-changed', {
+                eventType: 'user:role-changed',
+                userId: saved.id,
+                roleIds,
+                assignedBy: assignedById,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish user:role-changed event:', err);
+        }
         return saved;
     }
     async findAllRoles() {
@@ -148,6 +191,7 @@ exports.UserService = UserService = __decorate([
     __param(1, (0, typeorm_1.InjectRepository)(role_entity_1.RoleEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], UserService);
 //# sourceMappingURL=user.service.js.map

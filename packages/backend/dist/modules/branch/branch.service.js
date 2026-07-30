@@ -25,6 +25,7 @@ const zone_entity_1 = require("../zone/zone.entity");
 const geo_entities_1 = require("../geo/geo.entities");
 const audit_service_1 = require("../../core/audit/audit.service");
 const branch_query_service_1 = require("./branch-query.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 async function geocodeAddress(address, city, district, state) {
     const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
@@ -67,7 +68,8 @@ let BranchService = class BranchService {
     clientService;
     auditService;
     branchQueryService;
-    constructor(branchRepository, contactRepository, documentRepository, zoneRepository, stateRepository, districtRepository, cityRepository, clientService, auditService, branchQueryService) {
+    eventPublisher;
+    constructor(branchRepository, contactRepository, documentRepository, zoneRepository, stateRepository, districtRepository, cityRepository, clientService, auditService, branchQueryService, eventPublisher) {
         this.branchRepository = branchRepository;
         this.contactRepository = contactRepository;
         this.documentRepository = documentRepository;
@@ -78,6 +80,7 @@ let BranchService = class BranchService {
         this.clientService = clientService;
         this.auditService = auditService;
         this.branchQueryService = branchQueryService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId, organizationId) {
         await this.validateGeography(dto.state, dto.district, dto.city);
@@ -142,6 +145,21 @@ let BranchService = class BranchService {
             userId,
             remarks: `Created branch ${saved.name} (${saved.branchCode})`,
         });
+        try {
+            this.eventPublisher.publish('branch:created', {
+                eventType: 'branch:created',
+                branchId: saved.id,
+                branchCode: saved.branchCode,
+                name: saved.name,
+                clientId: saved.clientId,
+                organizationId: saved.organizationId,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish branch:created event:', err);
+        }
         return saved;
     }
     async findOne(id) {
@@ -242,6 +260,20 @@ let BranchService = class BranchService {
             userId,
             remarks: `Updated branch ${saved.name} (${saved.branchCode})`,
         });
+        try {
+            this.eventPublisher.publish('branch:updated', {
+                eventType: 'branch:updated',
+                branchId: saved.id,
+                name: saved.name,
+                clientId: saved.clientId,
+                organizationId: saved.organizationId,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish branch:updated event:', err);
+        }
         return saved;
     }
     async remove(id, userId) {
@@ -512,6 +544,7 @@ exports.BranchService = BranchService = __decorate([
         typeorm_2.Repository,
         client_service_1.ClientService,
         audit_service_1.AuditService,
-        branch_query_service_1.BranchQueryService])
+        branch_query_service_1.BranchQueryService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], BranchService);
 //# sourceMappingURL=branch.service.js.map

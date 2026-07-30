@@ -5,57 +5,64 @@ const typeorm_1 = require("@nestjs/typeorm");
 const common_1 = require("@nestjs/common");
 const document_service_1 = require("./document.service");
 const document_entity_1 = require("./document.entity");
-const project_branch_entity_1 = require("../project/project-branch.entity");
+const assessment_entity_1 = require("../project/assessment.entity");
+const assignment_entity_1 = require("../assignment/assignment.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
+const notification_service_1 = require("../notifications/notification.service");
+const push_notification_service_1 = require("../notifications/push-notification.service");
 const shared_1 = require("@fapoms/shared");
 describe('DocumentService', () => {
     let service;
-    let documentRepo;
-    let projectBranchRepo;
     const mockDocumentRepo = {
         create: jest.fn(),
         save: jest.fn(),
         findOne: jest.fn(),
         find: jest.fn(),
     };
-    const mockProjectBranchRepo = {
+    const mockAssessmentRepo = {
+        findOne: jest.fn(),
+    };
+    const mockAssignmentRepo = {
         findOne: jest.fn(),
     };
     const mockAuditService = {
         recordEvent: jest.fn(),
     };
+    const mockEventPublisher = {
+        publish: jest.fn(),
+    };
+    const mockNotificationService = {
+        create: jest.fn(),
+    };
+    const mockPushNotificationService = {
+        sendToUser: jest.fn(),
+    };
     beforeEach(async () => {
         const module = await testing_1.Test.createTestingModule({
             providers: [
                 document_service_1.DocumentService,
-                {
-                    provide: (0, typeorm_1.getRepositoryToken)(document_entity_1.DocumentEntity),
-                    useValue: mockDocumentRepo,
-                },
-                {
-                    provide: (0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity),
-                    useValue: mockProjectBranchRepo,
-                },
-                {
-                    provide: audit_service_1.AuditService,
-                    useValue: mockAuditService,
-                },
+                { provide: (0, typeorm_1.getRepositoryToken)(document_entity_1.DocumentEntity), useValue: mockDocumentRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(assessment_entity_1.AssessmentEntity), useValue: mockAssessmentRepo },
+                { provide: (0, typeorm_1.getRepositoryToken)(assignment_entity_1.AssignmentEntity), useValue: mockAssignmentRepo },
+                { provide: audit_service_1.AuditService, useValue: mockAuditService },
+                { provide: domain_event_publisher_1.DomainEventPublisher, useValue: mockEventPublisher },
+                { provide: notification_service_1.NotificationService, useValue: mockNotificationService },
+                { provide: push_notification_service_1.PushNotificationService, useValue: mockPushNotificationService },
             ],
         }).compile();
         service = module.get(document_service_1.DocumentService);
-        documentRepo = module.get((0, typeorm_1.getRepositoryToken)(document_entity_1.DocumentEntity));
-        projectBranchRepo = module.get((0, typeorm_1.getRepositoryToken)(project_branch_entity_1.ProjectBranchEntity));
         jest.clearAllMocks();
     });
     describe('create', () => {
-        it('should throw NotFoundException if project branch does not exist', async () => {
-            mockProjectBranchRepo.findOne.mockResolvedValue(null);
+        it('should throw NotFoundException if assessment does not exist', async () => {
+            mockAssessmentRepo.findOne.mockResolvedValue(null);
             await expect(service.create({
-                projectBranchId: 'pb-missing',
+                assessmentId: 'asmt-missing',
                 fileName: 'test.pdf',
                 filePath: '/path/test.pdf',
                 fileSize: 1024,
-                type: shared_1.DocumentType.GENERATED_PDF,
+                type: shared_1.DocumentType.PRE_FIELD_AUDIT_PDF,
             }, 'user-1')).rejects.toThrow(common_1.NotFoundException);
         });
     });

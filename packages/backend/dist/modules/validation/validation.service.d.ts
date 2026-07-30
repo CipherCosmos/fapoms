@@ -1,6 +1,7 @@
 import { OnModuleInit } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AuditService } from '../../core/audit/audit.service';
@@ -9,15 +10,17 @@ import { ValidationStatus } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 export interface CreateValidationCaseDto {
     projectBranchId: string;
+    assessmentId?: string;
 }
 export declare class ValidationService implements OnModuleInit {
     private readonly validationCaseRepository;
+    private readonly assessmentRepository;
     private readonly projectQueryService;
     private readonly projectService;
     private readonly auditService;
     private readonly eventPublisher;
     private readonly workflowEngine;
-    constructor(validationCaseRepository: Repository<ValidationCaseEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, auditService: AuditService, eventPublisher: DomainEventPublisher, workflowEngine: WorkflowEngine);
+    constructor(validationCaseRepository: Repository<ValidationCaseEntity>, assessmentRepository: Repository<AssessmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, auditService: AuditService, eventPublisher: DomainEventPublisher, workflowEngine: WorkflowEngine);
     onModuleInit(): void;
     create(dto: CreateValidationCaseDto, userId: string): Promise<ValidationCaseEntity>;
     findOne(id: string): Promise<ValidationCaseEntity>;

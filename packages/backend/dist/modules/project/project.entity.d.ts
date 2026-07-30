@@ -1,6 +1,7 @@
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { AssessmentEntity } from './assessment.entity';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 export declare class ProjectEntity extends BaseEntity {
     projectNumber: string;
@@ -22,4 +23,5 @@ export declare class ProjectEntity extends BaseEntity {
     dependencies: Record<string, any> | null;
     client: ClientEntity;
     projectBranches: ProjectBranchEntity[];
+    assessments: AssessmentEntity[];
 }

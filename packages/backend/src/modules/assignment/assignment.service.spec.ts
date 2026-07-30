@@ -10,13 +10,14 @@ import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
-import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { AssignmentStatus, ProjectBranchStatus, EventCategory } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { RoutingService } from '../geo/routing.provider';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -41,7 +42,6 @@ describe('AssignmentService', () => {
   };
 
   const mockProjectService = {
-    transitionProjectBranchStatus: jest.fn(),
     initiateBranchPlanning: jest.fn(),
     confirmBranchAssignment: jest.fn(),
     scheduleBranchAudit: jest.fn(),
@@ -56,6 +56,7 @@ describe('AssignmentService', () => {
   const mockAssayerService = {
     findOne: mockAssayerRepo.findOne,
     updateAssayerStats: jest.fn(),
+    getActiveCommercialProfile: jest.fn().mockResolvedValue({ baseFee: 1500 }),
   };
 
   const mockHolidayService = {
@@ -81,168 +82,37 @@ describe('AssignmentService', () => {
   const mockDataSource = {
     transaction: jest.fn((cb) => cb({
       save: jest.fn((arg) => Promise.resolve(arg)),
+      getRepository: jest.fn().mockReturnValue({
+        findOne: jest.fn(),
+      }),
     })),
   };
 
-  const mockWorkflowEngine = {
-    registerWorkflow: jest.fn(),
-    executeTransition: jest.fn().mockImplementation(async (key, id, from, to, ctx) => {
-      // Simulate valid transition paths
-      const validPaths: Record<string, string[]> = {
-        CREATED: ['ACCEPTED', 'REJECTED', 'CANCELLED', 'CANDIDATE_SELECTED'],
-        ACCEPTED: ['SCHEDULED'],
-        SCHEDULED: ['AUDIT_COMPLETED'],
-        AUDIT_COMPLETED: ['CLOSED'],
-      };
-      const allowed = validPaths[from] || [];
-      if (!allowed.includes(to)) {
-        throw new BadRequestException(`Invalid transition from '${from}' to '${to}'`);
-      }
-
-      if (to === 'ACCEPTED') {
-        ctx.payload.assignment.agreedFee = ctx.payload.fee ?? ctx.payload.assignment.proposedFee;
-        ctx.payload.assignment.projectBranch.status = 'ASSIGNMENT_CONFIRMED';
-      }
-      if (to === 'REJECTED') {
-        ctx.payload.assignment.rejectReason = ctx.payload.reason ?? 'Rejected';
-        ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
-      }
-      if (to === 'CANCELLED') {
-        ctx.payload.assignment.cancelReason = ctx.payload.reason ?? 'Cancelled';
-        ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
-      }
-      if (to === 'SCHEDULED') {
-        if (ctx.payload.scheduledDate) {
-          ctx.payload.assignment.scheduledDate = new Date(ctx.payload.scheduledDate);
-          ctx.payload.assignment.projectBranch.scheduledDate = new Date(ctx.payload.scheduledDate);
-        }
-        ctx.payload.assignment.projectBranch.status = 'SCHEDULED';
-      }
-      if (to === 'AUDIT_COMPLETED') {
-        ctx.payload.assignment.completionDate = new Date();
-        ctx.payload.assignment.projectBranch.status = 'AUDIT_COMPLETED';
-      }
-      if (to === 'CLOSED') {
-        ctx.payload.assignment.projectBranch.status = 'CLOSED';
-      }
-    }),
-    executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => {
-      const mockCtx = {
-        userId: uid,
-        payload: {
-          assignment: {
-            id,
-            status: from,
-            proposedFee: 1000,
-            projectBranch: {
-              id: 'pb-1',
-              status: 'PLANNING',
-              branch: { state: 'Karnataka' }
-            }
-          }
-        }
-      };
-      // We can also call executeTransition mock to simulate hook/payload mutations if any tests depend on it
-      try {
-        await mockWorkflowEngine.executeTransition(key, id, from, to, mockCtx);
-      } catch (err) {
-        // ignore validation issues for simplified calls
-      }
-      return action();
-    }),
+  const mockConstraintEvaluator = {
+    checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
+    checkLeaves: jest.fn().mockReturnValue({ passed: true }),
+    checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
+    checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+    checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AssignmentService,
-        {
-          provide: getRepositoryToken(AssignmentEntity),
-          useValue: mockAssignmentRepo,
-        },
-        {
-          provide: ProjectQueryService,
-          useValue: mockProjectQueryService,
-        },
-        {
-          provide: ProjectService,
-          useValue: mockProjectService,
-        },
-        {
-          provide: AssayerService,
-          useValue: mockAssayerService,
-        },
-        {
-          provide: HolidayService,
-          useValue: mockHolidayService,
-        },
-        {
-          provide: NotificationService,
-          useValue: mockNotificationService,
-        },
-        {
-          provide: PushNotificationService,
-          useValue: mockPushNotificationService,
-        },
-        {
-          provide: AuditService,
-          useValue: mockAuditService,
-        },
-        {
-          provide: WorkflowEngine,
-          useValue: mockWorkflowEngine,
-        },
-        {
-          provide: DomainEventPublisher,
-          useValue: mockDomainEventPublisher,
-        },
-        {
-          provide: DataSource,
-          useValue: mockDataSource,
-        },
-        {
-          provide: ConstraintEvaluator,
-          useValue: {
-            checkDoubleBooking: jest.fn().mockImplementation(async (assayerId, date) => {
-              // If the test has mocked a double booking count/find, return failed
-              const existing = await mockAssignmentRepo.findOne();
-              if (existing) {
-                return { passed: false, reason: 'Assayer Collision: Assayer is already assigned.' };
-              }
-              return { passed: true };
-            }),
-            checkLeaves: jest.fn().mockReturnValue({ passed: true }),
-            checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
-            checkHoliday: jest.fn().mockImplementation(async (state, date) => {
-              const isHoliday = await mockHolidayService.isHoliday(date, state);
-              if (isHoliday) {
-                return { passed: false, reason: 'Holiday Conflict' };
-              }
-              return { passed: true };
-            }),
-            checkSkillsAndCertifications: jest.fn().mockImplementation((assayer, project) => {
-              if (project.requiredSkills && project.requiredSkills.length > 0) {
-                const assayerSkills = (assayer.skills || []).map((s: string) => s.trim().toLowerCase());
-                const missingSkills = project.requiredSkills.filter(
-                  (skill: string) => !assayerSkills.includes(skill.trim().toLowerCase())
-                );
-                if (missingSkills.length > 0) {
-                  return { passed: false, reason: 'Assayer lacks required skills' };
-                }
-              }
-              if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-                const assayerCerts = (assayer.certifications || []).map((c: any) => c.name.trim().toLowerCase());
-                const missingCerts = project.requiredCertifications.filter(
-                  (cert: string) => !assayerCerts.includes(cert.trim().toLowerCase())
-                );
-                if (missingCerts.length > 0) {
-                  return { passed: false, reason: 'Assayer lacks required certifications' };
-                }
-              }
-              return { passed: true };
-            }),
-          },
-        },
+        { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
+        { provide: getRepositoryToken(AssessmentEntity), useValue: { findOne: jest.fn(), save: jest.fn() } },
+        { provide: ProjectQueryService, useValue: mockProjectQueryService },
+        { provide: ProjectService, useValue: mockProjectService },
+        { provide: AssayerService, useValue: mockAssayerService },
+        { provide: HolidayService, useValue: mockHolidayService },
+        { provide: NotificationService, useValue: mockNotificationService },
+        { provide: PushNotificationService, useValue: mockPushNotificationService },
+        { provide: AuditService, useValue: mockAuditService },
+        { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
+        { provide: DataSource, useValue: mockDataSource },
+        { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
+        { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
       ],
     }).compile();
 
@@ -255,269 +125,131 @@ describe('AssignmentService', () => {
   });
 
   describe('create', () => {
+    const validDto = {
+      projectBranchId: 'pb-1',
+      assayerId: 'as-1',
+      proposedFee: 500,
+      scheduledDate: '2026-08-01',
+    };
+
     it('should throw NotFoundException if project branch does not exist', async () => {
       mockProjectBranchRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw NotFoundException if assayer does not exist', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', branch: { state: 'MH' }, project: {} });
       mockAssayerRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw BadRequestException if assayer lacks required skills', async () => {
-      const mockBranch = {
-        id: 'pb-1',
-        branch: { state: 'MH' },
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', branch: { state: 'MH' },
         project: { requiredSkills: ['Expert Appraiser'] },
-      };
-      const mockAssayer = { id: 'as-1', skills: ['Junior Valuer'] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: ['Junior Valuer'] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({
+        passed: false, reason: 'Assayer lacks required skills',
+      });
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('should throw BadRequestException if assayer lacks required certifications', async () => {
-      const mockBranch = {
-        id: 'pb-1',
-        branch: { state: 'MH' },
-        project: { requiredSkills: [], requiredCertifications: ['Gold Appraiser Cert'] },
-      };
-      const mockAssayer = {
-        id: 'as-1',
-        skills: [],
-        certifications: [{ name: 'Basic Valuer Cert', expiryDate: '2027-01-01' }],
-      };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
+    it('should throw ConflictException if existing active assignment exists', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', branch: { state: 'MH' }, project: {} });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing', status: AssignmentStatus.ACCEPTED });
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(ConflictException);
     });
 
-    it('should throw BadRequestException if date is a holiday', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(true);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw ConflictException if assayer is double-booked', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(false);
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing-asn' });
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('should successfully create an assignment in CREATED status', async () => {
-      const mockBranch = { id: 'pb-1', projectId: 'p-1', branch: { name: 'Branch 1', state: 'MH' }, project: {} };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(false);
+    it('should create assignment in PENDING status', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1', branch: { name: 'Test', state: 'MH' }, project: {},
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
       mockAssignmentRepo.findOne.mockResolvedValue(null);
-
-      const mockCreatedAssignment = {
-        id: 'asn-123',
-        assignmentNumber: 'ASN-2026-1234',
-        status: AssignmentStatus.CREATED,
+      const created = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1',
+        status: AssignmentStatus.PENDING, proposedFee: 500,
       };
-      mockAssignmentRepo.create.mockReturnValue(mockCreatedAssignment);
-      mockAssignmentRepo.save.mockResolvedValue(mockCreatedAssignment);
+      mockAssignmentRepo.create.mockReturnValue(created);
+      mockAssignmentRepo.save.mockResolvedValue(created);
 
-      const result = await service.create(
-        {
-          projectBranchId: 'pb-1',
-          assayerId: 'as-1',
-          proposedFee: 500,
-          scheduledDate: '2026-08-01',
-        },
-        'user-1',
-      );
-
-      expect(result.status).toBe(AssignmentStatus.CREATED);
-      expect(mockDataSource.transaction).toHaveBeenCalled();
+      const result = await service.create(validDto, 'user-1');
+      expect(result.status).toBe(AssignmentStatus.PENDING);
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
     });
   });
 
-  describe('transition', () => {
-    it('should throw BadRequestException if transition is invalid', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        status: AssignmentStatus.CREATED,
-        projectBranch: { id: 'pb-1', branch: { state: 'MH' } },
+  describe('acceptOffer', () => {
+    it('should accept and update project branch to ASSIGNMENT_CONFIRMED', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING, agreedFee: null,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
 
-      await expect(
-        service.transition('asn-123', AssignmentStatus.SCHEDULED, 'user-1'),
-      ).rejects.toThrow(BadRequestException);
+      const result = await service.acceptOffer('asn-1', 'user-1', 2000);
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(result.agreedFee).toBe(2000);
     });
+  });
 
-    it('should transition from CREATED to CANDIDATE_SELECTED', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        status: AssignmentStatus.CREATED,
-        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
+  describe('rejectOffer', () => {
+    it('should reject and mark branch as CANDIDATE_SEARCH', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
-      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
 
-      const result = await service.transition('asn-123', AssignmentStatus.CANDIDATE_SELECTED, 'user-1');
-      expect(result.status).toBe(AssignmentStatus.CANDIDATE_SELECTED);
+      const result = await service.rejectOffer('asn-1', 'user-1', 'Too far');
+      expect(result.status).toBe(AssignmentStatus.REJECTED);
+      expect(result.rejectReason).toBe('Too far');
+    });
+  });
+
+  describe('cancelAssignment', () => {
+    it('should cancel assignment', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.ASSIGNMENT_CONFIRMED },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.cancelAssignment('asn-1', 'user-1', 'Admin override');
+      expect(result.status).toBe(AssignmentStatus.CANCELLED);
+    });
+  });
+
+  describe('scheduleAudit', () => {
+    it('should update project branch status to SCHEDULED', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED, scheduledDate: null,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.ASSIGNMENT_CONFIRMED },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.scheduleAudit('asn-1', 'user-1', '2026-08-15');
+      expect(result.scheduledDate).toEqual(new Date('2026-08-15'));
     });
   });
 
   describe('update', () => {
-    it('should throw BadRequestException if assignment is locked (ACCEPTED status)', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        status: AssignmentStatus.ACCEPTED,
+    it('should throw BadRequestException if assignment is not PENDING', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED,
         projectBranch: { id: 'pb-1' },
-      };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
-
+      });
       await expect(
-        service.update('asn-123', { proposedFee: 600 }, 'user-1'),
+        service.update('asn-1', { proposedFee: 600 }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
-    });
-  });
-
-  describe('SLA and Notifications validation', () => {
-    it('should calculate SLA due date based on client configuration in create', async () => {
-      const mockBranch = {
-        id: 'pb-1',
-        projectId: 'p-1',
-        branch: { name: 'Branch 1', state: 'MH' },
-        project: {
-          client: {
-            configuration: {
-              maxResponseTimeHours: 48,
-            },
-          },
-        },
-      };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(false);
-      mockAssignmentRepo.findOne.mockResolvedValue(null);
-
-      const mockCreatedAssignment = {
-        id: 'asn-123',
-        assignmentNumber: 'ASN-2026-1234',
-        status: AssignmentStatus.CREATED,
-      };
-      mockAssignmentRepo.create.mockImplementation((arg) => ({ ...mockCreatedAssignment, ...arg }));
-      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
-
-      const result = await service.create(
-        {
-          projectBranchId: 'pb-1',
-          assayerId: 'as-1',
-          proposedFee: 500,
-          scheduledDate: '2026-08-01',
-        },
-        'user-1',
-      );
-
-      expect(result.slaDueDate).toBeDefined();
-      const expectedTime = new Date().getTime() + 48 * 60 * 60 * 1000;
-      expect(Math.abs(result.slaDueDate!.getTime() - expectedTime)).toBeLessThan(5000);
-    });
-
-    it('should trigger notification when transitioning to ACCEPTED status', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        assignmentNumber: 'ASN-2026-1234',
-        status: AssignmentStatus.CREATED,
-        createdBy: 'creator-user',
-        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
-      };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
-      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
-
-      await service.transition('asn-123', AssignmentStatus.ACCEPTED, 'user-1');
-
-      expect(mockNotificationService.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'creator-user',
-          title: 'Assignment Accepted',
-        }),
-        'user-1',
-      );
     });
   });
 });

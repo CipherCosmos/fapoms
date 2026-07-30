@@ -22,6 +22,7 @@ const client_contact_entity_1 = require("./client-contact.entity");
 const client_contract_entity_1 = require("./client-contract.entity");
 const client_billing_entity_1 = require("./client-billing.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 const VALID_LIFECYCLE_TRANSITIONS = {
     [shared_1.ClientLifecycleStatus.PROSPECT]: [shared_1.ClientLifecycleStatus.ONBOARDING, shared_1.ClientLifecycleStatus.ARCHIVED],
@@ -40,13 +41,15 @@ let ClientService = class ClientService {
     contractRepository;
     billingRepository;
     auditService;
-    constructor(clientRepository, configRepository, contactRepository, contractRepository, billingRepository, auditService) {
+    eventPublisher;
+    constructor(clientRepository, configRepository, contactRepository, contractRepository, billingRepository, auditService, eventPublisher) {
         this.clientRepository = clientRepository;
         this.configRepository = configRepository;
         this.contactRepository = contactRepository;
         this.contractRepository = contractRepository;
         this.billingRepository = billingRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId, organizationId) {
         const existing = await this.clientRepository.findOne({ where: { clientCode: dto.clientCode } });
@@ -99,6 +102,20 @@ let ClientService = class ClientService {
             userId,
             remarks: `Created client ${saved.name} (${saved.clientCode})`,
         });
+        try {
+            this.eventPublisher.publish('client:created', {
+                eventType: 'client:created',
+                clientId: saved.id,
+                clientCode: saved.clientCode,
+                name: saved.name,
+                organizationId: saved.organizationId,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish client:created event:', err);
+        }
         return saved;
     }
     async findOne(id) {
@@ -187,6 +204,19 @@ let ClientService = class ClientService {
             userId,
             remarks: `Updated client ${client.name}`,
         });
+        try {
+            this.eventPublisher.publish('client:updated', {
+                eventType: 'client:updated',
+                clientId: saved.id,
+                name: saved.name,
+                organizationId: saved.organizationId,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish client:updated event:', err);
+        }
         return saved;
     }
     async remove(id, userId) {
@@ -223,6 +253,22 @@ let ClientService = class ClientService {
             userId,
             remarks: reason || `Lifecycle transitioned from ${currentStatus} to ${newStatus}`,
         });
+        try {
+            this.eventPublisher.publish('client:status-changed', {
+                eventType: 'client:status-changed',
+                clientId: saved.id,
+                name: saved.name,
+                previousStatus: currentStatus,
+                newStatus,
+                organizationId: saved.organizationId,
+                userId,
+                reason,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish client:status-changed event:', err);
+        }
         return saved;
     }
     async findContacts(clientId) {
@@ -443,6 +489,7 @@ exports.ClientService = ClientService = __decorate([
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], ClientService);
 //# sourceMappingURL=client.service.js.map

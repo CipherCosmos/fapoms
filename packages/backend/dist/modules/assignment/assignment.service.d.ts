@@ -1,12 +1,11 @@
-import { OnModuleInit } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { AssayerService } from '../assayer/assayer.service';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
@@ -33,8 +32,9 @@ export interface TransitionAssignmentDto {
     fee?: number;
     scheduledDate?: string;
 }
-export declare class AssignmentService implements OnModuleInit {
+export declare class AssignmentService {
     private readonly assignmentRepository;
+    private readonly assessmentRepository;
     private readonly projectQueryService;
     private readonly projectService;
     private readonly assayerService;
@@ -42,27 +42,21 @@ export declare class AssignmentService implements OnModuleInit {
     private readonly pushNotificationService;
     private readonly holidayService;
     private readonly auditService;
-    private readonly workflowEngine;
     private readonly eventPublisher;
     private readonly constraintEvaluator;
     private readonly dataSource;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, dataSource: DataSource);
-    onModuleInit(): void;
+    constructor(assignmentRepository: Repository<AssignmentEntity>, assessmentRepository: Repository<AssessmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, dataSource: DataSource);
+    private syncAssessmentStatus;
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
     update(id: string, dto: UpdateAssignmentDetailsDto, userId: string): Promise<AssignmentEntity>;
     private executeAssignmentTransition;
-    transition(id: string, targetStatus: AssignmentStatus, userId: string, remarks?: string, reason?: string, fee?: number, scheduledDate?: string): Promise<AssignmentEntity>;
-    selectCandidate(id: string, userId: string, remarks?: string): Promise<AssignmentEntity>;
-    initiateContact(id: string, userId: string, remarks?: string): Promise<AssignmentEntity>;
-    negotiate(id: string, userId: string, fee: number, remarks?: string): Promise<AssignmentEntity>;
-    acceptOffer(id: string, userId: string, fee?: number, remarks?: string): Promise<AssignmentEntity>;
-    rejectOffer(id: string, userId: string, reason?: string, remarks?: string): Promise<AssignmentEntity>;
+    acceptOffer(id: string, userId: string, fee?: number, reason?: string): Promise<AssignmentEntity>;
+    rejectOffer(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
+    cancelAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
     scheduleAudit(id: string, userId: string, scheduledDate: string, remarks?: string): Promise<AssignmentEntity>;
-    completeAudit(id: string, userId: string, remarks?: string): Promise<AssignmentEntity>;
-    closeAssignment(id: string, userId: string, remarks?: string): Promise<AssignmentEntity>;
-    cancelAssignment(id: string, userId: string, reason?: string, remarks?: string): Promise<AssignmentEntity>;
-    findAll(page?: number, limit?: number, status?: string): Promise<{
+    private publishAssignmentEvent;
+    findAll(page?: number, limit?: number, status?: string, projectBranchStatus?: string, assessmentStatus?: string): Promise<{
         assignments: AssignmentEntity[];
         total: number;
     }>;

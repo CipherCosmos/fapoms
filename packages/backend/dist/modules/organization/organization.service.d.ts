@@ -1,6 +1,7 @@
 import { Repository } from 'typeorm';
 import { OrganizationEntity } from './organization.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 export interface CreateOrganizationDto {
     code: string;
     name: string;
@@ -22,7 +23,8 @@ export interface UpdateOrganizationDto {
 export declare class OrganizationService {
     private readonly organizationRepository;
     private readonly auditService;
-    constructor(organizationRepository: Repository<OrganizationEntity>, auditService: AuditService);
+    private readonly eventPublisher;
+    constructor(organizationRepository: Repository<OrganizationEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
     create(dto: CreateOrganizationDto, userId: string): Promise<OrganizationEntity>;
     findAll(page?: number, limit?: number): Promise<{
         organizations: OrganizationEntity[];

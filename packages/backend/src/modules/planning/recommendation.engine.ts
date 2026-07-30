@@ -185,7 +185,7 @@ export class WorkloadScoreCalculator implements ScoreCalculator {
     const activeCount = await this.assignmentRepository.count({
       where: {
         assayerId: assayer.id,
-        status: In([AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+        status: In([AssignmentStatus.ACCEPTED]),
         isActive: true,
       },
     });
@@ -364,7 +364,7 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
       where: {
         assayerId: assayer.id,
         projectId: context.branch.clientId ? context.branch.clientId : undefined,
-        status: AssignmentStatus.CLOSED,
+        status: AssignmentStatus.ACCEPTED,
         isActive: true,
       },
     });
@@ -443,7 +443,7 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
         where: {
           assayerId: assayer.id,
           scheduledDate: context.scheduledDate,
-          status: In([AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+        status: In([AssignmentStatus.ACCEPTED]),
           isActive: true,
         },
       });

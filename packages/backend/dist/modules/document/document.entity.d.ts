@@ -1,8 +1,10 @@
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { DocumentStatus, DocumentType } from '@fapoms/shared';
 export declare class DocumentEntity extends BaseEntity {
-    projectBranchId: string;
+    projectBranchId: string | null;
+    assessmentId: string | null;
     fileName: string;
     filePath: string;
     fileSize: number;
@@ -10,5 +12,6 @@ export declare class DocumentEntity extends BaseEntity {
     type: DocumentType;
     status: DocumentStatus;
     docVersion: number;
-    projectBranch: ProjectBranchEntity;
+    projectBranch: ProjectBranchEntity | null;
+    assessment: AssessmentEntity | null;
 }

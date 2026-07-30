@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Search, Upload, AlertCircle, CheckCircle, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown } from 'lucide-react';
 import { api } from '../services/api';
 import { INDIAN_STATES } from '@fapoms/shared';
+import { connectSocket } from '../services/socket';
 
 interface ClientOption {
   id: string;
@@ -129,7 +130,17 @@ export const Branches: React.FC = () => {
   const navigate = useNavigate();
   const branchIdParam = searchParams.get('id');
 
-  useEffect(() => { loadClients(); }, []);
+  useEffect(() => {
+    loadClients();
+    const socket = connectSocket();
+    const refresh = () => { loadClients(); if (selectedClientId) loadBranches(selectedClientId); };
+    socket?.on('ProjectPlanningStarted', refresh);
+    socket?.on('ProjectBranchAssignmentConfirmed', refresh);
+    return () => {
+      socket?.off('ProjectPlanningStarted', refresh);
+      socket?.off('ProjectBranchAssignmentConfirmed', refresh);
+    };
+  }, []);
   useEffect(() => { if (selectedClientId) loadBranches(selectedClientId); }, [selectedClientId]);
 
   useEffect(() => {

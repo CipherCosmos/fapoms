@@ -22,9 +22,18 @@ export class LocalStorageService implements StorageEngine {
   }
 
   async getFileStream(relativePath: string): Promise<Readable> {
-    const absolutePath = path.join(this.uploadDir, path.basename(relativePath));
+    let absolutePath = relativePath.startsWith('/')
+      ? path.join(this.uploadDir, path.basename(relativePath))
+      : path.join(this.uploadDir, relativePath);
+
     if (!fs.existsSync(absolutePath)) {
-      throw new BadRequestException(`File ${relativePath} not found on disk.`);
+      // Try resolving directly from app root or uploadDir
+      const directPath = path.resolve(this.uploadDir, '..', relativePath.replace(/^\//, ''));
+      if (fs.existsSync(directPath)) {
+        absolutePath = directPath;
+      } else {
+        throw new BadRequestException(`File ${relativePath} not found on disk.`);
+      }
     }
     return fs.createReadStream(absolutePath);
   }

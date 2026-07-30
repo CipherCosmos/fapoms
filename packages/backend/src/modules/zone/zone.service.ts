@@ -11,6 +11,7 @@ import { Repository } from 'typeorm';
 
 import { ZoneEntity } from './zone.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory } from '@fapoms/shared';
 
 export interface CreateZoneDto {
@@ -34,6 +35,7 @@ export class ZoneService {
     @InjectRepository(ZoneEntity)
     private readonly zoneRepository: Repository<ZoneEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async create(dto: CreateZoneDto, userId: string): Promise<ZoneEntity> {
@@ -56,6 +58,14 @@ export class ZoneService {
       entityId: saved.id,
       userId,
       remarks: `Created operational zone ${saved.name}`,
+    });
+
+    this.eventPublisher.publish('zone:created', {
+      eventType: 'zone:created',
+      aggregateId: saved.id,
+      userId,
+      clientId: saved.clientId,
+      payload: { id: saved.id, name: saved.name, clientId: saved.clientId },
     });
 
     return saved;
@@ -106,6 +116,14 @@ export class ZoneService {
       remarks: `Updated operational zone ${zone.name}`,
     });
 
+    this.eventPublisher.publish('zone:updated', {
+      eventType: 'zone:updated',
+      aggregateId: id,
+      userId,
+      clientId: zone.clientId,
+      payload: { id, name: zone.name },
+    });
+
     return saved;
   }
 
@@ -122,6 +140,14 @@ export class ZoneService {
       entityId: id,
       userId,
       remarks: `Soft deleted operational zone ${zone.name}`,
+    });
+
+    this.eventPublisher.publish('zone:deleted', {
+      eventType: 'zone:deleted',
+      aggregateId: id,
+      userId,
+      clientId: zone.clientId,
+      payload: { id, name: zone.name },
     });
   }
 }

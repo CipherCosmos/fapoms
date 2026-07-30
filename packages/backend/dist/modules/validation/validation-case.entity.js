@@ -13,9 +13,11 @@ exports.ValidationCaseEntity = void 0;
 const typeorm_1 = require("typeorm");
 const base_entity_1 = require("../../core/entities/base.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const assessment_entity_1 = require("../project/assessment.entity");
 const shared_1 = require("@fapoms/shared");
 let ValidationCaseEntity = class ValidationCaseEntity extends base_entity_1.BaseEntity {
     projectBranchId;
+    assessmentId;
     status;
     ocrResult;
     reviewerId;
@@ -23,12 +25,17 @@ let ValidationCaseEntity = class ValidationCaseEntity extends base_entity_1.Base
     remarks;
     correctionNotes;
     projectBranch;
+    assessment;
 };
 exports.ValidationCaseEntity = ValidationCaseEntity;
 __decorate([
     (0, typeorm_1.Column)({ name: 'project_branch_id', type: 'uuid' }),
     __metadata("design:type", String)
 ], ValidationCaseEntity.prototype, "projectBranchId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'assessment_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], ValidationCaseEntity.prototype, "assessmentId", void 0);
 __decorate([
     (0, typeorm_1.Column)({
         type: 'enum',
@@ -62,9 +69,15 @@ __decorate([
     (0, typeorm_1.JoinColumn)({ name: 'project_branch_id' }),
     __metadata("design:type", project_branch_entity_1.ProjectBranchEntity)
 ], ValidationCaseEntity.prototype, "projectBranch", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => assessment_entity_1.AssessmentEntity, { onDelete: 'SET NULL', nullable: true }),
+    (0, typeorm_1.JoinColumn)({ name: 'assessment_id' }),
+    __metadata("design:type", Object)
+], ValidationCaseEntity.prototype, "assessment", void 0);
 exports.ValidationCaseEntity = ValidationCaseEntity = __decorate([
     (0, typeorm_1.Entity)('validation_cases'),
     (0, typeorm_1.Index)(['projectBranchId']),
+    (0, typeorm_1.Index)(['assessmentId']),
     (0, typeorm_1.Index)(['status'])
 ], ValidationCaseEntity);
 //# sourceMappingURL=validation-case.entity.js.map

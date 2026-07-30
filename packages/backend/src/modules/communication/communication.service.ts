@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { CommunicationEntity } from './communication.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, CommunicationType } from '@fapoms/shared';
 
 export interface CreateCommunicationDto {
@@ -21,6 +22,7 @@ export class CommunicationService {
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async create(dto: CreateCommunicationDto, userId: string): Promise<CommunicationEntity> {
@@ -52,6 +54,21 @@ export class CommunicationService {
       userId,
       remarks: `Logged ${dto.type} communication for assignment ${assignment.assignmentNumber}.`,
     });
+
+    try {
+      this.eventPublisher.publish('communication:created', {
+        eventType: 'communication:created',
+        communicationId: saved.id,
+        assignmentId: saved.assignmentId,
+        type: saved.type,
+        initiatedBy: userId,
+        recipientRef: saved.recipientRef,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish communication:created event:', err);
+    }
 
     return saved;
   }

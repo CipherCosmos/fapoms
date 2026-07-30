@@ -17,7 +17,7 @@ export declare class SchedulingController {
         success: boolean;
         data: import("./schedule.entity").ScheduleEntity;
     }>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, status?: ScheduleStatus, dateFrom?: string, dateTo?: string): Promise<{
         success: boolean;
         data: import("./schedule.entity").ScheduleEntity[];
         meta: {
@@ -35,6 +35,13 @@ export declare class SchedulingController {
     transition(id: string, dto: TransitionScheduleRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./schedule.entity").ScheduleEntity;
+    }>;
+    getAssayerWorkload(assayerId: string, date: string): Promise<{
+        success: boolean;
+        data: {
+            count: number;
+            schedules: any[];
+        };
     }>;
     getTimeline(id: string): Promise<{
         success: boolean;

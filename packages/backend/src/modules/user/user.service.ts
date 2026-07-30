@@ -15,6 +15,7 @@ import * as bcrypt from 'bcrypt';
 import { UserEntity } from './user.entity';
 import { RoleEntity } from './role.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, UserStatus } from '@fapoms/shared';
 
 export interface CreateUserDto {
@@ -44,6 +45,7 @@ export class UserService {
     @InjectRepository(RoleEntity)
     private readonly roleRepository: Repository<RoleEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async createUser(
@@ -94,6 +96,21 @@ export class UserService {
       newState: UserStatus.ACTIVE,
       userId: createdById,
     });
+
+    try {
+      this.eventPublisher.publish('user:created', {
+        eventType: 'user:created',
+        userId: savedUser.id,
+        username: savedUser.username,
+        email: savedUser.email,
+        displayName: savedUser.displayName,
+        roleIds: dto.roleIds || [],
+        createdBy: createdById,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish user:created event:', err);
+    }
 
     return savedUser;
   }
@@ -156,6 +173,19 @@ export class UserService {
       userId: updatedById,
     });
 
+    try {
+      this.eventPublisher.publish('user:updated', {
+        eventType: 'user:updated',
+        userId: saved.id,
+        status: saved.status,
+        previousStatus,
+        updatedBy: updatedById,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish user:updated event:', err);
+    }
+
     return saved;
   }
 
@@ -180,6 +210,18 @@ export class UserService {
       userId: assignedById,
       metadata: { roleIds },
     });
+
+    try {
+      this.eventPublisher.publish('user:role-changed', {
+        eventType: 'user:role-changed',
+        userId: saved.id,
+        roleIds,
+        assignedBy: assignedById,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish user:role-changed event:', err);
+    }
 
     return saved;
   }

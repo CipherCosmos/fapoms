@@ -42,6 +42,7 @@ const customer_master_module_1 = require("./modules/customer-master/customer-mas
 const validation_query_module_1 = require("./modules/validation-query/validation-query.module");
 const queue_module_1 = require("./infrastructure/queue/queue.module");
 const sla_scanner_module_1 = require("./infrastructure/scheduler/sla-scanner.module");
+const realtime_module_1 = require("./modules/realtime/realtime.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -98,6 +99,7 @@ exports.AppModule = AppModule = __decorate([
             validation_query_module_1.ValidationQueryModule,
             queue_module_1.QueueModule,
             sla_scanner_module_1.SlaScannerModule,
+            realtime_module_1.RealtimeModule,
         ],
         providers: [],
     })

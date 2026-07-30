@@ -1,17 +1,3 @@
-/**
- * FAPOMS — Canonical Business Enumerations
- *
- * These enumerations represent the reference data and state values
- * defined in the business specifications (Parts 6, 7, 8).
- *
- * Every enum value corresponds to a business concept.
- * Do not rename without explicit business specification approval.
- */
-
-// ---------------------------------------------------------------------------
-// Project Lifecycle (Part 6 §3)
-// ---------------------------------------------------------------------------
-
 export enum ProjectStatus {
   DRAFT = 'DRAFT',
   PLANNING = 'PLANNING',
@@ -23,10 +9,6 @@ export enum ProjectStatus {
   CANCELLED = 'CANCELLED',
   ON_HOLD = 'ON_HOLD',
 }
-
-// ---------------------------------------------------------------------------
-// Project Branch Lifecycle (Part 6 §4)
-// ---------------------------------------------------------------------------
 
 export enum ProjectBranchStatus {
   IMPORTED = 'IMPORTED',
@@ -44,26 +26,36 @@ export enum ProjectBranchStatus {
   CANCELLED = 'CANCELLED',
 }
 
-// ---------------------------------------------------------------------------
-// Assignment Lifecycle (Part 6 §5)
-// ---------------------------------------------------------------------------
+export enum AssessmentStatus {
+  PENDING_PLANNING = 'PENDING_PLANNING',
+  ASSESSOR_RECOMMENDED = 'ASSESSOR_RECOMMENDED',
+  IN_NEGOTIATION = 'IN_NEGOTIATION',
+  ASSIGNED_AND_SCHEDULED = 'ASSIGNED_AND_SCHEDULED',
+  UNASSIGNED = 'UNASSIGNED',
+  AWAITING_CLIENT_DATA = 'AWAITING_CLIENT_DATA',
+  CLIENT_DATA_RECEIVED = 'CLIENT_DATA_RECEIVED',
+  PDF_GENERATED = 'PDF_GENERATED',
+  READY_FOR_DISPATCH = 'READY_FOR_DISPATCH',
+  DISPATCHED_TO_ASSESSOR = 'DISPATCHED_TO_ASSESSOR',
+  AUDITED_PDF_RECEIVED = 'AUDITED_PDF_RECEIVED',
+  SENT_TO_DATA_ENTRY = 'SENT_TO_DATA_ENTRY',
+  DATA_ENTRY_IN_PROGRESS = 'DATA_ENTRY_IN_PROGRESS',
+  CLARIFICATION_NEEDED = 'CLARIFICATION_NEEDED',
+  REPORT_FINALIZED = 'REPORT_FINALIZED',
+  PENDING_HEAD_APPROVAL = 'PENDING_HEAD_APPROVAL',
+  DELIVERED_TO_CLIENT = 'DELIVERED_TO_CLIENT',
+  COMPLETED = 'COMPLETED',
+}
 
 export enum AssignmentStatus {
-  CREATED = 'CREATED',
-  CANDIDATE_SELECTED = 'CANDIDATE_SELECTED',
-  CONTACT_INITIATED = 'CONTACT_INITIATED',
-  NEGOTIATION = 'NEGOTIATION',
+  PENDING = 'PENDING',
   ACCEPTED = 'ACCEPTED',
-  SCHEDULED = 'SCHEDULED',
-  AUDIT_COMPLETED = 'AUDIT_COMPLETED',
-  CLOSED = 'CLOSED',
+  CHECKED_IN = 'CHECKED_IN',
+  IN_PROGRESS = 'IN_PROGRESS',
+  COMPLETED = 'COMPLETED',
   REJECTED = 'REJECTED',
   CANCELLED = 'CANCELLED',
 }
-
-// ---------------------------------------------------------------------------
-// Schedule Lifecycle (Part 6 §6)
-// ---------------------------------------------------------------------------
 
 export enum ScheduleStatus {
   TENTATIVE = 'TENTATIVE',
@@ -72,31 +64,26 @@ export enum ScheduleStatus {
   COMPLETED = 'COMPLETED',
 }
 
-// ---------------------------------------------------------------------------
-// Document Lifecycle (Part 6 §7)
-// ---------------------------------------------------------------------------
-
 export enum DocumentStatus {
   UPLOADED = 'UPLOADED',
-  PROCESSED = 'PROCESSED',
-  GENERATED = 'GENERATED',
   DISPATCHED = 'DISPATCHED',
   RECEIVED = 'RECEIVED',
+  SENT_TO_DATA_ENTRY = 'SENT_TO_DATA_ENTRY',
+  SENT_TO_EXTERNAL_OCR = 'SENT_TO_EXTERNAL_OCR',
+  EXCEL_GENERATED = 'EXCEL_GENERATED',
+  PROCESSED = 'PROCESSED',
+  COMPLETED = 'COMPLETED',
   ARCHIVED = 'ARCHIVED',
 }
 
 export enum DocumentType {
   BRANCH_LIST = 'BRANCH_LIST',
   CUSTOMER_MASTER_DATA = 'CUSTOMER_MASTER_DATA',
-  GENERATED_PDF = 'GENERATED_PDF',
-  RETURNED_AUDIT_PDF = 'RETURNED_AUDIT_PDF',
+  PRE_FIELD_AUDIT_PDF = 'PRE_FIELD_AUDIT_PDF',
+  AUDITED_RETURN_PDF = 'AUDITED_RETURN_PDF',
   GENERATED_EXCEL = 'GENERATED_EXCEL',
   FINAL_REPORT = 'FINAL_REPORT',
 }
-
-// ---------------------------------------------------------------------------
-// Validation Lifecycle (Part 6 §8)
-// ---------------------------------------------------------------------------
 
 export enum ValidationStatus {
   PENDING = 'PENDING',
@@ -108,10 +95,6 @@ export enum ValidationStatus {
   SUBMITTED = 'SUBMITTED',
 }
 
-// ---------------------------------------------------------------------------
-// Customer Master Lifecycle (Sprint 1 Priority 1)
-// ---------------------------------------------------------------------------
-
 export enum CustomerMasterStatus {
   DRAFT = 'DRAFT',
   RECONCILED = 'RECONCILED',
@@ -120,29 +103,17 @@ export enum CustomerMasterStatus {
   REJECTED = 'REJECTED',
 }
 
-// ---------------------------------------------------------------------------
-// Validation Query Lifecycle (Sprint 1 Priority 2)
-// ---------------------------------------------------------------------------
-
 export enum ValidationQueryStatus {
   OPEN = 'OPEN',
   RESPONDED = 'RESPONDED',
   RESOLVED = 'RESOLVED',
 }
 
-// ---------------------------------------------------------------------------
-// Assayer Operational Status
-// ---------------------------------------------------------------------------
-
 export enum AssayerStatus {
   ACTIVE = 'ACTIVE',
   INACTIVE = 'INACTIVE',
   SUSPENDED = 'SUSPENDED',
 }
-
-// ---------------------------------------------------------------------------
-// Assayer Enterprise Lifecycle
-// ---------------------------------------------------------------------------
 
 export enum AssayerLifecycleStatus {
   INVITED = 'INVITED',
@@ -158,10 +129,6 @@ export enum AssayerLifecycleStatus {
   ARCHIVED = 'ARCHIVED',
 }
 
-// ---------------------------------------------------------------------------
-// User Status (Part 8 §5)
-// ---------------------------------------------------------------------------
-
 export enum UserStatus {
   INVITED = 'INVITED',
   ACTIVE = 'ACTIVE',
@@ -170,10 +137,6 @@ export enum UserStatus {
   DISABLED = 'DISABLED',
   ARCHIVED = 'ARCHIVED',
 }
-
-// ---------------------------------------------------------------------------
-// System Roles (Part 8 §6)
-// ---------------------------------------------------------------------------
 
 export enum SystemRole {
   SUPER_ADMINISTRATOR = 'SUPER_ADMINISTRATOR',
@@ -187,10 +150,6 @@ export enum SystemRole {
   CLIENT_USER = 'CLIENT_USER',
   READ_ONLY_AUDITOR = 'READ_ONLY_AUDITOR',
 }
-
-// ---------------------------------------------------------------------------
-// Permission Actions (Part 8 §7)
-// ---------------------------------------------------------------------------
 
 export enum PermissionAction {
   VIEW = 'VIEW',
@@ -218,10 +177,6 @@ export enum PermissionAction {
   RESCHEDULE = 'RESCHEDULE',
 }
 
-// ---------------------------------------------------------------------------
-// Permission Resources (Part 8 §7)
-// ---------------------------------------------------------------------------
-
 export enum PermissionResource {
   PROJECT = 'PROJECT',
   BRANCH = 'BRANCH',
@@ -238,10 +193,6 @@ export enum PermissionResource {
   AUDIT_LOG = 'AUDIT_LOG',
 }
 
-// ---------------------------------------------------------------------------
-// Authorization Scopes (Part 8 §9)
-// ---------------------------------------------------------------------------
-
 export enum AuthorizationScope {
   SELF = 'SELF',
   ASSIGNED_RECORDS = 'ASSIGNED_RECORDS',
@@ -254,20 +205,12 @@ export enum AuthorizationScope {
   PLATFORM = 'PLATFORM',
 }
 
-// ---------------------------------------------------------------------------
-// Communication Types (Part 2 §13)
-// ---------------------------------------------------------------------------
-
 export enum CommunicationType {
   PHONE = 'PHONE',
   WHATSAPP = 'WHATSAPP',
   EMAIL = 'EMAIL',
   SYSTEM = 'SYSTEM',
 }
-
-// ---------------------------------------------------------------------------
-// Travel Mode (Part 2 §14)
-// ---------------------------------------------------------------------------
 
 export enum TravelMode {
   CAR = 'CAR',
@@ -278,20 +221,12 @@ export enum TravelMode {
   OTHER = 'OTHER',
 }
 
-// ---------------------------------------------------------------------------
-// Business Event Categories (Part 6 §10)
-// ---------------------------------------------------------------------------
-
 export enum EventCategory {
   OPERATIONAL = 'OPERATIONAL',
   USER = 'USER',
   WORKFLOW = 'WORKFLOW',
   SYSTEM = 'SYSTEM',
 }
-
-// ---------------------------------------------------------------------------
-// Client Lifecycle (Enterprise)
-// ---------------------------------------------------------------------------
 
 export enum ClientLifecycleStatus {
   PROSPECT = 'PROSPECT',
@@ -321,10 +256,6 @@ export enum ContractStatus {
   TERMINATED = 'TERMINATED',
   RENEWED = 'RENEWED',
 }
-
-// ---------------------------------------------------------------------------
-// Priority Levels
-// ---------------------------------------------------------------------------
 
 export enum Priority {
   LOW = 'LOW',

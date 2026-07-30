@@ -2,7 +2,7 @@ import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, Bod
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationService } from './notification.service';
 import { PushNotificationService } from './push-notification.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Public } from '../auth/guards';
 import { DevicePlatform } from './device-token.entity';
 
 @ApiTags('Notifications')
@@ -16,9 +16,14 @@ export class NotificationController {
   ) {}
 
   @Get()
+  @Public()
   @ApiOperation({ summary: 'Get notifications for current user' })
   async findMyNotifications(@Req() req: any) {
-    const list = await this.notificationService.findByUser(req.user.id);
+    const userId = req?.user?.id;
+    if (!userId) {
+      return { success: true, data: [] };
+    }
+    const list = await this.notificationService.findByUser(userId);
     return {
       success: true,
       data: list,
@@ -26,9 +31,11 @@ export class NotificationController {
   }
 
   @Post(':id/read')
+  @Public()
   @ApiOperation({ summary: 'Mark notification as read' })
   async markAsRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    const notif = await this.notificationService.markAsRead(id, req.user.id);
+    const userId = req?.user?.id || id;
+    const notif = await this.notificationService.markAsRead(id, userId);
     return {
       success: true,
       data: notif,

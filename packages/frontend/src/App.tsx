@@ -19,6 +19,7 @@ import { AssayerProfile } from './pages/AssayerProfile';
 import { Clients } from './pages/Clients';
 import { Rules } from './pages/Rules';
 import { Notifications } from './pages/Notifications';
+import { Holidays } from './pages/Holidays';
 import { api } from './services/api';
 
 interface UserProfile {
@@ -109,6 +110,7 @@ export const App: React.FC = () => {
         <Route path="/assayers/:id" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerProfile /></ProtectedRoute>} />
         <Route path="/clients" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Clients /></ProtectedRoute>} />
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
+        <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
         
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

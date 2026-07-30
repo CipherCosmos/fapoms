@@ -34,7 +34,7 @@ let ConstraintEvaluator = class ConstraintEvaluator {
             where: {
                 assayerId,
                 scheduledDate,
-                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.SCHEDULED]),
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED]),
                 isActive: true,
             },
         });

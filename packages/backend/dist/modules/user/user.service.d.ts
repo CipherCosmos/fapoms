@@ -2,6 +2,7 @@ import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
 import { RoleEntity } from './role.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UserStatus } from '@fapoms/shared';
 export interface CreateUserDto {
     username: string;
@@ -24,7 +25,8 @@ export declare class UserService {
     private readonly userRepository;
     private readonly roleRepository;
     private readonly auditService;
-    constructor(userRepository: Repository<UserEntity>, roleRepository: Repository<RoleEntity>, auditService: AuditService);
+    private readonly eventPublisher;
+    constructor(userRepository: Repository<UserEntity>, roleRepository: Repository<RoleEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
     createUser(dto: CreateUserDto, createdById: string): Promise<UserEntity>;
     findById(id: string): Promise<UserEntity>;
     findAll(page?: number, limit?: number): Promise<{

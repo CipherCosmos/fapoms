@@ -7,6 +7,7 @@ import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 export interface CreateBranchDto {
     branchCode: string;
     solId?: string;
@@ -100,7 +101,8 @@ export declare class BranchService {
     private readonly clientService;
     private readonly auditService;
     private readonly branchQueryService;
-    constructor(branchRepository: Repository<BranchEntity>, contactRepository: Repository<BranchContactEntity>, documentRepository: Repository<BranchDocumentEntity>, zoneRepository: Repository<ZoneEntity>, stateRepository: Repository<GeoStateEntity>, districtRepository: Repository<GeoDistrictEntity>, cityRepository: Repository<GeoCityEntity>, clientService: ClientService, auditService: AuditService, branchQueryService: BranchQueryService);
+    private readonly eventPublisher;
+    constructor(branchRepository: Repository<BranchEntity>, contactRepository: Repository<BranchContactEntity>, documentRepository: Repository<BranchDocumentEntity>, zoneRepository: Repository<ZoneEntity>, stateRepository: Repository<GeoStateEntity>, districtRepository: Repository<GeoDistrictEntity>, cityRepository: Repository<GeoCityEntity>, clientService: ClientService, auditService: AuditService, branchQueryService: BranchQueryService, eventPublisher: DomainEventPublisher);
     create(dto: CreateBranchDto, userId: string, organizationId?: string | null): Promise<BranchEntity>;
     findOne(id: string): Promise<BranchEntity>;
     findAll(page?: number, limit?: number, clientId?: string, region?: string, zoneId?: string): Promise<{

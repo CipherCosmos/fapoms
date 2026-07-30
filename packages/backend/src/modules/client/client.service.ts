@@ -12,6 +12,7 @@ import { ClientContactEntity } from './client-contact.entity';
 import { ClientContractEntity } from './client-contract.entity';
 import { ClientBillingEntity } from './client-billing.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, ClientLifecycleStatus } from '@fapoms/shared';
 
 export interface CreateClientDto {
@@ -157,6 +158,7 @@ export class ClientService {
     @InjectRepository(ClientBillingEntity)
     private readonly billingRepository: Repository<ClientBillingEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -218,6 +220,20 @@ export class ClientService {
       userId,
       remarks: `Created client ${saved.name} (${saved.clientCode})`,
     });
+
+    try {
+      this.eventPublisher.publish('client:created', {
+        eventType: 'client:created',
+        clientId: saved.id,
+        clientCode: saved.clientCode,
+        name: saved.name,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish client:created event:', err);
+    }
 
     return saved;
   }
@@ -290,6 +306,19 @@ export class ClientService {
       remarks: `Updated client ${client.name}`,
     });
 
+    try {
+      this.eventPublisher.publish('client:updated', {
+        eventType: 'client:updated',
+        clientId: saved.id,
+        name: saved.name,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish client:updated event:', err);
+    }
+
     return saved;
   }
 
@@ -338,6 +367,22 @@ export class ClientService {
       userId,
       remarks: reason || `Lifecycle transitioned from ${currentStatus} to ${newStatus}`,
     });
+
+    try {
+      this.eventPublisher.publish('client:status-changed', {
+        eventType: 'client:status-changed',
+        clientId: saved.id,
+        name: saved.name,
+        previousStatus: currentStatus,
+        newStatus,
+        organizationId: saved.organizationId,
+        userId,
+        reason,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish client:status-changed event:', err);
+    }
 
     return saved;
   }

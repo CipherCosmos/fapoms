@@ -84,7 +84,7 @@ export class OcrProcessingService {
 
     const saved = await this.ocrJobRepository.save(job);
 
-    const validationCase = await this.validationService.create({ projectBranchId: job.document.projectBranchId }, userId);
+    const validationCase = await this.validationService.create({ projectBranchId: job.document.projectBranchId! }, userId);
     await this.validationService.transition(validationCase.id, ValidationStatus.OCR_PROCESSING, userId, 'OCR text parsed', undefined, ocrPayload);
     await this.validationService.transition(validationCase.id, ValidationStatus.HUMAN_REVIEW, userId, 'Pending manual verification review');
 

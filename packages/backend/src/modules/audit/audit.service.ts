@@ -5,6 +5,7 @@ import { AuditEntity } from './audit.entity';
 import { BillingService } from '../billing/billing.service';
 import { LedgerService } from '../ledger/ledger.service';
 import { AuditHistoryService } from '../audit-history/audit-history.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 @Injectable()
 export class AuditService {
@@ -14,6 +15,7 @@ export class AuditService {
     private readonly billingService: BillingService,
     private readonly ledgerService: LedgerService,
     private readonly historyService: AuditHistoryService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async startAudit(assignmentId: string, assayerId: string, projectId: string, branchId: string, scheduledDate: Date): Promise<AuditEntity> {
@@ -40,6 +42,16 @@ export class AuditService {
       slaStatus: 'MET',
     });
 
+    this.eventPublisher.publish('audit:started', {
+      eventType: 'audit:started',
+      aggregateId: saved.id,
+      assayerId,
+      assignmentId,
+      projectId,
+      branchId,
+      payload: { id: saved.id, status: 'IN_PROGRESS', scheduledDate },
+    });
+
     return saved;
   }
 
@@ -63,6 +75,14 @@ export class AuditService {
 
     // Credit financial ledger
     await this.ledgerService.addEntry(saved.assayerId, 'CREDIT', bill.netPayable, bill.id);
+
+    this.eventPublisher.publish('audit:closed', {
+      eventType: 'audit:closed',
+      aggregateId: id,
+      assayerId: saved.assayerId,
+      billingId: bill.id,
+      payload: { id, status: 'CLOSED', completionDate: saved.completionDate, baseFee, travelAllowance },
+    });
 
     return saved;
   }

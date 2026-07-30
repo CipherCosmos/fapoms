@@ -82,13 +82,22 @@ export class AssignmentController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List all assignments' })
+  @Public()
+  @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or assessmentStatus' })
   async findAll(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('status') status?: string,
+    @Query('projectBranchStatus') projectBranchStatus?: string,
+    @Query('assessmentStatus') assessmentStatus?: string,
   ) {
-    const result = await this.assignmentService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, status);
+    const result = await this.assignmentService.findAll(
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 50,
+      status,
+      projectBranchStatus,
+      assessmentStatus,
+    );
     return {
       success: true,
       data: result.assignments,
@@ -140,9 +149,9 @@ export class AssignmentController {
 
   @Post(':id/transition')
   @Public()
-  @ApiOperation({ summary: 'Transition assignment to a new state' })
+  @ApiOperation({ summary: 'Transition assignment status' })
   async transition(
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id') id: string,
     @Body() dto: any,
     @Req() req: any,
   ) {
@@ -152,15 +161,22 @@ export class AssignmentController {
       throw new BadRequestException('targetStatus is required for assignment transition');
     }
     const userId = req?.user?.id || id;
-    const assignment = await this.assignmentService.transition(
-      id,
-      targetStatus,
-      userId,
-      body.remarks,
-      body.reason,
-      body.fee,
-      body.scheduledDate,
-    );
+    let assignment: any;
+    if (targetStatus === 'COUNTER_OFFER') {
+      const feeVal = body.counterFee ?? body.fee ?? body.proposedFee;
+      if (!feeVal || isNaN(Number(feeVal))) {
+        throw new BadRequestException('Valid counter fee amount is required for negotiation.');
+      }
+      assignment = await this.assignmentService.proposeCounterFee(id, userId, Number(feeVal), body.reason ?? body.remarks);
+    } else if (targetStatus === 'ACCEPTED') {
+      assignment = await this.assignmentService.acceptOffer(id, userId, undefined, body.reason ?? body.remarks);
+    } else if (targetStatus === 'REJECTED') {
+      assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
+    } else if (targetStatus === 'CANCELLED') {
+      assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);
+    } else {
+      throw new BadRequestException(`Invalid transition: ${targetStatus}.`);
+    }
     return {
       success: true,
       data: assignment,

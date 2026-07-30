@@ -12,6 +12,9 @@ import { AssayerModule } from '../assayer/assayer.module';
 import { ProjectModule } from '../project/project.module';
 import { PlanningModule } from '../planning/planning.module';
 
+import { GeoModule } from '../geo/geo.module';
+import { ValidationModule } from '../validation/validation.module';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([AssignmentEntity, AssignmentCommentEntity]),
@@ -20,6 +23,8 @@ import { PlanningModule } from '../planning/planning.module';
     NotificationsModule,
     AssayerModule,
     ProjectModule,
+    GeoModule,
+    ValidationModule,
     forwardRef(() => PlanningModule),
   ],
   controllers: [AssignmentController],

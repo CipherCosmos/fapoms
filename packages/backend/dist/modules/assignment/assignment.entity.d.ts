@@ -1,12 +1,14 @@
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { OperationsExecutionGroupEntity } from '../planning/operations-execution-group.entity';
 import { AssignmentStatus, Priority } from '@fapoms/shared';
 export declare class AssignmentEntity extends BaseEntity {
     assignmentNumber: string;
-    projectBranchId: string;
+    projectBranchId: string | null;
+    assessmentId: string | null;
     projectId: string;
     assayerId: string;
     status: AssignmentStatus;
@@ -22,9 +24,10 @@ export declare class AssignmentEntity extends BaseEntity {
     slaStatus: string;
     cancelReason: string | null;
     rejectReason: string | null;
-    projectBranch: ProjectBranchEntity;
+    projectBranch: ProjectBranchEntity | null;
+    assessment: AssessmentEntity | null;
     project: ProjectEntity;
     assayer: AssayerEntity;
     executionGroupId: string | null;
-    executionGroup: OperationsExecutionGroupEntity;
+    executionGroup: OperationsExecutionGroupEntity | null;
 }

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass, Download } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
+import { connectSocket } from '../services/socket';
 
 interface ClientOption {
   id: string;
@@ -156,6 +157,22 @@ export const Projects: React.FC = () => {
   useEffect(() => {
     loadProjects();
     loadClients();
+    const socket = connectSocket();
+    const refresh = () => { loadProjects(); loadClients(); };
+    socket?.on('ProjectPlanningStarted', refresh);
+    socket?.on('ProjectSchedulingReady', refresh);
+    socket?.on('ProjectExecutionStarted', refresh);
+    socket?.on('ProjectValidationStarted', refresh);
+    socket?.on('ProjectCompleted', refresh);
+    socket?.on('ProjectCancelled', refresh);
+    return () => {
+      socket?.off('ProjectPlanningStarted', refresh);
+      socket?.off('ProjectSchedulingReady', refresh);
+      socket?.off('ProjectExecutionStarted', refresh);
+      socket?.off('ProjectValidationStarted', refresh);
+      socket?.off('ProjectCompleted', refresh);
+      socket?.off('ProjectCancelled', refresh);
+    };
   }, []);
 
   useEffect(() => {

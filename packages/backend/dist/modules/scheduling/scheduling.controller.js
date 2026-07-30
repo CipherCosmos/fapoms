@@ -71,8 +71,8 @@ let SchedulingController = class SchedulingController {
             data: schedule,
         };
     }
-    async findAll(page = 1, limit = 50) {
-        const { schedules, total } = await this.schedulingService.findAll(Number(page), Number(limit));
+    async findAll(page = 1, limit = 50, status, dateFrom, dateTo) {
+        const { schedules, total } = await this.schedulingService.findAll(Number(page), Number(limit), status, dateFrom, dateTo);
         return {
             success: true,
             data: schedules,
@@ -99,6 +99,18 @@ let SchedulingController = class SchedulingController {
             data: schedule,
         };
     }
+    async getAssayerWorkload(assayerId, date) {
+        if (!assayerId || !date) {
+            return { success: true, data: { count: 0, schedules: [] } };
+        }
+        const dt = new Date(date);
+        const weekStart = new Date(dt);
+        weekStart.setDate(dt.getDate() - dt.getDay());
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        const data = await this.schedulingService.getAssayerWorkloadInRange(assayerId, weekStart, weekEnd);
+        return { success: true, data };
+    }
     async getTimeline(id) {
         const timeline = await this.schedulingService.getTimeline(id);
         return {
@@ -124,8 +136,11 @@ __decorate([
     (0, swagger_1.ApiOperation)({ summary: 'List all active schedules' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
+    __param(2, (0, common_1.Query)('status')),
+    __param(3, (0, common_1.Query)('dateFrom')),
+    __param(4, (0, common_1.Query)('dateTo')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:paramtypes", [Object, Object, String, String, String]),
     __metadata("design:returntype", Promise)
 ], SchedulingController.prototype, "findAll", null);
 __decorate([
@@ -148,6 +163,15 @@ __decorate([
     __metadata("design:paramtypes", [String, TransitionScheduleRequestDto, Object]),
     __metadata("design:returntype", Promise)
 ], SchedulingController.prototype, "transition", null);
+__decorate([
+    (0, common_1.Get)('assayer-workload'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get number of confirmed/tentative schedules for an assayer around a date' }),
+    __param(0, (0, common_1.Query)('assayerId')),
+    __param(1, (0, common_1.Query)('date')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], SchedulingController.prototype, "getAssayerWorkload", null);
 __decorate([
     (0, common_1.Get)(':id/timeline'),
     (0, swagger_1.ApiOperation)({ summary: 'Get unified activity timeline for a schedule' }),

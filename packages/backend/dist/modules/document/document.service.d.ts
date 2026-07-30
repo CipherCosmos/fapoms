@@ -1,10 +1,14 @@
 import { Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
-import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { AssessmentEntity } from '../project/assessment.entity';
+import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { NotificationService } from '../notifications/notification.service';
+import { PushNotificationService } from '../notifications/push-notification.service';
 import { DocumentStatus, DocumentType } from '@fapoms/shared';
 export interface CreateDocumentDto {
-    projectBranchId: string;
+    assessmentId: string;
     fileName: string;
     filePath: string;
     fileSize: number;
@@ -13,11 +17,29 @@ export interface CreateDocumentDto {
 }
 export declare class DocumentService {
     private readonly documentRepository;
-    private readonly projectBranchRepository;
+    private readonly assessmentRepository;
+    private readonly assignmentRepository;
     private readonly auditService;
-    constructor(documentRepository: Repository<DocumentEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, auditService: AuditService);
+    private readonly eventPublisher;
+    private readonly notificationService;
+    private readonly pushNotificationService;
+    constructor(documentRepository: Repository<DocumentEntity>, assessmentRepository: Repository<AssessmentEntity>, assignmentRepository: Repository<AssignmentEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher, notificationService: NotificationService, pushNotificationService: PushNotificationService);
     create(dto: CreateDocumentDto, userId: string): Promise<DocumentEntity>;
     findOne(id: string): Promise<DocumentEntity>;
     updateStatus(id: string, status: DocumentStatus, userId: string): Promise<DocumentEntity>;
-    findByProjectBranch(projectBranchId: string): Promise<DocumentEntity[]>;
+    findByAssessment(assessmentId: string): Promise<DocumentEntity[]>;
+    findByProject(projectId: string): Promise<DocumentEntity[]>;
+    dispatchDocument(id: string, userId: string): Promise<DocumentEntity>;
+    receiveDocument(id: string, userId: string): Promise<DocumentEntity>;
+    findDataEntryQueue(): Promise<{
+        project: string;
+        branch: string;
+        documents: DocumentEntity[];
+    }[]>;
+    getDocumentStats(): Promise<{
+        total: number;
+        uploaded: number;
+        dispatched: number;
+        received: number;
+    }>;
 }

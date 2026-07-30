@@ -1,6 +1,7 @@
 import { Repository } from 'typeorm';
 import { HolidayEntity } from './holiday.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 export interface CreateHolidayDto {
     name: string;
     date: string | Date;
@@ -10,7 +11,8 @@ export interface CreateHolidayDto {
 export declare class HolidayService {
     private readonly holidayRepository;
     private readonly auditService;
-    constructor(holidayRepository: Repository<HolidayEntity>, auditService: AuditService);
+    private readonly eventPublisher;
+    constructor(holidayRepository: Repository<HolidayEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
     create(dto: CreateHolidayDto, userId: string): Promise<HolidayEntity>;
     findOne(id: string): Promise<HolidayEntity>;
     update(id: string, dto: CreateHolidayDto, userId: string): Promise<HolidayEntity>;

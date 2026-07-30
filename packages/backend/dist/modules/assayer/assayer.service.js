@@ -257,6 +257,13 @@ let AssayerService = class AssayerService {
             userId,
             remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
         });
+        await this.eventPublisher.publish('assayer:created', {
+            eventType: 'assayer:created',
+            aggregateId: saved.id,
+            userId,
+            organizationId: saved.organizationId,
+            payload: { id: saved.id, displayName: saved.displayName, assayerCode: saved.assayerCode },
+        });
         await this.hydrateWorkforceAttributes(saved);
         return saved;
     }
@@ -305,6 +312,13 @@ let AssayerService = class AssayerService {
             userId,
             remarks: `Updated assayer profile: ${saved.displayName}`,
         });
+        await this.eventPublisher.publish('assayer:updated', {
+            eventType: 'assayer:updated',
+            aggregateId: saved.id,
+            userId,
+            organizationId: saved.organizationId,
+            payload: { id: saved.id, displayName: saved.displayName },
+        });
         await this.hydrateWorkforceAttributes(saved);
         return saved;
     }
@@ -320,6 +334,13 @@ let AssayerService = class AssayerService {
             entityId: id,
             userId,
             remarks: `Soft deleted assayer profile ${assayer.displayName}`,
+        });
+        await this.eventPublisher.publish('assayer:deleted', {
+            eventType: 'assayer:deleted',
+            aggregateId: id,
+            userId,
+            organizationId: assayer.organizationId,
+            payload: { id, displayName: assayer.displayName },
         });
     }
     async transitionLifecycle(id, targetStatus, userId, reason) {
@@ -732,18 +753,23 @@ let AssayerService = class AssayerService {
     async updateAssayerStats(assayerId) {
         const mgr = this.assayerRepository.manager;
         const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
-        const completed = await mgr.count('assignments', {
-            where: { assayerId, status: shared_1.AssignmentStatus.CLOSED, isActive: true },
-        });
+        const completed = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
+       JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND pb.status IN ('CLOSED', 'VALIDATION_COMPLETED')`, [assayerId]);
         const cancelled = await mgr.count('assignments', {
             where: { assayerId, status: shared_1.AssignmentStatus.CANCELLED, isActive: true },
         });
         const onTimeResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status = $2
+       JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')
        AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
-       AND a.completion_date <= a.scheduled_date`, [assayerId, shared_1.AssignmentStatus.AUDIT_COMPLETED]);
+       AND a.completion_date <= a.scheduled_date`, [assayerId]);
         const earningsResult = await mgr.query(`SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`, [assayerId, shared_1.AssignmentStatus.AUDIT_COMPLETED, shared_1.AssignmentStatus.CLOSED]);
+       JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')`, [assayerId]);
         const lastAssignment = await mgr.query(`SELECT updated_at FROM assignments a
        WHERE a.assayer_id = $1 AND a.is_active = true
        ORDER BY a.updated_at DESC LIMIT 1`, [assayerId]);

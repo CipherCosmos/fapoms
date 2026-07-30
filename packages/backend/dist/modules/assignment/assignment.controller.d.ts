@@ -25,7 +25,7 @@ export declare class AssignmentController {
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
     }>;
-    findAll(page?: number, limit?: number, status?: string): Promise<{
+    findAll(page?: number, limit?: number, status?: string, projectBranchStatus?: string, assessmentStatus?: string): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity[];
         meta: {
@@ -50,7 +50,7 @@ export declare class AssignmentController {
     }>;
     transition(id: string, dto: any, req: any): Promise<{
         success: boolean;
-        data: import("./assignment.entity").AssignmentEntity;
+        data: any;
     }>;
     getTimeline(id: string): Promise<{
         success: boolean;

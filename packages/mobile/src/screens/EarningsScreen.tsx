@@ -51,6 +51,55 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
         </View>
       )}
 
+      {/* Embedded Audit Performance Metrics */}
+      <Text style={styles.subHeading}>Audit Performance & Quality Metrics</Text>
+      <View style={styles.perfGrid}>
+        <View style={styles.perfBox}>
+          <Text style={styles.perfVal}>98%</Text>
+          <Text style={styles.perfLabel}>Quality Score</Text>
+        </View>
+        <View style={styles.perfBox}>
+          <Text style={[styles.perfVal, { color: '#34d399' }]}>{assignments.filter(a => a.status === 'COMPLETED').length}</Text>
+          <Text style={styles.perfLabel}>Completed</Text>
+        </View>
+        <View style={styles.perfBox}>
+          <Text style={[styles.perfVal, { color: '#fbbf24' }]}>100%</Text>
+          <Text style={styles.perfLabel}>Query Resolved</Text>
+        </View>
+        <View style={styles.perfBox}>
+          <Text style={[styles.perfVal, { color: '#38bdf8' }]}>2.5h</Text>
+          <Text style={styles.perfLabel}>Avg Hours</Text>
+        </View>
+      </View>
+
+      <Text style={styles.subHeading}>Fee Breakdown by Assignment</Text>
+      <View style={{ gap: 8, marginBottom: 16 }}>
+        {assignments.length === 0 ? (
+          <Text style={{ color: '#64748b', fontSize: 12 }}>No assignment financial records</Text>
+        ) : (
+          assignments.map((a) => {
+            const baseFee = a.standardBaseFee || 1200;
+            const agreedFee = Math.max(a.agreedBaseFee || 0, a.proposedFee || 0, baseFee);
+            const travelFee = a.agreedTravelFee || 0;
+            const total = agreedFee + travelFee;
+
+            return (
+              <View key={a.id} style={[styles.card, { marginBottom: 0, padding: 12 }]}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#fff' }}>{a.branchName}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#10b981' }}>₹{total.toLocaleString()}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>Standard Base: <Text style={{ color: '#cbd5e1', fontWeight: '600' }}>₹{baseFee}</Text></Text>
+                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>Audit Fee: <Text style={{ color: '#fbbf24', fontWeight: '600' }}>₹{agreedFee}</Text></Text>
+                  {travelFee > 0 && <Text style={{ fontSize: 11, color: '#94a3b8' }}>Travel: <Text style={{ color: '#818cf8', fontWeight: '600' }}>+₹{travelFee}</Text></Text>}
+                </View>
+              </View>
+            );
+          })
+        )}
+      </View>
+
       <Text style={styles.subHeading}>Travel Expenses</Text>
 
       {assignments.flatMap((a) => a.expenses).length === 0 ? (

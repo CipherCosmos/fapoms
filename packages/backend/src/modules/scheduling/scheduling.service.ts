@@ -6,7 +6,8 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
-import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, ProjectBranchStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 export interface CreateScheduleDto {
   assignmentId: string;
@@ -28,6 +29,7 @@ export class SchedulingService {
     private readonly holidayService: HolidayService,
     private readonly auditService: AuditService,
     private readonly constraintEvaluator: ConstraintEvaluator,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async create(dto: CreateScheduleDto, userId: string): Promise<ScheduleEntity> {
@@ -37,8 +39,8 @@ export class SchedulingService {
       throw new NotFoundException(`Assignment ${dto.assignmentId} not found.`);
     }
 
-    if (![AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED].includes(assignment.status as any)) {
-      throw new BadRequestException(`Cannot schedule assignment. Current status is ${assignment.status}.`);
+    if (assignment.projectBranch?.status !== ProjectBranchStatus.ASSIGNMENT_CONFIRMED) {
+      throw new BadRequestException(`Cannot schedule assignment: branch status must be ASSIGNMENT_CONFIRMED, got ${assignment.projectBranch?.status}.`);
     }
 
     const scheduledDateObj = new Date(dto.scheduledDate);
@@ -66,10 +68,17 @@ export class SchedulingService {
       throw new BadRequestException(holidayCheck.reason);
     }
 
-    // Validate double booking via ConstraintEvaluator
-    const doubleBookedCheck = await this.constraintEvaluator.checkDoubleBooking(assignment.assayerId, scheduledDateObj);
-    if (!doubleBookedCheck.passed) {
-      throw new ConflictException(doubleBookedCheck.reason);
+    const existingSchedule = await this.scheduleRepository.findOne({
+      where: { assignmentId: assignment.id, isActive: true },
+    }).catch(() => null);
+
+    if (existingSchedule) {
+      existingSchedule.scheduledDate = scheduledDateObj;
+      if (dto.remarks) existingSchedule.remarks = dto.remarks;
+      existingSchedule.updatedBy = userId;
+      const updated = await this.scheduleRepository.save(existingSchedule);
+      await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate).catch(() => {});
+      return updated;
     }
 
     const schedule = this.scheduleRepository.create({
@@ -96,6 +105,22 @@ export class SchedulingService {
       userId,
       remarks: `Confirmed schedule for assignment ${assignment.assignmentNumber} on ${dto.scheduledDate}.`,
     });
+
+    try {
+      this.eventPublisher.publish('schedule:created', {
+        eventType: 'schedule:created',
+        scheduleId: saved.id,
+        assignmentId: saved.assignmentId,
+        assayerId: saved.assayerId,
+        organizationId: (assignment as any).projectBranch?.project?.organizationId,
+        scheduledDate: saved.scheduledDate,
+        status: saved.status,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish schedule:created event:', err);
+    }
 
     return saved;
   }
@@ -164,6 +189,22 @@ export class SchedulingService {
       userId,
       remarks: remarks ?? `Transitioned schedule to ${targetStatus}`,
     });
+
+    try {
+      this.eventPublisher.publish('schedule:updated', {
+        eventType: 'schedule:updated',
+        scheduleId: saved.id,
+        assignmentId: saved.assignmentId,
+        assayerId: saved.assayerId,
+        scheduledDate: saved.scheduledDate,
+        status: saved.status,
+        previousStatus: prevStatus,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish schedule:updated event:', err);
+    }
 
     return saved;
   }

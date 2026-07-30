@@ -19,12 +19,14 @@ const typeorm_2 = require("typeorm");
 const typeorm_3 = require("@nestjs/typeorm");
 const assignment_entity_1 = require("./assignment.entity");
 const assignment_comment_entity_1 = require("./assignment-comment.entity");
+const assessment_entity_1 = require("../project/assessment.entity");
+const customer_master_version_entity_1 = require("../customer-master/customer-master-version.entity");
+const customer_record_entity_1 = require("../customer-master/customer-record.entity");
 const user_entity_1 = require("../user/user.entity");
 const notification_service_1 = require("../notifications/notification.service");
 const push_notification_service_1 = require("../notifications/push-notification.service");
 const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
-const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const assayer_service_1 = require("../assayer/assayer.service");
 const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
@@ -32,8 +34,24 @@ const assignment_state_machine_1 = require("./assignment.state-machine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const constraint_evaluator_1 = require("../planning/constraint.evaluator");
 const shared_1 = require("@fapoms/shared");
+const ASSESSMENT_STATUS_MAP = {
+    [shared_1.ProjectBranchStatus.IMPORTED]: shared_1.AssessmentStatus.PENDING_PLANNING,
+    [shared_1.ProjectBranchStatus.PLANNING]: shared_1.AssessmentStatus.PENDING_PLANNING,
+    [shared_1.ProjectBranchStatus.CANDIDATE_SEARCH]: shared_1.AssessmentStatus.ASSESSOR_RECOMMENDED,
+    [shared_1.ProjectBranchStatus.CONTACT_INITIATED]: shared_1.AssessmentStatus.IN_NEGOTIATION,
+    [shared_1.ProjectBranchStatus.NEGOTIATION]: shared_1.AssessmentStatus.IN_NEGOTIATION,
+    [shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED]: shared_1.AssessmentStatus.ASSIGNED_AND_SCHEDULED,
+    [shared_1.ProjectBranchStatus.SCHEDULED]: shared_1.AssessmentStatus.ASSIGNED_AND_SCHEDULED,
+    [shared_1.ProjectBranchStatus.AUDIT_COMPLETED]: shared_1.AssessmentStatus.AUDITED_PDF_RECEIVED,
+    [shared_1.ProjectBranchStatus.VALIDATION_COMPLETED]: shared_1.AssessmentStatus.SENT_TO_DATA_ENTRY,
+    [shared_1.ProjectBranchStatus.CLOSED]: shared_1.AssessmentStatus.COMPLETED,
+    [shared_1.ProjectBranchStatus.UNABLE_TO_COVER]: shared_1.AssessmentStatus.UNASSIGNED,
+    [shared_1.ProjectBranchStatus.ON_HOLD]: shared_1.AssessmentStatus.PENDING_PLANNING,
+    [shared_1.ProjectBranchStatus.CANCELLED]: shared_1.AssessmentStatus.UNASSIGNED,
+};
 let AssignmentService = class AssignmentService {
     assignmentRepository;
+    assessmentRepository;
     projectQueryService;
     projectService;
     assayerService;
@@ -41,12 +59,12 @@ let AssignmentService = class AssignmentService {
     pushNotificationService;
     holidayService;
     auditService;
-    workflowEngine;
     eventPublisher;
     constraintEvaluator;
     dataSource;
-    constructor(assignmentRepository, projectQueryService, projectService, assayerService, notificationService, pushNotificationService, holidayService, auditService, workflowEngine, eventPublisher, constraintEvaluator, dataSource) {
+    constructor(assignmentRepository, assessmentRepository, projectQueryService, projectService, assayerService, notificationService, pushNotificationService, holidayService, auditService, eventPublisher, constraintEvaluator, dataSource) {
         this.assignmentRepository = assignmentRepository;
+        this.assessmentRepository = assessmentRepository;
         this.projectQueryService = projectQueryService;
         this.projectService = projectService;
         this.assayerService = assayerService;
@@ -54,117 +72,30 @@ let AssignmentService = class AssignmentService {
         this.pushNotificationService = pushNotificationService;
         this.holidayService = holidayService;
         this.auditService = auditService;
-        this.workflowEngine = workflowEngine;
         this.eventPublisher = eventPublisher;
         this.constraintEvaluator = constraintEvaluator;
         this.dataSource = dataSource;
     }
-    onModuleInit() {
-        this.workflowEngine.registerWorkflow('assignment', [
-            {
-                from: [shared_1.AssignmentStatus.CREATED],
-                to: shared_1.AssignmentStatus.CANDIDATE_SELECTED,
-                beforeTransition: async (ctx) => {
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.CANDIDATE_SELECTED],
-                to: shared_1.AssignmentStatus.CONTACT_INITIATED,
-                beforeTransition: async (ctx) => {
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.CONTACT_INITIATED],
-                to: shared_1.AssignmentStatus.NEGOTIATION,
-                beforeTransition: async (ctx) => {
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.NEGOTIATION],
-                to: shared_1.AssignmentStatus.ACCEPTED,
-                beforeTransition: async (ctx) => {
-                    const { assignment, fee } = ctx.payload;
-                    assignment.agreedFee = fee ?? assignment.proposedFee;
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.CREATED, shared_1.AssignmentStatus.NEGOTIATION, shared_1.AssignmentStatus.CANDIDATE_SELECTED, shared_1.AssignmentStatus.CONTACT_INITIATED],
-                to: shared_1.AssignmentStatus.REJECTED,
-                beforeTransition: async (ctx) => {
-                    const { assignment, reason, remarks, userId } = ctx.payload;
-                    assignment.rejectReason = reason ?? remarks ?? 'Rejected by Assayer';
-                    assignment.isActive = false;
-                    if (assignment.projectBranch) {
-                        assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
-                        assignment.projectBranch.updatedBy = userId || 'SYSTEM';
-                    }
-                },
-            },
-            {
-                from: [
-                    shared_1.AssignmentStatus.CREATED,
-                    shared_1.AssignmentStatus.CANDIDATE_SELECTED,
-                    shared_1.AssignmentStatus.CONTACT_INITIATED,
-                    shared_1.AssignmentStatus.NEGOTIATION,
-                    shared_1.AssignmentStatus.ACCEPTED,
-                ],
-                to: shared_1.AssignmentStatus.CANCELLED,
-                beforeTransition: async (ctx) => {
-                    const { assignment, reason, remarks } = ctx.payload;
-                    assignment.cancelReason = reason ?? remarks ?? 'Cancelled by Admin';
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.ACCEPTED],
-                to: shared_1.AssignmentStatus.SCHEDULED,
-                guards: [
-                    async (ctx) => {
-                        const { scheduledDate, state } = ctx.payload;
-                        if (scheduledDate) {
-                            const isHoliday = await this.holidayService.isHoliday(new Date(scheduledDate), state);
-                            if (isHoliday) {
-                                throw new common_1.BadRequestException(`Holiday Conflict: ${scheduledDate} is a holiday in ${state}.`);
-                            }
-                        }
-                        return true;
-                    },
-                ],
-                beforeTransition: async (ctx) => {
-                    const { assignment, scheduledDate } = ctx.payload;
-                    if (scheduledDate) {
-                        const scheduledDateObj = new Date(scheduledDate);
-                        assignment.scheduledDate = scheduledDateObj;
-                        assignment.projectBranch.scheduledDate = scheduledDateObj;
-                    }
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.SCHEDULED;
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.SCHEDULED],
-                to: shared_1.AssignmentStatus.AUDIT_COMPLETED,
-                beforeTransition: async (ctx) => {
-                    const { assignment } = ctx.payload;
-                    assignment.completionDate = new Date();
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.AUDIT_COMPLETED;
-                },
-            },
-            {
-                from: [shared_1.AssignmentStatus.AUDIT_COMPLETED],
-                to: shared_1.AssignmentStatus.CLOSED,
-                beforeTransition: async (ctx) => {
-                    const { assignment } = ctx.payload;
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.CLOSED;
-                },
-            },
-        ]);
+    async syncAssessmentStatus(assignment) {
+        if (assignment.assessment && assignment.projectBranch) {
+            const mapped = ASSESSMENT_STATUS_MAP[assignment.projectBranch.status];
+            if (mapped && assignment.assessment.status !== mapped) {
+                assignment.assessment.status = mapped;
+                assignment.assessment.auditDate = assignment.projectBranch.scheduledDate;
+                assignment.assessment.assignedAssessorId = assignment.assayerId;
+                assignment.assessment.agreedFee = assignment.agreedFee;
+                await this.assessmentRepository.save(assignment.assessment);
+            }
+        }
     }
     async create(dto, userId) {
         const projectBranch = await this.projectQueryService.findProjectBranchById(dto.projectBranchId);
         if (!projectBranch) {
             throw new common_1.NotFoundException(`Project branch link ${dto.projectBranchId} not found.`);
         }
+        const assessment = await this.assessmentRepository.findOne({
+            where: { projectId: projectBranch.projectId, branchId: projectBranch.branchId, isActive: true },
+        });
         const assayer = await this.assayerService.findOne(dto.assayerId);
         if (!assayer) {
             throw new common_1.NotFoundException(`Assayer ${dto.assayerId} not found.`);
@@ -180,22 +111,19 @@ let AssignmentService = class AssignmentService {
             order: { createdAt: 'DESC' },
         });
         if (existingAssignment &&
-            [
-                shared_1.AssignmentStatus.ACCEPTED,
-                shared_1.AssignmentStatus.SCHEDULED,
-                shared_1.AssignmentStatus.AUDIT_COMPLETED,
-                shared_1.AssignmentStatus.CLOSED,
-            ].includes(existingAssignment.status)) {
-            throw new common_1.ConflictException(`Branch Busy: An active/completed assignment (${existingAssignment.assignmentNumber}) already exists for this branch.`);
+            [shared_1.AssignmentStatus.ACCEPTED].includes(existingAssignment.status)) {
+            throw new common_1.ConflictException(`Branch Busy: An active assignment (${existingAssignment.assignmentNumber}) already exists for this branch.`);
         }
-        const scheduledDateObj = new Date(dto.scheduledDate);
-        const holidayCheck = await this.constraintEvaluator.checkHoliday(projectBranch.branch.state, scheduledDateObj);
-        if (!holidayCheck.passed) {
-            throw new common_1.BadRequestException(holidayCheck.reason);
-        }
-        const doubleBookingCheck = await this.constraintEvaluator.checkDoubleBooking(dto.assayerId, scheduledDateObj);
-        if (!doubleBookingCheck.passed) {
-            throw new common_1.ConflictException(doubleBookingCheck.reason);
+        const scheduledDateObj = dto.scheduledDate ? new Date(dto.scheduledDate) : null;
+        if (scheduledDateObj) {
+            const holidayCheck = await this.constraintEvaluator.checkHoliday(projectBranch.branch.state, scheduledDateObj);
+            if (!holidayCheck.passed) {
+                throw new common_1.BadRequestException(holidayCheck.reason);
+            }
+            const doubleBookingCheck = await this.constraintEvaluator.checkDoubleBooking(dto.assayerId, scheduledDateObj);
+            if (!doubleBookingCheck.passed) {
+                throw new common_1.ConflictException(doubleBookingCheck.reason);
+            }
         }
         let maxResponseTimeHours = 24;
         if (projectBranch.project?.client?.configuration?.maxResponseTimeHours) {
@@ -208,7 +136,7 @@ let AssignmentService = class AssignmentService {
         if (existingAssignment) {
             assignment = existingAssignment;
             assignment.assayerId = dto.assayerId;
-            assignment.status = shared_1.AssignmentStatus.CREATED;
+            assignment.status = shared_1.AssignmentStatus.PENDING;
             assignment.proposedFee = dto.proposedFee;
             assignment.agreedFee = null;
             assignment.scheduledDate = scheduledDateObj;
@@ -227,9 +155,10 @@ let AssignmentService = class AssignmentService {
             assignment = this.assignmentRepository.create({
                 assignmentNumber,
                 projectBranchId: projectBranch.id,
+                assessmentId: assessment?.id || null,
                 projectId: projectBranch.projectId,
                 assayerId: dto.assayerId,
-                status: shared_1.AssignmentStatus.CREATED,
+                status: shared_1.AssignmentStatus.PENDING,
                 priority: projectBranch.priority,
                 proposedFee: dto.proposedFee,
                 agreedFee: null,
@@ -258,30 +187,42 @@ let AssignmentService = class AssignmentService {
             return savedAssignment;
         }).then(async (saved) => {
             try {
-                let targetUserId = assayer.id;
                 if (assayer.email) {
                     const userObj = await this.dataSource.getRepository(user_entity_1.UserEntity).findOne({ where: { email: assayer.email } }).catch(() => null);
                     if (userObj) {
-                        targetUserId = userObj.id;
+                        await this.notificationService.create({
+                            userId: userObj.id,
+                            title: 'New Assignment',
+                            message: `You have been assigned to ${projectBranch.branch.name} on ${dto.scheduledDate}. Proposed fee: ₹${dto.proposedFee}.`,
+                            link: `/assignments/${saved.id}`,
+                        }, userId);
                     }
                 }
-                await this.notificationService.create({
-                    userId: targetUserId,
-                    title: 'New Assignment',
-                    message: `You have been assigned to ${projectBranch.branch.name} on ${dto.scheduledDate}. Proposed fee: ₹${dto.proposedFee}.`,
-                    link: `/assignments/${saved.id}`,
-                }, userId);
                 await this.pushNotificationService.sendToUser(assayer.id, 'New Assignment', `You have been assigned to ${projectBranch.branch.name} on ${dto.scheduledDate}. Fee: ₹${dto.proposedFee}.`, { assignmentId: saved.id, type: 'assignment_created' });
             }
             catch (err) {
                 console.error('Failed to send assignment creation notification:', err);
+            }
+            try {
+                this.eventPublisher.publish('assignment:created', {
+                    eventType: 'assignment:created',
+                    assignmentId: saved.id,
+                    assignmentNumber: saved.assignmentNumber,
+                    assayerId: saved.assayerId,
+                    organizationId: saved.projectBranch?.project?.organizationId,
+                    branchName: projectBranch.branch?.name,
+                    status: saved.status,
+                });
+            }
+            catch (err) {
+                console.error('Failed to publish assignment:created event:', err);
             }
             return saved;
         });
     }
     async findOne(id) {
         const assignment = await this.assignmentRepository.findOne({
-            where: { id, isActive: true },
+            where: { id },
             relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
         });
         if (!assignment) {
@@ -291,11 +232,8 @@ let AssignmentService = class AssignmentService {
     }
     async update(id, dto, userId) {
         const assignment = await this.findOne(id);
-        if (assignment.status === shared_1.AssignmentStatus.ACCEPTED ||
-            assignment.status === shared_1.AssignmentStatus.SCHEDULED ||
-            assignment.status === shared_1.AssignmentStatus.AUDIT_COMPLETED ||
-            assignment.status === shared_1.AssignmentStatus.CLOSED) {
-            throw new common_1.BadRequestException(`Locked: Cannot modify assignment details after acceptance (Current status: ${assignment.status}).`);
+        if (assignment.status !== shared_1.AssignmentStatus.PENDING) {
+            throw new common_1.BadRequestException(`Locked: Cannot modify assignment details in status ${assignment.status}.`);
         }
         if (dto.proposedFee !== undefined)
             assignment.proposedFee = dto.proposedFee;
@@ -303,9 +241,10 @@ let AssignmentService = class AssignmentService {
             assignment.agreedFee = dto.agreedFee;
         if (dto.scheduledDate !== undefined) {
             const scheduledDateObj = new Date(dto.scheduledDate);
-            const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, assignment.projectBranch.branch.state);
+            const branchState = assignment.projectBranch?.branch?.state || assignment.assessment?.branch?.state || '';
+            const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, branchState);
             if (isHolidayConflict) {
-                throw new common_1.BadRequestException(`Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${assignment.projectBranch.branch.state}.`);
+                throw new common_1.BadRequestException(`Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${branchState}.`);
             }
             assignment.scheduledDate = scheduledDateObj;
         }
@@ -321,222 +260,202 @@ let AssignmentService = class AssignmentService {
             userId,
             remarks: `Updated details for assignment ${saved.assignmentNumber}.`,
         });
+        try {
+            if (dto.proposedFee !== undefined || dto.agreedFee !== undefined) {
+                this.eventPublisher.publish('assignment:fee-updated', {
+                    eventType: 'assignment:fee-updated',
+                    assignmentId: saved.id,
+                    assignmentNumber: saved.assignmentNumber,
+                    proposedFee: saved.proposedFee,
+                    agreedFee: saved.agreedFee,
+                    assayerId: saved.assayerId,
+                    organizationId: saved.projectBranch?.project?.organizationId,
+                    userId,
+                    timestamp: new Date(),
+                });
+            }
+        }
+        catch (err) {
+            console.error('Failed to publish assignment:fee-updated event:', err);
+        }
         return saved;
     }
-    async executeAssignmentTransition(id, targetStatus, userId, remarks, reason, fee, scheduledDate, role = shared_1.SystemRole.SUPER_ADMINISTRATOR) {
-        const validUserId = userId || (id && /^[0-9a-fA-F-]{36}$/.test(id) ? id : '00000000-0000-0000-0000-000000000000');
-        userId = validUserId;
+    async executeAssignmentTransition(id, targetStatus, userId, reason, fee) {
         const assignment = await this.findOne(id);
         const prevStatus = assignment.status;
         if (prevStatus === targetStatus) {
             return { saved: assignment, event: null };
         }
         let event;
-        if (targetStatus === shared_1.AssignmentStatus.CANDIDATE_SELECTED) {
-            event = assignment_state_machine_1.AssignmentStateMachine.selectCandidate(assignment, userId);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.CONTACT_INITIATED) {
-            event = assignment_state_machine_1.AssignmentStateMachine.initiateContact(assignment, userId);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.NEGOTIATION) {
-            if (fee === undefined)
-                throw new common_1.BadRequestException('Fee is required for negotiation.');
-            event = assignment_state_machine_1.AssignmentStateMachine.negotiate(assignment, fee, userId);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
-            event = assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, userId, fee);
+        if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
+            event = assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, userId);
+            if (fee !== undefined)
+                assignment.agreedFee = fee;
+            if (assignment.projectBranch) {
+                assignment.projectBranch.status = shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED;
+            }
         }
         else if (targetStatus === shared_1.AssignmentStatus.REJECTED) {
             event = assignment_state_machine_1.AssignmentStateMachine.rejectOffer(assignment, userId, reason);
+            if (assignment.projectBranch) {
+                assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+            }
         }
         else if (targetStatus === shared_1.AssignmentStatus.CANCELLED) {
             event = assignment_state_machine_1.AssignmentStateMachine.cancel(assignment, userId, reason);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.SCHEDULED) {
-            if (!scheduledDate)
-                throw new common_1.BadRequestException('Scheduled date is required.');
-            event = assignment_state_machine_1.AssignmentStateMachine.scheduleAudit(assignment, scheduledDate, userId);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.AUDIT_COMPLETED) {
-            event = assignment_state_machine_1.AssignmentStateMachine.completeAudit(assignment, userId);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.CLOSED) {
-            event = assignment_state_machine_1.AssignmentStateMachine.close(assignment, userId);
-        }
-        else {
-            throw new common_1.BadRequestException(`Invalid assignment status: ${targetStatus}`);
-        }
-        const payload = { assignment, fee, reason, remarks, userId };
-        return this.workflowEngine.executeCommand('assignment', assignment.id, `${targetStatus}_Command`, prevStatus, targetStatus, userId, role, [], async () => {
-            if (remarks)
-                assignment.remarks = remarks;
-            assignment.updatedBy = userId;
-            assignment.projectBranch.updatedBy = userId;
-            const saved = await this.dataSource.transaction(async (manager) => {
-                if (targetStatus === shared_1.AssignmentStatus.CANCELLED || targetStatus === shared_1.AssignmentStatus.REJECTED) {
-                    await this.projectService.initiateBranchPlanning(assignment.projectBranch.id, userId, manager);
-                    assignment.projectBranch.status = shared_1.ProjectBranchStatus.PLANNING;
-                }
-                else {
-                    const targetPBStatus = assignment.projectBranch.status;
-                    if (targetPBStatus === shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED) {
-                        await this.projectService.confirmBranchAssignment(assignment.projectBranch.id, userId, manager);
-                    }
-                    else if (targetPBStatus === shared_1.ProjectBranchStatus.SCHEDULED) {
-                        await this.projectService.scheduleBranchAudit(assignment.projectBranch.id, userId, manager);
-                    }
-                    else if (targetPBStatus === shared_1.ProjectBranchStatus.AUDIT_COMPLETED) {
-                        await this.projectService.completeBranchAudit(assignment.projectBranch.id, userId, manager);
-                    }
-                    else if (targetPBStatus === shared_1.ProjectBranchStatus.CLOSED) {
-                        await this.projectService.closeBranchProject(assignment.projectBranch.id, userId, manager);
-                    }
-                    else if (targetPBStatus === shared_1.ProjectBranchStatus.CANDIDATE_SEARCH) {
-                        await this.projectService.initiateBranchPlanning(assignment.projectBranch.id, userId, manager);
-                    }
-                }
-                const savedAssign = await manager.save(assignment);
-                await this.auditService.recordEvent({
-                    category: shared_1.EventCategory.OPERATIONAL,
-                    eventType: `ASSIGNMENT_${targetStatus}`,
-                    entityType: 'ASSIGNMENT',
-                    entityId: savedAssign.id,
-                    previousState: prevStatus,
-                    newState: targetStatus,
-                    userId,
-                    remarks: remarks ?? `Transitioned assignment to ${targetStatus}`,
-                });
-                try {
-                    if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
-                        await this.notificationService.create({
-                            userId: savedAssign.createdBy,
-                            title: `Assignment Accepted`,
-                            message: `Assignment offer ${savedAssign.assignmentNumber} has been accepted by the assayer.`,
-                        }, userId);
-                    }
-                    else if (targetStatus === shared_1.AssignmentStatus.REJECTED) {
-                        await this.notificationService.create({
-                            userId: savedAssign.createdBy,
-                            title: `Assignment Rejected`,
-                            message: `Assignment offer ${savedAssign.assignmentNumber} was rejected. Reason: ${reason ?? remarks ?? 'None'}.`,
-                        }, userId);
-                    }
-                }
-                catch (err) {
-                    console.error('Failed to dispatch transition notification', err);
-                }
-                try {
-                    if (targetStatus === shared_1.AssignmentStatus.AUDIT_COMPLETED ||
-                        targetStatus === shared_1.AssignmentStatus.CLOSED ||
-                        targetStatus === shared_1.AssignmentStatus.CANCELLED) {
-                        await this.assayerService.updateAssayerStats(savedAssign.assayerId);
-                    }
-                }
-                catch (err) {
-                    console.error('Failed to update assayer stats', err);
-                }
-                return savedAssign;
-            });
-            return { saved, event };
-        }, payload);
-    }
-    async transition(id, targetStatus, userId, remarks, reason, fee, scheduledDate) {
-        if (targetStatus === shared_1.AssignmentStatus.CANDIDATE_SELECTED) {
-            return this.selectCandidate(id, userId, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.CONTACT_INITIATED) {
-            return this.initiateContact(id, userId, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.NEGOTIATION) {
-            if (fee === undefined)
-                throw new common_1.BadRequestException('Fee is required for negotiation.');
-            return this.negotiate(id, userId, fee, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.ACCEPTED) {
-            return this.acceptOffer(id, userId, fee, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.REJECTED) {
-            return this.rejectOffer(id, userId, reason, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.CANCELLED) {
-            return this.cancelAssignment(id, userId, reason, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.SCHEDULED) {
-            if (!scheduledDate)
-                throw new common_1.BadRequestException('Scheduled date is required.');
-            return this.scheduleAudit(id, userId, scheduledDate, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.AUDIT_COMPLETED) {
-            return this.completeAudit(id, userId, remarks);
-        }
-        else if (targetStatus === shared_1.AssignmentStatus.CLOSED) {
-            return this.closeAssignment(id, userId, remarks);
+            if (assignment.projectBranch) {
+                assignment.projectBranch.status = shared_1.ProjectBranchStatus.CANDIDATE_SEARCH;
+            }
         }
         else {
             throw new common_1.BadRequestException(`Invalid assignment status transition to ${targetStatus}`);
         }
+        assignment.updatedBy = userId;
+        await this.syncAssessmentStatus(assignment);
+        const saved = await this.dataSource.transaction(async (manager) => {
+            if (assignment.projectBranch) {
+                await manager.save(assignment.projectBranch);
+            }
+            if (assignment.assessment) {
+                await manager.save(assignment.assessment);
+            }
+            const savedAssign = await manager.save(assignment);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.OPERATIONAL,
+                eventType: `ASSIGNMENT_${targetStatus}`,
+                entityType: 'ASSIGNMENT',
+                entityId: savedAssign.id,
+                previousState: prevStatus,
+                newState: targetStatus,
+                userId,
+                remarks: reason ?? `Transitioned assignment to ${targetStatus}`,
+            });
+            return savedAssign;
+        });
+        try {
+            if (targetStatus === shared_1.AssignmentStatus.ACCEPTED && saved.createdBy) {
+                const targetUser = await this.dataSource.getRepository(user_entity_1.UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
+                if (targetUser) {
+                    await this.notificationService.create({
+                        userId: saved.createdBy,
+                        title: 'Assignment Accepted',
+                        message: `Assignment offer ${saved.assignmentNumber} has been accepted by the assayer.`,
+                    }, userId);
+                }
+            }
+            else if (targetStatus === shared_1.AssignmentStatus.REJECTED && saved.createdBy) {
+                const targetUser = await this.dataSource.getRepository(user_entity_1.UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
+                if (targetUser) {
+                    await this.notificationService.create({
+                        userId: saved.createdBy,
+                        title: 'Assignment Rejected',
+                        message: `Assignment offer ${saved.assignmentNumber} was rejected. Reason: ${reason ?? 'None'}.`,
+                    }, userId);
+                }
+            }
+        }
+        catch (err) {
+            console.error('Failed to dispatch transition notification', err);
+        }
+        if (targetStatus === shared_1.AssignmentStatus.CANCELLED || targetStatus === shared_1.AssignmentStatus.REJECTED) {
+            try {
+                await this.assayerService.updateAssayerStats(saved.assayerId);
+            }
+            catch (err) {
+                console.error('Failed to update assayer stats', err);
+            }
+        }
+        return { saved, event };
     }
-    async selectCandidate(id, userId, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.CANDIDATE_SELECTED, userId, remarks);
+    async acceptOffer(id, userId, fee, reason) {
+        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.ACCEPTED, userId, reason, fee);
         if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
+            this.publishAssignmentEvent('assignment:status-changed', saved, event);
         return saved;
     }
-    async initiateContact(id, userId, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.CONTACT_INITIATED, userId, remarks);
+    async rejectOffer(id, userId, reason) {
+        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.REJECTED, userId, reason);
         if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
+            this.publishAssignmentEvent('assignment:status-changed', saved, event);
         return saved;
     }
-    async negotiate(id, userId, fee, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.NEGOTIATION, userId, remarks, undefined, fee);
+    async cancelAssignment(id, userId, reason) {
+        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.CANCELLED, userId, reason);
         if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
-    }
-    async acceptOffer(id, userId, fee, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.ACCEPTED, userId, remarks, undefined, fee);
-        if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
-    }
-    async rejectOffer(id, userId, reason, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.REJECTED, userId, remarks, reason);
-        if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
+            this.publishAssignmentEvent('assignment:status-changed', saved, event);
         return saved;
     }
     async scheduleAudit(id, userId, scheduledDate, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.SCHEDULED, userId, remarks, undefined, undefined, scheduledDate);
-        if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
+        const assignment = await this.findOne(id);
+        if (assignment.projectBranch) {
+            assignment.projectBranch.status = shared_1.ProjectBranchStatus.SCHEDULED;
+            assignment.projectBranch.scheduledDate = new Date(scheduledDate);
+            assignment.projectBranch.updatedBy = userId;
+        }
+        if (assignment.assessment) {
+            assignment.assessment.auditDate = new Date(scheduledDate);
+            assignment.assessment.status = shared_1.AssessmentStatus.ASSIGNED_AND_SCHEDULED;
+        }
+        assignment.scheduledDate = new Date(scheduledDate);
+        assignment.updatedBy = userId;
+        const saved = await this.dataSource.transaction(async (manager) => {
+            if (assignment.projectBranch) {
+                await manager.save(assignment.projectBranch);
+            }
+            if (assignment.assessment) {
+                await manager.save(assignment.assessment);
+            }
+            return manager.save(assignment);
+        });
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'ASSIGNMENT_SCHEDULED',
+            entityType: 'ASSIGNMENT',
+            entityId: saved.id,
+            userId,
+            remarks: remarks ?? `Scheduled audit for ${scheduledDate}.`,
+        });
+        this.publishAssignmentEvent('assignment:scheduled', saved, {
+            previousState: saved.status,
+            newState: saved.status,
+            userId,
+        });
         return saved;
     }
-    async completeAudit(id, userId, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.AUDIT_COMPLETED, userId, remarks);
-        if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
+    publishAssignmentEvent(eventType, assignment, event) {
+        this.eventPublisher.publish(eventType, {
+            eventType,
+            assignmentId: assignment.id,
+            assignmentNumber: assignment.assignmentNumber,
+            previousState: event.previousState || assignment.status,
+            newState: assignment.status,
+            assayerId: assignment.assayerId,
+            organizationId: assignment.projectBranch?.project?.organizationId,
+            userId: event.userId,
+            timestamp: event.timestamp || new Date(),
+            metadata: event.metadata,
+        });
     }
-    async closeAssignment(id, userId, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.CLOSED, userId, remarks);
-        if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
-    }
-    async cancelAssignment(id, userId, reason, remarks) {
-        const { saved, event } = await this.executeAssignmentTransition(id, shared_1.AssignmentStatus.CANCELLED, userId, remarks, reason);
-        if (event)
-            this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
-    }
-    async findAll(page = 1, limit = 50, status) {
-        const where = { isActive: true };
-        if (status)
-            where.status = status;
+    async findAll(page = 1, limit = 50, status, projectBranchStatus, assessmentStatus) {
+        const where = {};
+        if (status) {
+            const statuses = status.split(',').map((s) => s.trim()).filter(Boolean);
+            if (statuses.length === 1) {
+                where.status = statuses[0];
+            }
+            else if (statuses.length > 1) {
+                where.status = (0, typeorm_2.In)(statuses);
+            }
+        }
+        if (projectBranchStatus) {
+            where.projectBranch = { status: projectBranchStatus };
+        }
+        if (assessmentStatus) {
+            where.assessment = { status: assessmentStatus };
+        }
         const [assignments, total] = await this.assignmentRepository.findAndCount({
             where,
-            relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project'],
+            relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch', 'assayer', 'project'],
             order: { createdAt: 'DESC' },
             take: limit,
             skip: (page - 1) * limit,
@@ -544,11 +463,41 @@ let AssignmentService = class AssignmentService {
         return { assignments, total };
     }
     async findByAssayer(assayerId) {
-        return this.assignmentRepository.find({
-            where: { assayerId, isActive: true },
+        const assignments = await this.assignmentRepository.find({
+            where: {
+                assayerId,
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED]),
+            },
             relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project'],
             order: { createdAt: 'DESC' },
         });
+        const projectIds = [...new Set(assignments.map((a) => a.projectBranch.projectId))];
+        const versionRepo = this.dataSource.getRepository(customer_master_version_entity_1.CustomerMasterVersionEntity);
+        const recordRepo = this.dataSource.getRepository(customer_record_entity_1.CustomerRecordEntity);
+        const projectVersions = new Map();
+        for (const projectId of projectIds) {
+            const version = await versionRepo.findOne({
+                where: { projectId, status: shared_1.CustomerMasterStatus.APPROVED, isActive: true },
+                order: { versionNumber: 'DESC' },
+            });
+            projectVersions.set(projectId, version);
+        }
+        for (const assignment of assignments) {
+            const version = projectVersions.get(assignment.projectBranch.projectId);
+            if (version) {
+                const branchId = assignment.projectBranch.branchId;
+                const records = await recordRepo.find({
+                    where: { customerMasterVersionId: version.id, branchId, isActive: true },
+                });
+                assignment.customerCount = records.length;
+                assignment.customers = records;
+            }
+            else {
+                assignment.customerCount = 0;
+                assignment.customers = [];
+            }
+        }
+        return assignments;
     }
     async addComment(assignmentId, comment, userId, userName) {
         const assignment = await this.findOne(assignmentId);
@@ -560,7 +509,21 @@ let AssignmentService = class AssignmentService {
             createdBy: userId,
             updatedBy: userId,
         });
-        return this.dataSource.getRepository(assignment_comment_entity_1.AssignmentCommentEntity).save(commentRecord);
+        const saved = await this.dataSource.getRepository(assignment_comment_entity_1.AssignmentCommentEntity).save(commentRecord);
+        try {
+            this.eventPublisher.publish('comment:added', {
+                eventType: 'comment:added',
+                assignmentId: assignment.id,
+                commentId: saved.id,
+                userId,
+                userName,
+                comment,
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish comment:added event:', err);
+        }
+        return saved;
     }
     async getTimeline(assignmentId) {
         const assignment = await this.findOne(assignmentId);
@@ -598,12 +561,8 @@ let AssignmentService = class AssignmentService {
             where: {
                 slaStatus: 'COMPLIANT',
                 status: (0, typeorm_2.In)([
-                    shared_1.AssignmentStatus.CREATED,
-                    shared_1.AssignmentStatus.CANDIDATE_SELECTED,
-                    shared_1.AssignmentStatus.CONTACT_INITIATED,
-                    shared_1.AssignmentStatus.NEGOTIATION,
+                    shared_1.AssignmentStatus.PENDING,
                     shared_1.AssignmentStatus.ACCEPTED,
-                    shared_1.AssignmentStatus.SCHEDULED,
                 ]),
                 isActive: true,
             },
@@ -675,9 +634,16 @@ let AssignmentService = class AssignmentService {
             assignment.projectBranch.status = shared_1.ProjectBranchStatus.SCHEDULED;
             assignment.projectBranch.updatedBy = userId || assignment.assayerId || id;
         }
+        if (assignment.assessment) {
+            assignment.assessment.status = shared_1.AssessmentStatus.ASSIGNED_AND_SCHEDULED;
+            assignment.assessment.auditDate = assignment.scheduledDate;
+        }
         const saved = await this.dataSource.transaction(async (manager) => {
             if (assignment.projectBranch) {
                 await manager.save(assignment.projectBranch);
+            }
+            if (assignment.assessment) {
+                await manager.save(assignment.assessment);
             }
             return manager.save(assignment);
         });
@@ -696,12 +662,15 @@ let AssignmentService = class AssignmentService {
         }
         if (saved.createdBy) {
             try {
-                await this.notificationService.create({
-                    userId: saved.createdBy,
-                    title: 'Assayer GPS Check-In 📍',
-                    message: `Assayer ${saved.assayer?.displayName || 'Field Assayer'} checked in at ${saved.projectBranch?.branch?.name || 'Branch'} (${lat}, ${lng}).`,
-                    link: `/assignments/${saved.id}`,
-                }, userId || saved.assayerId);
+                const targetUser = await this.dataSource.getRepository(user_entity_1.UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
+                if (targetUser) {
+                    await this.notificationService.create({
+                        userId: saved.createdBy,
+                        title: 'Assayer GPS Check-In',
+                        message: `Assayer ${saved.assayer?.displayName || 'Field Assayer'} checked in at ${saved.projectBranch?.branch?.name || 'Branch'} (${lat}, ${lng}).`,
+                        link: `/assignments/${saved.id}`,
+                    }, userId || saved.assayerId);
+                }
             }
             catch (err) {
                 console.error('Failed to dispatch check-in notification:', err);
@@ -718,8 +687,10 @@ exports.AssignmentService = AssignmentService;
 exports.AssignmentService = AssignmentService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
+    __param(1, (0, typeorm_1.InjectRepository)(assessment_entity_1.AssessmentEntity)),
     __param(11, (0, typeorm_3.InjectDataSource)()),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         project_query_service_1.ProjectQueryService,
         project_service_1.ProjectService,
         assayer_service_1.AssayerService,
@@ -727,7 +698,6 @@ exports.AssignmentService = AssignmentService = __decorate([
         push_notification_service_1.PushNotificationService,
         holiday_service_1.HolidayService,
         audit_service_1.AuditService,
-        workflow_engine_1.WorkflowEngine,
         domain_event_publisher_1.DomainEventPublisher,
         constraint_evaluator_1.ConstraintEvaluator,
         typeorm_2.DataSource])

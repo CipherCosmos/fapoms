@@ -18,13 +18,16 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const zone_entity_1 = require("./zone.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 let ZoneService = class ZoneService {
     zoneRepository;
     auditService;
-    constructor(zoneRepository, auditService) {
+    eventPublisher;
+    constructor(zoneRepository, auditService, eventPublisher) {
         this.zoneRepository = zoneRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId) {
         const zone = this.zoneRepository.create({
@@ -44,6 +47,13 @@ let ZoneService = class ZoneService {
             entityId: saved.id,
             userId,
             remarks: `Created operational zone ${saved.name}`,
+        });
+        this.eventPublisher.publish('zone:created', {
+            eventType: 'zone:created',
+            aggregateId: saved.id,
+            userId,
+            clientId: saved.clientId,
+            payload: { id: saved.id, name: saved.name, clientId: saved.clientId },
         });
         return saved;
     }
@@ -87,6 +97,13 @@ let ZoneService = class ZoneService {
             userId,
             remarks: `Updated operational zone ${zone.name}`,
         });
+        this.eventPublisher.publish('zone:updated', {
+            eventType: 'zone:updated',
+            aggregateId: id,
+            userId,
+            clientId: zone.clientId,
+            payload: { id, name: zone.name },
+        });
         return saved;
     }
     async remove(id, userId) {
@@ -102,6 +119,13 @@ let ZoneService = class ZoneService {
             userId,
             remarks: `Soft deleted operational zone ${zone.name}`,
         });
+        this.eventPublisher.publish('zone:deleted', {
+            eventType: 'zone:deleted',
+            aggregateId: id,
+            userId,
+            clientId: zone.clientId,
+            payload: { id, name: zone.name },
+        });
     }
 };
 exports.ZoneService = ZoneService;
@@ -109,6 +133,7 @@ exports.ZoneService = ZoneService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(zone_entity_1.ZoneEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], ZoneService);
 //# sourceMappingURL=zone.service.js.map

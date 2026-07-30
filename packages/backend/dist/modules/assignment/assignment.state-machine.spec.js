@@ -8,20 +8,33 @@ describe('AssignmentStateMachine', () => {
     beforeEach(() => {
         assignment = {
             id: 'assign-1',
-            status: shared_1.AssignmentStatus.CREATED,
+            status: shared_1.AssignmentStatus.PENDING,
             proposedFee: 1000,
         };
     });
-    it('should transition from CREATED to CANDIDATE_SELECTED', () => {
-        const event = assignment_state_machine_1.AssignmentStateMachine.selectCandidate(assignment, 'user-1');
-        expect(assignment.status).toBe(shared_1.AssignmentStatus.CANDIDATE_SELECTED);
-        expect(event.previousState).toBe(shared_1.AssignmentStatus.CREATED);
-        expect(event.newState).toBe(shared_1.AssignmentStatus.CANDIDATE_SELECTED);
+    it('should transition from PENDING to ACCEPTED', () => {
+        const event = assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, 'user-1');
+        expect(assignment.status).toBe(shared_1.AssignmentStatus.ACCEPTED);
+        expect(event.previousState).toBe(shared_1.AssignmentStatus.PENDING);
+        expect(event.newState).toBe(shared_1.AssignmentStatus.ACCEPTED);
     });
-    it('should throw BadRequestException on invalid transition', () => {
+    it('should transition from PENDING to REJECTED', () => {
+        const event = assignment_state_machine_1.AssignmentStateMachine.rejectOffer(assignment, 'user-1', 'Not interested');
+        expect(assignment.status).toBe(shared_1.AssignmentStatus.REJECTED);
+        expect(assignment.rejectReason).toBe('Not interested');
+        expect(assignment.isActive).toBe(false);
+    });
+    it('should throw BadRequestException on invalid transition from ACCEPTED to REJECTED', () => {
+        assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, 'user-1');
         expect(() => {
-            assignment_state_machine_1.AssignmentStateMachine.scheduleAudit(assignment, '2026-08-01', 'user-1');
+            assignment_state_machine_1.AssignmentStateMachine.rejectOffer(assignment, 'user-1');
         }).toThrow(common_1.BadRequestException);
+    });
+    it('should transition from ACCEPTED to CANCELLED', () => {
+        assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, 'user-1');
+        const event = assignment_state_machine_1.AssignmentStateMachine.cancel(assignment, 'user-1', 'Admin override');
+        expect(assignment.status).toBe(shared_1.AssignmentStatus.CANCELLED);
+        expect(assignment.cancelReason).toBe('Admin override');
     });
 });
 //# sourceMappingURL=assignment.state-machine.spec.js.map

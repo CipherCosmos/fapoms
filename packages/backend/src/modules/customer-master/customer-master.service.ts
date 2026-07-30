@@ -219,13 +219,24 @@ export class CustomerMasterService {
     });
   }
 
-  async findRecords(versionId: string, page = 1, limit = 50): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+  async findRecords(versionId: string, page = 1, limit = 50, branchId?: string): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+    const where: any = { customerMasterVersionId: versionId, isActive: true };
+    if (branchId) {
+      where.branchId = branchId;
+    }
     const [records, total] = await this.recordRepository.findAndCount({
-      where: { customerMasterVersionId: versionId, isActive: true },
+      where,
       relations: ['branch'],
       take: limit,
       skip: (page - 1) * limit,
     });
     return { records, total };
+  }
+
+  async findRecordsByVersionAndBranch(versionId: string, branchId: string): Promise<CustomerRecordEntity[]> {
+    return this.recordRepository.find({
+      where: { customerMasterVersionId: versionId, branchId, isActive: true },
+      relations: ['branch'],
+    });
   }
 }

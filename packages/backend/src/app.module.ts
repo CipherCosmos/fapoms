@@ -47,6 +47,7 @@ import { ValidationQueryModule } from './modules/validation-query/validation-que
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module';
 import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
+import { RealtimeModule } from './modules/realtime/realtime.module';
 
 @Module({
   imports: [
@@ -111,6 +112,9 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
     // Background job queue
     QueueModule,
     SlaScannerModule,
+
+    // Real-time events
+    RealtimeModule,
   ],
   providers: [],
 })

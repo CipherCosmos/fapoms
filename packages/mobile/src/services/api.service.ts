@@ -1,26 +1,24 @@
 import { Platform } from 'react-native';
 import { AssayerAssignment, AppNotification } from '../types/mobile-app';
 
-const API_BASE_URL = 'http://localhost:3000/api/v1';
+const API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000/api/v1' : 'http://localhost:3000/api/v1';
 
-const BACKEND_TO_MOBILE_STATUS = {
-  CREATED: 'PENDING',
-  CANDIDATE_SELECTED: 'PENDING',
-  CONTACT_INITIATED: 'PENDING',
-  NEGOTIATION: 'PENDING',
+const BACKEND_TO_MOBILE_STATUS: Record<string, string> = {
+  PENDING: 'PENDING',
   ACCEPTED: 'ACCEPTED',
-  SCHEDULED: 'ACCEPTED',
-  AUDIT_COMPLETED: 'COMPLETED',
-  CLOSED: 'COMPLETED',
+  CHECKED_IN: 'CHECKED_IN',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
   REJECTED: 'REJECTED',
   CANCELLED: 'REJECTED',
 };
 
-const MOBILE_TO_BACKEND_STATUS = {
-  PENDING: 'CREATED',
+const MOBILE_TO_BACKEND_STATUS: Record<string, string> = {
+  PENDING: 'PENDING',
   ACCEPTED: 'ACCEPTED',
+  CHECKED_IN: 'CHECKED_IN',
+  IN_PROGRESS: 'IN_PROGRESS',
   REJECTED: 'REJECTED',
-  COMPLETED: 'AUDIT_COMPLETED',
 };
 
 export class MobileApiService {
@@ -28,6 +26,12 @@ export class MobileApiService {
   static refreshToken: string | null = null;
   static currentUserId: string | null = null;
   static currentUserName: string | null = null;
+
+  /** Returns the API origin URL (e.g., http://localhost:3000) for resolving relative attachment URLs */
+  static getApiOrigin(): string {
+    // API_BASE_URL is like http://localhost:3000/api/v1 — strip /api/v1 suffix
+    return API_BASE_URL.replace(/\/api\/v1$/, '');
+  }
 
   static setAuthToken(token: string, userId?: string, userName?: string) {
     this.authToken = token;
@@ -107,9 +111,6 @@ export class MobileApiService {
   }
 
   static getBaseUrl(): string {
-    if (Platform.OS === 'android') {
-      return 'http://10.0.2.2:3000/api/v1';
-    }
     return API_BASE_URL;
   }
 
@@ -171,7 +172,7 @@ export class MobileApiService {
     }
   }
 
-  private static async fetchWithAuth(url: string, options?: RequestInit): Promise<Response> {
+  static async fetchWithAuth(url: string, options?: RequestInit): Promise<Response> {
     const cacheBust = `${url}${url.includes('?') ? '&' : '?'}_t=${Date.now()}`;
     const headers = { ...this.getHeaders(), ...(options?.headers as Record<string, string> || {}) };
     let response = await fetch(cacheBust, { ...options, headers });
@@ -381,12 +382,31 @@ export class MobileApiService {
           longitude: branch?.longitude != null ? Number(branch.longitude) : 0,
           scheduledDate: item.scheduledDate || '',
           sequenceOrder: idx + 1,
-          estimatedCustomerCount: branch?.riskScore || 0,
+          estimatedCustomerCount: item.customerCount || item.projectBranch?.packetCount || (item.customers && item.customers.length > 0 ? item.customers.length : 15),
           estimatedAuditHours: 0,
           status: (BACKEND_TO_MOBILE_STATUS as any)[item.status] || 'PENDING',
           proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
+          standardBaseFee: item.baseFee != null ? Number(item.baseFee) : 1200,
           agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
           agreedTravelFee: item.travelAllowance != null ? Number(item.travelAllowance) : 0,
+          distanceKm: (() => {
+            const assayer = item.assayer;
+            if (assayer && assayer.latitude != null && assayer.longitude != null && branch && branch.latitude != null && branch.longitude != null) {
+              const lat1 = Number(assayer.latitude);
+              const lon1 = Number(assayer.longitude);
+              const lat2 = Number(branch.latitude);
+              const lon2 = Number(branch.longitude);
+              const R = 6371;
+              const dLat = (lat2 - lat1) * (Math.PI / 180);
+              const dLon = (lon2 - lon1) * (Math.PI / 180);
+              const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              return Math.round(R * c);
+            }
+            return undefined;
+          })(),
+          negotiationCount: item.negotiationCount != null ? Number(item.negotiationCount) : 0,
+          remarks: item.remarks || '',
           customers: item.customers || [],
           queries: item.queries || [],
           expenses: item.expenses || [],
@@ -402,10 +422,12 @@ export class MobileApiService {
     assignmentId: string,
     status: AssayerAssignment['status'],
     reason?: string,
+    counterFee?: number,
   ): Promise<boolean> {
     const backendStatus = (MOBILE_TO_BACKEND_STATUS as any)[status] || status;
     const body: any = { targetStatus: backendStatus };
     if (reason) body.reason = reason;
+    if (counterFee !== undefined) body.fee = counterFee;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -425,21 +447,22 @@ export class MobileApiService {
     };
   }
 
-  static async uploadCompletedAuditPdf(assignmentId: string, fileName: string, fileBase64OrBlob?: string): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
+  static async uploadCompletedAuditPdf(targetId: string, fileName: string, fileBase64OrBlob?: string, assignmentId?: string): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/upload`, {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/mobile-upload`, {
         method: 'POST',
         body: JSON.stringify({
-          assignmentId,
-          documentType: 'AUDITED_REPORT_PDF',
+          assignmentId: assignmentId || targetId,
+          assessmentId: targetId,
+          projectBranchId: targetId,
+          documentType: 'AUDITED_RETURN_PDF',
           fileName,
           fileData: fileBase64OrBlob,
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (response.ok) {
-        await this.updateAssignmentStatus(assignmentId, 'COMPLETED');
-        return { success: true, documentUrl: data.url || data.documentUrl };
+      if (response.ok && data.success) {
+        return { success: true, documentUrl: data.data?.filePath || data.documentUrl || `/documents/${data.data?.id}/download` };
       }
       return { success: false, error: data.message || 'Failed to upload audit PDF document' };
     } catch (err: any) {
@@ -458,12 +481,49 @@ export class MobileApiService {
     }
   }
 
-  static async respondToQuery(queryId: string, responseText: string): Promise<boolean> {
+  static async respondToQuery(queryId: string, responseText: string, attachments?: any[]): Promise<boolean> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/respond`, {
       method: 'POST',
-      body: JSON.stringify({ response: responseText }),
+      body: JSON.stringify({ response: responseText, attachments }),
     });
     return response.ok;
+  }
+
+  /**
+   * Upload a chat attachment file to server disk storage using multipart/form-data.
+   * Returns a lightweight URL reference instead of storing multi-MB base64 in DB.
+   */
+  static async uploadChatAttachment(file: any): Promise<any[] | null> {
+    try {
+      const formData = new FormData();
+      if (Platform.OS === 'web') {
+        formData.append('files', file);
+      } else {
+        formData.append('files', {
+          uri: file.uri,
+          name: file.name || file.fileName || `mobile_upload_${Date.now()}`,
+          type: file.mimeType || file.type || 'application/octet-stream',
+        } as any);
+      }
+
+      const token = this.authToken;
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const response = await fetch(`${API_BASE_URL}/validation-queries/upload-attachment`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data?.data || null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   static async submitExpense(assignmentId: string, category: string, amount: number, description: string): Promise<boolean> {

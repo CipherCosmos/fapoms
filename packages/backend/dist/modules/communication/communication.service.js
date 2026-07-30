@@ -19,15 +19,18 @@ const typeorm_2 = require("typeorm");
 const communication_entity_1 = require("./communication.entity");
 const assignment_entity_1 = require("../assignment/assignment.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 let CommunicationService = class CommunicationService {
     communicationRepository;
     assignmentRepository;
     auditService;
-    constructor(communicationRepository, assignmentRepository, auditService) {
+    eventPublisher;
+    constructor(communicationRepository, assignmentRepository, auditService, eventPublisher) {
         this.communicationRepository = communicationRepository;
         this.assignmentRepository = assignmentRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId) {
         const assignment = await this.assignmentRepository.findOne({
@@ -54,6 +57,21 @@ let CommunicationService = class CommunicationService {
             userId,
             remarks: `Logged ${dto.type} communication for assignment ${assignment.assignmentNumber}.`,
         });
+        try {
+            this.eventPublisher.publish('communication:created', {
+                eventType: 'communication:created',
+                communicationId: saved.id,
+                assignmentId: saved.assignmentId,
+                type: saved.type,
+                initiatedBy: userId,
+                recipientRef: saved.recipientRef,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish communication:created event:', err);
+        }
         return saved;
     }
     async findByAssignment(assignmentId) {
@@ -70,6 +88,7 @@ exports.CommunicationService = CommunicationService = __decorate([
     __param(1, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
         typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], CommunicationService);
 //# sourceMappingURL=communication.service.js.map

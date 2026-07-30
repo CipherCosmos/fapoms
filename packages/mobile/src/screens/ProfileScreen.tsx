@@ -36,6 +36,8 @@ export interface ProfileDataState {
   totalEarnings: number | string;
   runningBalance: number | string;
   assayerCode: string;
+  biometricsEnabled?: boolean;
+  pinCode?: string;
 }
 
 interface ProfileScreenProps {
@@ -169,6 +171,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: 2 }}>
           {[
             { id: 'CONTACT', label: '📱 Contact & GPS Map' },
+            { id: 'SECURITY', label: '🔒 Security & PIN' },
             { id: 'SKILLS', label: '📜 Skills & BIS' },
             { id: 'EMERGENCY', label: '🆘 Emergency' },
             { id: 'BANKING', label: '🏦 Bank & Tax' },
@@ -419,6 +422,50 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Max Weekly Audit Workload Limit:</Text>
               <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxWeeklyWorkload || 0} Audits / Week`} editable={false} />
+            </View>
+          </View>
+        )}
+
+        {(activeTab as any) === 'SECURITY' && (
+          <View>
+            <Text style={styles.cardTitle}>Security & Quick Sign-In Settings</Text>
+            <Text style={styles.branchSubText}>
+              Configure your hardware Face ID / Fingerprint sensor and quick 4-Digit Security PIN for rapid login.
+            </Text>
+
+            {/* Biometric Toggle */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 14 }}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Fingerprint / Face ID Login</Text>
+                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Allow sign-in using device biometric hardware</Text>
+              </View>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: profile.biometricsEnabled !== false ? '#10b981' : '#475569',
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                  borderRadius: 10,
+                }}
+                onPress={() => onUpdateProfileField('biometricsEnabled', !(profile.biometricsEnabled !== false))}
+              >
+                <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>
+                  {profile.biometricsEnabled !== false ? 'ENABLED ✅' : 'DISABLED 🔒'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Quick PIN Setup */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>4-Digit Quick Passcode / PIN:</Text>
+              <TextInput
+                style={styles.textInput}
+                value={profile.pinCode || ''}
+                onChangeText={(val) => onUpdateProfileField('pinCode', val.slice(0, 4))}
+                placeholder="Set 4-Digit Security PIN (e.g. 1234)"
+                placeholderTextColor="#475569"
+                keyboardType="numeric"
+                secureTextEntry
+              />
             </View>
           </View>
         )}

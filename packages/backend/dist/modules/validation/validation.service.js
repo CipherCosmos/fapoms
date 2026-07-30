@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const validation_case_entity_1 = require("./validation-case.entity");
+const assessment_entity_1 = require("../project/assessment.entity");
 const project_service_1 = require("../project/project.service");
 const project_query_service_1 = require("../project/project-query.service");
 const validation_state_machine_1 = require("./validation.state-machine");
@@ -26,13 +27,15 @@ const shared_1 = require("@fapoms/shared");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 let ValidationService = class ValidationService {
     validationCaseRepository;
+    assessmentRepository;
     projectQueryService;
     projectService;
     auditService;
     eventPublisher;
     workflowEngine;
-    constructor(validationCaseRepository, projectQueryService, projectService, auditService, eventPublisher, workflowEngine) {
+    constructor(validationCaseRepository, assessmentRepository, projectQueryService, projectService, auditService, eventPublisher, workflowEngine) {
         this.validationCaseRepository = validationCaseRepository;
+        this.assessmentRepository = assessmentRepository;
         this.projectQueryService = projectQueryService;
         this.projectService = projectService;
         this.auditService = auditService;
@@ -52,8 +55,17 @@ let ValidationService = class ValidationService {
         if (!projectBranch) {
             throw new common_1.NotFoundException(`ProjectBranch ${dto.projectBranchId} not found.`);
         }
+        let assessmentId = dto.assessmentId ?? null;
+        if (!assessmentId) {
+            const asmt = await this.assessmentRepository.findOne({
+                where: { projectId: projectBranch.projectId, branchId: projectBranch.branchId, isActive: true },
+            });
+            if (asmt)
+                assessmentId = asmt.id;
+        }
         const validationCase = this.validationCaseRepository.create({
             projectBranchId: projectBranch.id,
+            assessmentId,
             status: shared_1.ValidationStatus.PENDING,
             createdBy: userId,
             updatedBy: userId,
@@ -72,7 +84,7 @@ let ValidationService = class ValidationService {
     async findOne(id) {
         const validationCase = await this.validationCaseRepository.findOne({
             where: { id, isActive: true },
-            relations: ['projectBranch', 'projectBranch.branch'],
+            relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
         });
         if (!validationCase) {
             throw new common_1.NotFoundException(`ValidationCase ${id} not found.`);
@@ -82,7 +94,7 @@ let ValidationService = class ValidationService {
     async findAll(page = 1, limit = 50) {
         const [validationCases, total] = await this.validationCaseRepository.findAndCount({
             where: { isActive: true },
-            relations: ['projectBranch', 'projectBranch.branch'],
+            relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
             order: { createdAt: 'DESC' },
             take: limit,
             skip: (page - 1) * limit,
@@ -156,6 +168,19 @@ let ValidationService = class ValidationService {
             else if (targetStatus === shared_1.ValidationStatus.CORRECTION_REQUIRED) {
                 await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
             }
+            if (validationCase.assessmentId && validationCase.assessment) {
+                if (targetStatus === shared_1.ValidationStatus.APPROVED) {
+                    validationCase.assessment.status = shared_1.AssessmentStatus.REPORT_FINALIZED;
+                }
+                else if (targetStatus === shared_1.ValidationStatus.CORRECTION_REQUIRED) {
+                    validationCase.assessment.status = shared_1.AssessmentStatus.DATA_ENTRY_IN_PROGRESS;
+                }
+                else if (targetStatus === shared_1.ValidationStatus.SUBMITTED) {
+                    validationCase.assessment.status = shared_1.AssessmentStatus.PENDING_HEAD_APPROVAL;
+                }
+                validationCase.assessment.updatedBy = userId;
+                await this.assessmentRepository.save(validationCase.assessment);
+            }
             validationCase.updatedBy = userId;
             const saved = await this.validationCaseRepository.save(validationCase);
             await this.auditService.recordEvent({
@@ -208,7 +233,9 @@ exports.ValidationService = ValidationService;
 exports.ValidationService = ValidationService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(validation_case_entity_1.ValidationCaseEntity)),
+    __param(1, (0, typeorm_1.InjectRepository)(assessment_entity_1.AssessmentEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         project_query_service_1.ProjectQueryService,
         project_service_1.ProjectService,
         audit_service_1.AuditService,

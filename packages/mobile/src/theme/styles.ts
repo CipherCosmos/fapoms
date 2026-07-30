@@ -4,34 +4,51 @@ export const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#090d16',
-    minHeight: '100vh' as any,
+    ...Platform.select({
+      web: { minHeight: '100vh' } as any,
+      ios: { paddingTop: 0 },
+      android: { paddingTop: 0 },
+    }),
   },
 
-  // ── Header ──
+  // ── Header Bar (Native iOS & Android Dynamic Inset Support) ──
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 14,
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 12 : Platform.OS === 'android' ? 14 : 14,
+    paddingBottom: 14,
     backgroundColor: 'rgba(15, 23, 42, 0.95)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(99, 102, 241, 0.25)',
-    ...Platform.select({ web: { backdropFilter: 'blur(12px)' } as any }),
+    borderBottomColor: 'rgba(99, 102, 241, 0.2)',
+    ...Platform.select({
+      web: { backdropFilter: 'blur(16px)' } as any,
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+      },
+      android: { elevation: 6 },
+    }),
   },
   appTitle: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900',
     color: '#ffffff',
-    letterSpacing: -0.5,
-    fontFamily: Platform.OS === 'web' ? 'Outfit, Inter, system-ui, sans-serif' : undefined,
+    letterSpacing: 0.5,
+    fontFamily: Platform.select({
+      ios: 'System',
+      android: 'Roboto',
+      web: 'Outfit, Inter, system-ui, sans-serif',
+    }),
   },
   assayerSubtitle: {
     fontSize: 12,
     color: '#38bdf8',
-    marginTop: 1,
+    marginTop: 2,
     fontWeight: '600',
-    opacity: 0.9,
   },
   refreshBtn: {
     backgroundColor: 'rgba(99, 102, 241, 0.15)',
@@ -43,28 +60,28 @@ export const styles = StyleSheet.create({
   },
   refreshBtnText: {
     color: '#a5b4fc',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
   },
   notifBellBtn: {
     backgroundColor: 'rgba(99, 102, 241, 0.15)',
-    width: 38,
-    height: 38,
+    width: 40,
+    height: 40,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.25)',
+    borderColor: 'rgba(99, 102, 241, 0.3)',
     position: 'relative',
   },
   notifBadge: {
     position: 'absolute',
-    top: -5,
-    right: -5,
+    top: -4,
+    right: -4,
     backgroundColor: '#ef4444',
     borderRadius: 10,
-    minWidth: 20,
-    height: 20,
+    minWidth: 18,
+    height: 18,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
@@ -77,25 +94,26 @@ export const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  // ── Tab Bar ──
+  // ── Bottom / Top Navigation Bar ──
   tabBar: {
     flexDirection: 'row',
     backgroundColor: 'rgba(15, 23, 42, 0.95)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
-    paddingHorizontal: 4,
-    ...Platform.select({ web: { backdropFilter: 'blur(12px)' } as any }),
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    ...Platform.select({ web: { backdropFilter: 'blur(16px)' } as any }),
   },
   tabItem: {
     flex: 1,
     paddingVertical: 10,
     alignItems: 'center',
-    gap: 2,
-    borderRadius: 8,
+    gap: 3,
+    borderRadius: 10,
     marginHorizontal: 2,
   },
   activeTabItem: {
-    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+    backgroundColor: 'rgba(99, 102, 241, 0.18)',
     borderBottomWidth: 2,
     borderBottomColor: '#6366f1',
   },
@@ -109,15 +127,15 @@ export const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  // ── Content ──
+  // ── Scrollable Body Content ──
   contentScroll: {
-    paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 20,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 24,
   },
   sectionHeading: {
     fontSize: 18,
-    fontWeight: '800',
+    fontWeight: '900',
     color: '#ffffff',
     marginBottom: 14,
     letterSpacing: -0.3,
@@ -126,230 +144,361 @@ export const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#cbd5e1',
-    marginTop: 18,
+    marginTop: 16,
     marginBottom: 10,
   },
 
-  // ── Glass Card ──
+  // ── Glassmorphism Card Container ──
   card: {
     backgroundColor: 'rgba(30, 41, 59, 0.85)',
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 18,
-    marginBottom: 14,
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.15)',
-    ...Platform.select({ web: { backdropFilter: 'blur(8px)' } as any }),
+    borderColor: 'rgba(99, 102, 241, 0.18)',
+    ...Platform.select({ web: { backdropFilter: 'blur(12px)' } as any }),
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.35,
     shadowRadius: 20,
     elevation: 8,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  seqBadge: {
+    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+  },
+  seqText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#818cf8',
+    letterSpacing: 0.5,
+  },
+  branchName: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#f8fafc',
+    marginBottom: 4,
+  },
+  address: {
+    fontSize: 12,
+    color: '#94a3b8',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+
+  // ── Metrics Grid Row ──
+  metricsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginVertical: 12,
+  },
+  metricBox: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  metricLabel: {
+    fontSize: 10,
+    color: '#64748b',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  metricVal: {
+    fontSize: 14,
+    color: '#f1f5f9',
+    fontWeight: '800',
+    marginTop: 4,
+  },
+
+  // ── Status Badges ──
+  statusBadge: {
+    fontSize: 11,
+    fontWeight: '900',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    overflow: 'hidden',
+    textTransform: 'uppercase',
+  },
+  status_PENDING: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    color: '#fbbf24',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  status_ACCEPTED: {
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    color: '#60a5fa',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+  },
+  status_CHECKED_IN: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    color: '#34d399',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  status_IN_PROGRESS: {
+    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+    color: '#c084fc',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.3)',
+  },
+  status_COMPLETED: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    color: '#34d399',
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  status_REJECTED: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    color: '#f87171',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+
+  // ── Interactive Buttons & Actions (Sumeru Premium Dark Palette) ──
+  btnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  primaryBtn: {
+    flex: 1,
+    backgroundColor: '#3b82f6',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  primaryBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  secondaryBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(30, 41, 59, 0.9)',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  secondaryBtnText: {
+    color: '#e2e8f0',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  dangerBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.25)',
+  },
+  dangerBtnText: {
+    color: '#f87171',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Quick Action Icon Grid Buttons ──
+  actionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  actionChipText: {
+    fontSize: 12,
+    color: '#e2e8f0',
+    fontWeight: '700',
+  },
+
+  // ── Empty State Container ──
+  emptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 50,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(30, 41, 59, 0.4)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    marginVertical: 10,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#94a3b8',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
+  // ── Modals & Drawers ──
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(9, 13, 22, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 500,
+    backgroundColor: '#0f172a',
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.25)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.5,
+    shadowRadius: 30,
+    elevation: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#ffffff',
+    marginBottom: 6,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: '#94a3b8',
+    marginBottom: 16,
+  },
+  // ── Legacy Style Fallbacks for Components ──
   cardTitle: {
     fontSize: 16,
     fontWeight: '800',
     color: '#ffffff',
     marginBottom: 6,
   },
-  branchSubText: {
-    fontSize: 13,
-    color: '#94a3b8',
-    lineHeight: 19,
-    marginBottom: 14,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  seqBadge: {
-    backgroundColor: 'rgba(99, 102, 241, 0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.4)',
-  },
-  seqText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#a5b4fc',
-  },
-  statusBadge: {
-    fontSize: 11,
-    fontWeight: '800',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-    overflow: 'hidden',
-  },
-
-  // ── Status Colors ──
-  status_PENDING: {
-    backgroundColor: 'rgba(245, 158, 11, 0.2)',
-    color: '#fbbf24',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.4)',
-  },
-  status_ACCEPTED: {
-    backgroundColor: 'rgba(59, 130, 246, 0.2)',
-    color: '#60a5fa',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.4)',
-  },
-  status_CHECKED_IN: {
-    backgroundColor: 'rgba(234, 179, 8, 0.2)',
-    color: '#facc15',
-    borderWidth: 1,
-    borderColor: 'rgba(234, 179, 8, 0.4)',
-  },
-  status_IN_PROGRESS: {
-    backgroundColor: 'rgba(168, 85, 247, 0.2)',
-    color: '#c084fc',
-    borderWidth: 1,
-    borderColor: 'rgba(168, 85, 247, 0.4)',
-  },
-  status_COMPLETED: {
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
-    color: '#34d399',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
-  },
-  status_REJECTED: {
-    backgroundColor: 'rgba(239, 68, 68, 0.2)',
-    color: '#f87171',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.4)',
-  },
-
-  // ── Branch Info ──
-  branchName: {
-    fontSize: 18,
-    fontWeight: '800',
+  btnTextWhite: {
     color: '#ffffff',
-  },
-  address: {
     fontSize: 13,
-    color: '#94a3b8',
-    marginTop: 6,
-    lineHeight: 19,
-  },
-
-  // ── Metrics Row ──
-  metricsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
-    padding: 12,
-    borderRadius: 14,
-    marginTop: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  metricBox: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  metricLabel: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '600',
-  },
-  metricVal: {
-    fontSize: 16,
     fontWeight: '800',
-    color: '#38bdf8',
-    marginTop: 3,
   },
-
-  // ── Action Grid ──
-  actionGrid: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
+  checkInBtn: {
+    backgroundColor: '#10b981',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapBtn: {
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
   },
   acceptBtn: {
     flex: 1,
     backgroundColor: '#10b981',
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
-    shadowColor: '#10b981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'center',
   },
   rejectBtn: {
-    backgroundColor: '#ef4444',
+    flex: 1,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  saveBtn: {
+    backgroundColor: '#4f46e5',
+    paddingVertical: 12,
     paddingHorizontal: 18,
-    paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
-  },
-  mapBtn: {
-    flex: 1,
-    backgroundColor: '#334155',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  checkInBtn: {
-    flex: 1,
-    backgroundColor: '#f59e0b',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  primaryBtn: {
-    flex: 1,
-    backgroundColor: '#6366f1',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  submitFinalBtn: {
-    backgroundColor: '#059669',
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  // ── Button Text ──
-  btnTextWhite: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 14,
+  // ── Performance Grid ──
+  perfGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginVertical: 12,
   },
-  btnTextDark: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 14,
+  perfBox: {
+    width: '48%',
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
   },
-
-  // ── Customer ──
-  customerFormTitle: {
-    fontSize: 18,
-    fontWeight: '800',
+  perfVal: {
+    fontSize: 20,
+    fontWeight: '900',
     color: '#ffffff',
   },
-  customerSub: {
-    fontSize: 13,
+  perfLabel: {
+    fontSize: 11,
     color: '#94a3b8',
     marginTop: 2,
+    fontWeight: '600',
   },
-  customerPledged: {
+  // ── Form Input & Profile Helpers ──
+  textInput: {
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 12,
+    color: '#ffffff',
     fontSize: 14,
-    color: '#38bdf8',
-    marginTop: 6,
-    fontWeight: '700',
+    marginBottom: 12,
   },
-
-  // ── Form Inputs ──
   inputGroup: {
-    marginTop: 14,
+    marginBottom: 14,
   },
   inputLabel: {
     fontSize: 12,
@@ -357,309 +506,125 @@ export const styles = StyleSheet.create({
     color: '#cbd5e1',
     marginBottom: 6,
   },
-  textInput: {
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
-    color: '#ffffff',
-  },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 14,
-  },
-  toggleBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  toggleOn: {
-    backgroundColor: '#10b981',
-  },
-  toggleOff: {
-    backgroundColor: '#ef4444',
-  },
-  saveBtn: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 18,
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  backBtn: {
-    marginBottom: 14,
-  },
-  backBtnText: {
-    color: '#818cf8',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  // ── Customer Row ──
-  customerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: 'rgba(30, 41, 59, 0.85)',
-    padding: 16,
-    borderRadius: 14,
+  branchSubText: {
+    fontSize: 12,
+    color: '#94a3b8',
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-  },
-  customerRowLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  customerIndex: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#64748b',
-  },
-  customerNameText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  accountText: {
-    fontSize: 13,
-    color: '#94a3b8',
-  },
-  custStatusBadge: {
-    fontSize: 11,
-    fontWeight: '800',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-  custAudited: {
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
-    color: '#34d399',
-  },
-  custPending: {
-    backgroundColor: 'rgba(245, 158, 11, 0.2)',
-    color: '#fbbf24',
-  },
-  addExpBtn: {
-    backgroundColor: '#334155',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 18,
   },
 
-  // ── Empty State ──
-  emptyBox: {
-    padding: 30,
-    alignItems: 'center',
-    backgroundColor: 'rgba(30, 41, 59, 0.7)',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  emptyText: {
-    color: '#94a3b8',
-    fontSize: 14,
-  },
-
-  // ── Queries ──
+  // ── Query List Helpers ──
   queryValidator: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#818cf8',
-  },
-  queryStatus: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#fbbf24',
-  },
-  queryCust: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginTop: 4,
-  },
-  queryBody: {
-    fontSize: 14,
-    color: '#fde68a',
-    marginTop: 8,
-    backgroundColor: 'rgba(245, 158, 11, 0.12)',
-    padding: 12,
-    borderRadius: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: '#f59e0b',
-  },
-  responseBox: {
-    marginTop: 12,
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
-    padding: 12,
-    borderRadius: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: '#10b981',
-  },
-  responseTextTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#34d399',
-  },
-  responseText: {
-    fontSize: 13,
-    color: '#a7f3d0',
-    marginTop: 3,
-  },
-  respondBtn: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-
-  // ── Earnings ──
-  earningsSummaryGrid: {
-    flexDirection: 'row',
-    gap: 14,
-    marginBottom: 18,
-  },
-  earningsCard: {
-    flex: 1,
-    backgroundColor: 'rgba(30, 41, 59, 0.85)',
-    padding: 18,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.15)',
-    alignItems: 'center',
-  },
-  earningsLabel: {
-    fontSize: 11,
-    color: '#94a3b8',
-    fontWeight: '600',
-  },
-  earningsVal: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#34d399',
-    marginTop: 6,
-  },
-
-  // ── Expense Row ──
-  expenseRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: 'rgba(30, 41, 59, 0.85)',
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  expDesc: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  expBranch: {
-    fontSize: 12,
-    color: '#94a3b8',
-  },
-  expAmount: {
-    fontSize: 15,
-    fontWeight: '800',
     color: '#38bdf8',
   },
-  expStatus: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#34d399',
-  },
-
-  // ── Performance ──
-  perfGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 14,
-  },
-  perfBox: {
-    width: '47%',
-    backgroundColor: 'rgba(30, 41, 59, 0.85)',
-    padding: 18,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.15)',
-    alignItems: 'center',
-  },
-  perfVal: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#818cf8',
-  },
-  perfLabel: {
-    fontSize: 11,
+  queryCust: {
+    fontSize: 12,
     color: '#94a3b8',
-    marginTop: 6,
-    textAlign: 'center',
-    fontWeight: '600',
+    marginTop: 2,
   },
 
-  // ── Modals ──
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: 'rgba(30, 41, 59, 0.95)',
-    borderRadius: 22,
-    padding: 24,
+  // ── Notification Cards ──
+  notifCard: {
+    backgroundColor: 'rgba(30, 41, 59, 0.8)',
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.25)',
-    ...Platform.select({ web: { backdropFilter: 'blur(16px)' } as any }),
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  modalTitle: {
-    fontSize: 20,
+  notifTitle: {
+    fontSize: 14,
     fontWeight: '800',
     color: '#ffffff',
-    marginBottom: 18,
   },
+  // ── Expense & Financial Dashboard Helpers ──
   catBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   catBtnActive: {
     backgroundColor: '#6366f1',
     borderColor: '#818cf8',
   },
-
-  // ── Utility ──
+  btnTextDark: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  addExpBtn: {
+    backgroundColor: '#38bdf8',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  earningsSummaryGrid: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  earningsCard: {
+    flex: 1,
+    backgroundColor: 'rgba(30, 41, 59, 0.8)',
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.2)',
+  },
+  earningsLabel: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  earningsVal: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#10b981',
+    marginTop: 4,
+  },
+  expenseRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  expDesc: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#f1f5f9',
+  },
+  expBranch: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  expAmount: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#38bdf8',
+  },
+  expStatus: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#fbbf24',
+    textTransform: 'uppercase',
+  },
   centerContainer: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    justifyContent: 'center',
+    padding: 20,
   },
   loadingText: {
-    marginTop: 14,
+    fontSize: 13,
     color: '#94a3b8',
-    fontSize: 15,
-    fontWeight: '600',
+    marginTop: 10,
   },
 });

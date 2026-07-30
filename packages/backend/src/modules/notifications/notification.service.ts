@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NotificationEntity } from './notification.entity';
 import { PushNotificationService } from './push-notification.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 export interface CreateNotificationDto {
   userId: string;
@@ -18,6 +19,7 @@ export class NotificationService {
     @InjectRepository(NotificationEntity)
     private readonly notificationRepository: Repository<NotificationEntity>,
     private readonly pushNotificationService: PushNotificationService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async create(dto: CreateNotificationDto, systemUser?: string): Promise<NotificationEntity> {
@@ -42,6 +44,22 @@ export class NotificationService {
       );
     } catch (err: any) {
       // Don't break notification creation if push fails
+    }
+
+    // Emit real-time event for the notification
+    try {
+      this.eventPublisher.publish('notification:new', {
+        eventType: 'notification:new',
+        id: saved.id,
+        userId: dto.userId,
+        title: dto.title,
+        message: dto.message,
+        link: dto.link,
+        isRead: false,
+        createdAt: saved.createdAt?.toISOString?.() || new Date().toISOString(),
+      });
+    } catch (err: any) {
+      // Don't break if event publish fails
     }
 
     return saved;

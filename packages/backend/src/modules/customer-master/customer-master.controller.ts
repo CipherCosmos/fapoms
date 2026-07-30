@@ -68,13 +68,14 @@ export class CustomerMasterController {
   }
 
   @Get('versions/:versionId/records')
-  @ApiOperation({ summary: 'Get paginated customer records inside a version' })
+  @ApiOperation({ summary: 'Get paginated customer records inside a version, optionally filtered by branchId' })
   async findRecords(
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('branchId') branchId?: string,
   ) {
-    const result = await this.customerMasterService.findRecords(versionId, page, limit);
+    const result = await this.customerMasterService.findRecords(versionId, page, limit, branchId);
     return {
       success: true,
       data: result.records,

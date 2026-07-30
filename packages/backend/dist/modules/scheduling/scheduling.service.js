@@ -22,26 +22,29 @@ const holiday_service_1 = require("../holiday/holiday.service");
 const audit_service_1 = require("../../core/audit/audit.service");
 const constraint_evaluator_1 = require("../planning/constraint.evaluator");
 const shared_1 = require("@fapoms/shared");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 let SchedulingService = class SchedulingService {
     scheduleRepository;
     assignmentService;
     holidayService;
     auditService;
     constraintEvaluator;
-    constructor(scheduleRepository, assignmentService, holidayService, auditService, constraintEvaluator) {
+    eventPublisher;
+    constructor(scheduleRepository, assignmentService, holidayService, auditService, constraintEvaluator, eventPublisher) {
         this.scheduleRepository = scheduleRepository;
         this.assignmentService = assignmentService;
         this.holidayService = holidayService;
         this.auditService = auditService;
         this.constraintEvaluator = constraintEvaluator;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId) {
         const assignment = await this.assignmentService.findOne(dto.assignmentId);
         if (!assignment) {
             throw new common_1.NotFoundException(`Assignment ${dto.assignmentId} not found.`);
         }
-        if (assignment.status !== shared_1.AssignmentStatus.ACCEPTED) {
-            throw new common_1.BadRequestException(`Cannot schedule assignment. Current status must be ACCEPTED (got ${assignment.status}).`);
+        if (assignment.projectBranch?.status !== shared_1.ProjectBranchStatus.ASSIGNMENT_CONFIRMED) {
+            throw new common_1.BadRequestException(`Cannot schedule assignment: branch status must be ASSIGNMENT_CONFIRMED, got ${assignment.projectBranch?.status}.`);
         }
         const scheduledDateObj = new Date(dto.scheduledDate);
         if (assignment.assayer) {
@@ -56,7 +59,8 @@ let SchedulingService = class SchedulingService {
                 throw new common_1.BadRequestException(timelineCheck.reason);
             }
         }
-        const holidayCheck = await this.constraintEvaluator.checkHoliday(assignment.projectBranch.branch.state, scheduledDateObj);
+        const stateCode = assignment.projectBranch?.branch?.state ?? 'MH';
+        const holidayCheck = await this.constraintEvaluator.checkHoliday(stateCode, scheduledDateObj);
         if (!holidayCheck.passed) {
             throw new common_1.BadRequestException(holidayCheck.reason);
         }
@@ -84,6 +88,22 @@ let SchedulingService = class SchedulingService {
             userId,
             remarks: `Confirmed schedule for assignment ${assignment.assignmentNumber} on ${dto.scheduledDate}.`,
         });
+        try {
+            this.eventPublisher.publish('schedule:created', {
+                eventType: 'schedule:created',
+                scheduleId: saved.id,
+                assignmentId: saved.assignmentId,
+                assayerId: saved.assayerId,
+                organizationId: assignment.projectBranch?.project?.organizationId,
+                scheduledDate: saved.scheduledDate,
+                status: saved.status,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish schedule:created event:', err);
+        }
         return saved;
     }
     async findOne(id) {
@@ -96,9 +116,19 @@ let SchedulingService = class SchedulingService {
         }
         return schedule;
     }
-    async findAll(page = 1, limit = 50) {
+    async findAll(page = 1, limit = 50, status, dateFrom, dateTo) {
+        const where = { isActive: true };
+        if (status)
+            where.status = status;
+        if (dateFrom || dateTo) {
+            where.scheduledDate = {};
+            if (dateFrom)
+                where.scheduledDate.gte = new Date(dateFrom);
+            if (dateTo)
+                where.scheduledDate.lte = new Date(dateTo);
+        }
         const [schedules, total] = await this.scheduleRepository.findAndCount({
-            where: { isActive: true },
+            where,
             relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'assayer', 'project'],
             order: { scheduledDate: 'ASC' },
             take: limit,
@@ -133,7 +163,44 @@ let SchedulingService = class SchedulingService {
             userId,
             remarks: remarks ?? `Transitioned schedule to ${targetStatus}`,
         });
+        try {
+            this.eventPublisher.publish('schedule:updated', {
+                eventType: 'schedule:updated',
+                scheduleId: saved.id,
+                assignmentId: saved.assignmentId,
+                assayerId: saved.assayerId,
+                scheduledDate: saved.scheduledDate,
+                status: saved.status,
+                previousStatus: prevStatus,
+                userId,
+                timestamp: new Date(),
+            });
+        }
+        catch (err) {
+            console.error('Failed to publish schedule:updated event:', err);
+        }
         return saved;
+    }
+    async getAssayerWorkloadInRange(assayerId, from, to) {
+        const schedules = await this.scheduleRepository.find({
+            where: {
+                assayerId,
+                isActive: true,
+                scheduledDate: { gte: from, lte: to },
+            },
+            relations: ['assignment', 'project'],
+            order: { scheduledDate: 'ASC' },
+        });
+        return {
+            count: schedules.length,
+            schedules: schedules.map(s => ({
+                id: s.id,
+                scheduledDate: s.scheduledDate,
+                status: s.status,
+                projectName: s.project?.name,
+                assignmentNumber: s.assignment?.assignmentNumber,
+            })),
+        };
     }
     async getTimeline(scheduleId) {
         const schedule = await this.findOne(scheduleId);
@@ -160,6 +227,7 @@ exports.SchedulingService = SchedulingService = __decorate([
         assignment_service_1.AssignmentService,
         holiday_service_1.HolidayService,
         audit_service_1.AuditService,
-        constraint_evaluator_1.ConstraintEvaluator])
+        constraint_evaluator_1.ConstraintEvaluator,
+        domain_event_publisher_1.DomainEventPublisher])
 ], SchedulingService);
 //# sourceMappingURL=scheduling.service.js.map

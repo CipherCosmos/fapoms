@@ -387,6 +387,13 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
     });
+    await this.eventPublisher.publish('assayer:created', {
+      eventType: 'assayer:created',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, displayName: saved.displayName, assayerCode: saved.assayerCode },
+    });
     await this.hydrateWorkforceAttributes(saved);
     return saved;
   }
@@ -440,6 +447,13 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Updated assayer profile: ${saved.displayName}`,
     });
+    await this.eventPublisher.publish('assayer:updated', {
+      eventType: 'assayer:updated',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, displayName: saved.displayName },
+    });
     await this.hydrateWorkforceAttributes(saved);
     return saved;
   }
@@ -456,6 +470,13 @@ export class AssayerService implements OnModuleInit {
       entityId: id,
       userId,
       remarks: `Soft deleted assayer profile ${assayer.displayName}`,
+    });
+    await this.eventPublisher.publish('assayer:deleted', {
+      eventType: 'assayer:deleted',
+      aggregateId: id,
+      userId,
+      organizationId: assayer.organizationId,
+      payload: { id, displayName: assayer.displayName },
     });
   }
 
@@ -868,9 +889,13 @@ export class AssayerService implements OnModuleInit {
 
     const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
 
-    const completed = await mgr.count('assignments', {
-      where: { assayerId, status: AssignmentStatus.CLOSED, isActive: true },
-    });
+    const completed = await mgr.query(
+      `SELECT COUNT(*) as cnt FROM assignments a
+       JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND pb.status IN ('CLOSED', 'VALIDATION_COMPLETED')`,
+      [assayerId],
+    );
 
     const cancelled = await mgr.count('assignments', {
       where: { assayerId, status: AssignmentStatus.CANCELLED, isActive: true },
@@ -878,16 +903,20 @@ export class AssayerService implements OnModuleInit {
 
     const onTimeResult = await mgr.query(
       `SELECT COUNT(*) as cnt FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status = $2
+       JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')
        AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
        AND a.completion_date <= a.scheduled_date`,
-      [assayerId, AssignmentStatus.AUDIT_COMPLETED],
+      [assayerId],
     );
 
     const earningsResult = await mgr.query(
       `SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`,
-      [assayerId, AssignmentStatus.AUDIT_COMPLETED, AssignmentStatus.CLOSED],
+       JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED')`,
+      [assayerId],
     );
 
     const lastAssignment = await mgr.query(

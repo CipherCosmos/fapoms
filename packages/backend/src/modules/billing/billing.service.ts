@@ -2,12 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BillingRecord } from './billing-record.entity';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 @Injectable()
 export class BillingService {
   constructor(
     @InjectRepository(BillingRecord)
     private readonly billingRepository: Repository<BillingRecord>,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async createBillingRecord(dto: Partial<BillingRecord>): Promise<BillingRecord> {
@@ -32,7 +34,24 @@ export class BillingService {
       netPayable: netVal,
       invoiceStatus: dto.invoiceStatus || 'DRAFT',
     });
-    return this.billingRepository.save(record);
+    const saved = await this.billingRepository.save(record);
+
+    try {
+      this.eventPublisher.publish('billing:created', {
+        eventType: 'billing:created',
+        billingId: saved.id,
+        assayerId: saved.assayerId,
+        assignmentId: (saved as any).assignmentId,
+        baseFee: saved.baseFee,
+        netPayable: saved.netPayable,
+        invoiceStatus: saved.invoiceStatus,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish billing:created event:', err);
+    }
+
+    return saved;
   }
 
   async getAssayerBilling(assayerId: string): Promise<BillingRecord[]> {

@@ -61,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
     {
       category: 'Administration',
       items: [
+        { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
         { name: 'Rule Engine', path: '/rules', icon: Sliders },
         { name: 'User Management', path: '/users', icon: Users },
       ],

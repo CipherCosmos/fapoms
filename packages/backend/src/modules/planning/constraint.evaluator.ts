@@ -39,7 +39,7 @@ export class ConstraintEvaluator {
       where: {
         assayerId,
         scheduledDate,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+        status: In([AssignmentStatus.ACCEPTED]),
         isActive: true,
       },
     });

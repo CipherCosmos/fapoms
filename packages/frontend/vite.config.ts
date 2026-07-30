@@ -27,6 +27,11 @@ export default defineConfig({
         target: API_TARGET,
         changeOrigin: true,
       },
+      '/socket.io': {
+        target: API_TARGET,
+        ws: true,
+        changeOrigin: true,
+      },
     },
     watch: {
       // Use polling for reliable file watching inside Docker (bind mounts)

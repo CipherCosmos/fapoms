@@ -9,6 +9,7 @@ interface PdfDocsScreenProps {
   uploadedPdfName: string | null;
   uploadingPdf: boolean;
   onSelectPdfFile: () => void;
+  onOpenScanner?: () => void;
   onSubmitCompletedPdf: () => void;
   onOpenExpenseModal: () => void;
 }
@@ -18,6 +19,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   uploadedPdfName,
   uploadingPdf,
   onSelectPdfFile,
+  onOpenScanner,
   onSubmitCompletedPdf,
   onOpenExpenseModal,
 }) => {
@@ -88,13 +90,18 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
 
         {uploadedPdfName && (
           <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#10b981' }}>
-            <Text style={{ color: '#34d399', fontWeight: '700', fontSize: 13 }}>Selected File: {uploadedPdfName}</Text>
+            <Text style={{ color: '#34d399', fontWeight: '700', fontSize: 13 }}>Selected / Scanned File: {uploadedPdfName}</Text>
           </View>
         )}
 
-        <TouchableOpacity style={styles.mapBtn} onPress={onSelectPdfFile}>
-          <Text style={styles.btnTextWhite}>📁 Choose / Scan Completed PDF File</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+          <TouchableOpacity style={[styles.mapBtn, { flex: 1, backgroundColor: '#6366f1' }]} onPress={onOpenScanner || onSelectPdfFile}>
+            <Text style={styles.btnTextWhite}>📸 Camera Scan Pages</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.mapBtn, { flex: 1, backgroundColor: '#334155' }]} onPress={onSelectPdfFile}>
+            <Text style={styles.btnTextWhite}>📁 Pick PDF File</Text>
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={[styles.checkInBtn, { marginTop: 14, backgroundColor: uploadedPdfName ? '#10b981' : '#475569' }]}

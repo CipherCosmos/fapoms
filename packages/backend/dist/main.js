@@ -21,8 +21,11 @@ async function bootstrap() {
             enableImplicitConversion: true,
         },
     }));
+    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:8081,http://localhost:19006')
+        .split(',')
+        .map(s => s.trim());
     app.enableCors({
-        origin: ['http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
+        origin: corsOrigins,
         credentials: true,
     });
     const config = new swagger_1.DocumentBuilder()

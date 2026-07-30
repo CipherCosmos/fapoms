@@ -26,6 +26,9 @@ export class ValidationQueryEntity extends BaseEntity {
   @Column({ name: 'responded_at', type: 'timestamptz', nullable: true })
   respondedAt: Date | null;
 
+  @Column({ name: 'attachments', type: 'jsonb', nullable: true })
+  attachments: { url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[] | null;
+
   @Column({
     type: 'enum',
     enum: ValidationQueryStatus,

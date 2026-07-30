@@ -1,21 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, AlertCircle, RefreshCw, Calendar, MessageSquare, Clock, Send, Search, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle } from 'lucide-react';
-import { AssignmentStatus } from '@fapoms/shared';
 import { api } from '../services/api';
+import { queryClient } from '../queryClient';
+import { queryKeys } from '../hooks/queryKeys';
+import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 
 interface Assignment {
   id: string;
   assignmentNumber: string;
   projectId: string;
   assayerId: string;
-  status: AssignmentStatus;
+  status: string;
   proposedFee: number;
   agreedFee: number | null;
   scheduledDate: string | null;
   project: { name: string };
   assayer: { displayName: string };
   projectBranch: { status?: string; branch: { name: string; state: string } };
+  assessment: { status?: string; branch: { name: string; state: string }; packetSize?: number } | null;
 }
 
 interface TimelineEvent {
@@ -29,22 +33,34 @@ export const Assignments: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const assignmentIdParam = searchParams.get('id');
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [selectedAsnId, setSelectedAsnId] = useState<string | null>(null);
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [newComment, setNewComment] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   const [page] = useState(1);
 
-  useEffect(() => {
-    loadAssignments();
-  }, [page]);
+  const selectedRef = useRef(selectedAsnId);
+  selectedRef.current = selectedAsnId;
+
+  useSocketInvalidation();
+
+  const stage3BranchStatuses = ['SCHEDULED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED', 'CANCELLED'];
+
+  const { data: assignments = [], isLoading } = useQuery({
+    queryKey: queryKeys.assignments.list(page),
+    queryFn: () => api.request<Assignment[]>(`/assignments?page=${page}&limit=100`),
+    staleTime: 15_000,
+  });
+
+  const { data: timeline = [], isLoading: isLoadingTimeline } = useQuery({
+    queryKey: queryKeys.assignments.timeline(selectedAsnId || ''),
+    queryFn: () => api.request<TimelineEvent[]>(`/assignments/${selectedAsnId}/timeline`),
+    enabled: !!selectedAsnId,
+    staleTime: 15_000,
+  });
 
   useEffect(() => {
     if (assignmentIdParam && assignments.length > 0) {
@@ -52,14 +68,6 @@ export const Assignments: React.FC = () => {
       if (found) setSelectedAsnId(assignmentIdParam);
     }
   }, [assignmentIdParam, assignments]);
-
-  useEffect(() => {
-    if (selectedAsnId) {
-      loadTimeline(selectedAsnId);
-    } else {
-      setTimeline([]);
-    }
-  }, [selectedAsnId]);
 
   const formatRelativeTime = (ts: string): string => {
     const diff = Date.now() - new Date(ts).getTime();
@@ -135,50 +143,17 @@ export const Assignments: React.FC = () => {
   };
 
   useEffect(() => {
-    loadAssignments();
-  }, [page]);
-
-  useEffect(() => {
     if (assignmentIdParam && assignments.length > 0) {
       const found = assignments.find(a => a.id === assignmentIdParam);
       if (found) setSelectedAsnId(assignmentIdParam);
     }
+    if (assignments.length > 0 && !selectedAsnId) {
+      setSelectedAsnId(assignments[0].id);
+    }
   }, [assignmentIdParam, assignments]);
 
-  useEffect(() => {
-    if (selectedAsnId) {
-      loadTimeline(selectedAsnId);
-    } else {
-      setTimeline([]);
-    }
-  }, [selectedAsnId]);
-
-  const loadAssignments = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await api.request<Assignment[]>(`/assignments?page=${page}&limit=20`, { method: 'GET' });
-      setAssignments(response);
-      if (response.length > 0 && !selectedAsnId) {
-        setSelectedAsnId(response[0].id);
-      }
-    } catch (err) {
-      setError('Failed to fetch assignments.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const loadTimeline = async (id: string) => {
-    setIsLoadingTimeline(true);
-    try {
-      const response = await api.request<TimelineEvent[]>(`/assignments/${id}/timeline`, { method: 'GET' });
-      setTimeline(response);
-    } catch (err) {
-      console.error('Failed to load assignment timeline');
-    } finally {
-      setIsLoadingTimeline(false);
-    }
+  const invalidateTimeline = (id: string) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.assignments.timeline(id) });
   };
 
   const handlePostComment = async (e: React.FormEvent) => {
@@ -190,79 +165,29 @@ export const Assignments: React.FC = () => {
         body: JSON.stringify({ comment: newComment })
       });
       setNewComment('');
-      loadTimeline(selectedAsnId);
+      invalidateTimeline(selectedAsnId);
     } catch (err) {
       console.error('Failed to post comment');
     }
   };
 
-  const handleTransition = async (id: string, targetStatus: AssignmentStatus, extraPayload: Record<string, any> = {}) => {
-    try {
-      await api.request(`/assignments/${id}/transition`, {
-        method: 'POST',
-        body: JSON.stringify({ targetStatus, remarks: 'Transitioned via UI dashboard', ...extraPayload })
-      });
-      loadAssignments();
-      if (selectedAsnId === id) loadTimeline(id);
-    } catch (err: any) {
-      alert(err?.message || 'Failed to process transition.');
-    }
-  };
-
-  const updateFee = async (id: string, currentFee: number) => {
-    const fee = window.prompt('Enter updated fee (₹):', currentFee?.toString() || '1500');
-    if (fee && !isNaN(Number(fee))) {
-      try {
-        await api.request(`/assignments/${id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ proposedFee: Number(fee) })
-        });
-        loadAssignments();
-      } catch (err: any) {
-        alert(err?.message || 'Failed to update fee.');
-      }
-    }
-  };
-
-  const negotiateFee = async (id: string, currentFee: number) => {
-    const fee = window.prompt('Enter agreed fee (₹):', currentFee?.toString() || '1500');
-    if (fee && !isNaN(Number(fee))) {
-      handleTransition(id, AssignmentStatus.NEGOTIATION, { fee: Number(fee) });
-    }
-  };
-
-  const adminAcceptOffer = async (id: string, currentFee: number) => {
-    const fee = window.prompt('Confirm accepted fee (₹):', currentFee?.toString() || '1500');
-    if (fee && !isNaN(Number(fee))) {
-      const remarks = window.prompt('Add remarks (for audit trail):', 'Accepted via admin panel');
-      handleTransition(id, AssignmentStatus.ACCEPTED, { fee: Number(fee), remarks: remarks || 'Accepted via admin panel' });
-    }
-  };
-
-  const adminRejectOffer = async (id: string) => {
-    const reason = window.prompt('Reason for rejection (required for audit trail):');
-    if (reason && reason.trim()) {
-      handleTransition(id, AssignmentStatus.REJECTED, { reason: reason.trim(), remarks: `Rejected via admin panel. Reason: ${reason.trim()}` });
-    }
-  };
+  const stage3Assignments = assignments.filter(a => stage3BranchStatuses.includes(a.projectBranch?.status || ''));
+  const totalCount = stage3Assignments.length;
+  const activeCount = stage3Assignments.filter(a => !['CLOSED', 'CANCELLED'].includes(a.projectBranch?.status || '')).length;
+  const closedCount = stage3Assignments.filter(a => a.projectBranch?.status === 'CLOSED').length;
+  const cancelledCount = stage3Assignments.filter(a => a.projectBranch?.status === 'CANCELLED').length;
 
   const selectedAsn = assignments.find(a => a.id === selectedAsnId);
 
-  const filteredAssignments = assignments.filter(a => {
+  const filteredAssignments = stage3Assignments.filter(a => {
     const matchesSearch = a.assignmentNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           a.project?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           a.assayer?.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           a.projectBranch?.branch?.name?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'ALL' || a.status === statusFilter;
+    const branchSt = a.projectBranch?.status || '';
+    const matchesStatus = statusFilter === 'ALL' || branchSt === statusFilter;
     return matchesSearch && matchesStatus;
   });
-
-  const totalCount = assignments.length;
-  const activeCount = assignments.filter(a =>
-    ![AssignmentStatus.CLOSED, AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED].includes(a.status)
-  ).length;
-  const closedCount = assignments.filter(a => a.status === AssignmentStatus.CLOSED).length;
-  const cancelledCount = assignments.filter(a => a.status === AssignmentStatus.CANCELLED || a.status === AssignmentStatus.REJECTED).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -323,7 +248,7 @@ export const Assignments: React.FC = () => {
             Track and manage live field audits — from scheduling to report submission.
           </p>
         </div>
-        <button onClick={loadAssignments} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all })} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
@@ -368,7 +293,7 @@ export const Assignments: React.FC = () => {
           <Filter size={14} style={{ color: 'var(--text-muted)' }} />
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
             <option value="ALL">All Statuses</option>
-            {Object.values(AssignmentStatus).map(s => (<option key={s} value={s}>{s}</option>))}
+            {stage3BranchStatuses.map(s => (<option key={s} value={s}>{s}</option>))}
           </select>
         </div>
       </div>
@@ -391,7 +316,7 @@ export const Assignments: React.FC = () => {
                   <th style={{ padding: '16px 24px' }}>Project / Branch</th>
                   <th style={{ padding: '16px 24px' }}>Assayer</th>
                   <th style={{ padding: '16px 24px' }}>Status</th>
-                  <th style={{ padding: '16px 24px' }}>Actions</th>
+                  <th style={{ padding: '16px 24px' }}>Branch Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -405,54 +330,30 @@ export const Assignments: React.FC = () => {
                     <td style={{ padding: '16px 24px' }}>{asn.assayer?.displayName}</td>
                     <td style={{ padding: '16px 24px' }}>
                       {(() => {
-                        const st = String(asn.status);
-                        const isCheckedIn = st === 'CHECKED_IN' || (st === 'SCHEDULED' && asn.projectBranch?.status === 'SCHEDULED');
+                        const st = String(asn.projectBranch?.status || asn.status);
+                        const isCheckedIn = st === 'SCHEDULED';
                         const isAccepted = st === 'ACCEPTED' || st === 'ASSIGNMENT_CONFIRMED';
                         const isClosed = st === 'CLOSED';
-                        const isCancelled = st === 'CANCELLED' || st === 'REJECTED';
-                        const isDone = st === 'AUDIT_COMPLETED';
+                        const isCancelled = st === 'CANCELLED';
+                        const isDone = st === 'AUDIT_COMPLETED' || st === 'VALIDATION_COMPLETED';
 
                         const bg = isCheckedIn ? 'rgba(6, 182, 212, 0.15)' : isAccepted ? 'rgba(16, 185, 129, 0.15)' : isClosed ? 'rgba(16, 185, 129, 0.2)' : isDone ? 'rgba(168, 85, 247, 0.15)' : isCancelled ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)';
                         const color = isCheckedIn ? '#06b6d4' : isAccepted ? '#10b981' : isClosed ? '#10b981' : isDone ? '#a855f7' : isCancelled ? '#ef4444' : '#f59e0b';
-                        const icon = isCheckedIn ? '📍 ' : isAccepted ? '✅ ' : isDone ? '📄 ' : isClosed ? '🔒 ' : '';
+                        const icon = isCheckedIn ? '📍 ' : isDone ? '📄 ' : isClosed ? '🔒 ' : '';
 
                         return (
                           <span className="badge" style={{ background: bg, color: color, padding: '4px 10px', fontWeight: 700, borderRadius: '6px' }}>
-                            {icon}{asn.status}
+                            {icon}{asn.projectBranch?.status || asn.status}
                           </span>
                         );
                       })()}
                     </td>
                     <td style={{ padding: '16px 24px' }} onClick={(e) => e.stopPropagation()}>
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        {asn.status === AssignmentStatus.CREATED && (
-                          <button onClick={() => handleTransition(asn.id, AssignmentStatus.CANDIDATE_SELECTED, {})} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.4)', color: '#818cf8' }}>Select Candidate</button>
-                        )}
-                        {asn.status === AssignmentStatus.CANDIDATE_SELECTED && (
-                          <button onClick={() => handleTransition(asn.id, AssignmentStatus.CONTACT_INITIATED, {})} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.4)', color: '#818cf8' }}>Initiate Contact</button>
-                        )}
-                        {asn.status === AssignmentStatus.CONTACT_INITIATED && (
-                          <button onClick={() => negotiateFee(asn.id, asn.proposedFee)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.4)', color: '#fbbf24' }}>🤝 Negotiate Fee</button>
-                        )}
-                        {[AssignmentStatus.CONTACT_INITIATED, AssignmentStatus.NEGOTIATION].includes(asn.status) && (
-                          <>
-                            <button onClick={() => adminAcceptOffer(asn.id, asn.proposedFee)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)', color: '#10b981' }}>✅ Accept Offer</button>
-                            <button onClick={() => adminRejectOffer(asn.id)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', color: '#ef4444' }}>❌ Reject Offer</button>
-                          </>
-                        )}
-                        {asn.status === AssignmentStatus.NEGOTIATION && (
-                          <button onClick={() => updateFee(asn.id, asn.proposedFee)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.4)', color: '#fbbf24' }}>💰 Update Fee</button>
-                        )}
-                        {asn.status === AssignmentStatus.SCHEDULED && (
-                          <button onClick={() => handleTransition(asn.id, AssignmentStatus.AUDIT_COMPLETED)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px' }}>Complete Audit</button>
-                        )}
-                        {asn.status === AssignmentStatus.AUDIT_COMPLETED && (
-                          <button onClick={() => handleTransition(asn.id, AssignmentStatus.CLOSED)} className="btn btn-primary" style={{ padding: '3px 8px', fontSize: '11px' }}>Close</button>
-                        )}
-                        {![AssignmentStatus.CLOSED, AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED, AssignmentStatus.AUDIT_COMPLETED].includes(asn.status) && (
-                          <button onClick={() => { if (confirm('Are you sure?')) handleTransition(asn.id, AssignmentStatus.CANCELLED, { reason: 'Cancelled via UI' }); }} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '11px', border: '1px solid rgba(239, 68, 68, 0.4)', background: 'transparent', color: '#ef4444' }}>Cancel</button>
-                        )}
-                      </div>
+                      {asn.assessment?.status ? (
+                        <span className="badge" style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#818cf8', padding: '2px 8px', fontWeight: 600, borderRadius: '4px', fontSize: '11px' }}>
+                          {asn.assessment.status}
+                        </span>
+                      ) : '-'}
                     </td>
                   </tr>
                 ))}
@@ -478,17 +379,16 @@ export const Assignments: React.FC = () => {
                   </div>
                   <div>
                     {(() => {
-                      const st = String(selectedAsn.status);
-                      const isCheckedIn = st === 'CHECKED_IN';
-                      const isAccepted = st === 'ACCEPTED' || st === 'ASSIGNMENT_CONFIRMED' || st === 'SCHEDULED';
+                      const st = String(selectedAsn.projectBranch?.status || selectedAsn.status);
+                      const isScheduled = st === 'SCHEDULED';
+                      const isDone = st === 'AUDIT_COMPLETED' || st === 'VALIDATION_COMPLETED';
                       const isClosed = st === 'CLOSED';
-                      const isDone = st === 'AUDIT_COMPLETED';
-                      const isCancelled = st === 'CANCELLED' || st === 'REJECTED';
-                      const bg = isCheckedIn ? 'rgba(6, 182, 212, 0.2)' : isAccepted ? 'rgba(16, 185, 129, 0.2)' : isClosed ? 'rgba(16, 185, 129, 0.25)' : isDone ? 'rgba(168, 85, 247, 0.2)' : isCancelled ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)';
-                      const color = isCheckedIn ? '#06b6d4' : isAccepted ? '#10b981' : isClosed ? '#10b981' : isDone ? '#a855f7' : isCancelled ? '#ef4444' : '#f59e0b';
+                      const isCancelled = st === 'CANCELLED';
+                      const bg = isScheduled ? 'rgba(6, 182, 212, 0.2)' : isDone ? 'rgba(168, 85, 247, 0.2)' : isClosed ? 'rgba(16, 185, 129, 0.25)' : isCancelled ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)';
+                      const color = isScheduled ? '#06b6d4' : isDone ? '#a855f7' : isClosed ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
                       return (
                         <span className="badge" style={{ background: bg, color, padding: '4px 12px', fontWeight: 700, fontSize: '12px' }}>
-                          {selectedAsn.status}
+                          {selectedAsn.projectBranch?.status || selectedAsn.status}
                         </span>
                       );
                     })()}

@@ -2,6 +2,7 @@ import { OnModuleInit } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
 import { BranchService } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
@@ -31,6 +32,7 @@ export interface CreateProjectDto {
 export declare class ProjectService implements OnModuleInit {
     private readonly projectRepository;
     private readonly projectBranchRepository;
+    private readonly assessmentRepository;
     private readonly clientRepository;
     private readonly branchQueryService;
     private readonly branchService;
@@ -38,7 +40,7 @@ export declare class ProjectService implements OnModuleInit {
     private readonly workflowEngine;
     private readonly eventPublisher;
     private readonly projectQueryService;
-    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, clientRepository: Repository<ClientEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
+    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, assessmentRepository: Repository<AssessmentEntity>, clientRepository: Repository<ClientEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
     onModuleInit(): void;
     create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity>;
     findAll(page?: number, limit?: number): Promise<{

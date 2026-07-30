@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { 
   Building2, 
   Users, 
@@ -9,6 +10,9 @@ import {
   TrendingUp
 } from 'lucide-react';
 import { api } from '../services/api';
+import { queryClient } from '../queryClient';
+import { queryKeys } from '../hooks/queryKeys';
+import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 
 interface DashboardMetrics {
   clients: number;
@@ -32,37 +36,27 @@ interface SlaSummary {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  useSocketInvalidation();
 
-  useEffect(() => {
-    loadAllData();
-    const interval = setInterval(() => {
-      loadAllData();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data: metrics, isLoading: loadingMetrics } = useQuery({
+    queryKey: queryKeys.dashboard.metrics,
+    queryFn: () => api.request<DashboardMetrics>('/system-dashboard/metrics'),
+    staleTime: 60_000,
+  });
 
-  const loadAllData = async () => {
-    setIsLoading(true);
-    try {
-      const [metricsData, slaData, projectsData] = await Promise.all([
-        api.request<DashboardMetrics>('/system-dashboard/metrics'),
-        api.request<SlaSummary>('/assignments/dashboard/summary'),
-        api.request<any[]>('/projects')
-      ]);
+  const { data: slaSummary, isLoading: loadingSla } = useQuery({
+    queryKey: queryKeys.dashboard.slaSummary,
+    queryFn: () => api.request<SlaSummary>('/assignments/dashboard/summary'),
+    staleTime: 60_000,
+  });
 
-      setMetrics(metricsData);
-      setSlaSummary(slaData);
-      setProjects(projectsData || []);
-    } catch (err) {
-      console.error('Failed to fetch dashboard metrics', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const { data: projects = [], isLoading: loadingProjects } = useQuery({
+    queryKey: queryKeys.projects.list,
+    queryFn: () => api.request<any[]>('/projects'),
+    staleTime: 60_000,
+  });
+
+  const isLoading = loadingMetrics || loadingSla || loadingProjects;
 
   const getMetricCards = () => {
     if (!metrics) return [];
@@ -188,8 +182,8 @@ export const Dashboard: React.FC = () => {
                   </h4>
                   <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Real-time field completions and compliance tracking.</span>
                 </div>
-                <button onClick={loadAllData} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>
-                  Sync Data
+                <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all })} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>
+                  Refresh
                 </button>
               </div>
 

@@ -43,6 +43,7 @@ export interface AssayerAssignment {
   id: string;
   assignmentCode: string;
   projectBranchId: string;
+  assayerId?: string;
   branchName: string;
   branchCode: string;
   bankName: string;
@@ -55,14 +56,18 @@ export interface AssayerAssignment {
   estimatedAuditHours: number;
   status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED';
   proposedFee: number;
+  standardBaseFee?: number;
   agreedBaseFee: number;
   agreedTravelFee: number;
+  distanceKm?: number;
   checkedInAt?: string;
   checkInGeoLat?: number;
   checkInGeoLng?: number;
   customerPdfUrl?: string;
   completedPdfUrl?: string;
   instructions?: string;
+  negotiationCount?: number;
+  remarks?: string;
   customers: CustomerRecord[];
   queries: ValidationQuery[];
   expenses: AssayerExpense[];

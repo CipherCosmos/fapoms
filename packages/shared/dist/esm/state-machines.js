@@ -1,16 +1,4 @@
-/**
- * FAPOMS — State Machine Definitions
- *
- * These transition maps define valid state changes for business entities.
- * Derived from Part 6 — Business State & Event Model.
- *
- * Invalid transitions must be rejected by business services.
- * Every transition generates a business event.
- */
-import { AssignmentStatus, ProjectBranchStatus, ProjectStatus, ScheduleStatus, ValidationStatus, } from './enums';
-// ---------------------------------------------------------------------------
-// Project State Machine (Part 6 §3)
-// ---------------------------------------------------------------------------
+import { AssessmentStatus, ProjectStatus, ScheduleStatus, ValidationStatus, } from './enums';
 export const PROJECT_TRANSITIONS = {
     [ProjectStatus.DRAFT]: [ProjectStatus.PLANNING],
     [ProjectStatus.PLANNING]: [ProjectStatus.SCHEDULING, ProjectStatus.CANCELLED],
@@ -19,71 +7,48 @@ export const PROJECT_TRANSITIONS = {
     [ProjectStatus.VALIDATION]: [ProjectStatus.COMPLETED],
     [ProjectStatus.COMPLETED]: [ProjectStatus.ARCHIVED],
     [ProjectStatus.ON_HOLD]: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION],
-    // ARCHIVED and CANCELLED are terminal states
 };
-// ---------------------------------------------------------------------------
-// Project Branch State Machine (Part 6 §4, consolidated)
-// ---------------------------------------------------------------------------
-export const PROJECT_BRANCH_TRANSITIONS = {
-    [ProjectBranchStatus.IMPORTED]: [ProjectBranchStatus.PLANNING],
-    [ProjectBranchStatus.PLANNING]: [
-        ProjectBranchStatus.CANDIDATE_SEARCH,
-        ProjectBranchStatus.UNABLE_TO_COVER,
+export const ASSESSMENT_TRANSITIONS = {
+    [AssessmentStatus.PENDING_PLANNING]: [AssessmentStatus.ASSESSOR_RECOMMENDED],
+    [AssessmentStatus.ASSESSOR_RECOMMENDED]: [
+        AssessmentStatus.IN_NEGOTIATION,
+        AssessmentStatus.UNASSIGNED,
     ],
-    [ProjectBranchStatus.CANDIDATE_SEARCH]: [
-        ProjectBranchStatus.CONTACT_INITIATED,
-        ProjectBranchStatus.UNABLE_TO_COVER,
+    [AssessmentStatus.IN_NEGOTIATION]: [
+        AssessmentStatus.ASSIGNED_AND_SCHEDULED,
+        AssessmentStatus.ASSESSOR_RECOMMENDED,
     ],
-    [ProjectBranchStatus.CONTACT_INITIATED]: [
-        ProjectBranchStatus.NEGOTIATION,
-        ProjectBranchStatus.CANDIDATE_SEARCH, // Rejected → search new candidate
+    [AssessmentStatus.ASSIGNED_AND_SCHEDULED]: [
+        AssessmentStatus.AWAITING_CLIENT_DATA,
+        AssessmentStatus.UNASSIGNED,
     ],
-    [ProjectBranchStatus.NEGOTIATION]: [
-        ProjectBranchStatus.ASSIGNMENT_CONFIRMED,
-        ProjectBranchStatus.CANDIDATE_SEARCH, // Rejected → search new candidate
+    [AssessmentStatus.AWAITING_CLIENT_DATA]: [AssessmentStatus.CLIENT_DATA_RECEIVED],
+    [AssessmentStatus.CLIENT_DATA_RECEIVED]: [AssessmentStatus.PDF_GENERATED],
+    [AssessmentStatus.PDF_GENERATED]: [AssessmentStatus.READY_FOR_DISPATCH],
+    [AssessmentStatus.READY_FOR_DISPATCH]: [AssessmentStatus.DISPATCHED_TO_ASSESSOR],
+    [AssessmentStatus.DISPATCHED_TO_ASSESSOR]: [AssessmentStatus.AUDITED_PDF_RECEIVED],
+    [AssessmentStatus.AUDITED_PDF_RECEIVED]: [AssessmentStatus.SENT_TO_DATA_ENTRY],
+    [AssessmentStatus.SENT_TO_DATA_ENTRY]: [AssessmentStatus.DATA_ENTRY_IN_PROGRESS],
+    [AssessmentStatus.DATA_ENTRY_IN_PROGRESS]: [
+        AssessmentStatus.CLARIFICATION_NEEDED,
+        AssessmentStatus.REPORT_FINALIZED,
     ],
-    [ProjectBranchStatus.ASSIGNMENT_CONFIRMED]: [ProjectBranchStatus.SCHEDULED],
-    [ProjectBranchStatus.SCHEDULED]: [ProjectBranchStatus.AUDIT_COMPLETED],
-    [ProjectBranchStatus.AUDIT_COMPLETED]: [ProjectBranchStatus.VALIDATION_COMPLETED],
-    [ProjectBranchStatus.VALIDATION_COMPLETED]: [ProjectBranchStatus.CLOSED],
-    // UNABLE_TO_COVER, ON_HOLD, CANCELLED are (near-)terminal states
-    [ProjectBranchStatus.UNABLE_TO_COVER]: [ProjectBranchStatus.PLANNING], // Can be reopened
-    [ProjectBranchStatus.ON_HOLD]: [ProjectBranchStatus.PLANNING],
+    [AssessmentStatus.CLARIFICATION_NEEDED]: [AssessmentStatus.DATA_ENTRY_IN_PROGRESS],
+    [AssessmentStatus.REPORT_FINALIZED]: [AssessmentStatus.PENDING_HEAD_APPROVAL],
+    [AssessmentStatus.PENDING_HEAD_APPROVAL]: [
+        AssessmentStatus.DELIVERED_TO_CLIENT,
+        AssessmentStatus.DATA_ENTRY_IN_PROGRESS,
+    ],
+    [AssessmentStatus.DELIVERED_TO_CLIENT]: [AssessmentStatus.COMPLETED],
 };
-// ---------------------------------------------------------------------------
-// Assignment State Machine (Part 6 §5)
-// ---------------------------------------------------------------------------
-export const ASSIGNMENT_TRANSITIONS = {
-    [AssignmentStatus.CREATED]: [AssignmentStatus.CANDIDATE_SELECTED],
-    [AssignmentStatus.CANDIDATE_SELECTED]: [AssignmentStatus.CONTACT_INITIATED],
-    [AssignmentStatus.CONTACT_INITIATED]: [AssignmentStatus.NEGOTIATION],
-    [AssignmentStatus.NEGOTIATION]: [
-        AssignmentStatus.ACCEPTED,
-        AssignmentStatus.REJECTED,
-    ],
-    [AssignmentStatus.ACCEPTED]: [
-        AssignmentStatus.SCHEDULED,
-        AssignmentStatus.CANCELLED, // Emergency only
-    ],
-    [AssignmentStatus.SCHEDULED]: [AssignmentStatus.AUDIT_COMPLETED],
-    [AssignmentStatus.AUDIT_COMPLETED]: [AssignmentStatus.CLOSED],
-    // REJECTED and CANCELLED are terminal states
-};
-// ---------------------------------------------------------------------------
-// Schedule State Machine (Part 6 §6)
-// ---------------------------------------------------------------------------
 export const SCHEDULE_TRANSITIONS = {
     [ScheduleStatus.TENTATIVE]: [ScheduleStatus.CONFIRMED],
     [ScheduleStatus.CONFIRMED]: [
         ScheduleStatus.RESCHEDULED,
         ScheduleStatus.COMPLETED,
     ],
-    [ScheduleStatus.RESCHEDULED]: [ScheduleStatus.CONFIRMED],
-    // COMPLETED is terminal
+    [ScheduleStatus.RESCHEDULED]: [ScheduleStatus.RESCHEDULED, ScheduleStatus.CONFIRMED, ScheduleStatus.COMPLETED],
 };
-// ---------------------------------------------------------------------------
-// Validation State Machine (Part 6 §8)
-// ---------------------------------------------------------------------------
 export const VALIDATION_TRANSITIONS = {
     [ValidationStatus.PENDING]: [ValidationStatus.ASSIGNED],
     [ValidationStatus.ASSIGNED]: [ValidationStatus.OCR_PROCESSING],
@@ -94,15 +59,7 @@ export const VALIDATION_TRANSITIONS = {
     ],
     [ValidationStatus.CORRECTION_REQUIRED]: [ValidationStatus.HUMAN_REVIEW],
     [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED],
-    // SUBMITTED is terminal
 };
-// ---------------------------------------------------------------------------
-// Transition Validator
-// ---------------------------------------------------------------------------
-/**
- * Checks whether a state transition is valid according to the transition map.
- * Returns true if the transition is allowed.
- */
 export function isValidTransition(transitions, currentState, targetState) {
     const allowedTargets = transitions[currentState];
     if (!allowedTargets)

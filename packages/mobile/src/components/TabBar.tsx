@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { styles } from '../theme/styles';
 
-export type TabType = 'SCHEDULE' | 'PDF_DOCUMENTS' | 'QUERIES' | 'EARNINGS' | 'PERFORMANCE' | 'MY_PROFILE' | 'NOTIFICATIONS';
+export type TabType = 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
 
 interface TabBarProps {
   selectedTab: TabType;
@@ -13,13 +13,10 @@ interface TabBarProps {
 
 export const TabBar: React.FC<TabBarProps> = ({ selectedTab, onSelectTab, openQueriesCount, unreadNotifCount }) => {
   const tabs: { key: TabType; label: string; icon: string; badge?: number }[] = [
-    { key: 'SCHEDULE', label: 'Schedule', icon: '📅' },
-    { key: 'PDF_DOCUMENTS', label: 'PDF Docs', icon: '📄' },
-    { key: 'QUERIES', label: 'Queries', icon: '💬', badge: openQueriesCount > 0 ? openQueriesCount : undefined },
-    { key: 'EARNINGS', label: 'Earnings', icon: '💰' },
-    { key: 'PERFORMANCE', label: 'Stats', icon: '📊' },
-    { key: 'NOTIFICATIONS', label: 'Alerts', icon: '🔔', badge: unreadNotifCount > 0 ? unreadNotifCount : undefined },
-    { key: 'MY_PROFILE', label: 'Profile', icon: '👤' },
+    { key: 'SCHEDULE', label: 'Audit Route', icon: '📍' },
+    { key: 'QUERIES', label: 'Clarifications', icon: '⚡' },
+    { key: 'EARNINGS', label: 'Financial Ledger', icon: '💳' },
+    { key: 'MY_PROFILE', label: 'Account & Security', icon: '⚙️' },
   ];
 
   return (

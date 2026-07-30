@@ -10,6 +10,7 @@ import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory } from '@fapoms/shared';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
@@ -149,6 +150,7 @@ export class BranchService {
     private readonly clientService: ClientService,
     private readonly auditService: AuditService,
     private readonly branchQueryService: BranchQueryService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -222,6 +224,21 @@ export class BranchService {
       userId,
       remarks: `Created branch ${saved.name} (${saved.branchCode})`,
     });
+
+    try {
+      this.eventPublisher.publish('branch:created', {
+        eventType: 'branch:created',
+        branchId: saved.id,
+        branchCode: saved.branchCode,
+        name: saved.name,
+        clientId: saved.clientId,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish branch:created event:', err);
+    }
 
     return saved;
   }
@@ -325,6 +342,20 @@ export class BranchService {
       userId,
       remarks: `Updated branch ${saved.name} (${saved.branchCode})`,
     });
+
+    try {
+      this.eventPublisher.publish('branch:updated', {
+        eventType: 'branch:updated',
+        branchId: saved.id,
+        name: saved.name,
+        clientId: saved.clientId,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish branch:updated event:', err);
+    }
 
     return saved;
   }

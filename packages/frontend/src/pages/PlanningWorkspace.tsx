@@ -5,6 +5,9 @@ import { Priority } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
+import { useSocket } from '../hooks/useSocket';
+import { connectSocket } from '../services/socket';
+import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 
 interface ProjectOption {
   id: string;
@@ -38,6 +41,7 @@ interface ProjectBranch {
     proposedFee: number;
     agreedFee: number | null;
     scheduledDate: string | null;
+    remarks?: string | null;
     assayer?: { displayName: string };
   } | null;
 }
@@ -183,6 +187,7 @@ const STATUS_OPTIONS = [
   { value: 'ALL', label: 'All Statuses' },
   { value: 'IMPORTED', label: 'Imported' },
   { value: 'PLANNING', label: 'Planning' },
+  { value: 'NEGOTIATION', label: 'Under Negotiation (Counter Offer)' },
   { value: 'ASSIGNMENT_CONFIRMED', label: 'Confirmed' },
   { value: 'SCHEDULED', label: 'Scheduled' },
 ];
@@ -215,6 +220,11 @@ export const PlanningWorkspace: React.FC = () => {
   const [negotiatingFee, setNegotiatingFee] = useState('1500');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
+  const [scheduledAuditDate, setScheduledAuditDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  });
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
@@ -230,6 +240,26 @@ export const PlanningWorkspace: React.FC = () => {
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
 
   useEffect(() => { loadProjects(); loadZones(); }, []);
+
+  useSocketInvalidation();
+
+  useEffect(() => {
+    const socket = connectSocket();
+    if (!socket) return;
+    const handleRealtimeUpdate = () => {
+      if (selectedProjectId) {
+        loadProjectBranches(selectedProjectId);
+      }
+    };
+    socket.on('assignment:counter-offered', handleRealtimeUpdate);
+    socket.on('assignment:status-changed', handleRealtimeUpdate);
+    socket.on('schedule:created', handleRealtimeUpdate);
+    return () => {
+      socket.off('assignment:counter-offered', handleRealtimeUpdate);
+      socket.off('assignment:status-changed', handleRealtimeUpdate);
+      socket.off('schedule:created', handleRealtimeUpdate);
+    };
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (selectedProjectId) {
@@ -252,12 +282,25 @@ export const PlanningWorkspace: React.FC = () => {
     }
   }, [selectedBranchId, branches]);
 
+  const { on: onSocketEvent } = useSocket();
+
   useEffect(() => {
-    if (!selectedBranchId) return;
-    const selectedPb = branches.find(b => b.id === selectedBranchId);
-    if (!selectedPb) return;
-    const interval = setInterval(() => loadCandidates(selectedPb.branchId), 60000);
-    return () => clearInterval(interval);
+    const unsubs: (() => void)[] = [];
+
+    const refresh = () => {
+      if (selectedBranchId) {
+        const selectedPb = branches.find(b => b.id === selectedBranchId);
+        if (selectedPb) loadCandidates(selectedPb.branchId);
+      }
+    };
+
+    unsubs.push(onSocketEvent('assignment:created', refresh));
+    unsubs.push(onSocketEvent('assignment:status-changed', refresh));
+    unsubs.push(onSocketEvent('assignment:fee-updated', refresh));
+    unsubs.push(onSocketEvent('schedule:created', refresh));
+    unsubs.push(onSocketEvent('schedule:updated', refresh));
+
+    return () => unsubs.forEach(u => u());
   }, [selectedBranchId, branches]);
 
   useEffect(() => {
@@ -373,7 +416,12 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       await api.request('/assignments', {
         method: 'POST',
-        body: JSON.stringify({ projectBranchId: selectedBranchId, assayerId: selectedCandidate.id, proposedFee: Number(negotiatingFee) })
+        body: JSON.stringify({
+          projectBranchId: selectedBranchId,
+          assayerId: selectedCandidate.id,
+          proposedFee: Number(negotiatingFee),
+          scheduledDate: scheduledAuditDate,
+        })
       });
       setMessage({ type: 'success', text: `Assigned ${selectedCandidate.displayName} to branch. Assayer will receive the offer on their mobile app.` });
       loadProjectBranches(selectedProjectId);
@@ -479,64 +527,103 @@ export const PlanningWorkspace: React.FC = () => {
           const cardBg = slaStatus === 'compliant' ? 'rgba(16,185,129,0.04)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.04)' : 'rgba(255,255,255,0.02)';
           return (
             <div key={c.id} style={{
-              minWidth: horizontal ? '280px' : 'auto', maxWidth: horizontal ? '300px' : 'auto', flexShrink: horizontal ? 0 : undefined,
-              background: cardBg, border: `1px solid ${cardBorderColor}`, borderRadius: 'var(--radius-md)', padding: '12px',
-              display: 'flex', flexDirection: 'column', gap: '8px'
+              minWidth: horizontal ? '320px' : 'auto', maxWidth: horizontal ? '340px' : 'auto', flexShrink: horizontal ? 0 : undefined,
+              background: cardBg, border: `1px solid ${cardBorderColor}`, borderRadius: 'var(--radius-md)', padding: '14px',
+              display: 'flex', flexDirection: 'column', gap: '10px'
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#fff' }}>{c.displayName}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '1px' }}>
-                    <Compass size={11} /> {c.distanceKm !== null ? `${c.distanceKm} km (straight-line)` : 'Unknown distance'}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.displayName}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', flexWrap: 'wrap' }}>
+                    <Compass size={11} style={{ flexShrink: 0 }} />
+                    <span>{c.distanceKm !== null ? `${c.distanceKm} km away` : 'Distance unavailable'}</span>
                     {slaEnabled && c.distanceKm !== null && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '0 5px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: c.distanceKm >= slaRadius ? '#10b981' : '#ef4444' }}>
-                        {c.distanceKm >= slaRadius ? `✓ Beyond ${slaRadius}km SLA` : `✗ Within ${slaRadius}km SLA`}
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: c.distanceKm >= slaRadius ? '#10b981' : '#ef4444' }}>
+                        {c.distanceKm >= slaRadius ? `✓ SLA Pass` : `✗ SLA Breach`}
                       </span>
                     )}
                   </div>
                 </div>
-                <span title="Score evaluates Distance, Travel Time, Workload, Performance, Experience, and Cost." style={{ cursor: 'help', padding: '2px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 600, background: conf >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
-                  {conf}% {conf >= 90 ? '🔥 High Utilization' : ''}
+                <span title="Score evaluates Distance, Travel Time, Workload, Performance, Experience, and Cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf >= 90 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b', flexShrink: 0 }}>
+                  {conf}% Match
                 </span>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '12px' }}>
+
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span>📞 {c.phone}</span>
-                <span>📍 {c.city}</span>
+                <span>📍 {c.city}, {c.state}</span>
+                <span>Base: ₹{c.baseFee || 1500}</span>
               </div>
-              <div style={{ display: 'flex', gap: '6px' }}>
+
+              {/* Row 1 Actions: View Map, Route TSP, Profile Details */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                 <button onClick={() => setSelectedCandidateForMap(selectedCandidateForMap?.id === c.id ? null : c)}
-                  className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px', flex: 1, justifyContent: 'center', background: selectedCandidateForMap?.id === c.id ? 'rgba(139, 92, 246, 0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : '#fff' }}>
+                  className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: selectedCandidateForMap?.id === c.id ? 'rgba(139, 92, 246, 0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : '#fff' }}>
                   👁️ Map
                 </button>
                 <button onClick={() => handleOptimizeRoute(c)} disabled={isOptimizing}
-                  className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Compass size={11} /> Route
                 </button>
                 <button onClick={() => loadAssayerDetail(c.id)}
-                  className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Search size={11} /> Details
                 </button>
+              </div>
+
+              {/* Row 2 Actions: Call & Negotiate vs Direct App Invite */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                 <button onClick={async () => {
                   setSelectedCandidate(c);
                   setCommercialBaseFee(null);
                   setLoadingCommercial(true);
                   try {
                     const profile = await api.request<{ baseFee: number } | null>(`/assayers/${c.id}/commercial/active`, { method: 'GET' });
-                    const fee = profile?.baseFee ?? c.baseFee ?? 1500;
-                    setCommercialBaseFee(fee);
-                    setNegotiatingFee(fee.toString());
+                    const baseFee = Number(profile?.baseFee ?? c.baseFee ?? 1200);
+                    const distanceKm = c.distanceKm || 0;
+                    const travelAllowance = Math.round(Math.max(0, distanceKm - 10) * 8);
+                    const recommendedFee = baseFee + travelAllowance;
+                    setCommercialBaseFee(baseFee);
+                    setNegotiatingFee(recommendedFee.toString());
                   } catch {
-                    const fee = c.baseFee ?? 1500;
-                    setNegotiatingFee(fee.toString());
+                    const baseFee = Number(c.baseFee ?? 1200);
+                    const distanceKm = c.distanceKm || 0;
+                    const travelAllowance = Math.round(Math.max(0, distanceKm - 10) * 8);
+                    const recommendedFee = baseFee + travelAllowance;
+                    setCommercialBaseFee(baseFee);
+                    setNegotiatingFee(recommendedFee.toString());
                   } finally {
                     setLoadingCommercial(false);
                     setShowNegotiationModal(true);
                   }
                 }}
-                  className="btn btn-primary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                  <Check size={11} /> Assign
+                  className="btn btn-primary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  <Phone size={12} /> Call & Assign
+                </button>
+
+                <button onClick={async () => {
+                  const selectedPb = branches.find(b => b.id === selectedBranchId);
+                  if (!selectedPb) return;
+                  try {
+                    await api.request('/assignments', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        projectBranchId: selectedPb.id,
+                        assayerId: c.id,
+                        remarks: 'Dispatched directly via App Invitation',
+                      }),
+                    });
+                    setMessage({ type: 'success', text: `App invitation dispatched directly to ${c.displayName}!` });
+                    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                  } catch (err: any) {
+                    setMessage({ type: 'error', text: err.message || 'Direct dispatch failed' });
+                  }
+                }}
+                  className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: 'rgba(16,185,129,0.12)', color: 'var(--status-active)', borderColor: 'rgba(16,185,129,0.3)' }}>
+                  📲 Direct App Invite
                 </button>
               </div>
+
               {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
                 <div style={{ padding: '8px 10px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div><b>🗺️ Optimized Route Details:</b></div>
@@ -555,24 +642,23 @@ export const PlanningWorkspace: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', margin: '-20px' }}>
-      {/* ── STAGE 1 BANNER ── */}
-      <div style={{ background: 'linear-gradient(90deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.06) 100%)', borderBottom: '1px solid var(--border-color)', padding: '8px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      {/* ── UNIFIED 3-STEP PIPELINE BAR ── */}
+      <div style={{ background: 'rgba(15, 23, 42, 0.8)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', margin: '12px 32px 0', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ backgroundColor: '#6366f1', color: '#fff', fontSize: '10px', fontWeight: 800, padding: '3px 7px', borderRadius: '4px', marginRight: '4px' }}>STAGE 1 OF 3</span>
           <div onClick={() => navigate('/planning')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(99,102,241,0.2)', border: '1px solid #6366f1', borderRadius: '20px', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-            <span>1</span> Planning & Matching
+            <span>📍 Stage 1</span> Planning & Assayer Match
           </div>
           <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
           <div onClick={() => navigate('/scheduling')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
-            <span>2</span> Schedule Dispatch
+            <span>📅 Stage 2</span> Calendar & Fee Schedule Dispatch
           </div>
           <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>➔</span>
           <div onClick={() => navigate('/assignments')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', borderRadius: '20px', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
-            <span>3</span> Field Execution
+            <span>📋 Stage 3</span> Field Execution & Return PDF Validation
           </div>
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          💡 Step 1 of 3: Plan & assign assayers to branches. Click a branch on the map to see recommendations.
+          💡 <b style={{ color: '#a5b4fc' }}>Stage 1 of 3:</b> Match assayers to branches based on proximity & fee rate.
         </div>
       </div>
 
@@ -706,6 +792,70 @@ export const PlanningWorkspace: React.FC = () => {
             }}>
               {selectedPb && (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
+                    <div style={{ padding: '10px 16px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '16px' }}>💬</span>
+                        <div>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: '#f59e0b' }}>
+                            Counter Offer Received from {selectedPb.assignment.assayer?.displayName}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#fcd34d' }}>
+                            Assayer proposed rate: <b>₹{selectedPb.assignment.proposedFee}</b> (Remarks: {selectedPb.assignment.remarks || 'None'})
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={async () => {
+                          try {
+                            await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
+                              method: 'POST',
+                              body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
+                            });
+                            setMessage({ type: 'success', text: `Counter fee ₹${selectedPb.assignment?.proposedFee} approved! Branch confirmed.` });
+                            if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                          } catch (err: any) {
+                            setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
+                          }
+                        }} className="btn btn-primary" style={{ padding: '4px 12px', fontSize: '11px', background: '#10b981', borderColor: '#10b981', color: '#fff' }}>
+                          ✅ Accept ₹{selectedPb.assignment.proposedFee}
+                        </button>
+                        <button onClick={async () => {
+                          const newRateStr = prompt(`Enter counter rate proposal to send back to ${selectedPb.assignment?.assayer?.displayName} (₹):`, String(selectedPb.assignment?.proposedFee || 1500));
+                          if (!newRateStr) return;
+                          const newRateNum = parseFloat(newRateStr);
+                          if (isNaN(newRateNum) || newRateNum <= 0) return;
+                          try {
+                            await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
+                              method: 'POST',
+                              body: JSON.stringify({ targetStatus: 'COUNTER_OFFER', counterFee: newRateNum, reason: `Operations proposed counter rate ₹${newRateNum}` }),
+                            });
+                            setMessage({ type: 'success', text: `Counter proposal ₹${newRateNum} sent to assayer!` });
+                            if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                          } catch (err: any) {
+                            setMessage({ type: 'error', text: err.message || 'Failed to send counter proposal' });
+                          }
+                        }} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)' }}>
+                          🔁 Propose Counter Rate
+                        </button>
+                        <button onClick={async () => {
+                          try {
+                            await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
+                              method: 'POST',
+                              body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
+                            });
+                            setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
+                            if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                          } catch (err: any) {
+                            setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
+                          }
+                        }} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)' }}>
+                          ❌ Decline Counter Offer
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>RECOMMENDED ASSAYERS</span>
@@ -805,6 +955,69 @@ export const PlanningWorkspace: React.FC = () => {
 
           {selectedPb && (
             <div style={{ width: '340px', minWidth: '340px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
+                <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '14px' }}>💬</span>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>
+                        Counter Offer from {selectedPb.assignment.assayer?.displayName}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#fcd34d' }}>
+                        Proposed Fee: <b>₹{selectedPb.assignment.proposedFee}</b>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={async () => {
+                      try {
+                        await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
+                          method: 'POST',
+                          body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
+                        });
+                        setMessage({ type: 'success', text: `Counter fee ₹${selectedPb.assignment?.proposedFee} approved! Branch confirmed.` });
+                        if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                      } catch (err: any) {
+                        setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
+                      }
+                    }} className="btn btn-primary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', background: '#10b981', borderColor: '#10b981', color: '#fff' }}>
+                      ✅ Accept ₹{selectedPb.assignment.proposedFee}
+                    </button>
+                    <button onClick={async () => {
+                      const newRateStr = prompt(`Enter counter rate proposal to send back to ${selectedPb.assignment?.assayer?.displayName} (₹):`, String(selectedPb.assignment?.proposedFee || 1500));
+                      if (!newRateStr) return;
+                      const newRateNum = parseFloat(newRateStr);
+                      if (isNaN(newRateNum) || newRateNum <= 0) return;
+                      try {
+                        await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
+                          method: 'POST',
+                          body: JSON.stringify({ targetStatus: 'COUNTER_OFFER', counterFee: newRateNum, reason: `Operations proposed counter rate ₹${newRateNum}` }),
+                        });
+                        setMessage({ type: 'success', text: `Counter proposal ₹${newRateNum} sent to assayer!` });
+                        if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                      } catch (err: any) {
+                        setMessage({ type: 'error', text: err.message || 'Failed to send counter proposal' });
+                      }
+                    }} className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)' }}>
+                      🔁 Propose Counter
+                    </button>
+                    <button onClick={async () => {
+                      try {
+                        await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
+                          method: 'POST',
+                          body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
+                        });
+                        setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
+                        if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                      } catch (err: any) {
+                        setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
+                      }
+                    }} className="btn btn-secondary" style={{ flex: 1, padding: '4px 8px', fontSize: '10px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)' }}>
+                      ❌ Decline
+                    </button>
+                  </div>
+                </div>
+              )}
               <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>BRANCH DETAILS</span>
@@ -931,7 +1144,7 @@ export const PlanningWorkspace: React.FC = () => {
             </div>
 
             {/* Fee inputs */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <DollarSign size={11} /> Base Fee
@@ -949,6 +1162,13 @@ export const PlanningWorkspace: React.FC = () => {
                   <input type="number" value={negotiatingFee} onChange={e => setNegotiatingFee(e.target.value)} required
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Calendar size={11} /> Audit Scheduled Date
+                </label>
+                <input type="date" value={scheduledAuditDate} onChange={e => setScheduledAuditDate(e.target.value)} required
+                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>
 

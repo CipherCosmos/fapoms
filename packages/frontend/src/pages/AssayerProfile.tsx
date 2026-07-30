@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { connectSocket, getSocket } from '../services/socket';
 import {
   ArrowLeft, Star, Briefcase, MapPin, Phone, Mail, Award, CheckCircle, XCircle,
   Clock, DollarSign, Calendar, TrendingUp
@@ -70,19 +71,46 @@ export const AssayerProfile: React.FC = () => {
   const [remarkRating, setRemarkRating] = useState<number>(0);
   const [submittingRemark, setSubmittingRemark] = useState(false);
 
-  useEffect(() => {
-    if (id) {
-      Promise.all([
+  const loadProfile = useCallback(async () => {
+    if (!id) return;
+    try {
+      const [profileData, remarksData] = await Promise.all([
         api.request<AssayerProfile>(`/assayers/${id}/profile`, { method: 'GET' }),
         api.request<Remark[]>(`/assayers/${id}/remark`, { method: 'GET' }),
-      ]).then(([profileData, remarksData]) => {
-        setAssayer(profileData);
-        setRemarks(Array.isArray(remarksData) ? remarksData : []);
-      }).catch(() => {
-        navigate('/assayers');
-      }).finally(() => setLoading(false));
+      ]);
+      setAssayer(profileData);
+      setRemarks(Array.isArray(remarksData) ? remarksData : []);
+    } catch {
+      navigate('/assayers');
+    } finally {
+      setLoading(false);
     }
-  }, [id]);
+  }, [id, navigate]);
+
+  useEffect(() => {
+    loadProfile();
+    connectSocket();
+    const socket = getSocket();
+    if (socket) {
+      socket.on('assayer:updated', (data: any) => {
+        if (data?.aggregateId === id || data?.payload?.id === id) {
+          loadProfile();
+        }
+      });
+      socket.on('assayer:deleted', (data: any) => {
+        if (data?.aggregateId === id || data?.payload?.id === id) {
+          navigate('/assayers');
+        }
+      });
+    }
+    return () => {
+      const s = getSocket();
+      if (s) {
+        s.off('assayer:updated');
+        s.off('assayer:deleted');
+      }
+    };
+  }, [id, loadProfile, navigate]);
 
   const handleAddRemark = async () => {
     if (!remarkText.trim() || !id) return;

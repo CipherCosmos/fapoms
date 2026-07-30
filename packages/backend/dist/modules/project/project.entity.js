@@ -14,6 +14,7 @@ const typeorm_1 = require("typeorm");
 const base_entity_1 = require("../../core/entities/base.entity");
 const client_entity_1 = require("../client/client.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
+const assessment_entity_1 = require("./assessment.entity");
 const shared_1 = require("@fapoms/shared");
 let ProjectEntity = class ProjectEntity extends base_entity_1.BaseEntity {
     projectNumber;
@@ -35,6 +36,7 @@ let ProjectEntity = class ProjectEntity extends base_entity_1.BaseEntity {
     dependencies;
     client;
     projectBranches;
+    assessments;
 };
 exports.ProjectEntity = ProjectEntity;
 __decorate([
@@ -122,6 +124,10 @@ __decorate([
     (0, typeorm_1.OneToMany)(() => project_branch_entity_1.ProjectBranchEntity, (pb) => pb.project),
     __metadata("design:type", Array)
 ], ProjectEntity.prototype, "projectBranches", void 0);
+__decorate([
+    (0, typeorm_1.OneToMany)(() => assessment_entity_1.AssessmentEntity, (a) => a.project),
+    __metadata("design:type", Array)
+], ProjectEntity.prototype, "assessments", void 0);
 exports.ProjectEntity = ProjectEntity = __decorate([
     (0, typeorm_1.Entity)('projects'),
     (0, typeorm_1.Index)(['projectNumber']),

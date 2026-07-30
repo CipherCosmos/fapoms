@@ -21,36 +21,38 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onBiometricLogin,
 }) => {
   const [showPassword, setShowPassword] = useState(false);
+  const [usePinMode, setUsePinMode] = useState(false);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#090d16', minHeight: '100vh' as any }}>
       <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
         {/* Brand Logo */}
-        <View style={{ alignItems: 'center', marginBottom: 32 }}>
+        <View style={{ alignItems: 'center', marginBottom: 28 }}>
           <View style={{
             width: 72,
             height: 72,
-            borderRadius: 22,
-            background: 'linear-gradient(135deg, #6366f1 0%, #06b6d4 100%)' as any,
-            backgroundColor: '#6366f1',
+            borderRadius: 24,
+            backgroundColor: '#4f46e5',
             alignItems: 'center',
             justifyContent: 'center',
-            marginBottom: 16,
-            shadowColor: '#6366f1',
-            shadowOffset: { width: 0, height: 8 },
-            shadowOpacity: 0.4,
+            marginBottom: 14,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.2)',
+            shadowColor: '#4f46e5',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.5,
             shadowRadius: 20,
-            elevation: 10,
+            elevation: 12,
           }}>
             <Text style={{ fontSize: 32, fontWeight: '900', color: '#ffffff', fontFamily: Platform.OS === 'web' ? 'Outfit, sans-serif' : undefined }}>
-              F
+              S
             </Text>
           </View>
-          <Text style={{ fontSize: 30, fontWeight: '900', color: '#ffffff', letterSpacing: -0.5, textAlign: 'center', fontFamily: Platform.OS === 'web' ? 'Outfit, sans-serif' : undefined }}>
-            FAPOMS
+          <Text style={{ fontSize: 26, fontWeight: '900', color: '#ffffff', letterSpacing: 0.5, textAlign: 'center', fontFamily: Platform.OS === 'web' ? 'Outfit, sans-serif' : undefined }}>
+            SUMERU GLOBAL
           </Text>
-          <Text style={{ fontSize: 13, color: '#64748b', fontWeight: '600', marginTop: 4, letterSpacing: 2, textTransform: 'uppercase' }}>
-            Gold Audit Suite
+          <Text style={{ fontSize: 11, color: '#38bdf8', fontWeight: '800', marginTop: 4, letterSpacing: 2, textTransform: 'uppercase' }}>
+            Audit & Support Suite
           </Text>
         </View>
 
@@ -108,11 +110,27 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </View>
           </View>
 
-          {/* Password Input */}
+          {/* Login Mode Selector */}
+          <View style={{ flexDirection: 'row', backgroundColor: 'rgba(15, 23, 42, 0.6)', padding: 4, borderRadius: 12, marginBottom: 18, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+            <TouchableOpacity
+              style={{ flex: 1, paddingVertical: 8, borderRadius: 8, backgroundColor: !usePinMode ? '#4f46e5' : 'transparent', alignItems: 'center' }}
+              onPress={() => setUsePinMode(false)}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '800', color: !usePinMode ? '#ffffff' : '#94a3b8' }}>Password</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flex: 1, paddingVertical: 8, borderRadius: 8, backgroundColor: usePinMode ? '#4f46e5' : 'transparent', alignItems: 'center' }}
+              onPress={() => setUsePinMode(true)}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '800', color: usePinMode ? '#ffffff' : '#94a3b8' }}>4-Digit PIN</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Password or PIN Input */}
           <View style={{ marginBottom: 24 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <Text style={{ fontSize: 11, fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>
-                Password
+                {usePinMode ? '4-Digit Security PIN' : 'Password'}
               </Text>
             </View>
             <View style={{
@@ -128,13 +146,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 style={{
                   flex: 1,
                   paddingVertical: 14,
-                  fontSize: 15,
+                  fontSize: usePinMode ? 20 : 15,
+                  letterSpacing: usePinMode ? 6 : 0,
                   color: '#ffffff',
                   fontWeight: '600',
                 }}
-                placeholder="Enter your password"
+                placeholder={usePinMode ? '• • • •' : 'Enter your password'}
                 placeholderTextColor="#475569"
                 secureTextEntry={!showPassword}
+                keyboardType={usePinMode ? 'numeric' : 'default'}
+                maxLength={usePinMode ? 4 : undefined}
                 value={loginPassword}
                 onChangeText={onChangePassword}
               />

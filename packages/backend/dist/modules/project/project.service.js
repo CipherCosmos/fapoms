@@ -18,6 +18,7 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
+const assessment_entity_1 = require("./assessment.entity");
 const client_entity_1 = require("../client/client.entity");
 const project_state_machine_1 = require("./project.state-machine");
 const branch_service_1 = require("../branch/branch.service");
@@ -111,6 +112,7 @@ const INDIAN_NAMES = ['Aravind Swamy', 'Karthik Raja', 'Siddharth Rao', 'Vijay S
 let ProjectService = class ProjectService {
     projectRepository;
     projectBranchRepository;
+    assessmentRepository;
     clientRepository;
     branchQueryService;
     branchService;
@@ -118,9 +120,10 @@ let ProjectService = class ProjectService {
     workflowEngine;
     eventPublisher;
     projectQueryService;
-    constructor(projectRepository, projectBranchRepository, clientRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
+    constructor(projectRepository, projectBranchRepository, assessmentRepository, clientRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
         this.projectRepository = projectRepository;
         this.projectBranchRepository = projectBranchRepository;
+        this.assessmentRepository = assessmentRepository;
         this.clientRepository = clientRepository;
         this.branchQueryService = branchQueryService;
         this.branchService = branchService;
@@ -187,6 +190,13 @@ let ProjectService = class ProjectService {
             entityId: saved.id,
             userId,
             remarks: `Created project: ${saved.name} (${saved.projectNumber})`,
+        });
+        this.eventPublisher.publish('project:created', {
+            eventType: 'project:created',
+            aggregateId: saved.id,
+            userId,
+            organizationId: saved.organizationId,
+            payload: { id: saved.id, name: saved.name, projectNumber: saved.projectNumber, clientId: saved.clientId },
         });
         return saved;
     }
@@ -258,6 +268,13 @@ let ProjectService = class ProjectService {
             userId,
             remarks: `Updated project: ${saved.name} (${saved.projectNumber})`,
         });
+        this.eventPublisher.publish('project:updated', {
+            eventType: 'project:updated',
+            aggregateId: saved.id,
+            userId,
+            organizationId: saved.organizationId,
+            payload: { id: saved.id, name: saved.name, status: saved.status },
+        });
         return saved;
     }
     async remove(id, userId) {
@@ -272,6 +289,13 @@ let ProjectService = class ProjectService {
             entityId: id,
             userId,
             remarks: `Soft deleted project ${project.name}`,
+        });
+        this.eventPublisher.publish('project:deleted', {
+            eventType: 'project:deleted',
+            aggregateId: id,
+            userId,
+            organizationId: project.organizationId,
+            payload: { id, name: project.name, projectNumber: project.projectNumber },
         });
     }
     async findProjectBranches(projectId) {
@@ -297,6 +321,20 @@ let ProjectService = class ProjectService {
                     });
                     const savedPb = await this.projectBranchRepository.save(pb);
                     addedBranches.push(savedPb);
+                    const existingAsmt = await this.assessmentRepository.findOne({
+                        where: { projectId: project.id, branchId: branch.id, isActive: true },
+                    });
+                    if (!existingAsmt) {
+                        const asmt = this.assessmentRepository.create({
+                            projectId: project.id,
+                            branchId: branch.id,
+                            zoneId: branch.zoneId,
+                            status: shared_1.AssessmentStatus.PENDING_PLANNING,
+                            createdBy: userId,
+                            updatedBy: userId,
+                        });
+                        await this.assessmentRepository.save(asmt);
+                    }
                 }
             }
         }
@@ -442,6 +480,21 @@ let ProjectService = class ProjectService {
                 });
                 const savedPb = await this.projectBranchRepository.save(pb);
                 addedBranches.push(savedPb);
+                const existingAsmt = await this.assessmentRepository.findOne({
+                    where: { projectId: project.id, branchId: branch.id, isActive: true },
+                });
+                if (!existingAsmt) {
+                    const asmt = this.assessmentRepository.create({
+                        projectId: project.id,
+                        branchId: branch.id,
+                        zoneId: branch.zoneId,
+                        status: shared_1.AssessmentStatus.PENDING_PLANNING,
+                        packetSize: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
+                        createdBy: userId,
+                        updatedBy: userId,
+                    });
+                    await this.assessmentRepository.save(asmt);
+                }
             }
             else if (!isNaN(packetCount) && packetCount > 0) {
                 pb.packetCount = packetCount;
@@ -626,8 +679,10 @@ exports.ProjectService = ProjectService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(project_entity_1.ProjectEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
-    __param(2, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(2, (0, typeorm_1.InjectRepository)(assessment_entity_1.AssessmentEntity)),
+    __param(3, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         branch_query_service_1.BranchQueryService,

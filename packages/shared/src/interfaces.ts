@@ -10,6 +10,7 @@
  */
 
 import {
+  AssessmentStatus,
   AssayerStatus,
   AssayerLifecycleStatus,
   AssignmentStatus,
@@ -24,7 +25,6 @@ import {
   PermissionAction,
   PermissionResource,
   Priority,
-  ProjectBranchStatus,
   ProjectStatus,
   ScheduleStatus,
   SystemRole,
@@ -234,18 +234,21 @@ export interface BranchDocument extends AuditMetadata {
 }
 
 // ---------------------------------------------------------------------------
-// Project Branch (Part 2 §5) — Transactional
+// Assessment (Section 4, Section 9 — Proposed Data Model)
 // ---------------------------------------------------------------------------
 
-export interface ProjectBranch extends ExtendedAuditMetadata {
+export interface Assessment extends ExtendedAuditMetadata {
   id: string;
   projectId: string;
   branchId: string;
-  status: ProjectBranchStatus;
+  status: AssessmentStatus;
+  packetSize?: number;
+  assignedAssessorId?: string;
+  auditDate?: string;
+  agreedFee?: number;
+  coverageFlag?: boolean;
   priority: Priority;
   zoneId?: string;
-  assignmentId?: string;
-  scheduledDate?: string;
   remarks?: string;
 
   // Denormalized for display (populated from Branch)
@@ -255,6 +258,17 @@ export interface ProjectBranch extends ExtendedAuditMetadata {
   state?: string;
   district?: string;
   city?: string;
+}
+
+export interface CallLog extends AuditMetadata {
+  id: string;
+  assessmentId: string;
+  assessorId: string;
+  calledBy: string;
+  timestamp: string;
+  outcome: string; // ACCEPTED, REJECTED, NEGOTIATING, NO_ANSWER
+  negotiatedFee?: number;
+  notes?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,8 +370,8 @@ export interface AssayerActivity {
 
 export interface Assignment extends ExtendedAuditMetadata {
   id: string;
-  assignmentNumber: string;     // Business identifier
-  projectBranchId: string;
+  assignmentNumber: string;
+  assessmentId: string;
   projectId: string;
   assayerId: string;
   status: AssignmentStatus;
@@ -454,7 +468,7 @@ export interface Travel extends AuditMetadata {
 
 export interface Document extends AuditMetadata {
   id: string;
-  projectBranchId?: string;
+  assessmentId?: string;
   projectId?: string;
   type: DocumentType;
   status: DocumentStatus;
@@ -473,7 +487,7 @@ export interface Document extends AuditMetadata {
 
 export interface ValidationCase extends ExtendedAuditMetadata {
   id: string;
-  projectBranchId: string;
+  assessmentId: string;
   documentId: string;
   status: ValidationStatus;
   assignedTo?: string;          // User ID of validator

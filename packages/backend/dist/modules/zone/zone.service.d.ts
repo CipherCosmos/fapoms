@@ -1,6 +1,7 @@
 import { Repository } from 'typeorm';
 import { ZoneEntity } from './zone.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 export interface CreateZoneDto {
     name: string;
     description?: string;
@@ -17,7 +18,8 @@ export interface UpdateZoneDto {
 export declare class ZoneService {
     private readonly zoneRepository;
     private readonly auditService;
-    constructor(zoneRepository: Repository<ZoneEntity>, auditService: AuditService);
+    private readonly eventPublisher;
+    constructor(zoneRepository: Repository<ZoneEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
     create(dto: CreateZoneDto, userId: string): Promise<ZoneEntity>;
     findOne(id: string): Promise<ZoneEntity>;
     findAll(page?: number, limit?: number, clientId?: string): Promise<{

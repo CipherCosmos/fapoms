@@ -18,13 +18,16 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const holiday_entity_1 = require("./holiday.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 let HolidayService = class HolidayService {
     holidayRepository;
     auditService;
-    constructor(holidayRepository, auditService) {
+    eventPublisher;
+    constructor(holidayRepository, auditService, eventPublisher) {
         this.holidayRepository = holidayRepository;
         this.auditService = auditService;
+        this.eventPublisher = eventPublisher;
     }
     async create(dto, userId) {
         const holidayDate = new Date(dto.date);
@@ -45,6 +48,12 @@ let HolidayService = class HolidayService {
             entityId: saved.id,
             userId,
             remarks: `Created holiday ${saved.name} for ${dto.date}`,
+        });
+        this.eventPublisher.publish('holiday:created', {
+            eventType: 'holiday:created',
+            aggregateId: saved.id,
+            userId,
+            payload: { id: saved.id, name: saved.name, date: dto.date, type: dto.type },
         });
         return saved;
     }
@@ -72,6 +81,12 @@ let HolidayService = class HolidayService {
             entityId: saved.id,
             userId,
             remarks: `Updated holiday ${saved.name} for ${dto.date}`,
+        });
+        this.eventPublisher.publish('holiday:updated', {
+            eventType: 'holiday:updated',
+            aggregateId: id,
+            userId,
+            payload: { id, name: saved.name, date: dto.date, type: dto.type },
         });
         return saved;
     }
@@ -114,6 +129,12 @@ let HolidayService = class HolidayService {
             userId,
             remarks: `Soft deleted holiday ${holiday.name}`,
         });
+        this.eventPublisher.publish('holiday:deleted', {
+            eventType: 'holiday:deleted',
+            aggregateId: id,
+            userId,
+            payload: { id, name: holiday.name },
+        });
     }
 };
 exports.HolidayService = HolidayService;
@@ -121,6 +142,7 @@ exports.HolidayService = HolidayService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(holiday_entity_1.HolidayEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], HolidayService);
 //# sourceMappingURL=holiday.service.js.map

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { 
   CalendarDays, AlertCircle, RefreshCw, Calendar, CheckCircle2,
   Plus, FileText, Download, ChevronLeft, ChevronRight,
@@ -6,6 +7,9 @@ import {
 } from 'lucide-react';
 import { ScheduleStatus } from '@fapoms/shared';
 import { api } from '../services/api';
+import { queryClient } from '../queryClient';
+import { queryKeys } from '../hooks/queryKeys';
+import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 
 interface Schedule {
   id: string;
@@ -61,9 +65,6 @@ export const Scheduling: React.FC = () => {
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
   const [selectedDate, setSelectedDate] = useState<string>(today.toISOString().split('T')[0]);
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [assignments, setAssignments] = useState<AssignmentOption[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
   const [scheduleDate, setScheduleDate] = useState(today.toISOString().split('T')[0]);
@@ -75,11 +76,31 @@ export const Scheduling: React.FC = () => {
   const [selectedSchId, setSelectedSchId] = useState<string | null>(null);
   const [documents, setDocuments] = useState<any[]>([]);
 
+  useSocketInvalidation();
+
+  const { data: schedules = [], isLoading } = useQuery({
+    queryKey: queryKeys.schedules.list,
+    queryFn: () => api.request<Schedule[]>('/schedules'),
+    staleTime: 30_000,
+  });
+
+  const { data: assignments = [] } = useQuery({
+    queryKey: [...queryKeys.assignments.all, 'available'],
+    queryFn: () => api.request<AssignmentOption[]>('/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&limit=100'),
+    staleTime: 30_000,
+  });
+
+  const { data: holidaysRes } = useQuery({
+    queryKey: ['holidays', currentYear],
+    queryFn: () => api.request<any[]>(`/holidays?year=${currentYear}&limit=200`),
+    staleTime: 60_000,
+  });
+
+  const holidays = (Array.isArray(holidaysRes) ? holidaysRes : (holidaysRes as any)?.data) || [];
+
   const selectedSch = schedules.find(s => s.id === selectedSchId);
   const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
   const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
-
-  useEffect(() => { loadSchedules(); }, []);
 
   useEffect(() => {
     if (error) { const t = setTimeout(() => setError(null), 4000); return () => clearTimeout(t); }
@@ -95,21 +116,9 @@ export const Scheduling: React.FC = () => {
     }
   }, [selectedSchId]);
 
-  const loadSchedules = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await api.request<Schedule[]>('/schedules');
-      setSchedules(data);
-    } catch { setError('Failed to load schedules'); }
-    finally { setIsLoading(false); }
-  };
-
-  const loadAcceptedAssignments = async () => {
-    try {
-      const data = await api.request<AssignmentOption[]>('/assignments?status=ACCEPTED&limit=100');
-      setAssignments(data);
-    } catch { console.error('Failed to load assignments'); }
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all });
+    queryClient.invalidateQueries({ queryKey: [...queryKeys.assignments.all, 'available'] });
   };
 
   const loadAssayerWorkload = async (assayerId: string, date: string) => {
@@ -150,7 +159,7 @@ export const Scheduling: React.FC = () => {
       setSuccessMsg('Schedule created! Assignment is now Scheduled.');
       setSelectedAssignmentId('');
       setScheduleRemarks('');
-      loadSchedules();
+      invalidateAll();
     } catch (err: any) {
       setError(err?.message || 'Failed to create schedule');
     } finally { setIsCreating(false); }
@@ -159,12 +168,22 @@ export const Scheduling: React.FC = () => {
   const handleTransition = async (id: string, targetStatus: ScheduleStatus) => {
     setError(null);
     try {
+      let newDate: string | null = null;
+      if (targetStatus === ScheduleStatus.RESCHEDULED) {
+        const inputDate = prompt('Select new audit date for rescheduling (YYYY-MM-DD):', today.toISOString().split('T')[0]);
+        if (!inputDate) return;
+        newDate = inputDate;
+      }
       await api.request(`/schedules/${id}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus, remarks: `Transitioned to ${targetStatus}` }),
+        body: JSON.stringify({
+          targetStatus,
+          remarks: `Transitioned to ${targetStatus}`,
+          ...(newDate ? { scheduledDate: newDate } : {}),
+        }),
       });
-      setSuccessMsg(`Schedule marked as ${targetStatus}`);
-      loadSchedules();
+      setSuccessMsg(newDate ? `Schedule rescheduled to ${newDate}` : `Schedule marked as ${targetStatus}`);
+      invalidateAll();
     } catch (err: any) {
       setError(err?.message || 'Failed to update schedule');
     }
@@ -225,10 +244,10 @@ export const Scheduling: React.FC = () => {
               </button>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button onClick={loadSchedules} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all })} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <RefreshCw size={13} /> Refresh
               </button>
-              <button onClick={() => { setShowCreateModal(true); loadAcceptedAssignments(); setScheduleDate(today.toISOString().split('T')[0]); setAssayerWorkload(null); }}
+              <button onClick={() => { setShowCreateModal(true); setScheduleDate(today.toISOString().split('T')[0]); setAssayerWorkload(null); }}
                 className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Plus size={14} /> Create Schedule
               </button>
@@ -244,17 +263,37 @@ export const Scheduling: React.FC = () => {
             {Array.from({ length: daysInMonth }).map((_, i) => {
               const day = i + 1;
               const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const cellDate = new Date(currentYear, currentMonth, day);
+              const dayOfWeek = cellDate.getDay(); // 0 = Sun, 6 = Sat
+              const weekIndex = Math.ceil(day / 7);
+
+              const isSunday = dayOfWeek === 0;
+              const isAltSaturday = dayOfWeek === 6 && (weekIndex === 2 || weekIndex === 4);
+
               const daySchedules = getSchedulesForDate(dateStr);
+              const dayHolidays = holidays.filter((h: any) => {
+                const hd = typeof h.date === 'string' ? h.date.slice(0, 10) : new Date(h.date).toISOString().slice(0, 10);
+                return hd === dateStr;
+              });
               const isToday = dateStr === today.toISOString().split('T')[0];
               const isSelected = dateStr === selectedDate;
               const hasSchedules = daySchedules.length > 0;
+              const isHoliday = dayHolidays.length > 0 || isSunday || isAltSaturday;
+
+              let holidayLabel = '';
+              if (dayHolidays.length > 0) holidayLabel = dayHolidays.map((h: any) => h.name).join(', ');
+              else if (isSunday) holidayLabel = 'Sunday Holiday';
+              else if (isAltSaturday) holidayLabel = `${weekIndex === 2 ? '2nd' : '4th'} Saturday Bank Holiday`;
 
               return (
                 <div key={day} onClick={() => setSelectedDate(dateStr)}
-                  style={{ padding: '6px', cursor: 'pointer', borderRadius: '6px', minHeight: '52px',
-                    background: isSelected ? 'rgba(139,92,246,0.15)' : isToday ? 'rgba(139,92,246,0.06)' : 'transparent',
-                    border: isSelected ? '1px solid rgba(139,92,246,0.4)' : isToday ? '1px solid rgba(139,92,246,0.15)' : '1px solid transparent' }}>
-                  <div style={{ fontSize: '12px', fontWeight: isToday ? 700 : 500, color: isToday ? 'var(--accent-primary)' : '#fff', marginBottom: '4px' }}>{day}</div>
+                  style={{ padding: '6px', cursor: 'pointer', borderRadius: '6px', minHeight: '56px', position: 'relative',
+                    background: isHoliday ? 'rgba(239,68,68,0.12)' : isSelected ? 'rgba(139,92,246,0.15)' : isToday ? 'rgba(139,92,246,0.06)' : 'transparent',
+                    border: isHoliday ? '1px solid rgba(239,68,68,0.35)' : isSelected ? '1px solid rgba(139,92,246,0.4)' : isToday ? '1px solid rgba(139,92,246,0.15)' : '1px solid transparent' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: isToday || isHoliday ? 700 : 500, color: isHoliday ? '#f87171' : isToday ? 'var(--accent-primary)' : '#fff' }}>{day}</span>
+                    {isHoliday && <span style={{ fontSize: '9px', fontWeight: 700, color: '#f87171' }} title={holidayLabel}>{isSunday ? '☀️' : isAltSaturday ? '🏦' : '🏖️'}</span>}
+                  </div>
                   {hasSchedules && (
                     <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
                       {daySchedules.map(s => (
@@ -271,6 +310,7 @@ export const Scheduling: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Circle size={8} fill="#10b981" color="#10b981" /> Confirmed</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Circle size={8} fill="#8b5cf6" color="#8b5cf6" /> Rescheduled</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Circle size={8} fill="#06b6d4" color="#06b6d4" /> Completed</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#f87171', fontWeight: 600 }}><Circle size={8} fill="#ef4444" color="#ef4444" /> 🏖️ Holiday</span>
           </div>
         </div>
 
@@ -287,6 +327,48 @@ export const Scheduling: React.FC = () => {
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+            {(() => {
+              const selDate = new Date(selectedDate);
+              const dow = selDate.getDay();
+              const dom = selDate.getDate();
+              const wIdx = Math.ceil(dom / 7);
+              const isSun = dow === 0;
+              const isAltSat = dow === 6 && (wIdx === 2 || wIdx === 4);
+
+              return (
+                <>
+                  {isSun && (
+                    <div style={{ marginBottom: '8px', padding: '10px 12px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px' }}>
+                      <div style={{ color: '#f87171', fontWeight: 700, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        ☀️ Sunday Weekly Holiday
+                      </div>
+                      <div style={{ color: '#cbd5e1', fontSize: '11px', marginTop: '2px' }}>Standard non-working weekly holiday for all banking operations</div>
+                    </div>
+                  )}
+                  {isAltSat && (
+                    <div style={{ marginBottom: '8px', padding: '10px 12px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '6px' }}>
+                      <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        🏦 {wIdx === 2 ? '2nd' : '4th'} Saturday Bank Holiday
+                      </div>
+                      <div style={{ color: '#cbd5e1', fontSize: '11px', marginTop: '2px' }}>Official 2nd / 4th Saturday statutory bank holiday</div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+            {holidays.filter((h: any) => {
+              const hd = typeof h.date === 'string' ? h.date.slice(0, 10) : new Date(h.date).toISOString().slice(0, 10);
+              return hd === selectedDate;
+            }).map((h: any) => (
+              <div key={h.id} style={{ marginBottom: '8px', padding: '10px 12px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px' }}>
+                <div style={{ color: '#f87171', fontWeight: 700, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  🏖️ {h.name} ({h.type})
+                </div>
+                <div style={{ color: '#cbd5e1', fontSize: '11px', marginTop: '2px' }}>
+                  {!h.applicableStates || h.applicableStates.length === 0 ? 'National Bank Holiday (All States)' : `Regional Holiday: ${h.applicableStates.join(', ')}`}
+                </div>
+              </div>
+            ))}
             {isLoading ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading schedules...</div>
             ) : dateSchedules.length === 0 ? (
@@ -355,9 +437,9 @@ export const Scheduling: React.FC = () => {
             <div>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>ACTIONS</span>
               <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                {selectedSch.status === ScheduleStatus.CONFIRMED && (
+                {(selectedSch.status === ScheduleStatus.CONFIRMED || selectedSch.status === ScheduleStatus.RESCHEDULED) && (
                   <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.RESCHEDULED)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }}>
-                    Mark Rescheduled
+                    Reschedule Date
                   </button>
                 )}
                 {selectedSch.status !== ScheduleStatus.COMPLETED && selectedSch.status !== ScheduleStatus.TENTATIVE && (

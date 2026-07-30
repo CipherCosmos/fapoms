@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bell, CheckCheck, ExternalLink } from 'lucide-react';
 import { api, WebNotification } from '../services/api';
+import { connectSocket } from '../services/socket';
 
 export const NotificationDropdown: React.FC = () => {
   const [open, setOpen] = useState(false);
@@ -20,7 +21,40 @@ export const NotificationDropdown: React.FC = () => {
   useEffect(() => {
     loadNotifications();
     const interval = setInterval(loadNotifications, 30000);
-    return () => clearInterval(interval);
+    const socket = connectSocket();
+    const handler = (data: any) => {
+      setNotifications((prev) => {
+        const exists = prev.some((n) => n.id === data.id);
+        if (exists) return prev;
+        const newNotif: WebNotification = {
+          id: data.id,
+          title: data.title || data.message?.split('\n')[0] || 'New Notification',
+          message: data.message || '',
+          isRead: false,
+          link: data.link || null,
+          createdAt: data.createdAt || new Date().toISOString(),
+        };
+        return [newNotif, ...prev];
+      });
+      setUnreadCount((prev) => prev + 1);
+    };
+    if (socket?.connected) {
+      socket.on('notification:new', handler);
+    } else {
+      const checkConnect = setInterval(() => {
+        const s = connectSocket();
+        if (s?.connected) {
+          s.on('notification:new', handler);
+          clearInterval(checkConnect);
+        }
+      }, 500);
+      setTimeout(() => clearInterval(checkConnect), 10000);
+    }
+    return () => {
+      clearInterval(interval);
+      const s = connectSocket();
+      s?.off('notification:new', handler);
+    };
   }, []);
 
   useEffect(() => {

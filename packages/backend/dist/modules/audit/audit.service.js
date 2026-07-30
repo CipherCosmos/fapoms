@@ -20,16 +20,19 @@ const audit_entity_1 = require("./audit.entity");
 const billing_service_1 = require("../billing/billing.service");
 const ledger_service_1 = require("../ledger/ledger.service");
 const audit_history_service_1 = require("../audit-history/audit-history.service");
+const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 let AuditService = class AuditService {
     auditRepository;
     billingService;
     ledgerService;
     historyService;
-    constructor(auditRepository, billingService, ledgerService, historyService) {
+    eventPublisher;
+    constructor(auditRepository, billingService, ledgerService, historyService, eventPublisher) {
         this.auditRepository = auditRepository;
         this.billingService = billingService;
         this.ledgerService = ledgerService;
         this.historyService = historyService;
+        this.eventPublisher = eventPublisher;
     }
     async startAudit(assignmentId, assayerId, projectId, branchId, scheduledDate) {
         const audit = this.auditRepository.create({
@@ -52,6 +55,15 @@ let AuditService = class AuditService {
             startTime: new Date(),
             slaStatus: 'MET',
         });
+        this.eventPublisher.publish('audit:started', {
+            eventType: 'audit:started',
+            aggregateId: saved.id,
+            assayerId,
+            assignmentId,
+            projectId,
+            branchId,
+            payload: { id: saved.id, status: 'IN_PROGRESS', scheduledDate },
+        });
         return saved;
     }
     async closeAudit(id, baseFee, travelAllowance) {
@@ -70,6 +82,13 @@ let AuditService = class AuditService {
             invoiceStatus: 'ISSUED',
         });
         await this.ledgerService.addEntry(saved.assayerId, 'CREDIT', bill.netPayable, bill.id);
+        this.eventPublisher.publish('audit:closed', {
+            eventType: 'audit:closed',
+            aggregateId: id,
+            assayerId: saved.assayerId,
+            billingId: bill.id,
+            payload: { id, status: 'CLOSED', completionDate: saved.completionDate, baseFee, travelAllowance },
+        });
         return saved;
     }
 };
@@ -80,6 +99,7 @@ exports.AuditService = AuditService = __decorate([
     __metadata("design:paramtypes", [typeorm_2.Repository,
         billing_service_1.BillingService,
         ledger_service_1.LedgerService,
-        audit_history_service_1.AuditHistoryService])
+        audit_history_service_1.AuditHistoryService,
+        domain_event_publisher_1.DomainEventPublisher])
 ], AuditService);
 //# sourceMappingURL=audit.service.js.map

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, UserX } from 'lucide-react';
 import { api } from '../services/api';
+import { connectSocket } from '../services/socket';
 
 interface UserRole {
   id: string;
@@ -63,6 +64,16 @@ export const Users: React.FC = () => {
   useEffect(() => {
     loadUsers();
     loadRoles();
+    const socket = connectSocket();
+    const refresh = () => { loadUsers(); loadRoles(); };
+    socket?.on('AssayerActivated', refresh);
+    socket?.on('AssayerSuspended', refresh);
+    socket?.on('AssayerDeactivated', refresh);
+    return () => {
+      socket?.off('AssayerActivated', refresh);
+      socket?.off('AssayerSuspended', refresh);
+      socket?.off('AssayerDeactivated', refresh);
+    };
   }, []);
 
   const loadUsers = async () => {

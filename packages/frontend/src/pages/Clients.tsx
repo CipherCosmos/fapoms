@@ -3,6 +3,7 @@ import { Building2, Plus, Search, Mail, Phone, User, X } from 'lucide-react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ClientLifecycleStatus } from '@fapoms/shared';
 import { api } from '../services/api';
+import { connectSocket } from '../services/socket';
 
 interface Client {
   id: string;
@@ -95,7 +96,17 @@ export const Clients: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'contacts' | 'contracts' | 'billing'>('contacts');
 
-  useEffect(() => { loadClients(); }, []);
+  useEffect(() => {
+    loadClients();
+    const socket = connectSocket();
+    const refresh = () => loadClients();
+    socket?.on('ProjectPlanningStarted', refresh);
+    socket?.on('ProjectCancelled', refresh);
+    return () => {
+      socket?.off('ProjectPlanningStarted', refresh);
+      socket?.off('ProjectCancelled', refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (clientIdParam && clients.length > 0) {

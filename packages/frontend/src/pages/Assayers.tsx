@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { connectSocket } from '../services/socket';
 import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star, ExternalLink, Search, Phone, DollarSign, TrendingUp, CheckCircle, X } from 'lucide-react';
 import { AssayerLifecycleStatus, INDIAN_STATES } from '@fapoms/shared';
 
@@ -201,7 +202,16 @@ export const Assayers: React.FC = () => {
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState('');
 
-  useEffect(() => { fetchAssayers(); }, []);
+  useEffect(() => {
+    fetchAssayers();
+    const socket = connectSocket();
+    const refresh = () => fetchAssayers();
+    const assayerEvents = ['AssayerActivated', 'AssayerSuspended', 'AssayerDeactivated', 'AssayerOnLeave', 'AssayerResigned', 'AssayerTerminated', 'AssayerArchived', 'AssayerDocumentVerificationStarted', 'AssayerBackgroundCheckInitiated', 'AssayerTrainingStarted'];
+    assayerEvents.forEach(evt => socket?.on(evt, refresh));
+    return () => {
+      assayerEvents.forEach(evt => socket?.off(evt, refresh));
+    };
+  }, []);
 
   const fetchAssayers = async () => {
     setLoading(true);

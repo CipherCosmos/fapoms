@@ -28,6 +28,21 @@ if (Notifications && Notifications.setNotificationHandler) {
 }
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
+  const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+  if (Platform.OS === 'web' && g.window && 'Notification' in g.window) {
+    try {
+      if (g.Notification.permission !== 'granted') {
+        const perm = await g.Notification.requestPermission();
+        if (perm === 'granted') {
+          console.log('Web Notification permission granted');
+        }
+      }
+      return 'web-simulated-push-token';
+    } catch (e) {
+      console.log('Web notification setup failed:', e);
+    }
+  }
+
   if (!Notifications || !Device || !Device.isDevice) {
     return null;
   }

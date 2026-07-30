@@ -13,6 +13,7 @@ exports.AssignmentEntity = void 0;
 const typeorm_1 = require("typeorm");
 const base_entity_1 = require("../../core/entities/base.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const assessment_entity_1 = require("../project/assessment.entity");
 const project_entity_1 = require("../project/project.entity");
 const assayer_entity_1 = require("../assayer/assayer.entity");
 const operations_execution_group_entity_1 = require("../planning/operations-execution-group.entity");
@@ -20,6 +21,7 @@ const shared_1 = require("@fapoms/shared");
 let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     assignmentNumber;
     projectBranchId;
+    assessmentId;
     projectId;
     assayerId;
     status;
@@ -36,6 +38,7 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     cancelReason;
     rejectReason;
     projectBranch;
+    assessment;
     project;
     assayer;
     executionGroupId;
@@ -47,9 +50,13 @@ __decorate([
     __metadata("design:type", String)
 ], AssignmentEntity.prototype, "assignmentNumber", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'project_branch_id', type: 'uuid' }),
-    __metadata("design:type", String)
+    (0, typeorm_1.Column)({ name: 'project_branch_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "projectBranchId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'assessment_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], AssignmentEntity.prototype, "assessmentId", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'project_id', type: 'uuid' }),
     __metadata("design:type", String)
@@ -62,7 +69,7 @@ __decorate([
     (0, typeorm_1.Column)({
         type: 'enum',
         enum: shared_1.AssignmentStatus,
-        default: shared_1.AssignmentStatus.CREATED,
+        default: shared_1.AssignmentStatus.PENDING,
     }),
     __metadata("design:type", String)
 ], AssignmentEntity.prototype, "status", void 0);
@@ -119,10 +126,15 @@ __decorate([
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "rejectReason", void 0);
 __decorate([
-    (0, typeorm_1.ManyToOne)(() => project_branch_entity_1.ProjectBranchEntity, (pb) => pb.assignments, { onDelete: 'CASCADE' }),
+    (0, typeorm_1.ManyToOne)(() => project_branch_entity_1.ProjectBranchEntity, { onDelete: 'CASCADE', nullable: true }),
     (0, typeorm_1.JoinColumn)({ name: 'project_branch_id' }),
-    __metadata("design:type", project_branch_entity_1.ProjectBranchEntity)
+    __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "projectBranch", void 0);
+__decorate([
+    (0, typeorm_1.ManyToOne)(() => assessment_entity_1.AssessmentEntity, (a) => a.assignments, { onDelete: 'CASCADE', nullable: true }),
+    (0, typeorm_1.JoinColumn)({ name: 'assessment_id' }),
+    __metadata("design:type", Object)
+], AssignmentEntity.prototype, "assessment", void 0);
 __decorate([
     (0, typeorm_1.ManyToOne)(() => project_entity_1.ProjectEntity, { onDelete: 'CASCADE' }),
     (0, typeorm_1.JoinColumn)({ name: 'project_id' }),
@@ -140,12 +152,13 @@ __decorate([
 __decorate([
     (0, typeorm_1.ManyToOne)(() => operations_execution_group_entity_1.OperationsExecutionGroupEntity, (eg) => eg.assignments, { onDelete: 'SET NULL', nullable: true }),
     (0, typeorm_1.JoinColumn)({ name: 'execution_group_id' }),
-    __metadata("design:type", operations_execution_group_entity_1.OperationsExecutionGroupEntity)
+    __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "executionGroup", void 0);
 exports.AssignmentEntity = AssignmentEntity = __decorate([
     (0, typeorm_1.Entity)('assignments'),
     (0, typeorm_1.Index)(['assignmentNumber']),
     (0, typeorm_1.Index)(['projectBranchId']),
+    (0, typeorm_1.Index)(['assessmentId']),
     (0, typeorm_1.Index)(['projectId']),
     (0, typeorm_1.Index)(['assayerId'])
 ], AssignmentEntity);
