@@ -116,7 +116,7 @@ export class PlanningController {
 
   @Put('field/visits/:visitId/status')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' })
   async transitionVisit(
     @Param('visitId', ParseUUIDPipe) visitId: string,
@@ -146,7 +146,7 @@ export class PlanningController {
 
   @Put('field/incidents/:incidentId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Resolve active field incident' })
   async resolveIncident(
     @Param('incidentId', ParseUUIDPipe) incidentId: string,
@@ -252,7 +252,7 @@ export class PlanningController {
 
   @Put('control-center/tasks/:taskId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Resolve an operations task with justification log' })
   async resolveTask(
     @Param('taskId', ParseUUIDPipe) taskId: string,
@@ -281,7 +281,7 @@ export class PlanningController {
 
   @Put('control-center/exceptions/:exceptionId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Resolve or bypass exception log with justification' })
   async resolveException(
     @Param('exceptionId', ParseUUIDPipe) exceptionId: string,
@@ -333,7 +333,7 @@ export class PlanningController {
 
   @Put('coverage-plans/:planId/transition')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' })
   async transitionPlan(
     @Param('planId', ParseUUIDPipe) planId: string,
@@ -407,6 +407,9 @@ export class PlanningController {
     return {
       success: true,
       data: recommendations,
+      // Candidates the filters removed, with the reason. Ops needs this to distinguish
+      // "nobody is suitable" from "everyone was blocked by one misconfigured rule".
+      meta: { excluded: (recommendations as any).excluded || [] },
     };
   }
 
@@ -416,8 +419,17 @@ export class PlanningController {
   async getDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Query('targetDate') targetDate?: string,
+    // Same "Min Radius Filter" control already used on the single-branch Planning view —
+    // previously this endpoint had no minimum-distance concept at all (see
+    // DayPlannerService.resolveMinDistanceKm).
+    @Query('minDistanceKm') minDistanceKm?: string,
   ) {
-    const plan = await this.dayPlannerService.generateDayPlans(projectId, targetDate);
+    const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+    const plan = await this.dayPlannerService.generateDayPlans(
+      projectId,
+      targetDate,
+      Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+    );
     return {
       success: true,
       data: plan,
@@ -439,7 +451,7 @@ export class PlanningController {
 
   @Put('rules/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Update a business planning rule by ID' })
   async updateRule(
     @Param('id', ParseUUIDPipe) id: string,

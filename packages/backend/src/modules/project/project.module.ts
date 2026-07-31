@@ -13,12 +13,13 @@ import { ProjectBranchEntity } from './project-branch.entity';
 import { AssessmentEntity } from './assessment.entity';
 import { CallLogEntity } from './call-log.entity';
 import { ClientEntity } from '../client/client.entity';
+import { UserEntity } from '../user/user.entity';
 import { PlatformModule } from '../platform/platform.module';
 import { BranchModule } from '../branch/branch.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ProjectEntity, ProjectBranchEntity, AssessmentEntity, CallLogEntity, ClientEntity]),
+    TypeOrmModule.forFeature([ProjectEntity, ProjectBranchEntity, AssessmentEntity, CallLogEntity, ClientEntity, UserEntity]),
     PlatformModule,
     BranchModule,
   ],

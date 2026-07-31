@@ -23,6 +23,13 @@ interface InteractivePlanningMapProps {
   selectedAssayerFromParent?: any | null;
   slaEnabled?: boolean;
   slaRadius?: number;
+  /**
+   * Recommendation results for the selected branch. The map previously coloured every assayer
+   * purely by straight-line distance, so the engine's top pick and an assayer blocked by a
+   * regulation looked identical — the operator had to cross-reference the list by hand.
+   */
+  rankedCandidates?: { id: string; score?: number; scoreBreakdown?: Record<string, number> }[];
+  excludedCandidates?: { assayerId: string; reason: string; detail?: string }[];
 }
 
 export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
@@ -34,6 +41,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   selectedAssayerFromParent,
   slaEnabled: slaEnabledProp = false,
   slaRadius: slaRadiusProp = 50,
+  rankedCandidates,
+  excludedCandidates,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -371,6 +380,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
     // 2. Render Assayers
     if (showAssayers) {
+      // Rank/exclusion lookups so each pin can show where the engine placed that assayer.
+      const rankById = new Map<string, { rank: number; score?: number }>();
+      (rankedCandidates || []).forEach((c, i) => rankById.set(c.id, { rank: i + 1, score: c.score }));
+      const blockedById = new Map<string, { reason: string; detail?: string }>();
+      (excludedCandidates || []).forEach((e) => blockedById.set(e.assayerId, { reason: e.reason, detail: e.detail }));
+
       filteredAssayers.forEach((assayer) => {
       if (assayer.latitude !== null && assayer.longitude !== null) {
         const aLat = Number(assayer.latitude);
@@ -390,10 +405,39 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }
 
         if (shouldRender) {
-          const slaCompliant = slaEnabledProp && selectedBranchLatLng
-            ? straightDist >= slaRadiusProp
+          // Uses the same *effective* radius/enabled the "Restricted Zone" circle above is
+          // drawn with (effectiveSlaEnabled/effectiveSlaRadius), not the raw slaEnabledProp/
+          // slaRadiusProp. Those two used to diverge: the map has its own independent "Show
+          // SLA Risk" layer toggle (showSlaRisk/slaRadiusKm) that draws the restricted-zone
+          // circle on its own, separate from the Planning page's min-radius filter — so an
+          // assayer standing inside a visibly-drawn red restricted zone could still be
+          // coloured green/gold as "recommended", directly contradicting the circle drawn
+          // around them.
+          const slaCompliant = effectiveSlaEnabled && selectedBranchLatLng
+            ? straightDist >= effectiveSlaRadius
             : null;
-          const markerColor = slaCompliant === null ? '#a855f7' : slaCompliant ? '#10b981' : '#ef4444';
+          const ranking = rankById.get(assayer.id);
+          const blocked = blockedById.get(assayer.id);
+          // An assayer inside the restricted radius must never read as recommended, even if
+          // they're still present in rankedCandidates (e.g. the Planning page's own min-radius
+          // filter is off but the map's local "Show SLA Risk" toggle is on) — so this is
+          // checked ahead of ranking, not folded into the same priority level as it.
+          const inBreach = slaCompliant === false;
+
+          // Ranking wins over raw distance: what matters operationally is who the engine
+          // recommends, not merely who is nearest. Blocked assayers are greyed so they read as
+          // "cannot be assigned" at a glance instead of looking like an ordinary option.
+          const markerColor = blocked
+            ? '#64748b'
+            : inBreach
+            ? '#ef4444'
+            : ranking?.rank === 1
+            ? '#f59e0b'
+            : ranking
+            ? '#10b981'
+            : slaCompliant === null
+            ? '#a855f7'
+            : '#10b981';
           const assayerSvg = `
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${markerColor}" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
               <circle cx="12" cy="12" r="10" fill="none" stroke="${markerColor}" stroke-width="2"/>
@@ -401,8 +445,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             </svg>
           `;
 
+          // A small rank badge on the top three, so the best options are findable on the map
+          // without reading the list. Suppressed when in breach — a "#1 recommended" badge on
+          // a marker that's simultaneously coloured red as a restricted-zone breach is a direct
+          // visual contradiction.
+          const rankBadge = ranking && ranking.rank <= 3 && !inBreach
+            ? `<div style="position:absolute;top:-6px;right:-6px;background:${markerColor};color:#0f172a;font-size:9px;font-weight:800;width:14px;height:14px;line-height:14px;border-radius:50%;text-align:center;border:1.5px solid #0f172a;">${ranking.rank}</div>`
+            : '';
+          const blockedMark = blocked
+            ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:12px;font-weight:800;">✕</div>`
+            : '';
+
           const assayerIcon = L.divIcon({
-            html: assayerSvg,
+            html: `<div style="position:relative;width:26px;height:26px;opacity:${blocked ? 0.55 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`,
             className: 'custom-assayer-marker',
             iconSize: [24, 24],
             iconAnchor: [12, 24],
@@ -413,15 +468,28 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
           if (selectedBranchLatLng) {
             const slaStatus = slaCompliant === null ? '' : slaCompliant
-              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${slaRadiusProp}km SLA</div>`
-              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${slaRadiusProp}km SLA — Breach Risk</div>`;
+              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${effectiveSlaRadius}km SLA</div>`
+              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${effectiveSlaRadius}km SLA — Breach Risk</div>`;
+            // Surface the engine's verdict on the pin itself — rank and score when eligible,
+            // the blocking reason when not. A breach always wins over a stale ranking: an
+            // assayer can be in `rankedCandidates` (unfiltered by radius, e.g. when only the
+            // map's own SLA-risk layer is on) while still standing inside the restricted zone.
+            const verdict = blocked
+              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — ${blocked.reason}</div>` +
+                (blocked.detail ? `<div style="font-size:10px;color:#92400e;">└─ ${blocked.detail}</div>` : '')
+              : inBreach
+              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — within the ${effectiveSlaRadius}km restricted zone</div>`
+              : ranking
+              ? `<div style="margin-top:3px;color:#047857;font-weight:600;">#${ranking.rank} recommended · score ${ranking.score ?? '—'}</div>`
+              : '';
             assayerMarker.bindPopup(`
-              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:150px;">
+              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:170px;">
                 <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Distance: <b>${straightDist.toFixed(1)} km</b></div>
+                ${verdict}
                 ${slaStatus}
-                <div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>
+                ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>'}
               </div>
             `);
             assayerMarker.on('click', () => {
@@ -441,7 +509,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                 <b style="color:#a855f7; display:block; margin-bottom: 4px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Status: <span style="color:var(--status-active)">${assayer.status}</span></div>
-                <div>Skills: <i>${assayer.skills?.join(', ') || 'gold'}</i></div>
+                <div>Skills: <i>${assayer.skills?.length ? assayer.skills.join(', ') : 'None recorded'}</i></div>
               </div>
             `);
           }
@@ -538,7 +606,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         map.fitBounds(bounds, { padding: [30, 30] });
       }
     }
-  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp]);
+  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };

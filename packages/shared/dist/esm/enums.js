@@ -200,6 +200,15 @@ export var PermissionResource;
     PermissionResource["BRANCH"] = "BRANCH";
     PermissionResource["ASSIGNMENT"] = "ASSIGNMENT";
     PermissionResource["SCHEDULING"] = "SCHEDULING";
+    /**
+     * Candidate recommendation, day planning, and the business-rule engine.
+     *
+     * The planning controller already guarded 18 endpoints with `planning:*` permissions, but
+     * PLANNING was never a member of this enum and no such permission row existed — so the guard
+     * could not be satisfied by any role, including SUPER_ADMINISTRATOR. That is why no business
+     * rule had ever been created: the rule-management API was unreachable.
+     */
+    PermissionResource["PLANNING"] = "PLANNING";
     PermissionResource["DOCUMENT"] = "DOCUMENT";
     PermissionResource["VALIDATION"] = "VALIDATION";
     PermissionResource["ASSAYER"] = "ASSAYER";

@@ -91,14 +91,26 @@ export interface BranchCluster {
   feasibleForOneDay: boolean;
 }
 
+/** An assayer who could not be offered this cluster, and why. */
+export interface ExcludedDayPlanCandidate {
+  assayerId: string;
+  displayName: string;
+  reason: string;
+  detail?: string;
+}
+
 export interface ProjectDayPlan {
   projectId: string;
   projectName: string;
   targetDate: string;
+  /** Hard minimum km actually enforced (manual override, client floor, or both — the stricter wins). Null when neither applies. */
+  effectiveMinDistanceKm: number | null;
   clusters: Array<{
     cluster: BranchCluster;
     dayPlans: DayPlanCandidate[];
     bestPlan: DayPlanCandidate | null;
+    /** Previously silently dropped — this is what "no eligible assayers" actually meant. */
+    excludedAssayers: ExcludedDayPlanCandidate[];
   }>;
   unclusteredBranches: Array<{
     branchId: string;
@@ -148,14 +160,27 @@ export class DayPlannerService {
 
   /**
    * Main entry: generate day plans for all unassigned branches of a project.
+   *
+   * @param manualMinDistanceKm The operator's own "Min Radius Filter" value (same control used
+   *   on the single-branch Planning view — pass undefined when that toggle is off). This is
+   *   combined with the client's own configured `planningPreferences.minDistanceKm` and the
+   *   stricter of the two is enforced as a hard exclusion — see `resolveMinDistanceKm`. The
+   *   client's floor is never bypassable by turning the operator's toggle off; it's a
+   *   configured business/conflict-of-interest rule, not a UI convenience.
    */
-  async generateDayPlans(projectId: string, targetDate?: string): Promise<ProjectDayPlan> {
+  async generateDayPlans(
+    projectId: string,
+    targetDate?: string,
+    manualMinDistanceKm?: number,
+  ): Promise<ProjectDayPlan> {
     const project = await this.projectRepository.findOne({ where: { id: projectId } });
     if (!project) throw new NotFoundException(`Project ${projectId} not found.`);
 
     const client = project.clientId
       ? await this.clientRepository.findOne({ where: { id: project.clientId }, relations: ['configuration'] })
       : null;
+
+    const effectiveMinDistanceKm = this.resolveMinDistanceKm(client, manualMinDistanceKm);
 
     const scheduledDate = targetDate ? new Date(targetDate) : new Date();
     const dateStr = scheduledDate.toISOString().split('T')[0];
@@ -202,16 +227,19 @@ export class DayPlannerService {
       // Skip single-branch clusters — handled by the simple assignment interface
       if (cluster.branches.length <= 1) continue;
 
-      let dayPlans = await this.generateClusterDayPlans(
-        cluster, assayers, client, scheduledDate,
+      let { dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
+        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm,
       );
 
-      // Fallback: if no candidates found within client constraints, retry
-      // with relaxed distance maxDistKm to still surface options for remote branches.
+      // Fallback: if no candidates found within client constraints, retry with relaxed
+      // *maximum* distance to still surface options for remote branches. minDistanceKm is
+      // never relaxed here — unlike maxDistanceKm (an optimization preference), it's a
+      // conflict-of-interest/compliance floor and staying empty is the correct outcome if
+      // every candidate is too close.
       if (dayPlans.length === 0) {
-        dayPlans = await this.generateClusterDayPlans(
-          cluster, assayers, client, scheduledDate, true,
-        );
+        ({ dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
+          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true,
+        ));
       }
 
       const bestPlan = dayPlans.length > 0 ? dayPlans[0] : null;
@@ -220,6 +248,7 @@ export class DayPlannerService {
         cluster,
         dayPlans: dayPlans.slice(0, 5), // top 5 candidates per cluster
         bestPlan,
+        excludedAssayers,
       });
     }
 
@@ -245,6 +274,7 @@ export class DayPlannerService {
       projectId,
       projectName: project.name,
       targetDate: dateStr,
+      effectiveMinDistanceKm,
       clusters: clusterResults,
       unclusteredBranches,
       summary,
@@ -384,6 +414,22 @@ export class DayPlannerService {
   }
 
   /**
+   * The stricter of the operator's manual "Min Radius Filter" and the client's own configured
+   * `planningPreferences.minDistanceKm`. The client's value is a real business/conflict-of-
+   * interest floor (verified against seeded clients: SBI 5km, HDFC 10km) — it must not be
+   * bypassable by an operator simply leaving their own toggle off. Returns null when neither
+   * applies, meaning no minimum-distance exclusion is enforced.
+   */
+  private resolveMinDistanceKm(client: ClientEntity | null, manualMinDistanceKm?: number): number | null {
+    const clientFloor = Number(client?.planningPreferences?.minDistanceKm);
+    const values = [
+      typeof manualMinDistanceKm === 'number' && manualMinDistanceKm > 0 ? manualMinDistanceKm : undefined,
+      Number.isFinite(clientFloor) && clientFloor > 0 ? clientFloor : undefined,
+    ].filter((v): v is number => v !== undefined);
+    return values.length > 0 ? Math.max(...values) : null;
+  }
+
+  /**
    * For a given cluster of branches, find and rank assayers that can cover
    * all branches in one day, with route optimization.
    */
@@ -392,54 +438,98 @@ export class DayPlannerService {
     assayers: AssayerEntity[],
     client: ClientEntity | null,
     scheduledDate: Date,
+    effectiveMinDistanceKm: number | null,
     relaxDistance = false,
-  ): Promise<DayPlanCandidate[]> {
+  ): Promise<{ dayPlans: DayPlanCandidate[]; excludedAssayers: ExcludedDayPlanCandidate[] }> {
     const planningPreferences = client?.planningPreferences || {};
     const requiredSkills: string[] = planningPreferences.requiredSkills || [];
     const requiredCerts: string[] = planningPreferences.requiredCertifications || [];
     const maxDistKm = relaxDistance ? Infinity : (Number(planningPreferences.maxDistanceKm) || Infinity);
 
+    // One recommend() call per branch, not per (branch × assayer). This used to re-run the
+    // full recommendation engine — its own DB queries, 6 eligibility filters, 15 scorers,
+    // across every active assayer — inside a per-assayer loop: a 3-branch cluster with 8
+    // candidate assayers issued 24 full engine runs instead of 3.
+    //
+    // Caching per branch also fixes a correctness gap, not just performance: eligibility here
+    // now comes entirely from the same engine the single-branch Planning view uses
+    // (availability, no-repeat-auditor rotation, client eligibility/restriction, required
+    // skills/certifications, and every active business rule), replacing a hand-rolled
+    // skill/cert-only check that had silently drifted from it. An assayer blocked by, say, the
+    // "Certified Gold Assayer" business rule could previously still receive a day-plan card —
+    // the rule engine was never consulted here at all.
+    const branchRecommendations = new Map<
+      string,
+      { ranked: Awaited<ReturnType<RecommendationEngine['recommend']>>; excluded: ExcludedDayPlanCandidate[] }
+    >();
+    for (const branch of cluster.branches) {
+      const branchEntity = await this.branchRepository.findOne({ where: { id: branch.branchId } });
+      if (!branchEntity) continue;
+      const ranked = await this.recommendationEngine.recommend(branchEntity, scheduledDate);
+      branchRecommendations.set(branch.branchId, {
+        ranked,
+        excluded: ((ranked as any).excluded as ExcludedDayPlanCandidate[]) || [],
+      });
+    }
+
     const candidates: DayPlanCandidate[] = [];
+    // Previously dropped silently — "No eligible assayers found" was the only signal, with no
+    // way to tell a genuine dead end from one blocked assayer and a misconfigured rule.
+    const excludedAssayers: ExcludedDayPlanCandidate[] = [];
 
     for (const assayerEntity of assayers) {
       const assayer = assayerEntity as AssayerWithWorkforceAttributes;
-      // ─── Hard Filter: Client Preferences ───────────────────────────────
       if (!assayer.latitude || !assayer.longitude) continue;
 
-      // 1. Check restricted assayers
-      if (client?.restrictedAssayers?.includes(assayer.id)) continue;
-
-      // 2. Check required skills
-      const assayerSkills = (assayer.skills || []).map((s: string) => s.toLowerCase());
-      if (requiredSkills.length > 0) {
-        const hasAll = requiredSkills.every((s) => assayerSkills.includes(s.toLowerCase()));
-        if (!hasAll) continue;
+      // ─── Eligibility: must be eligible for EVERY branch in the cluster ──
+      let exclusion: ExcludedDayPlanCandidate | null = null;
+      for (const branch of cluster.branches) {
+        const rec = branchRecommendations.get(branch.branchId);
+        if (!rec) continue;
+        if (rec.ranked.some((r) => r.assayer.id === assayer.id)) continue;
+        const entry = rec.excluded.find((e) => e.assayerId === assayer.id);
+        exclusion = {
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: entry?.reason ?? `Not eligible for ${branch.branchName}`,
+          detail: entry?.detail,
+        };
+        break;
+      }
+      if (exclusion) {
+        excludedAssayers.push(exclusion);
+        continue;
       }
 
-      // 3. Check required certifications
-      const assayerCerts = (assayer.certifications || []).map((c: any) =>
-        (typeof c === 'string' ? c : c.name || '').toLowerCase(),
-      );
-      if (requiredCerts.length > 0) {
-        const hasAll = requiredCerts.every((c) => assayerCerts.includes(c.toLowerCase()));
-        if (!hasAll) continue;
-      }
-
-      // 4. Check distance — every branch must be within maxDistKm from the assayer.
-      //    (minDistKm is advisory and not a hard filter — local assayers are preferred.)
+      // ─── Distance ────────────────────────────────────────────────────
       const aLat = assayer.latitude!;
       const aLng = assayer.longitude!;
       const branchDistances = cluster.branches.map((b) =>
         calculateHaversineDistance(aLat, aLng, b.latitude, b.longitude),
       );
       const maxBranchDist = Math.max(...branchDistances);
-      if (maxBranchDist > maxDistKm) continue;
+      const minBranchDist = Math.min(...branchDistances);
 
-      // 5. Check availability (double booking, leaves)
-      const dbCheck = await this.constraintEvaluator.checkDoubleBooking(assayer.id, scheduledDate);
-      if (!dbCheck.passed) continue;
-      const leaveCheck = this.constraintEvaluator.checkLeaves(assayer, scheduledDate);
-      if (!leaveCheck.passed) continue;
+      if (maxBranchDist > maxDistKm) {
+        excludedAssayers.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: `Too far — ${maxBranchDist.toFixed(0)}km exceeds the ${maxDistKm}km limit`,
+        });
+        continue;
+      }
+
+      // Hard exclusion. Unlike maxDistKm above, this is never relaxed by the "no candidates
+      // found" retry in generateDayPlans() — it's a compliance floor, not an optimization
+      // preference, so staying empty is the correct outcome when every candidate is too close.
+      if (effectiveMinDistanceKm !== null && minBranchDist < effectiveMinDistanceKm) {
+        excludedAssayers.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: `Too close — ${minBranchDist.toFixed(1)}km is within the ${effectiveMinDistanceKm}km minimum-distance rule`,
+        });
+        continue;
+      }
 
       // ─── Route Optimization: TSP across cluster branches ───────────────
       const destinations: DestinationCoords[] = cluster.branches.map((b) => ({
@@ -494,8 +584,15 @@ export class DayPlannerService {
       const totalAuditHours = cluster.totalEstimatedAuditHours;
       const totalDayHours = totalAuditHours + totalTravelMinutes / 60;
 
-      // Skip if the day exceeds max working hours
-      if (totalDayHours > MAX_DAILY_WORK_HOURS + 2) continue; // allow 2h grace
+      // Skip if the day exceeds max working hours (allow 2h grace)
+      if (totalDayHours > MAX_DAILY_WORK_HOURS + 2) {
+        excludedAssayers.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: `Day too long — ${totalDayHours.toFixed(1)}h exceeds the ${MAX_DAILY_WORK_HOURS + 2}h working-day limit`,
+        });
+        continue;
+      }
 
       // Compute return travel from last branch back to assayer home.
       // (solveTSP adds the return trip to totalDurationMinutes but not to steps.)
@@ -515,15 +612,12 @@ export class DayPlannerService {
       const travelFee = parseFloat((totalTravelKm * TRAVEL_FEE_PER_KM).toFixed(0));
       const totalCost = baseFee * cluster.branches.length + travelFee;
 
-      // ─── Score: use recommendation engine scores averaged across branches
+      // ─── Score: recommendation engine scores averaged across branches, from the
+      // per-branch cache built above — no longer re-invoking the engine here. ───
       let totalScore = 0;
       for (const branch of cluster.branches) {
-        const branchEntity = await this.branchRepository.findOne({ where: { id: branch.branchId } });
-        if (branchEntity) {
-          const results = await this.recommendationEngine.recommend(branchEntity, scheduledDate);
-          const match = results.find((r) => r.assayer.id === assayer.id);
-          totalScore += match ? match.score : 0;
-        }
+        const match = branchRecommendations.get(branch.branchId)?.ranked.find((r) => r.assayer.id === assayer.id);
+        totalScore += match ? match.score : 0;
       }
       const avgScore = cluster.branches.length > 0
         ? parseFloat((totalScore / cluster.branches.length).toFixed(1))
@@ -535,11 +629,23 @@ export class DayPlannerService {
         : 0;
 
       // Skip candidates with very poor utilization (<60% productive audit time)
-      if (utilizationPercent < 60) continue;
+      if (utilizationPercent < 60) {
+        excludedAssayers.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: `Low utilization — only ${utilizationPercent.toFixed(0)}% of the day would be productive audit time (need 60%+)`,
+        });
+        continue;
+      }
 
       // ─── Client Preference Match Summary ───────────────────────────────
-      const preferredSkills = planningPreferences.preferredSkills || [];
-      const preferredCerts = planningPreferences.preferredCertifications || [];
+      // Informational only now — required skills/certifications are already enforced by the
+      // engine's own filters above, so every surviving candidate matches by construction.
+      // Kept here purely to render the confirmation badges the UI already shows.
+      const assayerSkills = (assayer.skills || []).map((s: string) => s.toLowerCase());
+      const assayerCerts = (assayer.certifications || []).map((c: any) =>
+        (typeof c === 'string' ? c : c.name || '').toLowerCase(),
+      );
 
       candidates.push({
         assayerId: assayer.id,
@@ -575,7 +681,7 @@ export class DayPlannerService {
       return a.estimatedTotalCost - b.estimatedTotalCost;
     });
 
-    return candidates;
+    return { dayPlans: candidates, excludedAssayers };
   }
 
   /**
@@ -654,6 +760,7 @@ export class DayPlannerService {
       projectId,
       projectName,
       targetDate: dateStr,
+      effectiveMinDistanceKm: null,
       clusters: [],
       unclusteredBranches: [],
       summary: {

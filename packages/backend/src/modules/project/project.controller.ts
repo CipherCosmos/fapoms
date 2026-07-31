@@ -24,10 +24,13 @@ import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject } from 'class-validator';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
+import { UserEntity } from '../user/user.entity';
 
 export class CreateProjectRequestDto implements CreateProjectDto {
   @IsString() @IsNotEmpty() name: string;
@@ -53,7 +56,11 @@ export class CreateProjectRequestDto implements CreateProjectDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('projects')
 export class ProjectController {
-  constructor(private readonly projectService: ProjectService) {}
+  constructor(
+    private readonly projectService: ProjectService,
+    @InjectRepository(UserEntity)
+    private readonly userRepository: Repository<UserEntity>,
+  ) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
@@ -126,16 +133,44 @@ export class ProjectController {
     };
   }
 
+  // Was @Public() — anyone reaching the API could read every project branch's assignment
+  // fees and negotiation state without authenticating. Fixed alongside adding operator
+  // attribution below, since that made the gap more consequential (it would have exposed
+  // which staff member is handling which negotiation to an unauthenticated caller too).
   @Get(':id/branches')
-  @Public()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Get unassigned and planning branches queue for project' })
   async getProjectBranches(@Param('id', ParseUUIDPipe) id: string) {
     const branches = await this.projectService.findProjectBranches(id);
+
+    // Sorted-descending most-recently-touched assignment per branch, computed once and reused
+    // below rather than recomputed per field.
+    const activeAssignmentByBranch = new Map(
+      branches.map(b => [
+        b.id,
+        b.assignments
+          ?.filter(a => a.status !== 'CANCELLED' && a.status !== 'REJECTED')
+          ?.sort((a, b2) => new Date(b2.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+          ?.[0],
+      ]),
+    );
+
+    // Resolves "who is negotiating this branch" — the ops user who created the offer, i.e.
+    // who first made contact with the assayer. `createdBy` on the assignment is just a raw
+    // user id (see BaseEntity), so without this the frontend has no way to show it as a name;
+    // operators had no visibility into which colleague already owns a given negotiation,
+    // risking duplicate outreach to the same assayer. Batched into one query rather than
+    // resolved per-branch to avoid N+1 lookups on a list endpoint.
+    const creatorIds = [...new Set(
+      [...activeAssignmentByBranch.values()].map(a => a?.createdBy).filter((v): v is string => !!v),
+    )];
+    const creators = creatorIds.length
+      ? await this.userRepository.find({ where: { id: In(creatorIds) }, select: ['id', 'displayName'] })
+      : [];
+    const creatorNameById = new Map(creators.map(u => [u.id, u.displayName]));
+
     const data = branches.map(b => {
-      const activeAssignment = b.assignments
-        ?.filter(a => a.status !== 'CANCELLED' && a.status !== 'REJECTED')
-        ?.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
-        ?.find(a => a.status === 'COMPLETED' || a.status === 'ACCEPTED' || true);
+      const activeAssignment = activeAssignmentByBranch.get(b.id);
       return {
         ...b,
         assignment: activeAssignment ? {
@@ -144,6 +179,15 @@ export class ProjectController {
           proposedFee: activeAssignment.proposedFee,
           agreedFee: activeAssignment.agreedFee,
           scheduledDate: activeAssignment.scheduledDate,
+          // Was declared in the frontend's type but never actually sent — the counter-offer
+          // banner's "(Remarks: ...)" text always rendered "None" as a result.
+          remarks: activeAssignment.remarks,
+          negotiatedByName: activeAssignment.createdBy
+            ? creatorNameById.get(activeAssignment.createdBy) ?? null
+            : null,
+          // proposeCounterFee() auto-declines once this reaches 3 — surfaced so ops can see
+          // how many rounds remain before that happens, instead of it silently auto-declining.
+          negotiationCount: activeAssignment.negotiationCount ?? 0,
           assayer: activeAssignment.assayer ? {
             displayName: activeAssignment.assayer.displayName,
             id: activeAssignment.assayer.id,

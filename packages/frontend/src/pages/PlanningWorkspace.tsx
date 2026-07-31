@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
 import { Priority, ProjectBranchStatus } from '@fapoms/shared';
@@ -43,9 +43,16 @@ interface ProjectBranch {
     agreedFee: number | null;
     scheduledDate: string | null;
     remarks?: string | null;
-    assayer?: { displayName: string };
+    /** The ops user who created this offer — i.e. who owns this negotiation. */
+    negotiatedByName?: string | null;
+    /** Counter-offer rounds so far; proposeCounterFee() auto-declines at 3. */
+    negotiationCount?: number;
+    assayer?: { id: string; displayName: string; assayerCode?: string };
   } | null;
 }
+
+/** Hard limit enforced by AssignmentService.proposeCounterFee() — kept in sync here for display. */
+const MAX_NEGOTIATION_ROUNDS = 3;
 
 interface Candidate {
   id: string;
@@ -63,6 +70,17 @@ interface Candidate {
   score?: number;
   baseFee?: number;
   pendingOnThisBranch?: boolean;
+  /** Backend already computes these; the UI previously discarded them. */
+  readableReasons?: { label: string; detail?: string; sentiment?: string }[];
+  scoreBreakdown?: Record<string, number>;
+}
+
+/** A candidate the engine filtered out, and why. */
+interface ExcludedCandidate {
+  assayerId: string;
+  displayName: string;
+  reason: string;
+  detail?: string;
 }
 
 interface AssayerDetail {
@@ -175,7 +193,10 @@ interface DayPlanCandidate {
 interface BranchCluster {
   clusterId: string;
   radiusKm: number;
-  branches: Array<{ branchId: string; branchName: string; branchCode: string; estimatedDurationHours: number; city: string; district: string }>;
+  // `id` (the project-branch id) was missing from this type though the backend always sends
+  // it — assigning a day plan needs it for POST /assignments, which takes projectBranchId,
+  // not the bare branch id.
+  branches: Array<{ id: string; branchId: string; branchName: string; branchCode: string; estimatedDurationHours: number; city: string; district: string }>;
   totalEstimatedAuditHours: number;
   feasibleForOneDay: boolean;
 }
@@ -184,10 +205,13 @@ interface ProjectDayPlan {
   projectId: string;
   projectName: string;
   targetDate: string;
+  /** Stricter of the operator's manual filter and the client's own configured floor; null when neither applies. */
+  effectiveMinDistanceKm: number | null;
   clusters: Array<{
     cluster: BranchCluster;
     dayPlans: DayPlanCandidate[];
     bestPlan: DayPlanCandidate | null;
+    excludedAssayers: ExcludedCandidate[];
   }>;
   unclusteredBranches: Array<{ branchId: string; branchName: string; reason: string }>;
   summary: {
@@ -215,6 +239,177 @@ const STATUS_OPTIONS = [
   ...Object.values(ProjectBranchStatus).map(value => ({ value, label: branchStatusLabel(value) })),
 ];
 
+
+/** Friendly names for the engine's scoring dimensions. */
+const SCORE_DIMENSION_LABELS: Record<string, string> = {
+  slaCompliance: 'SLA compliance',
+  acceptanceRate: 'Accepts offers',
+  workload: 'Spare capacity',
+  distance: 'Proximity',
+  travelTime: 'Travel time',
+  performance: 'Performance rating',
+  queryVolume: 'Clean paperwork',
+  deliverySpeed: 'Turnaround speed',
+  branchFamiliarity: 'Knows this branch',
+  experience: 'Experience',
+  cost: 'Cost',
+  clientPreference: 'Client fit',
+  customerDensity: 'Capacity vs branch size',
+  profitability: 'Budget fit',
+  riskScore: 'Risk suitability',
+};
+
+/**
+ * Shows the strongest and weakest dimensions behind a candidate's score.
+ *
+ * The engine has always returned a full per-dimension breakdown; the UI discarded it and
+ * showed only a single "% Match" number with a hardcoded tooltip listing six dimensions
+ * (there are fifteen). Ops had no way to tell a candidate who is close-but-unreliable from
+ * one who is distant-but-excellent.
+ */
+const ScoreBreakdown: React.FC<{ breakdown?: Record<string, number> }> = ({ breakdown }) => {
+  if (!breakdown || Object.keys(breakdown).length === 0) return null;
+  const entries = Object.entries(breakdown)
+    .filter(([k]) => SCORE_DIMENSION_LABELS[k])
+    .sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return null;
+  const strengths = entries.slice(0, 3);
+  const weakest = entries[entries.length - 1];
+
+  const pill = (k: string, v: number, good: boolean) => (
+    <span key={k} title={`${SCORE_DIMENSION_LABELS[k]}: ${Math.round(v)}/100`}
+      style={{ fontSize: '9.5px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', whiteSpace: 'nowrap',
+        background: good ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+        color: good ? '#34d399' : '#f87171' }}>
+      {SCORE_DIMENSION_LABELS[k]} {Math.round(v)}
+    </span>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+      {strengths.map(([k, v]) => pill(k, v, true))}
+      {weakest[1] < 50 && pill(weakest[0], weakest[1], false)}
+    </div>
+  );
+};
+
+/**
+ * Candidates the engine filtered out, and why.
+ *
+ * Excluded assayers used to disappear with no explanation, so "my best assayer isn't in the
+ * list" was unanswerable — and genuine data problems (an expired certification, a full diary)
+ * looked identical to a normal short list.
+ */
+const ExcludedCandidatesPanel: React.FC<{ excluded: ExcludedCandidate[] }> = ({ excluded }) => {
+  const [open, setOpen] = useState(false);
+  if (excluded.length === 0) return null;
+  return (
+    <div style={{ marginTop: '10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.02)' }}>
+      <button onClick={() => setOpen(!open)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer' }}>
+        <span>{excluded.length} assayer{excluded.length > 1 ? 's' : ''} not shown — why?</span>
+        <span>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 10px' }}>
+          {excluded.map(e => (
+            <div key={e.assayerId} style={{ padding: '6px 0', borderTop: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{e.displayName}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{e.reason}</div>
+              {e.detail && <div style={{ fontSize: '10.5px', color: '#f59e0b', marginTop: '2px' }}>└─ {e.detail}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * The active counter-offer banner — an assayer has proposed a different fee and ops needs to
+ * accept, counter, or decline it.
+ *
+ * Single shared definition, used in every layout that shows a branch's negotiation state.
+ * This used to be two near-identical blocks of inline JSX hand-copied into the "default" and
+ * "three-col" layouts — already drifted apart in wording — and was missing entirely from
+ * "two-col-branch-recom", so a counter-offer arriving while an operator had that layout open
+ * was completely invisible to them until they happened to switch layouts.
+ *
+ * Also surfaces two things the old inline version never showed: who on the team is already
+ * handling this negotiation (`negotiatedByName` — see project.controller.ts), and how many
+ * counter-offer rounds remain before AssignmentService.proposeCounterFee() auto-declines it.
+ */
+const NegotiationBanner: React.FC<{
+  assignment: NonNullable<ProjectBranch['assignment']>;
+  onAccept: () => void;
+  onCounter: () => void;
+  onDecline: () => void;
+}> = ({ assignment, onAccept, onCounter, onDecline }) => {
+  const round = Math.max(1, assignment.negotiationCount ?? 1);
+  const roundsLeft = Math.max(0, MAX_NEGOTIATION_ROUNDS - (assignment.negotiationCount ?? 0));
+
+  return (
+    <div style={{
+      padding: '12px 14px',
+      background: 'linear-gradient(135deg, rgba(245,158,11,0.10), rgba(245,158,11,0.03))',
+      borderBottom: '1px solid rgba(245,158,11,0.25)',
+      borderLeft: '3px solid #f59e0b',
+      display: 'flex', flexDirection: 'column', gap: '10px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+        <div style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'rgba(245,158,11,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px' }}>
+          💬
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#fbbf24' }}>
+              Counter offer from {assignment.assayer?.displayName || 'assayer'}
+            </span>
+            <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', whiteSpace: 'nowrap' }}>
+              Round {round} of {MAX_NEGOTIATION_ROUNDS}
+            </span>
+          </div>
+          <div style={{ fontSize: '19px', fontWeight: 800, color: '#fff', marginTop: '3px' }}>
+            ₹{assignment.proposedFee?.toLocaleString()}
+          </div>
+          {assignment.remarks && (
+            <div style={{ fontSize: '11px', color: '#fcd34d', marginTop: '3px', fontStyle: 'italic' }}>
+              "{assignment.remarks}"
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '5px' }}>
+            {assignment.negotiatedByName && (
+              <span style={{ fontSize: '10px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Users size={10} /> Handled by <b style={{ color: '#cbd5e1', fontWeight: 700 }}>{assignment.negotiatedByName}</b>
+              </span>
+            )}
+            {roundsLeft <= 1 && (
+              <span style={{ fontSize: '10px', color: '#f87171', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <AlertTriangle size={10} />
+                {roundsLeft === 0 ? 'Next counter auto-declines this offer' : 'Last round before auto-decline'}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '6px' }}>
+        <button type="button" onClick={onAccept} className="btn btn-primary"
+          style={{ flex: 1.3, padding: '7px 10px', fontSize: '11.5px', background: '#10b981', borderColor: '#10b981', color: '#fff', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          <Check size={13} /> Accept
+        </button>
+        <button type="button" onClick={onCounter} className="btn btn-secondary"
+          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: '#a78bfa', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          <RefreshCw size={12} /> Counter
+        </button>
+        <button type="button" onClick={onDecline} className="btn btn-secondary"
+          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: '#f87171', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          <X size={13} /> Decline
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const PlanningWorkspace: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -226,6 +421,8 @@ export const PlanningWorkspace: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [, setIsLoadingQueue] = useState(false);
   const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
+  const [excludedCandidates, setExcludedCandidates] = useState<ExcludedCandidate[]>([]);
+  const [candidatesError, setCandidatesError] = useState<string | null>(null);
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[] | undefined>(undefined);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizedSummary, setOptimizedSummary] = useState<{ totalDistanceKm: number; totalDurationMinutes: number } | null>(null);
@@ -258,10 +455,33 @@ export const PlanningWorkspace: React.FC = () => {
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [slaEnabled, setSlaEnabled] = useState(true);
   const [slaRadius, setSlaRadius] = useState(50);
+
+  // Single source of truth for "which candidates are actually eligible right now". The map
+  // previously ranked off the raw `candidates` array, so an assayer who fails the min-radius
+  // check (too close to the branch — see the "Inside Radius" flag below) could still show a
+  // gold #1 badge on the map, contradicting the sidebar which excludes/flags them. Both now
+  // read from this one filtered list.
+  const displayCandidates = useMemo(() => {
+    const slaFiltered = slaEnabled
+      ? candidates.filter(c => c.distanceKm !== null && c.distanceKm >= slaRadius)
+      : null;
+    return slaFiltered ?? (showAllCandidates
+      ? candidates
+      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700));
+  }, [candidates, slaEnabled, slaRadius, showAllCandidates]);
   const drawerRef = useRef<HTMLDivElement>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
   const [isLoadingDayPlans, setIsLoadingDayPlans] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
+  // Day plans previously had no date picker at all — always locked to the backend's default
+  // of "right now", with no way to ask "what would tomorrow's coverage look like". Defaults to
+  // tomorrow since field audits are scheduled ahead, not same-day.
+  const [dayPlanTargetDate, setDayPlanTargetDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  });
+  const [dayPlanAssigning, setDayPlanAssigning] = useState<string | null>(null);
 
   useEffect(() => { loadProjects(); loadZones(); }, []);
 
@@ -402,19 +622,98 @@ export const PlanningWorkspace: React.FC = () => {
     setIsLoadingDayPlans(true);
     setDayPlanData(null);
     try {
-      const data = await api.request<ProjectDayPlan>(`/planning/projects/${selectedProjectId}/day-plans`);
+      // Reuses the exact "Min Radius Filter" control already on this page (slaEnabled/
+      // slaRadius) instead of a separate day-plans-only control — one setting, consistent
+      // everywhere. Previously this request sent no params at all: no date (always locked to
+      // the backend's "right now" default) and no radius (the endpoint had no minimum-distance
+      // concept whatsoever until this fix).
+      const params = new URLSearchParams({ targetDate: dayPlanTargetDate });
+      if (slaEnabled) params.set('minDistanceKm', String(slaRadius));
+      const data = await api.request<ProjectDayPlan>(`/planning/projects/${selectedProjectId}/day-plans?${params}`);
       setDayPlanData(data);
       if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
     } catch (err) { console.error('Failed to load day plans', err); }
     finally { setIsLoadingDayPlans(false); }
   };
 
+  /**
+   * Commits a day-plan candidate: creates a real assignment for every branch in the cluster,
+   * all with this assayer and the plan's target date.
+   *
+   * Previously this whole screen was read-only — a detailed, correctly-computed report of the
+   * optimal multi-branch route and cost that ops could only look at, then had to go re-create
+   * by hand, branch by branch, through the single-branch flow. That defeats the point of
+   * clustering in the first place: the value is committing to all N branches in one action.
+   *
+   * Base + travel cost is split evenly across the cluster's branches so each created
+   * assignment carries a real proposed fee (summing back to the plan's estimatedTotalCost)
+   * rather than 0 or a guess.
+   */
+  const handleAssignDayPlan = async (cluster: BranchCluster, plan: DayPlanCandidate) => {
+    const key = `${cluster.clusterId}:${plan.assayerId}`;
+    setDayPlanAssigning(key);
+    const perBranchFee = Math.round(
+      (plan.estimatedBaseFee + plan.estimatedTravelFee) / Math.max(1, plan.totalBranches),
+    );
+
+    const results: { branchName: string; ok: boolean; error?: string }[] = [];
+    for (const stop of plan.stops) {
+      const branchMeta = cluster.branches.find((b) => b.branchId === stop.branchId);
+      if (!branchMeta) {
+        results.push({ branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' });
+        continue;
+      }
+      try {
+        await api.request('/assignments', {
+          method: 'POST',
+          body: JSON.stringify({
+            projectBranchId: branchMeta.id,
+            assayerId: plan.assayerId,
+            proposedFee: perBranchFee,
+            scheduledDate: dayPlanTargetDate,
+            remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
+          }),
+        });
+        results.push({ branchName: stop.branchName, ok: true });
+      } catch (err: any) {
+        results.push({ branchName: stop.branchName, ok: false, error: err?.message || 'Failed' });
+      }
+    }
+
+    setDayPlanAssigning(null);
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length === 0) {
+      setMessage({ type: 'success', text: `Assigned all ${results.length} branch(es) in ${cluster.clusterId} to ${plan.assayerName}.` });
+    } else {
+      setMessage({
+        type: 'error',
+        text: `${results.length - failed.length}/${results.length} branches assigned to ${plan.assayerName}. Failed: ${failed.map((f) => `${f.branchName} (${f.error})`).join('; ')}`,
+      });
+    }
+    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    loadDayPlans();
+  };
+
   const loadCandidates = async (branchId: string) => {
     setIsLoadingCandidates(true);
+    setCandidatesError(null);
     try {
-      const response = await api.request<Candidate[]>(`/planning/recommendations?branchId=${branchId}`, { method: 'GET' });
-      setCandidates(response);
-    } catch { console.error('Failed to load candidate recommendations'); }
+      // withMeta so we also receive `excluded` — candidates the engine filtered out, with the
+      // reason. Previously they vanished silently and ops had no way to tell "nobody suitable"
+      // apart from "everyone blocked by one misconfigured rule".
+      const response = await api.request<{ data: Candidate[]; meta?: { excluded?: ExcludedCandidate[] } }>(
+        `/planning/recommendations?branchId=${branchId}`,
+        { method: 'GET', withMeta: true },
+      );
+      setCandidates(response.data || []);
+      setExcludedCandidates(response.meta?.excluded || []);
+    } catch (err: any) {
+      // Was a bare `catch { console.error(...) }`, so a failure looked identical to
+      // "no candidates" — the operator saw an empty list with no indication anything broke.
+      setCandidates([]);
+      setExcludedCandidates([]);
+      setCandidatesError(err?.message || 'Could not load candidate recommendations.');
+    }
     finally { setIsLoadingCandidates(false); }
   };
 
@@ -507,6 +806,46 @@ export const PlanningWorkspace: React.FC = () => {
   const [layout, setLayout] = useState(layoutMode);
   const setLayoutMode = (m: string) => { setLayout(m); localStorage.setItem('planning_layout', m); };
 
+  // ── Counter-offer negotiation handlers ──────────────────────────────────────────
+  // Previously this exact logic (and the banner that triggers it) was hand-duplicated in the
+  // "default" and "three-col" layouts, with the two copies already drifted apart in wording —
+  // and missing entirely from "two-col-branch-recom", so a counter-offer arriving while that
+  // layout was active was invisible until switching layouts. One definition now, used by all
+  // three via the shared NegotiationBanner component below.
+  const handleAcceptCounterOffer = async (assignmentId: string, proposedFee: number) => {
+    try {
+      await api.request(`/assignments/${assignmentId}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
+      });
+      setMessage({ type: 'success', text: `Counter fee ₹${proposedFee.toLocaleString()} approved! Branch confirmed.` });
+      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
+    }
+  };
+
+  const handleOpenCounterProposal = (assignment: NonNullable<ProjectBranch['assignment']>) => {
+    if (assignment.assayer) {
+      setSelectedCandidate({ id: assignment.assayer.id, displayName: assignment.assayer.displayName } as any);
+      setNegotiatingFee(String(assignment.proposedFee || 1500));
+      setShowNegotiationModal(true);
+    }
+  };
+
+  const handleDeclineCounterOffer = async (assignmentId: string) => {
+    try {
+      await api.request(`/assignments/${assignmentId}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
+      });
+      setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
+      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
+    }
+  };
+
   const s = (sel: string, set: (v: string) => void, opts: { value: string; label: string }[]) => (
     <select value={sel} onChange={e => set(e.target.value)}
       style={{ padding: '7px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', cursor: 'pointer' }}>
@@ -518,13 +857,20 @@ export const PlanningWorkspace: React.FC = () => {
     if (isLoadingCandidates) {
       return <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Searching for assayers...</div>;
     }
-    const slaFiltered = slaEnabled
-      ? candidates.filter(c => c.distanceKm !== null && c.distanceKm >= slaRadius)
-      : null;
-    const displayCandidates = slaFiltered ?? (showAllCandidates 
-      ? candidates 
-      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700));
-
+    // A failed request previously rendered as "no candidates", which is indistinguishable from
+    // a genuine empty result — the operator would go looking for assayers that were never queried.
+    if (candidatesError) {
+      return (
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: '#f87171', fontSize: '12.5px', textAlign: 'center' }}>
+          <AlertTriangle size={18} />
+          <div>{candidatesError}</div>
+          <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 10px' }}
+            onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}>
+            Retry
+          </button>
+        </div>
+      );
+    }
     if (displayCandidates.length === 0) {
       const msg = slaEnabled
         ? `No assayers found beyond ${slaRadius}km minimum radius.`
@@ -576,7 +922,7 @@ export const PlanningWorkspace: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <span title="Score evaluates Distance, Travel Time, Workload, Performance, Experience, and Cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf >= 90 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b', flexShrink: 0 }}>
+                <span title="Weighted across 15 dimensions including SLA compliance, acceptance history, proximity, workload, paperwork quality and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf >= 90 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b', flexShrink: 0 }}>
                   {conf}% Match
                 </span>
               </div>
@@ -586,6 +932,8 @@ export const PlanningWorkspace: React.FC = () => {
                 <span>📍 {c.city}, {c.state}</span>
                 <span>Base: ₹{c.baseFee ?? 1200}</span>
               </div>
+
+              <ScoreBreakdown breakdown={c.scoreBreakdown} />
 
               {/* Row 1 Actions: View Map, Route TSP, Profile Details */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
@@ -679,6 +1027,7 @@ export const PlanningWorkspace: React.FC = () => {
             </div>
           );
         })}
+        <ExcludedCandidatesPanel excluded={excludedCandidates} />
       </div>
     );
   };
@@ -891,6 +1240,14 @@ export const PlanningWorkspace: React.FC = () => {
                         <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
                       )}
                     </div>
+                    {/* Operators previously had no way to tell, from the queue, whether a
+                        colleague was already negotiating this branch — risking duplicate
+                        outreach to the same assayer. */}
+                    {isNegotiating && pb.assignment?.negotiatedByName && (
+                      <div style={{ fontSize: '9.5px', color: '#f59e0b', marginTop: '2px' }}>
+                        💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -899,6 +1256,17 @@ export const PlanningWorkspace: React.FC = () => {
 
           {/* Column 2: Assayer Recommendations & Match Details */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+            {/* This layout previously had no negotiation-state handling at all — a counter
+                offer arriving while an operator had "Branch + Match" open was completely
+                invisible until they switched to a different layout. */}
+            {selectedPb?.status === 'NEGOTIATION' && selectedPb.assignment && (
+              <NegotiationBanner
+                assignment={selectedPb.assignment}
+                onAccept={() => handleAcceptCounterOffer(selectedPb.assignment!.id, selectedPb.assignment!.proposedFee)}
+                onCounter={() => handleOpenCounterProposal(selectedPb.assignment!)}
+                onDecline={() => handleDeclineCounterOffer(selectedPb.assignment!.id)}
+              />
+            )}
             <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(30, 41, 59, 0.5)', flexWrap: 'wrap', gap: '8px' }}>
               <div>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>RECOMMENDED ASSAYERS</span>
@@ -1004,6 +1372,11 @@ export const PlanningWorkspace: React.FC = () => {
                         <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
                       )}
                     </div>
+                    {isNegotiating && pb.assignment?.negotiatedByName && (
+                      <div style={{ fontSize: '9.5px', color: '#f59e0b', marginTop: '2px' }}>
+                        💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1020,6 +1393,8 @@ export const PlanningWorkspace: React.FC = () => {
               selectedAssayerFromParent={selectedCandidateForMap}
               slaEnabled={slaEnabled}
               slaRadius={slaRadius}
+              rankedCandidates={displayCandidates}
+              excludedCandidates={excludedCandidates}
             />
           </div>
         </div>
@@ -1066,6 +1441,11 @@ export const PlanningWorkspace: React.FC = () => {
                       {pb.assignment?.assayer?.displayName && (
                         <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '2px', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</div>
                       )}
+                      {isNegotiating && pb.assignment?.negotiatedByName && (
+                        <div style={{ fontSize: '9px', color: '#f59e0b', marginTop: '2px' }}>
+                          💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -1082,6 +1462,8 @@ export const PlanningWorkspace: React.FC = () => {
               selectedAssayerFromParent={selectedCandidateForMap}
               slaEnabled={slaEnabled}
               slaRadius={slaRadius}
+              rankedCandidates={displayCandidates}
+              excludedCandidates={excludedCandidates}
             />
             <div ref={drawerRef} style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -1129,58 +1511,12 @@ export const PlanningWorkspace: React.FC = () => {
                   ) : (
                     <>
                   {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
-                    <div style={{ padding: '10px 16px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '16px' }}>💬</span>
-                        <div>
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: '#f59e0b' }}>
-                            Counter Offer Received from {selectedPb.assignment.assayer?.displayName}
-                          </div>
-                          <div style={{ fontSize: '11px', color: '#fcd34d' }}>
-                            Assayer proposed rate: <b>₹{selectedPb.assignment.proposedFee}</b> (Remarks: {selectedPb.assignment.remarks || 'None'})
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button onClick={async () => {
-                          try {
-                            await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
-                              method: 'POST',
-                              body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
-                            });
-                            setMessage({ type: 'success', text: `Counter fee ₹${selectedPb.assignment?.proposedFee} approved! Branch confirmed.` });
-                            if (selectedProjectId) loadProjectBranches(selectedProjectId);
-                          } catch (err: any) {
-                            setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
-                          }
-                        }} className="btn btn-primary" style={{ padding: '4px 12px', fontSize: '11px', background: '#10b981', borderColor: '#10b981', color: '#fff' }}>
-                          ✅ Accept ₹{selectedPb.assignment.proposedFee}
-                        </button>
-                        <button onClick={() => {
-                          if (selectedPb.assignment?.assayer) {
-                            setSelectedCandidate({ id: (selectedPb.assignment.assayer as any).id || '', displayName: selectedPb.assignment.assayer.displayName } as any);
-                            setNegotiatingFee(String(selectedPb.assignment?.proposedFee || 1500));
-                            setShowNegotiationModal(true);
-                          }
-                        }} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', fontWeight: 600 }}>
-                          🔁 Counter Proposal
-                        </button>
-                        <button onClick={async () => {
-                          try {
-                            await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
-                              method: 'POST',
-                              body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
-                            });
-                            setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
-                            if (selectedProjectId) loadProjectBranches(selectedProjectId);
-                          } catch (err: any) {
-                            setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
-                          }
-                        }} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)' }}>
-                          ❌ Decline Counter Offer
-                        </button>
-                      </div>
-                    </div>
+                    <NegotiationBanner
+                      assignment={selectedPb.assignment}
+                      onAccept={() => handleAcceptCounterOffer(selectedPb.assignment!.id, selectedPb.assignment!.proposedFee)}
+                      onCounter={() => handleOpenCounterProposal(selectedPb.assignment!)}
+                      onDecline={() => handleDeclineCounterOffer(selectedPb.assignment!.id)}
+                    />
                   )}
 
                   <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1270,6 +1606,11 @@ export const PlanningWorkspace: React.FC = () => {
                     {pb.assignment?.assayer?.displayName && (
                       <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '3px', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</div>
                     )}
+                    {isNegotiating && pb.assignment?.negotiatedByName && (
+                      <div style={{ fontSize: '9px', color: '#f59e0b', marginTop: '3px' }}>
+                        💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1286,6 +1627,8 @@ export const PlanningWorkspace: React.FC = () => {
               selectedAssayerFromParent={selectedCandidateForMap}
               slaEnabled={slaEnabled}
               slaRadius={slaRadius}
+              rankedCandidates={displayCandidates}
+              excludedCandidates={excludedCandidates}
             />
           </div>
 
@@ -1333,58 +1676,12 @@ export const PlanningWorkspace: React.FC = () => {
               ) : (
                 <>
               {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
-                <div style={{ padding: '12px 14px', background: 'rgba(245,158,11,0.15)', borderBottom: '1px solid rgba(245,158,11,0.3)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '16px' }}>💬</span>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#f59e0b' }}>
-                        Counter Offer from {selectedPb.assignment.assayer?.displayName}
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#fcd34d' }}>
-                        Assayer Rate Proposal: <b>₹{selectedPb.assignment.proposedFee}</b>
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <button onClick={async () => {
-                      try {
-                        await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
-                          method: 'POST',
-                          body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
-                        });
-                        setMessage({ type: 'success', text: `Counter fee ₹${selectedPb.assignment?.proposedFee} approved!` });
-                        if (selectedProjectId) loadProjectBranches(selectedProjectId);
-                      } catch (err: any) {
-                        setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
-                      }
-                    }} className="btn btn-primary" style={{ flex: 1, padding: '5px 8px', fontSize: '11px', background: '#10b981', borderColor: '#10b981', color: '#fff', fontWeight: 700 }}>
-                      ✅ Accept ₹{selectedPb.assignment.proposedFee}
-                    </button>
-                    <button onClick={() => {
-                      if (selectedPb.assignment?.assayer) {
-                        setSelectedCandidate({ id: (selectedPb.assignment.assayer as any).id || '', displayName: selectedPb.assignment.assayer.displayName } as any);
-                        setNegotiatingFee(String(selectedPb.assignment?.proposedFee || 1500));
-                        setShowNegotiationModal(true);
-                      }
-                    }} className="btn btn-secondary" style={{ flex: 1, padding: '5px 8px', fontSize: '11px', color: '#8b5cf6', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', fontWeight: 600 }}>
-                      🔁 Counter
-                    </button>
-                    <button onClick={async () => {
-                      try {
-                        await api.request(`/assignments/${selectedPb.assignment?.id}/transition`, {
-                          method: 'POST',
-                          body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
-                        });
-                        setMessage({ type: 'success', text: 'Counter offer rejected.' });
-                        if (selectedProjectId) loadProjectBranches(selectedProjectId);
-                      } catch (err: any) {
-                        setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
-                      }
-                    }} className="btn btn-secondary" style={{ flex: 1, padding: '5px 8px', fontSize: '11px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', fontWeight: 600 }}>
-                      ❌ Decline
-                    </button>
-                  </div>
-                </div>
+                <NegotiationBanner
+                  assignment={selectedPb.assignment}
+                  onAccept={() => handleAcceptCounterOffer(selectedPb.assignment!.id, selectedPb.assignment!.proposedFee)}
+                  onCounter={() => handleOpenCounterProposal(selectedPb.assignment!)}
+                  onDecline={() => handleDeclineCounterOffer(selectedPb.assignment!.id)}
+                />
               )}
 
               {/* Branch Header & SLA Controls Bar */}
@@ -1805,17 +2102,47 @@ export const PlanningWorkspace: React.FC = () => {
       {layout === 'day-plans' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 32px 32px', overflowY: 'auto' }}>
           {/* Header & Refresh */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px', flexWrap: 'wrap', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <Layers size={18} style={{ color: 'var(--accent-primary)' }} />
               <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>Multi-Branch Day Plans</h2>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Clusters nearby branches → assigns single assayer per cluster for one-day coverage</span>
             </div>
-            <button onClick={loadDayPlans} disabled={isLoadingDayPlans}
-              className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <Route size={13} /> {isLoadingDayPlans ? 'Generating...' : 'Generate Day Plans'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                <Calendar size={12} />
+                <input type="date" value={dayPlanTargetDate} min={new Date().toISOString().split('T')[0]}
+                  onChange={(e) => setDayPlanTargetDate(e.target.value)}
+                  style={{ padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#fff', fontSize: '11px', outline: 'none' }} />
+              </label>
+              {/* Same control that drives the single-branch candidate list and map — reused
+                  here rather than a separate day-plans-only setting, so "Min Radius Filter"
+                  means one thing everywhere on this page. */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
+                Min Radius Filter
+              </label>
+              {slaEnabled && (
+                <select value={slaRadius} onChange={(e) => setSlaRadius(Number(e.target.value))}
+                  style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', cursor: 'pointer' }}>
+                  {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
+                </select>
+              )}
+              <button onClick={loadDayPlans} disabled={isLoadingDayPlans}
+                className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <Route size={13} /> {isLoadingDayPlans ? 'Generating...' : 'Generate Day Plans'}
+              </button>
+            </div>
           </div>
+
+          {dayPlanData?.effectiveMinDistanceKm != null && (
+            <div style={{ fontSize: '10.5px', color: '#94a3b8', paddingBottom: '4px' }}>
+              Enforcing a {dayPlanData.effectiveMinDistanceKm}km minimum distance
+              {!slaEnabled || dayPlanData.effectiveMinDistanceKm > slaRadius
+                ? " (this client's own configured floor — it always applies, regardless of the filter above)"
+                : ''}.
+            </div>
+          )}
 
           {isLoadingDayPlans && (
             <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)', fontSize: '13px' }}>
@@ -1861,7 +2188,7 @@ export const PlanningWorkspace: React.FC = () => {
 
               {/* Clusters */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {dayPlanData.clusters.map(({ cluster, dayPlans, bestPlan }) => (
+                {dayPlanData.clusters.map(({ cluster, dayPlans, bestPlan, excludedAssayers }) => (
                   <div key={cluster.clusterId} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                     {/* Cluster Header */}
                     <div onClick={() => setExpandedCluster(expandedCluster === cluster.clusterId ? null : cluster.clusterId)}
@@ -1906,7 +2233,15 @@ export const PlanningWorkspace: React.FC = () => {
                         {dayPlans.length === 0 ? (
                           <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '12px' }}>
                             <AlertTriangle size={18} style={{ color: '#f59e0b', marginBottom: '6px' }} />
-                            <div>No eligible assayers found for this cluster. Check client preferences or expand search radius.</div>
+                            <div>No eligible assayers found for this cluster.</div>
+                            {/* Previously the only signal here — this generic dead end hid
+                                whether it was a genuine no-coverage gap or one misconfigured
+                                business rule blocking every candidate. */}
+                            {excludedAssayers.length > 0 && (
+                              <div style={{ marginTop: '10px', textAlign: 'left' }}>
+                                <ExcludedCandidatesPanel excluded={excludedAssayers} />
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1942,6 +2277,20 @@ export const PlanningWorkspace: React.FC = () => {
                                     }}>
                                       {plan.overallScore}% Score
                                     </span>
+                                    {/* Previously this whole page was read-only: a correctly
+                                        computed multi-branch route and cost ops could only look
+                                        at, then had to manually re-create branch by branch
+                                        through the single-branch flow. This commits all
+                                        branches in the cluster to this assayer in one action. */}
+                                    <button
+                                      onClick={() => handleAssignDayPlan(cluster, plan)}
+                                      disabled={dayPlanAssigning !== null}
+                                      className="btn btn-primary"
+                                      style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}>
+                                      {dayPlanAssigning === `${cluster.clusterId}:${plan.assayerId}`
+                                        ? <>Assigning…</>
+                                        : <><Check size={12} /> Assign All {plan.totalBranches}</>}
+                                    </button>
                                   </div>
                                 </div>
 
@@ -2033,6 +2382,12 @@ export const PlanningWorkspace: React.FC = () => {
                               </div>
                             ))}
                           </div>
+                        )}
+
+                        {/* Also shown alongside a non-empty result — ops sees not just who's
+                            recommended but who was considered and ruled out, and why. */}
+                        {dayPlans.length > 0 && excludedAssayers.length > 0 && (
+                          <ExcludedCandidatesPanel excluded={excludedAssayers} />
                         )}
                       </div>
                     )}

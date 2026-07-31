@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
@@ -14,6 +14,18 @@ import { ConfigurationResolver } from '../platform/configuration/configuration.r
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
+
+/**
+ * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
+ */
+const EXCLUSION_REASONS: Record<string, string> = {
+  availability: 'Unavailable on this date (already booked, on leave, or inactive)',
+  consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
+  clientRestriction: 'Restricted by this client',
+  clientEligibility: 'Not approved to work for this client',
+  ruleEngineEligibility: 'Blocked by a business rule',
+  requiredSkills: 'Missing a skill or certification this project requires',
+};
 
 export interface PlanningContext {
   branch: BranchEntity;
@@ -127,10 +139,26 @@ export class ClientEligibilityFilter implements CandidateFilter {
 export class RuleEngineEligibilityFilter implements CandidateFilter {
   name = 'ruleEngineEligibility';
 
-  constructor(private readonly ruleEngine: RuleEngine) {}
+  constructor(
+    private readonly ruleEngine: RuleEngine,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
 
   async evaluate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<boolean> {
     const assayer = assayerEntity as AssayerWithWorkforceAttributes;
+
+    // A CAPACITY rule compares against `activeWorkload`, which was never supplied here — so it
+    // always read 0 and no capacity limit could ever trigger. Counting committed work makes
+    // that rule type enforceable.
+    const activeWorkload = await this.assignmentRepository.count({
+      where: {
+        assayerId: assayer.id,
+        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
+        isActive: true,
+      },
+    });
+
     const results = await this.ruleEngine.evaluate({
       subject: {
         id: assayer.id,
@@ -143,10 +171,42 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
         clientId: context.branch.clientId,
       },
       scheduledDate: context.scheduledDate,
+      activeWorkload,
       restrictedAssayers: context.client?.restrictedAssayers,
     });
     // If any active rule block action fails, return false
     return !results.some((r) => !r.passed && r.actionType === 'BLOCK');
+  }
+
+  /**
+   * Same evaluation, but returns the human-readable reasons a candidate was blocked.
+   * Ops needs "why is my best assayer missing?" answered — a silently shorter list is the
+   * least useful possible output.
+   */
+  async explain(assayerEntity: AssayerEntity, context: PlanningContext): Promise<string[]> {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
+    const activeWorkload = await this.assignmentRepository.count({
+      where: {
+        assayerId: assayer.id,
+        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
+        isActive: true,
+      },
+    });
+    const results = await this.ruleEngine.evaluate({
+      subject: {
+        id: assayer.id,
+        state: assayer.state,
+        skills: assayer.skills || [],
+        certifications: (assayer.certifications || []).map((c) => ({ name: c.name, expiryDate: c.expiryDate ?? undefined })),
+      },
+      target: { id: context.branch.id, clientId: context.branch.clientId },
+      scheduledDate: context.scheduledDate,
+      activeWorkload,
+      restrictedAssayers: context.client?.restrictedAssayers,
+    });
+    return results
+      .filter((r) => !r.passed && r.actionType === 'BLOCK')
+      .map((r) => r.message || 'Blocked by a business rule');
   }
 }
 
@@ -668,6 +728,7 @@ export class RiskScoreCalculator implements ScoreCalculator {
 
 @Injectable()
 export class RecommendationEngine {
+  private static readonly logger = new Logger(RecommendationEngine.name);
   private filters: CandidateFilter[] = [];
   private calculators: ScoreCalculator[] = [];
 
@@ -729,6 +790,19 @@ export class RecommendationEngine {
       this.profitabilityCalculator,
       this.riskCalculator,
     );
+
+    // A calculator with no configured weight still runs — it just contributes nothing, which
+    // is invisible in the output. Six shipped that way. Surface it loudly instead.
+    const unweighted = ConfigurationResolver.assertWeightsCoverAllCalculators(
+      this.calculators.map((c) => c.name),
+    );
+    if (unweighted.length > 0) {
+      RecommendationEngine.logger.error(
+        `Scoring calculators registered with no configured weight — they will run on every ` +
+          `recommendation and contribute nothing to the ranking: ${unweighted.join(', ')}. ` +
+          `Add them to DEFAULT_RECOMMENDATION_CONFIG.weights.`,
+      );
+    }
   }
 
   async recommend(
@@ -767,16 +841,34 @@ export class RecommendationEngine {
     });
 
     const candidates = [];
+    // Excluded candidates are recorded rather than silently dropped. Ops repeatedly hits
+    // "why isn't <assayer> in this list?" — a shorter list with no explanation is the least
+    // actionable possible answer, and it hides genuine data problems (an expired
+    // certification, a full diary) behind an apparently-normal result.
+    const excluded: { assayerId: string; displayName: string; reason: string; detail?: string }[] = [];
+
     for (const assayer of assayers) {
-      let passed = true;
+      let blockedBy: string | null = null;
       for (const filter of this.filters) {
         if (!(await filter.evaluate(assayer, context))) {
-          passed = false;
+          blockedBy = filter.name;
           break;
         }
       }
 
-      if (!passed) continue;
+      if (blockedBy) {
+        let detail: string | undefined;
+        if (blockedBy === this.ruleEngineEligibilityFilter.name) {
+          detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
+        }
+        excluded.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: EXCLUSION_REASONS[blockedBy] ?? blockedBy,
+          detail,
+        });
+        continue;
+      }
 
       let weightedSum = 0;
       let totalWeight = 0;
@@ -801,6 +893,10 @@ export class RecommendationEngine {
       });
     }
 
-    return candidates.sort((a, b) => b.score - a.score);
+    const ranked = candidates.sort((a, b) => b.score - a.score);
+    // Attached to the array so existing callers that just iterate results keep working
+    // unchanged, while callers that want the audit trail can read it.
+    (ranked as any).excluded = excluded;
+    return ranked;
   }
 }

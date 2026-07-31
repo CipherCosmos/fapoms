@@ -32,7 +32,17 @@ export interface AssayerRecommendation {
   longitude?: number | null;
   baseFee?: number;
   readableReasons?: ExplanationReason[];
+  /** Per-dimension scores (distance, acceptanceRate, queryVolume, …) behind the total. */
+  scoreBreakdown?: Record<string, number>;
   pendingOnThisBranch?: boolean;
+}
+
+/** A candidate the filters removed, and why — surfaced so ops isn't left guessing. */
+export interface ExcludedCandidate {
+  assayerId: string;
+  displayName: string;
+  reason: string;
+  detail?: string;
 }
 
 export interface CreateBusinessRuleDto {
@@ -111,10 +121,17 @@ export class PlanningService {
         longitude: r.assayer.longitude,
         baseFee,
         readableReasons,
+        // Per-dimension scores so ops can see *why* this candidate ranked where they did,
+        // rather than being handed an unexplained number.
+        scoreBreakdown: r.breakdown,
         pendingOnThisBranch: r.pendingOnThisBranch,
       });
     }
 
+    // Carried through so the UI can answer "why isn't <assayer> on this list?" — previously
+    // excluded candidates just vanished, which hid real data problems (expired certification,
+    // full diary) behind an apparently-normal shorter list.
+    (recommendations as any).excluded = (results as any).excluded || [];
     return recommendations;
   }
 
