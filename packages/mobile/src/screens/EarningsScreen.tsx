@@ -9,6 +9,10 @@ interface EarningsScreenProps {
   totalEarnings: number;
   pendingEarnings: number;
   runningBalance?: number;
+  /** Actually disbursed by finance, from the billing engine. */
+  earningsPaid?: number;
+  /** Booked but not yet approved for payout. */
+  earningsAwaitingApproval?: number;
   assignments: AssayerAssignment[];
   onOpenExpenseModal: () => void;
   /** Real assayer quality/performance rating expressed as a %, or null if no rating data exists yet. */
@@ -17,13 +21,47 @@ interface EarningsScreenProps {
   queryResolutionRate?: number;
   /** Real average estimated audit duration across assignments, or null if no duration data exists. */
   avgAuditHours?: number | null;
+  /** Billing-engine entries for this assayer, driving the live "Billing Status" section. */
+  billingEntries?: any[];
 }
+
+const BILLING_STATE_LABEL: Record<string, string> = {
+  PENDING_BILLING: 'Pending',
+  READY_FOR_BILLING: 'Ready for billing',
+  DRAFT: 'Draft',
+  SUBMITTED: 'Submitted',
+  UNDER_REVIEW: 'Under review',
+  APPROVED: 'Approved',
+  INVOICED: 'Invoiced',
+  PARTIALLY_PAID: 'Partially paid',
+  PAID: 'Paid',
+  ON_HOLD: 'On hold',
+  DISPUTED: 'Disputed',
+  CANCELLED: 'Cancelled',
+  ADJUSTED: 'Adjusted',
+  REJECTED: 'Rejected',
+};
+
+const BILLING_STATE_COLOR: Record<string, string> = {
+  PAID: '#10b981',
+  PARTIALLY_PAID: '#fbbf24',
+  APPROVED: '#38bdf8',
+  READY_FOR_BILLING: '#a78bfa',
+  INVOICED: '#38bdf8',
+  ON_HOLD: '#f97316',
+  DISPUTED: '#f43f5e',
+  CANCELLED: '#64748b',
+  REJECTED: '#64748b',
+};
 
 export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   totalEarnings,
   pendingEarnings,
   runningBalance,
+  earningsPaid,
+  earningsAwaitingApproval,
   assignments,
+  billingEntries,
   onOpenExpenseModal,
   qualityScore,
   queryResolutionRate,
@@ -50,15 +88,58 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
         </View>
       </View>
 
-      {runningBalance != null && runningBalance > 0 && (
+      {/* Settlement position, straight from the billing engine — the same figures
+          finance pays against, so this can never disagree with what lands in the bank.
+          Previously this card showed a `running_balance` column nothing ever wrote,
+          so it read zero and never appeared. */}
+      {(Number(runningBalance) > 0 || Number(earningsPaid) > 0 || Number(earningsAwaitingApproval) > 0) && (
         <View style={[styles.card, { marginBottom: 14 }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ fontSize: 12, color: '#94a3b8', fontWeight: '700', marginBottom: 10 }}>Settlement</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <View>
-              <Text style={{ fontSize: 12, color: '#94a3b8', fontWeight: '600' }}>Running Balance</Text>
-              <Text style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Total available for withdrawal</Text>
+              <Text style={{ fontSize: 12, color: '#e2e8f0', fontWeight: '600' }}>Owed to you</Text>
+              <Text style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>Approved, awaiting payout</Text>
             </View>
-            <Text style={{ fontSize: 22, fontWeight: '800', color: '#818cf8' }}>₹{Number(runningBalance).toLocaleString()}</Text>
+            <Text style={{ fontSize: 22, fontWeight: '800', color: '#818cf8' }}>₹{Number(runningBalance || 0).toLocaleString()}</Text>
           </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingTop: 8, borderTopWidth: 1, borderTopColor: '#1e293b' }}>
+            <View>
+              <Text style={{ fontSize: 11, color: '#64748b' }}>Paid to date</Text>
+              <Text style={{ fontSize: 15, fontWeight: '700', color: '#34d399' }}>₹{Number(earningsPaid || 0).toLocaleString()}</Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={{ fontSize: 11, color: '#64748b' }}>Awaiting approval</Text>
+              <Text style={{ fontSize: 15, fontWeight: '700', color: '#fbbf24' }}>₹{Number(earningsAwaitingApproval || 0).toLocaleString()}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Billing Status — live from the billing engine (assignment-level entries) */}
+      <Text style={styles.subHeading}>Billing Status</Text>
+      {(!billingEntries || billingEntries.length === 0) ? (
+        <View style={styles.emptyBox}>
+          <Ionicons name="receipt-outline" size={32} color="#94a3b8" style={{ marginBottom: 8 }} />
+          <Text style={styles.emptyText}>No billing records yet</Text>
+        </View>
+      ) : (
+        <View style={{ gap: 8, marginBottom: 16 }}>
+          {billingEntries.map((e) => {
+            const label = BILLING_STATE_LABEL[e.state] || e.state;
+            const color = BILLING_STATE_COLOR[e.state] || '#94a3b8';
+            return (
+              <View key={e.id} style={[styles.card, { marginBottom: 0, padding: 12 }]}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#fff' }}>{e.assignmentNumber || e.id.slice(0, 8)}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color }}>{label}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>{e.description || 'Billing entry'}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#10b981' }}>₹{Number(e.totalAmount || 0).toLocaleString()}</Text>
+                </View>
+              </View>
+            );
+          })}
         </View>
       )}
 

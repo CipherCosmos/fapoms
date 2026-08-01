@@ -39,12 +39,37 @@ export class DocumentDispatchWorker {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowStr = tomorrow.toISOString().split('T')[0];
 
+    // The audit date is owned by project_branches.scheduled_date — that is what
+    // scheduling writes and what a reschedule updates. `assessments.audit_date` is
+    // a copy made by syncAssessmentStatus, and only when the status *changes*, so
+    // it is absent for branches whose assignment has not transitioned yet and goes
+    // stale whenever a branch is rescheduled without a status change. Keying
+    // auto-dispatch off that copy meant packets for those branches were never sent
+    // at all, or sent against an out-of-date date.
+    const scheduledRows: Array<{ project_id: string; branch_id: string; scheduled_date: string | null }> =
+      await this.documentRepository.manager.query(
+        `SELECT project_id, branch_id, scheduled_date
+           FROM project_branches
+          WHERE is_active = true AND scheduled_date IS NOT NULL`,
+      );
+    const scheduledByBranch = new Map(
+      scheduledRows.map((r) => [`${r.project_id}:${r.branch_id}`, r.scheduled_date]),
+    );
+
     for (const doc of docs) {
       if (!doc.assessment) continue;
 
-      // Section 12.6 rule: Automatically dispatch documents 1 day before the scheduled audit date
-      const auditDate = doc.assessment.auditDate ? new Date(doc.assessment.auditDate).toISOString().split('T')[0] : null;
-      const isDueTomorrow = auditDate === tomorrowStr || (auditDate && new Date(auditDate) <= tomorrow);
+      const scheduled = scheduledByBranch.get(`${doc.assessment.projectId}:${doc.assessment.branchId}`);
+      const auditDate = scheduled ? new Date(scheduled).toISOString().split('T')[0] : null;
+      if (!auditDate) {
+        // No confirmed date yet — nothing to dispatch against.
+        continue;
+      }
+
+      // Spec §12.6: release the packet one day before the audit. `<= tomorrow` also
+      // catches anything already due, so a packet uploaded late still goes out
+      // immediately rather than waiting for a date that has passed.
+      const isDueTomorrow = auditDate === tomorrowStr || new Date(auditDate) <= tomorrow;
 
       const assignment = await this.assignmentRepository.findOne({
         where: {

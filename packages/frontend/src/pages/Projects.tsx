@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Filter, Plus, FileSpreadsheet, Eye, X, CheckCircle, AlertCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass, Download } from 'lucide-react';
+import { FileSpreadsheet, Eye, X, CheckCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 import { connectSocket } from '../services/socket';
+import { StatusBadge, Modal, KpiCard, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
 
 interface ClientOption {
   id: string;
@@ -407,6 +408,41 @@ export const Projects: React.FC = () => {
     }
   };
 
+  const handleUploadBranches = async (file: File) => {
+    if (!detail) return;
+    setIsSaving(true);
+    setMessage(null);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      await api.request(`/projects/${detail.id}/branches/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
+      loadDetail(detail.id);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    if (!detail) return;
+    try {
+      const blob = await api.request(`/projects/${detail.id}/branches/template`, { method: 'GET', raw: true }) as Blob;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'branch_upload_template.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to download template.' });
+    }
+  };
+
   const filteredProjects = projects.filter(p => {
     const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           p.projectNumber.toLowerCase().includes(searchTerm.toLowerCase());
@@ -425,28 +461,15 @@ export const Projects: React.FC = () => {
   const completedCount = projects.filter(p => p.status === ProjectStatus.COMPLETED || p.status === ProjectStatus.ARCHIVED).length;
 
   const renderForm = (onSubmit: (e: React.FormEvent) => void, onClose: () => void, title: string) => (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      width: '100vw',
-      height: '100vh',
-      background: 'rgba(0,0,0,0.7)',
-      backdropFilter: 'blur(4px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 100
-    }}>
-      <form onSubmit={onSubmit} className="glass-card" style={{ width: '560px', display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '90vh', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h4 style={{ fontSize: '18px', fontWeight: 600 }}>{title}</h4>
-          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-            <X size={18} />
-          </button>
+    <Modal open asForm onSubmit={onSubmit} onClose={onClose} title={title} width="560px" maxHeight="90vh" closeIcon={<X size={18} />}
+      footer={
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+          <button type="button" onClick={onClose} className="btn btn-secondary" disabled={isSaving}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={isSaving}>{isSaving ? 'Saving...' : 'Save'}</button>
         </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Name *</label>
             <input type="text" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. SBI Quarter 3 Audit" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
@@ -506,15 +529,9 @@ export const Projects: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Certifications (comma-separated)</label>
             <input type="text" value={form.requiredCertifications} onChange={(e) => setForm(f => ({ ...f, requiredCertifications: e.target.value }))} placeholder="e.g. Gold Valuer License" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
-          </div>
         </div>
-
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-          <button type="button" onClick={onClose} className="btn btn-secondary" disabled={isSaving}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={isSaving}>{isSaving ? 'Saving...' : 'Save'}</button>
-        </div>
-      </form>
-    </div>
+      </div>
+    </Modal>
   );
 
   return (
@@ -545,59 +562,32 @@ export const Projects: React.FC = () => {
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <FileSpreadsheet size={15} /> Export
           </button>
-          <button onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)', border: 'none', color: '#fff', padding: '10px 18px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer', boxShadow: 'var(--shadow-neon)' }}>
-            <Plus size={16} /> Create Project
-          </button>
+          <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}>
+            Create Project
+          </PrimaryButton>
         </div>
       </div>
 
       {/* Notifications */}
       {message && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', borderRadius: 'var(--radius-md)', fontSize: '13px', border: '1px solid', background: message.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', borderColor: message.type === 'success' ? 'var(--accent-secondary)' : 'rgba(239,68,68,0.4)', color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171' }}>
-          {message.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-          <span>{message.text}</span>
-        </div>
+        <AlertBanner type={message.type}>{message.text}</AlertBanner>
       )}
 
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
-        {[
-          { label: 'Total Projects', value: totalCount, icon: FolderKanban, color: 'var(--accent-primary)' },
-          { label: 'Planning / Draft', value: planningCount, icon: ClipboardList, color: 'var(--accent-secondary)' },
-          { label: 'Active', value: activeCount, icon: TrendingUp, color: 'var(--status-active)' },
-          { label: 'Completed / Archived', value: completedCount, icon: CheckCircle, color: 'var(--priority-low)' },
-        ].map(card => {
-          const Icon = card.icon;
-          return (
-            <div key={card.label} className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color }}>
-                <Icon size={20} />
-              </div>
-              <div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>{card.label}</div>
-                <div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{card.value}</div>
-              </div>
-            </div>
-          );
-        })}
+        <KpiCard layout="label-first" label="Total Projects" value={totalCount} icon={<FolderKanban />} iconColor="var(--accent-primary)" />
+        <KpiCard layout="label-first" label="Planning / Draft" value={planningCount} icon={<ClipboardList />} iconColor="var(--accent-secondary)" />
+        <KpiCard layout="label-first" label="Active" value={activeCount} icon={<TrendingUp />} iconColor="var(--status-active)" />
+        <KpiCard layout="label-first" label="Completed / Archived" value={completedCount} icon={<CheckCircle />} iconColor="var(--priority-low)" />
       </div>
 
       {/* Filter Row */}
       <div className="glass-card" style={{ padding: '14px 18px', display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
-          <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-          <input type="text" placeholder="Search by project name or code..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ width: '100%', padding: '9px 12px 9px 34px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Filter size={15} style={{ color: 'var(--text-muted)' }} />
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-            style={{ padding: '9px 14px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }}>
-            <option value="ALL">All Statuses</option>
-            {Object.values(ProjectStatus).map(status => (<option key={status} value={status}>{status}</option>))}
-          </select>
-        </div>
+        <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by project name or code..." style={{ minWidth: '240px' }} />
+        <FilterSelect value={statusFilter} onChange={setStatusFilter} options={[
+          { value: 'ALL', label: 'All Statuses' },
+          ...Object.values(ProjectStatus).map(status => ({ value: status, label: status })),
+        ]} />
         <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{filteredProjects.length} of {projects.length} results</span>
       </div>
 
@@ -663,16 +653,7 @@ export const Projects: React.FC = () => {
                         )}
                       </td>
                       <td>
-                        <span className="badge" style={{
-                          ...statusBadge(p.status),
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          padding: '3px 10px',
-                          borderRadius: 'var(--radius-sm)',
-                          display: 'inline-block',
-                        }}>
-                          {p.status}
-                        </span>
+                        <StatusBadge className="badge" label={p.status} bg={statusBadge(p.status).background} color={statusBadge(p.status).color} />
                       </td>
                       <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
@@ -713,9 +694,7 @@ export const Projects: React.FC = () => {
                       <h3 style={{ fontSize: '18px', fontWeight: 700, margin: '4px 0 2px' }}>{detail.name}</h3>
                       <code style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{detail.projectNumber}</code>
                     </div>
-                    <span className="badge" style={{ ...statusBadge(detail.status), fontSize: '10px', fontWeight: 600, padding: '3px 10px', borderRadius: 'var(--radius-sm)' }}>
-                      {detail.status}
-                    </span>
+                    <StatusBadge className="badge" label={detail.status} bg={statusBadge(detail.status).background} color={statusBadge(detail.status).color} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.01)' }}>
@@ -828,46 +807,7 @@ export const Projects: React.FC = () => {
                         </span>
                         {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
                           <div style={{ display: 'flex', gap: '8px' }}>
-                            <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'var(--gradient-neon)', border: 'none', color: '#fff', borderRadius: 'var(--radius-sm)', fontWeight: 600, boxShadow: 'var(--shadow-neon)' }}>
-                              <Plus size={12} /> Upload Excel
-                              <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
-                                onChange={async (e) => {
-                                  const file = e.target.files?.[0];
-                                  if (!file) return;
-                                  setIsSaving(true);
-                                  setMessage(null);
-                                  const formData = new FormData();
-                                  formData.append('file', file);
-                                  try {
-                                    await api.request(`/projects/${detail.id}/branches/upload`, {
-                                      method: 'POST',
-                                      body: formData
-                                    });
-                                    setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
-                                    loadDetail(detail.id);
-                                  } catch (err: any) {
-                                    setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
-                                  } finally {
-                                    setIsSaving(false);
-                                  }
-                                }}
-                              />
-                            </label>
-                            <button onClick={async () => {
-                              try {
-                                const blob = await api.request(`/projects/${detail.id}/branches/template`, { method: 'GET', raw: true }) as Blob;
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement('a');
-                                a.href = url;
-                                a.download = 'branch_upload_template.xlsx';
-                                a.click();
-                                URL.revokeObjectURL(url);
-                              } catch (err: any) {
-                                setMessage({ type: 'error', text: err?.message || 'Failed to download template.' });
-                              }
-                            }} style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600, cursor: 'pointer' }}>
-                              <Download size={12} /> Download Template
-                            </button>
+                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" />
                           </div>
                         )}
                       </div>
@@ -1026,20 +966,20 @@ export const Projects: React.FC = () => {
       {showEditModal && renderForm(handleEdit, () => setShowEditModal(false), 'Edit Project')}
 
       {/* Delete Confirmation */}
-      {showDeleteConfirm && detail && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div className="glass-card" style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '20px', padding: '24px' }}>
-            <h4 style={{ fontSize: '18px', fontWeight: 600 }}>Delete Project</h4>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-              Are you sure you want to delete <b>{detail.name}</b> ({detail.projectNumber})? This action cannot be undone.
-            </p>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-              <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
-              <button onClick={handleDelete} className="btn btn-primary" style={{ background: '#ef4444', border: 'none' }}>Delete</button>
-            </div>
+      <Modal open={showDeleteConfirm && !!detail} onClose={() => setShowDeleteConfirm(false)} title="Delete Project" width="400px"
+        footer={
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+            <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={handleDelete} className="btn btn-primary" style={{ background: '#ef4444', border: 'none' }}>Delete</button>
           </div>
-        </div>
-      )}
+        }
+      >
+        {detail && (
+          <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            Are you sure you want to delete <b>{detail.name}</b> ({detail.projectNumber})? This action cannot be undone.
+          </p>
+        )}
+      </Modal>
 
     </div>
   );

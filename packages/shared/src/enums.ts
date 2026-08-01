@@ -165,6 +165,13 @@ export enum SystemRole {
   DATA_ENTRY_HEAD = 'DATA_ENTRY_HEAD',
   ASSAYER = 'ASSAYER',
   CLIENT_USER = 'CLIENT_USER',
+  /**
+   * Owns the money: client receivables, assayer disbursements, invoicing and
+   * financial reporting. Finance work was previously bundled into the operations
+   * roles because billing had no dedicated owner, which meant anyone who could
+   * plan an audit could also issue an invoice.
+   */
+  FINANCE_MANAGER = 'FINANCE_MANAGER',
   READ_ONLY_AUDITOR = 'READ_ONLY_AUDITOR',
 }
 
@@ -217,6 +224,12 @@ export enum PermissionResource {
   CONFIGURATION = 'CONFIGURATION',
   REFERENCE_DATA = 'REFERENCE_DATA',
   AUDIT_LOG = 'AUDIT_LOG',
+  /**
+   * The unified billing engine: receivables, payables, invoices, payments and
+   * financial reporting. Billing previously had no permission resource of its own
+   * and was guarded only by coarse role checks.
+   */
+  BILLING = 'BILLING',
 }
 
 export enum AuthorizationScope {
@@ -275,6 +288,19 @@ export enum ClientType {
   OTHER = 'OTHER',
 }
 
+export enum ClientBillingStatus {
+  DRAFT = 'DRAFT',
+  ACTIVE = 'ACTIVE',
+  SUSPENDED = 'SUSPENDED',
+  INACTIVE = 'INACTIVE',
+}
+
+export enum ClientBillingEventType {
+  STATUS_CHANGE = 'STATUS_CHANGE',
+  REMARK = 'REMARK',
+  PROFILE_UPDATE = 'PROFILE_UPDATE',
+}
+
 export enum ContractStatus {
   DRAFT = 'DRAFT',
   ACTIVE = 'ACTIVE',
@@ -288,4 +314,153 @@ export enum Priority {
   MEDIUM = 'MEDIUM',
   HIGH = 'HIGH',
   CRITICAL = 'CRITICAL',
+}
+
+// ---------------------------------------------------------------------------
+// Multi-level Billing Engine (Client / Project / Assignment / Assayer Payable)
+// ---------------------------------------------------------------------------
+
+/** The operational entity a billing line belongs to. */
+export enum BillingLevel {
+  CLIENT = 'CLIENT',
+  PROJECT = 'PROJECT',
+  ASSIGNMENT = 'ASSIGNMENT',
+}
+
+/**
+ * Canonical billing state machine.
+ *
+ * Forward spine (spec §6):
+ *   Not Billable → Pending Billing → Ready for Billing → Draft → Submitted
+ *     → Under Review → (Rejected ⇄ Draft) → Approved → Invoiced
+ *     → Partially Paid → Paid
+ * Cross-cutting: On Hold, Disputed, Cancelled, Adjusted.
+ */
+export enum BillingState {
+  NOT_BILLABLE = 'NOT_BILLABLE',
+  PENDING_BILLING = 'PENDING_BILLING',
+  READY_FOR_BILLING = 'READY_FOR_BILLING',
+  DRAFT = 'DRAFT',
+  SUBMITTED = 'SUBMITTED',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  REJECTED = 'REJECTED',
+  APPROVED = 'APPROVED',
+  INVOICED = 'INVOICED',
+  PARTIALLY_PAID = 'PARTIALLY_PAID',
+  PAID = 'PAID',
+  ON_HOLD = 'ON_HOLD',
+  DISPUTED = 'DISPUTED',
+  CANCELLED = 'CANCELLED',
+  ADJUSTED = 'ADJUSTED',
+}
+
+/** Money-collection status, tracked independently of the approval pipeline. */
+export enum PaymentState {
+  UNPAID = 'UNPAID',
+  PARTIALLY_PAID = 'PARTIALLY_PAID',
+  PAID = 'PAID',
+  REVERSED = 'REVERSED',
+}
+
+/** How a price is computed. */
+export enum BillingPricingModel {
+  FLAT_RATE = 'FLAT_RATE',
+  PER_ASSIGNMENT = 'PER_ASSIGNMENT',
+  PER_BRANCH = 'PER_BRANCH',
+  PER_PACKET = 'PER_PACKET',
+  HOURLY = 'HOURLY',
+  RETAINER = 'RETAINER',
+}
+
+/** Consolidation of a set of approved billing entries into an invoice. */
+export enum InvoiceStatus {
+  DRAFT = 'DRAFT',
+  ISSUED = 'ISSUED',
+  PARTIALLY_PAID = 'PARTIALLY_PAID',
+  PAID = 'PAID',
+  DISPUTED = 'DISPUTED',
+  CANCELLED = 'CANCELLED',
+  VOID = 'VOID',
+}
+
+/** Aggregation scope of an invoice. */
+export enum InvoiceType {
+  CONSOLIDATED = 'CONSOLIDATED',
+  PER_PROJECT = 'PER_PROJECT',
+}
+
+export enum PaymentStatus {
+  PENDING = 'PENDING',
+  RECEIVED = 'RECEIVED',
+  REVERSED = 'REVERSED',
+  ALLOCATED = 'ALLOCATED',
+}
+
+/**
+ * Which way money moved. Both directions live in one payments table so that
+ * "every payment the business made or received" is a single query — cash-flow
+ * and the assayer's running balance both derive from it.
+ *
+ * INBOUND  — a client paying one of our invoices (accounts receivable).
+ * OUTBOUND — us disbursing an approved assayer payable (accounts payable).
+ */
+export enum PaymentDirection {
+  INBOUND = 'INBOUND',
+  OUTBOUND = 'OUTBOUND',
+}
+
+export enum PaymentMethod {
+  BANK_TRANSFER = 'BANK_TRANSFER',
+  NEFT = 'NEFT',
+  RTGS = 'RTGS',
+  UPI = 'UPI',
+  CHEQUE = 'CHEQUE',
+  CARD = 'CARD',
+  OTHER = 'OTHER',
+}
+
+/** Assayer payable is deliberately separate from client billing. */
+export enum AssayerPayableStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  PAID = 'PAID',
+  DISPUTED = 'DISPUTED',
+  ON_HOLD = 'ON_HOLD',
+}
+
+export enum BillingConflictSeverity {
+  INFO = 'INFO',
+  WARNING = 'WARNING',
+  CRITICAL = 'CRITICAL',
+}
+
+export enum BillingConflictStatus {
+  OPEN = 'OPEN',
+  RESOLVED = 'RESOLVED',
+  MERGED = 'MERGED',
+  SEPARATED = 'SEPARATED',
+  REASSIGNED = 'REASSIGNED',
+  OVERRIDDEN = 'OVERRIDDEN',
+  REJECTED = 'REJECTED',
+  ON_HOLD = 'ON_HOLD',
+}
+
+/** Resolution actions offered on the conflict screen. */
+export enum BillingConflictAction {
+  RESOLVE = 'RESOLVE',
+  MERGE = 'MERGE',
+  SEPARATE = 'SEPARATE',
+  REASSIGN = 'REASSIGN',
+  OVERRIDE = 'OVERRIDE',
+  REJECT = 'REJECT',
+  PUT_ON_HOLD = 'PUT_ON_HOLD',
+}
+
+/** What kind of record a billing history/audit event refers to. */
+export enum BillingEntityType {
+  ENTRY = 'ENTRY',
+  INVOICE = 'INVOICE',
+  PAYMENT = 'PAYMENT',
+  PAYABLE = 'PAYABLE',
+  CONFLICT = 'CONFLICT',
 }

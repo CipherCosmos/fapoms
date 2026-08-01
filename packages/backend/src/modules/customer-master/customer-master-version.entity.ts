@@ -15,6 +15,19 @@ export class CustomerMasterVersionEntity extends BaseEntity {
   @Column({ name: 'version_number', type: 'integer' })
   versionNumber: number;
 
+  /**
+   * The audit date this batch is for.
+   *
+   * The client sends one file the day before covering every branch scheduled for
+   * that date — so the batch, not the branch, is the unit of a day's intake. Without
+   * this the batch was only "version N of the project", which could not answer
+   * "did tomorrow's data arrive?" or "which branches are in tomorrow's run?".
+   *
+   * Nullable so batches created before this existed remain readable.
+   */
+  @Column({ name: 'audit_date', type: 'date', nullable: true })
+  auditDate: string | null;
+
   @Column({ name: 'file_name', type: 'varchar', length: 255 })
   fileName: string;
 

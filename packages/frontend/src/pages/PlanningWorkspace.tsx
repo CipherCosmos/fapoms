@@ -181,6 +181,9 @@ interface DayPlanCandidate {
   dayStartTime: string;
   dayEndTime: string;
   utilizationPercent: number;
+  totalPackets: number;
+  costPerPacket: number | null;
+  idleHours: number;
   stops: DayPlanStop[];
   clientPreferencesMatch: {
     skillsMatch: boolean;
@@ -196,7 +199,15 @@ interface BranchCluster {
   // `id` (the project-branch id) was missing from this type though the backend always sends
   // it — assigning a day plan needs it for POST /assignments, which takes projectBranchId,
   // not the bare branch id.
-  branches: Array<{ id: string; branchId: string; branchName: string; branchCode: string; estimatedDurationHours: number; city: string; district: string }>;
+  branches: Array<{
+    id: string; branchId: string; branchName: string; branchCode: string;
+    estimatedDurationHours: number; city: string; district: string;
+    /** Packets in THIS cycle — what actually determines how long the branch takes. */
+    packetCount: number | null;
+    /** True when hours came from the stale per-branch estimate, not this cycle's packets. */
+    durationFromStaticFallback: boolean;
+  }>;
+  totalPackets: number;
   totalEstimatedAuditHours: number;
   feasibleForOneDay: boolean;
 }
@@ -214,12 +225,22 @@ interface ProjectDayPlan {
     excludedAssayers: ExcludedCandidate[];
   }>;
   unclusteredBranches: Array<{ branchId: string; branchName: string; reason: string }>;
+  /** Requested date wasn't workable (holiday/weekend) and the planner moved forward. */
+  dateAdjustment: { requestedDate: string; reason: string } | null;
+  /** Lone branches that would consume a full paid day for a few hours of work. */
+  underutilizedBranches: Array<{
+    branchId: string; branchName: string; packetCount: number | null;
+    auditHours: number; idleHours: number; note: string;
+  }>;
   summary: {
     totalClusters: number;
     totalBranchesCovered: number;
     totalAssayersNeeded: number;
     estimatedTotalCost: number;
     averageUtilization: number;
+    totalPackets: number;
+    averagePacketsPerDay: number;
+    averageCostPerPacket: number | null;
   };
 }
 
@@ -1998,9 +2019,14 @@ export const PlanningWorkspace: React.FC = () => {
               {/* Summary KPI Bar */}
               <div style={{ display: 'flex', gap: '16px', padding: '10px 0 14px', flexWrap: 'wrap' }}>
                 {[
-                  { label: 'Clusters', value: dayPlanData.summary.totalClusters, icon: <Layers size={13} />, color: 'var(--accent-primary)' },
+                  // Throughput first: an assayer-day is bought whole, so packets-per-day and
+                  // cost-per-packet are what decide whether the day is worth committing —
+                  // more so than the branch count.
+                  { label: 'Packets / Day', value: dayPlanData.summary.averagePacketsPerDay || '—', icon: <Layers size={13} />, color: 'var(--accent-primary)' },
+                  { label: 'Cost / Packet', value: dayPlanData.summary.averageCostPerPacket != null ? `₹${dayPlanData.summary.averageCostPerPacket.toLocaleString()}` : '—', icon: <DollarSign size={13} />, color: '#8b5cf6' },
+                  { label: 'Total Packets', value: dayPlanData.summary.totalPackets || '—', icon: <Briefcase size={13} />, color: 'var(--status-active)' },
+                  { label: 'Assayer-Days', value: dayPlanData.summary.totalAssayersNeeded, icon: <Users size={13} />, color: '#f59e0b' },
                   { label: 'Branches Covered', value: dayPlanData.summary.totalBranchesCovered, icon: <Building2 size={13} />, color: 'var(--status-active)' },
-                  { label: 'Assayers Needed', value: dayPlanData.summary.totalAssayersNeeded, icon: <Users size={13} />, color: '#f59e0b' },
                   { label: 'Est. Total Cost', value: `₹${dayPlanData.summary.estimatedTotalCost.toLocaleString()}`, icon: <DollarSign size={13} />, color: '#8b5cf6' },
                   { label: 'Avg Utilization', value: `${dayPlanData.summary.averageUtilization.toFixed(0)}%`, icon: <TrendingUp size={13} />, color: dayPlanData.summary.averageUtilization >= 70 ? 'var(--status-active)' : '#f59e0b' },
                 ].map((kpi, idx) => (
@@ -2010,6 +2036,40 @@ export const PlanningWorkspace: React.FC = () => {
                   </div>
                 ))}
               </div>
+
+              {/* Date moved because the requested day couldn't be worked. Previously the
+                  planner would plan a holiday and only fail later, at assign time. */}
+              {dayPlanData.dateAdjustment && (
+                <div style={{ background: 'rgba(56,189,248,0.06)', border: '1px solid rgba(56,189,248,0.25)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Calendar size={14} style={{ color: '#38bdf8', flexShrink: 0 }} />
+                  <div style={{ fontSize: '11.5px', color: '#bae6fd' }}>
+                    <b>{dayPlanData.dateAdjustment.requestedDate}</b> can't be worked — {dayPlanData.dateAdjustment.reason}
+                    {' '}Planned for <b>{dayPlanData.targetDate}</b> instead.
+                  </div>
+                </div>
+              )}
+
+              {/* The core signal this whole mechanism exists to surface: a full paid day
+                  being spent on a couple of hours of work. */}
+              {dayPlanData.underutilizedBranches.length > 0 && (
+                <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.22)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#f87171', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <AlertTriangle size={13} /> {dayPlanData.underutilizedBranches.length} branch(es) would use a full paid day for a few hours of work
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: '#94a3b8', marginBottom: '8px' }}>
+                    No neighbouring branch was close enough to bundle. Consider deferring these into a cycle where they can share a day.
+                  </div>
+                  {dayPlanData.underutilizedBranches.map((b, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
+                      <span style={{ fontWeight: 600, color: '#fff', minWidth: '160px' }}>{b.branchName}</span>
+                      <span style={{ color: '#f87171', fontWeight: 700 }}>{b.idleHours}h idle</span>
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        {b.packetCount != null ? `${b.packetCount} packets ≈ ${b.auditHours}h` : `~${b.auditHours}h (no packet count recorded)`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Unclustered branches warning */}
               {dayPlanData.unclusteredBranches.length > 0 && (
@@ -2038,6 +2098,9 @@ export const PlanningWorkspace: React.FC = () => {
                         </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        {cluster.totalPackets > 0 && (
+                          <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: 700 }}>{cluster.totalPackets} packets</span>
+                        )}
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><Clock size={11} /> {cluster.totalEstimatedAuditHours}h audit</span>
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> {cluster.radiusKm.toFixed(0)}km radius</span>
                         <span style={{ fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : '#ef4444' }}>
@@ -2060,7 +2123,18 @@ export const PlanningWorkspace: React.FC = () => {
                           {cluster.branches.map(b => (
                             <div key={b.branchId} style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '11px' }}>
                               <div style={{ fontWeight: 600, color: '#fff' }}>{b.branchName}</div>
-                              <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{b.branchCode} • {b.city} • {b.estimatedDurationHours}h audit</div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+                                {b.branchCode} • {b.city} •{' '}
+                                {b.packetCount != null
+                                  ? <>{b.packetCount} packets → {b.estimatedDurationHours}h</>
+                                  : (
+                                    // Distinguished from a real packet-derived figure: this is a
+                                    // stale per-branch default that may not reflect this cycle.
+                                    <span title="No packet count recorded for this cycle — estimated from the branch default, which may be out of date.">
+                                      ~{b.estimatedDurationHours}h <span style={{ color: '#f59e0b' }}>(est.)</span>
+                                    </span>
+                                  )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -2132,16 +2206,23 @@ export const PlanningWorkspace: React.FC = () => {
                                 {/* Metrics Grid */}
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
                                   {[
-                                    { label: 'Branches', val: plan.totalBranches, icon: '🏢' },
-                                    { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: '⏱️' },
-                                    { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: '🚗' },
-                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: '📅' },
-                                    { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: '🕐' },
-                                    { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? '🔥' : '📊' },
+                                    // Packets and idle time lead: they answer "is this day worth
+                                    // buying", which branch/hour counts alone don't.
+                                    ...(plan.totalPackets > 0 ? [{ label: 'Packets', val: String(plan.totalPackets), icon: '📦', warn: false }] : []),
+                                    ...(plan.costPerPacket != null ? [{ label: 'Cost / Packet', val: `₹${plan.costPerPacket.toLocaleString()}`, icon: '💰', warn: false }] : []),
+                                    // Idle time is the cost of a badly-packed day, so it's called
+                                    // out in amber once it passes roughly a quarter of the day.
+                                    { label: 'Idle (paid)', val: `${plan.idleHours}h`, icon: plan.idleHours >= 3 ? '⚠️' : '✅', warn: plan.idleHours >= 3 },
+                                    { label: 'Branches', val: String(plan.totalBranches), icon: '🏢', warn: false },
+                                    { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: '⏱️', warn: false },
+                                    { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: '🚗', warn: false },
+                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: '📅', warn: false },
+                                    { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: '🕐', warn: false },
+                                    { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? '🔥' : '📊', warn: false },
                                   ].map((m, mi) => (
                                     <div key={mi} style={{ background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' }}>
                                       <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{m.icon} {m.label}</div>
-                                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff', marginTop: '2px' }}>{m.val}</div>
+                                      <div style={{ fontSize: '13px', fontWeight: 600, color: m.warn ? '#f59e0b' : '#fff', marginTop: '2px' }}>{m.val}</div>
                                     </div>
                                   ))}
                                 </div>

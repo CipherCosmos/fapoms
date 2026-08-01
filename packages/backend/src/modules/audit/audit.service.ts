@@ -3,8 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditEntity } from './audit.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { BillingService } from '../billing/billing.service';
-import { LedgerService } from '../ledger/ledger.service';
+import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { AuditHistoryService } from '../audit-history/audit-history.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
@@ -15,8 +14,7 @@ export class AuditService {
     private readonly auditRepository: Repository<AuditEntity>,
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
-    private readonly billingService: BillingService,
-    private readonly ledgerService: LedgerService,
+    private readonly billingEngine: BillingEngineService,
     private readonly historyService: AuditHistoryService,
     private readonly eventPublisher: DomainEventPublisher,
   ) {}
@@ -79,25 +77,24 @@ export class AuditService {
     audit.completionDate = new Date();
     const saved = await this.auditRepository.save(audit);
 
-    // Generate billing record
-    const bill = await this.billingService.createBillingRecord({
-      auditId: saved.id,
-      assayerId: saved.assayerId,
-      baseFee: resolvedBaseFee,
-      travelAllowance: resolvedTravelAllowance,
-      penalties: 0,
-      invoiceStatus: 'ISSUED',
-    });
-
-    // Credit financial ledger
-    await this.ledgerService.addEntry(saved.assayerId, 'CREDIT', bill.netPayable, bill.id);
+    // Book what we owe the assayer through the billing engine. This used to write
+    // a separate billing record and hand-credit a running balance in another
+    // module, which meant closing an audit and completing its assignment each
+    // produced their own record of the same debt. `syncPayableForAssignment` is
+    // idempotent per assignment, so whichever event lands first creates the
+    // payable and the other is a no-op — one obligation, one record.
+    let payableId: string | undefined;
+    if (saved.assignmentId) {
+      const result = await this.billingEngine.syncPayableForAssignment(saved.assignmentId, 'system');
+      payableId = result.payableId;
+    }
 
     this.eventPublisher.publish('audit:closed', {
       eventType: 'audit:closed',
       aggregateId: id,
       assayerId: saved.assayerId,
-      billingId: bill.id,
-      payload: { id, status: 'CLOSED', completionDate: saved.completionDate, baseFee, travelAllowance },
+      payableId,
+      payload: { id, status: 'CLOSED', completionDate: saved.completionDate, baseFee: resolvedBaseFee, travelAllowance: resolvedTravelAllowance },
     });
 
     return saved;

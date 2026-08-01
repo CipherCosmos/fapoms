@@ -62,6 +62,16 @@ export interface DayPlanCandidate {
   dayStartTime: string;        // e.g., "09:00"
   dayEndTime: string;          // e.g., "17:30"
   utilizationPercent: number;  // how much of the workday is productive audit vs. travel
+  /**
+   * Throughput economics. An assayer is engaged (and paid) for the whole day, so the number
+   * that actually matters commercially is packets audited per paid day — not whether the
+   * branches merely "fit". A 2-hour single-branch day and a 9-hour four-branch day can cost
+   * the same; these fields make that difference visible instead of hiding it behind a
+   * utilization percentage.
+   */
+  totalPackets: number;
+  costPerPacket: number | null;   // null when packet counts are unknown for the cluster
+  idleHours: number;              // paid-but-unproductive hours left in the working day
   stops: DayPlanStop[];
   clientPreferencesMatch: {
     skillsMatch: boolean;
@@ -83,13 +93,22 @@ export interface BranchCluster {
     branchCode: string;
     latitude: number;
     longitude: number;
+    /** Packets to audit in THIS project cycle — the real driver of how long the branch takes. */
+    packetCount: number | null;
     estimatedDurationHours: number;
+    /** True when the hours above came from a stale static branch value rather than this cycle's packets. */
+    durationFromStaticFallback: boolean;
     district: string;
     city: string;
   }>;
+  /** Total packets across the cluster — the throughput this day actually buys. */
+  totalPackets: number;
   totalEstimatedAuditHours: number;
   feasibleForOneDay: boolean;
 }
+
+/** One branch as it participates in clustering — sized by this cycle's workload. */
+type ClusterMember = BranchCluster['branches'][number];
 
 /** An assayer who could not be offered this cluster, and why. */
 export interface ExcludedDayPlanCandidate {
@@ -105,6 +124,15 @@ export interface ProjectDayPlan {
   targetDate: string;
   /** Hard minimum km actually enforced (manual override, client floor, or both — the stricter wins). Null when neither applies. */
   effectiveMinDistanceKm: number | null;
+  /**
+   * Set when the requested date could not be worked (public holiday or weekend) and the
+   * planner moved to the next working day instead. Previously the planner would happily plan
+   * a national holiday and only fail later, at assign time, with "Holiday Conflict".
+   */
+  dateAdjustment: {
+    requestedDate: string;
+    reason: string;
+  } | null;
   clusters: Array<{
     cluster: BranchCluster;
     dayPlans: DayPlanCandidate[];
@@ -117,12 +145,30 @@ export interface ProjectDayPlan {
     branchName: string;
     reason: string;
   }>;
+  /**
+   * Branches that will consume a full paid day on their own while needing only a few hours.
+   * These are the exact cases this whole mechanism exists to catch, and they were previously
+   * skipped in silence (`if (cluster.branches.length <= 1) continue`), so the one thing ops
+   * most needed to see never appeared anywhere.
+   */
+  underutilizedBranches: Array<{
+    branchId: string;
+    branchName: string;
+    packetCount: number | null;
+    auditHours: number;
+    idleHours: number;
+    note: string;
+  }>;
   summary: {
     totalClusters: number;
     totalBranchesCovered: number;
     totalAssayersNeeded: number;
     estimatedTotalCost: number;
     averageUtilization: number;
+    /** Packets bought by the assayer-days this plan commits to. */
+    totalPackets: number;
+    averagePacketsPerDay: number;
+    averageCostPerPacket: number | null;
   };
 }
 
@@ -132,6 +178,14 @@ const MAX_DAILY_WORK_HOURS = 10;
 const DAY_START_HOUR = 9; // 9:00 AM
 const CLUSTER_RADIUS_KM = 80; // branches within 80km are candidates for bundling; feasibility filters (total day hours, utilization, client max distance) determine if bundling actually works
 const TRAVEL_FEE_PER_KM = 8; // ₹8 per km
+/** Matches the import-time default in project.service.ts so estimates stay consistent. */
+const DEFAULT_MINUTES_PER_PACKET = 15;
+/** Used only when a branch has neither a packet count for this cycle nor a stored estimate. */
+const DEFAULT_AUDIT_HOURS = 4;
+/** Idle hours on a paid day beyond which a lone branch is worth flagging to ops. */
+const UNDERUTILIZED_IDLE_HOURS_THRESHOLD = 3;
+/** How far forward to search for a workable date before giving up. */
+const MAX_DATE_LOOKAHEAD_DAYS = 30;
 
 // ─── Service ───────────────────────────────────────────────────────────────────
 
@@ -182,8 +236,9 @@ export class DayPlannerService {
 
     const effectiveMinDistanceKm = this.resolveMinDistanceKm(client, manualMinDistanceKm);
 
-    const scheduledDate = targetDate ? new Date(targetDate) : new Date();
-    const dateStr = scheduledDate.toISOString().split('T')[0];
+    // How long one packet takes to audit, per this client's agreement. This is what converts
+    // "how much work is at this branch this cycle" into hours — see resolveAuditHours().
+    const minutesPerPacket = Number(client?.planningPreferences?.minutesPerPacket) || DEFAULT_MINUTES_PER_PACKET;
 
     // 1. Get unassigned project branches with branch details
     const projectBranches = await this.projectBranchRepository.find({
@@ -195,22 +250,30 @@ export class DayPlannerService {
       (pb) => pb.status === 'IMPORTED' || pb.status === 'PLANNING' || pb.status === 'CANDIDATE_SEARCH',
     );
 
+    // 2. Resolve a date the audit can actually be worked. Holidays are state-specific, so this
+    //    needs the branches in scope — hence it runs after loading them.
+    const { scheduledDate, dateStr, dateAdjustment } = await this.resolveWorkingDate(
+      targetDate ? new Date(targetDate) : new Date(),
+      unassigned,
+    );
+
     if (unassigned.length === 0) {
       return this.emptyPlan(projectId, project.name, dateStr);
     }
 
-    // 2. Cluster branches by proximity
-    const clusters = this.clusterBranches(unassigned);
+    // 3. Cluster branches by proximity, sizing each branch by THIS cycle's packet count
+    const clusters = this.clusterBranches(unassigned, minutesPerPacket);
 
-    // 3. Get all active assayers
+    // 4. Get all active assayers
     const assayers = await this.assayerRepository.find({
       where: { isActive: true, status: AssayerStatus.ACTIVE },
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
-    // 4. Generate day plans for each cluster
+    // 5. Generate day plans for each cluster
     const clusterResults: ProjectDayPlan['clusters'] = [];
     const unclusteredBranches: ProjectDayPlan['unclusteredBranches'] = [];
+    const underutilizedBranches: ProjectDayPlan['underutilizedBranches'] = [];
 
     for (const cluster of clusters) {
       if (!cluster.feasibleForOneDay) {
@@ -224,8 +287,30 @@ export class DayPlannerService {
         continue;
       }
 
-      // Skip single-branch clusters — handled by the simple assignment interface
-      if (cluster.branches.length <= 1) continue;
+      // A branch with no neighbour close enough to bundle still consumes a whole paid day.
+      // This used to `continue` silently, which hid the single most important signal this
+      // mechanism exists to produce: "you are about to buy a full day for 2 hours of work."
+      // Reported instead, with the idle time quantified, so ops can decide to defer it into a
+      // later cycle where it can be bundled.
+      if (cluster.branches.length <= 1) {
+        const only = cluster.branches[0];
+        if (only) {
+          const idle = Math.max(0, MAX_DAILY_WORK_HOURS - cluster.totalEstimatedAuditHours);
+          if (idle >= UNDERUTILIZED_IDLE_HOURS_THRESHOLD) {
+            underutilizedBranches.push({
+              branchId: only.branchId,
+              branchName: only.branchName,
+              packetCount: only.packetCount,
+              auditHours: cluster.totalEstimatedAuditHours,
+              idleHours: parseFloat(idle.toFixed(1)),
+              note: only.durationFromStaticFallback
+                ? `Needs ~${cluster.totalEstimatedAuditHours.toFixed(1)}h but occupies a full paid day (~${idle.toFixed(1)}h idle). No packet count recorded for this cycle — estimate is from the branch default, so this may be inaccurate.`
+                : `${only.packetCount} packet(s) ≈ ${cluster.totalEstimatedAuditHours.toFixed(1)}h, leaving ~${idle.toFixed(1)}h of the paid day idle. No nearby branch was close enough to bundle.`,
+            });
+          }
+        }
+        continue;
+      }
 
       let { dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
         cluster, assayers, client, scheduledDate, effectiveMinDistanceKm,
@@ -259,15 +344,23 @@ export class DayPlannerService {
     const bestPlans = clusterResults.filter((r) => r.bestPlan).map((r) => r.bestPlan!);
     const uniqueAssayers = new Set(bestPlans.map((p) => p.assayerId));
 
+    const totalCost = bestPlans.reduce((sum, p) => sum + p.estimatedTotalCost, 0);
+    const totalPackets = bestPlans.reduce((sum, p) => sum + p.totalPackets, 0);
+
     const summary = {
       totalClusters: clusterResults.length,
       totalBranchesCovered: bestPlans.reduce((sum, p) => sum + p.totalBranches, 0),
       totalAssayersNeeded: uniqueAssayers.size,
-      estimatedTotalCost: bestPlans.reduce((sum, p) => sum + p.estimatedTotalCost, 0),
+      estimatedTotalCost: totalCost,
       averageUtilization:
         bestPlans.length > 0
           ? bestPlans.reduce((sum, p) => sum + p.utilizationPercent, 0) / bestPlans.length
           : 0,
+      totalPackets,
+      // Each best plan is one assayer-day, so this is packets bought per paid day — the
+      // headline number for whether the day is worth buying.
+      averagePacketsPerDay: bestPlans.length > 0 ? parseFloat((totalPackets / bestPlans.length).toFixed(1)) : 0,
+      averageCostPerPacket: totalPackets > 0 ? parseFloat((totalCost / totalPackets).toFixed(2)) : null,
     };
 
     return {
@@ -275,9 +368,98 @@ export class DayPlannerService {
       projectName: project.name,
       targetDate: dateStr,
       effectiveMinDistanceKm,
+      dateAdjustment,
       clusters: clusterResults,
       unclusteredBranches,
+      underutilizedBranches,
       summary,
+    };
+  }
+
+  /**
+   * Finds a date the audit can actually be worked, moving forward from the requested one.
+   *
+   * Skips weekends and any date that is a public holiday in a state where one of these
+   * branches sits (holidays are state-scoped, so a Maharashtra holiday shouldn't block a
+   * Karnataka branch). Previously no holiday check existed here at all: the planner would
+   * produce a full plan for, say, Independence Day, and the failure only surfaced later when
+   * assignment creation rejected it with "Holiday Conflict" — after the operator had already
+   * chosen an assayer.
+   */
+  private async resolveWorkingDate(
+    requested: Date,
+    branches: ProjectBranchEntity[],
+  ): Promise<{ scheduledDate: Date; dateStr: string; dateAdjustment: ProjectDayPlan['dateAdjustment'] }> {
+    const states = [...new Set(branches.map((pb) => pb.branch?.state).filter(Boolean))] as string[];
+    const requestedStr = requested.toISOString().split('T')[0];
+
+    const candidate = new Date(requested);
+    for (let attempt = 0; attempt <= MAX_DATE_LOOKAHEAD_DAYS; attempt++) {
+      const blocker = await this.describeDateBlocker(candidate, states);
+      if (!blocker) {
+        const dateStr = candidate.toISOString().split('T')[0];
+        return {
+          scheduledDate: candidate,
+          dateStr,
+          dateAdjustment: dateStr === requestedStr
+            ? null
+            : { requestedDate: requestedStr, reason: (await this.describeDateBlocker(requested, states)) || 'Not a working day' },
+        };
+      }
+      candidate.setDate(candidate.getDate() + 1);
+    }
+
+    // Nothing workable in range — return the original rather than silently inventing a date.
+    return {
+      scheduledDate: requested,
+      dateStr: requestedStr,
+      dateAdjustment: {
+        requestedDate: requestedStr,
+        reason: `No working day found within ${MAX_DATE_LOOKAHEAD_DAYS} days — check the holiday calendar.`,
+      },
+    };
+  }
+
+  /** Returns why a date can't be worked, or null when it can. */
+  private async describeDateBlocker(date: Date, states: string[]): Promise<string | null> {
+    const day = date.getDay();
+    if (day === 0) return 'Falls on a Sunday';
+    if (day === 6) return 'Falls on a Saturday';
+
+    for (const state of states) {
+      const result = await this.constraintEvaluator.checkHoliday(state, date);
+      if (!result.passed) {
+        return result.reason || `Public holiday in ${state}`;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * How many hours this branch's audit will take in THIS project cycle.
+   *
+   * Derived from the packet count on the project-branch, because that is what actually varies
+   * between cycles — the same branch can be a 2-hour job one month and a full day the next.
+   * `branches.estimated_duration_hours` is only a fallback: it is written once when the branch
+   * is first imported and never refreshed, so by the second cycle it reflects some earlier
+   * month's workload rather than the work now in front of the assayer.
+   */
+  private resolveAuditHours(
+    pb: ProjectBranchEntity,
+    minutesPerPacket: number,
+  ): { hours: number; packetCount: number | null; fromStaticFallback: boolean } {
+    const packetCount = pb.packetCount ?? null;
+    if (packetCount !== null && packetCount > 0) {
+      return {
+        hours: parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2)),
+        packetCount,
+        fromStaticFallback: false,
+      };
+    }
+    return {
+      hours: Number(pb.branch?.estimatedDurationHours) || DEFAULT_AUDIT_HOURS,
+      packetCount,
+      fromStaticFallback: true,
     };
   }
 
@@ -286,23 +468,32 @@ export class DayPlannerService {
    * Pick the first unvisited branch as cluster center,
    * then absorb all unvisited branches within CLUSTER_RADIUS_KM.
    */
-  private clusterBranches(projectBranches: ProjectBranchEntity[]): BranchCluster[] {
+  private clusterBranches(projectBranches: ProjectBranchEntity[], minutesPerPacket: number): BranchCluster[] {
     const branchesWithCoords = projectBranches
       .filter((pb) => pb.branch?.latitude && pb.branch?.longitude)
-      .map((pb) => ({
-        id: pb.id,
-        branchId: pb.branchId,
-        branchName: pb.branch.name,
-        branchCode: pb.branch.branchCode,
-        latitude: Number(pb.branch.latitude),
-        longitude: Number(pb.branch.longitude),
-        packetCount: pb.packetCount || 40,
-        estimatedDurationHours: Number(pb.branch.estimatedDurationHours) || 4, // default 4h
-        district: pb.branch.district,
-        city: pb.branch.city,
-      }))
-      // Customer Throughput Optimization: Prioritize seeding clusters from high-volume customer packet branches
-      .sort((a, b) => b.packetCount - a.packetCount);
+      .map((pb) => {
+        // Sized by this cycle's packets. Previously this read the static
+        // branches.estimated_duration_hours, so a branch with only a handful of packets this
+        // month was still budgeted its historical full-day estimate — which is precisely how
+        // an assayer ends up paid for a day they finish in two hours.
+        const { hours, packetCount, fromStaticFallback } = this.resolveAuditHours(pb, minutesPerPacket);
+        return {
+          id: pb.id,
+          branchId: pb.branchId,
+          branchName: pb.branch.name,
+          branchCode: pb.branch.branchCode,
+          latitude: Number(pb.branch.latitude),
+          longitude: Number(pb.branch.longitude),
+          packetCount,
+          estimatedDurationHours: hours,
+          durationFromStaticFallback: fromStaticFallback,
+          district: pb.branch.district,
+          city: pb.branch.city,
+        };
+      })
+      // Seed clusters from the heaviest branches so the biggest workloads anchor a day and
+      // smaller neighbours fill the remaining capacity around them.
+      .sort((a, b) => b.estimatedDurationHours - a.estimatedDurationHours);
 
     const visited = new Set<string>();
     const clusters: BranchCluster[] = [];
@@ -355,15 +546,9 @@ export class DayPlannerService {
   /**
    * Build a BranchCluster from a list of branch members.
    */
-  private buildCluster(
-    members: Array<{
-      id: string; branchId: string; branchName: string; branchCode: string;
-      latitude: number; longitude: number; estimatedDurationHours: number;
-      district: string; city: string;
-    }>,
-    index: number,
-  ): BranchCluster {
+  private buildCluster(members: ClusterMember[], index: number): BranchCluster {
     const totalAuditHours = members.reduce((sum, b) => sum + b.estimatedDurationHours, 0);
+    const totalPackets = members.reduce((sum, b) => sum + (b.packetCount ?? 0), 0);
     const centerLat = members.reduce((s, b) => s + b.latitude, 0) / members.length;
     const centerLng = members.reduce((s, b) => s + b.longitude, 0) / members.length;
     const maxDist = Math.max(
@@ -376,24 +561,22 @@ export class DayPlannerService {
       centerLongitude: parseFloat(centerLng.toFixed(4)),
       radiusKm: parseFloat(maxDist.toFixed(1)),
       branches: members,
+      totalPackets,
       totalEstimatedAuditHours: parseFloat(totalAuditHours.toFixed(1)),
       feasibleForOneDay: totalAuditHours <= MAX_DAILY_WORK_HOURS,
     };
   }
 
   /**
-   * Split an infeasible cluster (total audit hours > daily max) into smaller
-   * feasible sub-clusters using a farthest-point seeding approach.
+   * Split an infeasible cluster (total audit hours > daily max) into smaller feasible
+   * sub-clusters using first-fit-decreasing bin packing: place the largest workloads first,
+   * then fill each partially-used day with the largest remaining branch that still fits.
+   * This packs each assayer-day as full as possible, which is the whole point — a day that
+   * ends at 60% capacity still costs a full day.
    */
-  private splitInfeasibleCluster(
-    members: Array<{
-      id: string; branchId: string; branchName: string; branchCode: string;
-      latitude: number; longitude: number; estimatedDurationHours: number;
-      district: string; city: string;
-    }>,
-  ): Array<Array<typeof members[0]>> {
+  private splitInfeasibleCluster(members: ClusterMember[]): ClusterMember[][] {
     const sorted = [...members].sort((a, b) => b.estimatedDurationHours - a.estimatedDurationHours);
-    const subClusters: Array<Array<typeof members[0]>> = [];
+    const subClusters: ClusterMember[][] = [];
 
     for (const branch of sorted) {
       let placed = false;
@@ -665,6 +848,15 @@ export class DayPlannerService {
         dayStartTime: this.minutesToTime(DAY_START_HOUR * 60),
         dayEndTime,
         utilizationPercent,
+        totalPackets: cluster.totalPackets,
+        // Null rather than a misleading number when no packet counts are recorded for this
+        // cycle — a fabricated cost-per-packet would be worse than none.
+        costPerPacket: cluster.totalPackets > 0
+          ? parseFloat((totalCost / cluster.totalPackets).toFixed(2))
+          : null,
+        // Paid-but-unproductive time: what's left of the working day once audit and travel
+        // are done. This is the number that quantifies "we paid for a day and got two hours".
+        idleHours: parseFloat(Math.max(0, MAX_DAILY_WORK_HOURS - totalDayHours).toFixed(1)),
         stops,
         clientPreferencesMatch: {
           skillsMatch: requiredSkills.length === 0 || requiredSkills.every((s) => assayerSkills.includes(s.toLowerCase())),
@@ -761,14 +953,19 @@ export class DayPlannerService {
       projectName,
       targetDate: dateStr,
       effectiveMinDistanceKm: null,
+      dateAdjustment: null,
       clusters: [],
       unclusteredBranches: [],
+      underutilizedBranches: [],
       summary: {
         totalClusters: 0,
         totalBranchesCovered: 0,
         totalAssayersNeeded: 0,
         estimatedTotalCost: 0,
         averageUtilization: 0,
+        totalPackets: 0,
+        averagePacketsPerDay: 0,
+        averageCostPerPacket: null,
       },
     };
   }

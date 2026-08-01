@@ -1,8 +1,9 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemRole } from '@fapoms/shared';
 
 @ApiTags('System Dashboard')
@@ -13,7 +14,27 @@ export class SystemDashboardController {
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly operationsSnapshot: OperationsSnapshotService,
   ) {}
+
+  @Get('operations')
+  // Every staff role gets a dashboard — the payload itself is scoped to what the
+  // caller's roles allow, so restricting the route as well would only lock people
+  // out of their own view (the validator role was 403'd by exactly that).
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.FINANCE_MANAGER, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
+    SystemRole.DOCUMENT_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD,
+    SystemRole.READ_ONLY_AUDITOR, SystemRole.CLIENT_USER,
+  )
+  @ApiOperation({ summary: "Role-scoped operational snapshot: only the sections the caller's roles include" })
+  async getOperations(@Req() req: any) {
+    // Sections follow the caller's own roles rather than a query parameter, so the
+    // view cannot be widened by editing the request.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    return { success: true, data: await this.operationsSnapshot.snapshot(roles, req.user?.id) };
+  }
 
   @Get('metrics')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)

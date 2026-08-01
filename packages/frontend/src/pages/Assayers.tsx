@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import { connectSocket } from '../services/socket';
 import { Plus, Calendar, Users, UserCheck, UserX, Clock, Edit2, Trash2, User, MapPin, Briefcase, Award, CreditCard, AlertTriangle, Star, ExternalLink, Search, Phone, DollarSign, TrendingUp, CheckCircle, X } from 'lucide-react';
 import { AssayerLifecycleStatus, INDIAN_STATES } from '@fapoms/shared';
+import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
 
 interface Assayer {
   id: string;
@@ -288,6 +289,33 @@ export const Assayers: React.FC = () => {
     } finally { setSubmitting(false); }
   };
 
+  const handleUpload = async (file: File) => {
+    setSubmitting(true);
+    setMessage(null);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const result: any = await api.request(`/assayers/upload`, { method: 'POST', body: formData });
+      setMessage({ type: 'success', text: `Imported ${result.importedCount} assayers${result.errors?.length ? ` (${result.errors.length} errors)` : ''}` });
+      if (result.errors?.length) console.warn('Import errors:', result.errors);
+      fetchAssayers();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Upload failed' });
+    } finally { setSubmitting(false); }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await api.request(`/assayers/template/download`, { method: 'GET', raw: true }) as Blob;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'assayer_upload_template.xlsx'; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Download failed' });
+    }
+  };
+
   const totalAssayers = assayers.length;
   const activeAssayers = assayers.filter(a => a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE).length;
   const onLeaveAssayers = assayers.filter(a => a.lifecycleStatus === AssayerLifecycleStatus.ON_LEAVE).length;
@@ -309,51 +337,13 @@ export const Assayers: React.FC = () => {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <label style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600 }}>
-            Upload Excel
-            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                setSubmitting(true);
-                setMessage(null);
-                const formData = new FormData();
-                formData.append('file', file);
-                try {
-                  const result: any = await api.request(`/assayers/upload`, { method: 'POST', body: formData });
-                  setMessage({ type: 'success', text: `Imported ${result.importedCount} assayers${result.errors?.length ? ` (${result.errors.length} errors)` : ''}` });
-                  if (result.errors?.length) console.warn('Import errors:', result.errors);
-                  fetchAssayers();
-                } catch (err: any) {
-                  setMessage({ type: 'error', text: err?.message || 'Upload failed' });
-                } finally { setSubmitting(false); }
-              }}
-            />
-          </label>
-          <button onClick={async () => {
-            try {
-              const blob = await api.request(`/assayers/template/download`, { method: 'GET', raw: true }) as Blob;
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url; a.download = 'assayer_upload_template.xlsx'; a.click();
-              URL.revokeObjectURL(url);
-            } catch (err: any) {
-              setMessage({ type: 'error', text: err?.message || 'Download failed' });
-            }
-          }} style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 'var(--radius-sm)', fontWeight: 600, cursor: 'pointer' }}>
-            Download Template
-          </button>
-          <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Plus size={16} /> Add Assayer
-          </button>
+          <UploadExcelControls onUpload={handleUpload} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" />
+          <PrimaryButton onClick={() => setShowCreateModal(true)}>Add Assayer</PrimaryButton>
         </div>
       </div>
 
       {message && (
-        <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: message.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', color: message.type === 'error' ? '#ef4444' : '#10b981', border: `1px solid ${message.type === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}` }}>
-          <span style={{ flex: 1 }}>{message.text}</span>
-          <X size={14} style={{ cursor: 'pointer', opacity: 0.6 }} onClick={() => setMessage(null)} />
-        </div>
+        <AlertBanner type={message.type === 'error' ? 'error' : 'success'} message={message.text} onClose={() => setMessage(null)} />
       )}
 
       {/* ── KPI Dashboard ── */}
@@ -379,26 +369,10 @@ export const Assayers: React.FC = () => {
       {/* ── Filters ── */}
       <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', zIndex: 1 }} />
-            <input type="text" placeholder="Search by name, code, email, phone..." value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px 8px 34px', fontSize: '13px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', boxSizing: 'border-box' }}
-            />
-          </div>
+          <SearchInput value={searchText} onChange={setSearchText} placeholder="Search by name, code, email, phone..." />
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
-              style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-              <option value="ALL">All Status</option>
-              {Object.values(AssayerLifecycleStatus).map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-            </select>
-            <select value={filterEmployment} onChange={(e) => setFilterEmployment(e.target.value)}
-              style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-              <option value="ALL">All Employment</option>
-              <option value="INTERNAL">Internal</option>
-              <option value="EXTERNAL">External</option>
-              <option value="CONTRACT">Contract</option>
-            </select>
+            <FilterSelect value={filterStatus} onChange={setFilterStatus} options={[{ value: 'ALL', label: 'All Status' }, ...Object.values(AssayerLifecycleStatus).map(s => ({ value: s, label: s.replace(/_/g, ' ') }))]} />
+            <FilterSelect value={filterEmployment} onChange={setFilterEmployment} options={[{ value: 'ALL', label: 'All Employment' }, { value: 'INTERNAL', label: 'Internal' }, { value: 'EXTERNAL', label: 'External' }, { value: 'CONTRACT', label: 'Contract' }]} />
             <button onClick={() => setFiltersExpanded(!filtersExpanded)}
               style={{ padding: '8px 12px', fontSize: '12px', background: filtersExpanded ? 'rgba(99,102,241,0.1)' : 'none', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: filtersExpanded ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
               {filtersExpanded ? 'Fewer Filters −' : 'More Filters +'}
@@ -412,11 +386,7 @@ export const Assayers: React.FC = () => {
               onChange={(e) => setFilterCity(e.target.value)}
               style={{ padding: '6px 10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '160px' }}
             />
-            <select value={filterState} onChange={(e) => setFilterState(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-              <option value="ALL">All States</option>
-              {[...new Set(assayers.map(a => a.state))].sort().map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <FilterSelect compact value={filterState} onChange={setFilterState} options={[{ value: 'ALL', label: 'All States' }, ...[...new Set(assayers.map(a => a.state))].sort().map(s => ({ value: s, label: s }))]} />
             <input type="text" placeholder="Filter by skill..." value={filterSkills}
               onChange={(e) => setFilterSkills(e.target.value)}
               style={{ padding: '6px 10px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '160px' }}
@@ -527,12 +497,7 @@ export const Assayers: React.FC = () => {
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0 }}>{selectedAssayer.displayName}</h2>
-                        <span style={{ padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: 600,
-                          background: `${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}20`,
-                          color: STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280',
-                          border: `1px solid ${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}40` }}>
-                          {selectedAssayer.lifecycleStatus || selectedAssayer.status}
-                        </span>
+                        <StatusBadge label={selectedAssayer.lifecycleStatus || selectedAssayer.status} bg={`${STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'}20`} color={STATUS_COLORS[selectedAssayer.lifecycleStatus || selectedAssayer.status] || '#6b7280'} border />
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)' }}>{selectedAssayer.assayerCode}</span>
@@ -899,52 +864,40 @@ export const Assayers: React.FC = () => {
       {showCreateModal && <CreateAssayerModal existingAssayersCount={assayers.length} onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); fetchAssayers(); }} />}
       {showEditModal && selectedAssayer && <EditAssayerModal assayer={selectedAssayer} onClose={() => setShowEditModal(false)} onUpdated={() => { setShowEditModal(false); fetchAssayers().then(() => selectAssayer(selectedAssayer)); }} />}
       {showLifecycleModal && selectedAssayer && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowLifecycleModal(false)}>
-          <div className="glass-card" style={{ width: '400px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Transition Lifecycle</h4>
-              <button onClick={() => setShowLifecycleModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px' }}>&times;</button>
-            </div>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-              {selectedAssayer.displayName} — Current: <b>{selectedAssayer.lifecycleStatus || selectedAssayer.status}</b>
-            </p>
-            <select value={targetLifecycle} onChange={(e) => setTargetLifecycle(e.target.value)}
-              style={{ width: '100%', padding: '10px', marginBottom: '16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-              <option value="">-- Select target status --</option>
-              {LIFECYCLE_TRANSITIONS[selectedAssayer.lifecycleStatus || selectedAssayer.status]?.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-            </select>
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowLifecycleModal(false)} className="btn btn-secondary">Cancel</button>
-              <button onClick={handleLifecycleTransition} disabled={!targetLifecycle} className="btn btn-primary">Confirm</button>
-            </div>
-          </div>
-        </div>
+        <Modal open={showLifecycleModal} onClose={() => setShowLifecycleModal(false)} title="Transition Lifecycle" width="400px" footer={
+          <>
+            <button onClick={() => setShowLifecycleModal(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={handleLifecycleTransition} disabled={!targetLifecycle} className="btn btn-primary">Confirm</button>
+          </>
+        }>
+          <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+            {selectedAssayer.displayName} — Current: <b>{selectedAssayer.lifecycleStatus || selectedAssayer.status}</b>
+          </p>
+          <select value={targetLifecycle} onChange={(e) => setTargetLifecycle(e.target.value)}
+            style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+            <option value="">-- Select target status --</option>
+            {LIFECYCLE_TRANSITIONS[selectedAssayer.lifecycleStatus || selectedAssayer.status]?.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+          </select>
+        </Modal>
       )}
       {showProfileModal && selectedAssayer && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowProfileModal(false)}>
-          <div className="glass-card" style={{ width: '550px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 600 }}>Configure Assayer Rates</h3>
-              <button onClick={() => setShowProfileModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>&times;</button>
-            </div>
-            <form onSubmit={handleSaveProfile}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
-                {[{ label: 'Base Fee (₹)', val: baseFee, set: setBaseFee }, { label: 'Hourly Rate (₹)', val: hourlyRate, set: setHourlyRate }, { label: 'Daily Rate (₹)', val: dailyRate, set: setDailyRate }, { label: 'Travel/km (₹)', val: travelReimbursement, set: setTravelReimbursement }, { label: 'Accommodation (₹)', val: accommodationAllowance, set: setAccommodationAllowance }, { label: 'Meal Allowance (₹)', val: mealAllowance, set: setMealAllowance }].map(f => (
-                  <div key={f.label}><label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>{f.label}</label>
-                    <input type="number" className="form-input" style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff' }} value={f.val} onChange={(e) => f.set(Number(e.target.value))} required /></div>
-                ))}
-                <div><label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Start Date</label>
-                  <input type="date" className="form-input" style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff' }} value={startDate} onChange={(e) => setStartDate(e.target.value)} required /></div>
-                <div><label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>End Date (Optional)</label>
-                  <input type="date" className="form-input" style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff' }} value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button type="button" onClick={() => setShowProfileModal(false)} style={{ background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', padding: '8px 16px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                <button type="submit" disabled={submitting} style={{ background: 'var(--gradient-neon)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer', boxShadow: 'var(--shadow-neon)' }}>{submitting ? 'Saving...' : 'Save Profile'}</button>
-              </div>
-            </form>
+        <Modal open={showProfileModal} onClose={() => setShowProfileModal(false)} title="Configure Assayer Rates" width="550px" asForm onSubmit={handleSaveProfile} footer={
+          <>
+            <button type="button" onClick={() => setShowProfileModal(false)} style={{ background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', padding: '8px 16px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+            <button type="submit" disabled={submitting} style={{ background: 'var(--gradient-neon)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer', boxShadow: 'var(--shadow-neon)' }}>{submitting ? 'Saving...' : 'Save Profile'}</button>
+          </>
+        }>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            {[{ label: 'Base Fee (₹)', val: baseFee, set: setBaseFee }, { label: 'Hourly Rate (₹)', val: hourlyRate, set: setHourlyRate }, { label: 'Daily Rate (₹)', val: dailyRate, set: setDailyRate }, { label: 'Travel/km (₹)', val: travelReimbursement, set: setTravelReimbursement }, { label: 'Accommodation (₹)', val: accommodationAllowance, set: setAccommodationAllowance }, { label: 'Meal Allowance (₹)', val: mealAllowance, set: setMealAllowance }].map(f => (
+              <div key={f.label}><label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>{f.label}</label>
+                <input type="number" className="form-input" style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff' }} value={f.val} onChange={(e) => f.set(Number(e.target.value))} required /></div>
+            ))}
+            <div><label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>Start Date</label>
+              <input type="date" className="form-input" style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff' }} value={startDate} onChange={(e) => setStartDate(e.target.value)} required /></div>
+            <div><label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>End Date (Optional)</label>
+              <input type="date" className="form-input" style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff' }} value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
@@ -1227,253 +1180,252 @@ const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void;
   const currentGroup = CREATE_FIELD_GROUPS[activeTab];
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
-      <div className="glass-card" style={{ width: '680px', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-color)', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()}>
-        {/* Top Header & Mode Selector */}
-        <div style={{ padding: '20px 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
-          <div>
-            <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <User size={18} style={{ color: 'var(--accent-primary)' }} /> Enroll New Assayer
-            </h3>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '4px 0 0' }}>
-              Fast 1-click onboarding with auto-generated code and pincode geocoding.
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <div style={{ background: 'rgba(255,255,255,0.06)', padding: '3px', borderRadius: '8px', display: 'flex', gap: '2px', border: '1px solid var(--border-color)' }}>
-              <button
-                type="button"
-                onClick={() => setMode('express')}
-                style={{
-                  padding: '5px 12px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  borderRadius: '6px',
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: mode === 'express' ? 'var(--accent-primary)' : 'transparent',
-                  color: mode === 'express' ? '#fff' : 'var(--text-muted)',
-                }}
-              >
-                ⚡ Express Mode
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('advanced')}
-                style={{
-                  padding: '5px 12px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  borderRadius: '6px',
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: mode === 'advanced' ? 'var(--accent-primary)' : 'transparent',
-                  color: mode === 'advanced' ? '#fff' : 'var(--text-muted)',
-                }}
-              >
-                📋 Advanced (6 Tabs)
-              </button>
-            </div>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}><X size={18} /></button>
-          </div>
-        </div>
-
-        {/* Mode Body */}
-        {mode === 'express' ? (
-          <form onSubmit={handleSubmit} style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Auto-Generated Assayer Code</span>
-                <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{form.assayerCode}</span>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Default Department</span>
-                <span style={{ fontSize: '12px', fontWeight: 700, color: '#34d399' }}>Gold Testing & Assay</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              <div>
-                <label style={labelStyle}>First Name <span style={{ color: '#ef4444' }}>*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Deepak"
-                  className="form-input"
-                  style={formFieldStyle}
-                  value={form.firstName || ''}
-                  onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Last Name <span style={{ color: '#ef4444' }}>*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Verma"
-                  className="form-input"
-                  style={formFieldStyle}
-                  value={form.lastName || ''}
-                  onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Mobile Phone Number <span style={{ color: '#ef4444' }}>*</span></label>
-                <div style={{ position: 'relative' }}>
-                  <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>
-                  <input
-                    type="tel"
-                    required
-                    placeholder="9876543217"
-                    maxLength={10}
-                    style={{ ...formFieldStyle, paddingLeft: '42px' }}
-                    value={form.phone || ''}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, '') })}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label style={labelStyle}>Email Address (Optional)</label>
-                <input
-                  type="email"
-                  placeholder="deepak.verma@fapoms.com"
-                  className="form-input"
-                  style={formFieldStyle}
-                  value={form.email || ''}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                />
-              </div>
-
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={labelStyle}>Base Street Address <span style={{ color: '#ef4444' }}>*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Connaught Place, Radial Road 1, Central Delhi"
-                  className="form-input"
-                  style={formFieldStyle}
-                  value={form.address || ''}
-                  onChange={(e) => setForm({ ...form, address: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Pincode (Auto-Fills City & State) <span style={{ color: '#ef4444' }}>*</span></label>
-                <input
-                  type="text"
-                  required
-                  maxLength={6}
-                  placeholder="e.g. 110001"
-                  className="form-input"
-                  style={{ ...formFieldStyle, fontFamily: 'monospace' }}
-                  value={form.pincode || ''}
-                  onChange={(e) => {
-                    const pin = e.target.value.replace(/\D/g, '');
-                    setForm({ ...form, pincode: pin });
-                    handlePincodeLookup(pin);
-                  }}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>City / Base District <span style={{ color: '#ef4444' }}>*</span></label>
-                <input
-                  type="text"
-                  required
-                  placeholder="New Delhi"
-                  className="form-input"
-                  style={formFieldStyle}
-                  value={form.city || ''}
-                  onChange={(e) => setForm({ ...form, city: e.target.value, district: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>State <span style={{ color: '#ef4444' }}>*</span></label>
-                <select
-                  value={form.state || 'Delhi'}
-                  onChange={(e) => setForm({ ...form, state: e.target.value })}
-                  style={formSelectStyle}
-                >
-                  {INDIAN_STATES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </select>
-              </div>
-
-              <div>
-                <label style={labelStyle}>Employment Type</label>
-                <select
-                  value={form.employmentType || 'FULL_TIME'}
-                  onChange={(e) => setForm({ ...form, employmentType: e.target.value })}
-                  style={formSelectStyle}
-                >
-                  {EMPLOYMENT_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '9px 18px', fontSize: '13px' }}>Cancel</button>
-              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '9px 22px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)' }}>
-                {submitting ? 'Enrolling...' : <><CheckCircle size={16} /> Enroll Assayer Instantly ⚡</>}
-              </button>
-            </div>
-          </form>
-        ) : (
+    <Modal
+      open
+      onClose={onClose}
+      width="680px"
+      maxHeight="92vh"
+      closeIcon={<X size={18} />}
+      asForm
+      onSubmit={handleSubmit}
+      title={<><User size={18} style={{ color: 'var(--accent-primary)' }} /> Enroll New Assayer</>}
+      footer={
+        mode === 'express' ? (
           <>
-            <div style={{ display: 'flex', gap: '0', padding: '16px 24px 0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
-              {CREATE_FIELD_GROUPS.map((group, i) => (
-                <button key={group.title} onClick={() => setActiveTab(i)}
-                  style={{
-                    padding: '8px 14px', background: 'transparent', border: 'none',
-                    borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                    color: activeTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
-                    fontWeight: activeTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
-                    transition: 'all 0.15s', opacity: activeTab === i ? 1 : 0.6,
-                  }}>
-                  {group.icon} {group.title}
-                </button>
-              ))}
-            </div>
-            <form onSubmit={handleSubmit} style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  {currentGroup.fields.map(key => {
-                    const field = fieldsMap.get(key);
-                    return field ? renderFormField(field, form, setForm) : null;
-                  })}
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '20px' }}>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {activeTab > 0 && (
-                    <button type="button" onClick={() => setActiveTab(activeTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      ← Previous
-                    </button>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
-                  {activeTab < CREATE_FIELD_GROUPS.length - 1 ? (
-                    <button type="button" onClick={() => setActiveTab(activeTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      Next →
-                    </button>
-                  ) : (
-                    <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {submitting ? 'Saving...' : <><CheckCircle size={14} /> Create Assayer</>}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </form>
+            <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '9px 18px', fontSize: '13px' }}>Cancel</button>
+            <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '9px 22px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)' }}>
+              {submitting ? 'Enrolling...' : <><CheckCircle size={16} /> Enroll Assayer Instantly ⚡</>}
+            </button>
           </>
-        )}
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {activeTab > 0 && (
+                <button type="button" onClick={() => setActiveTab(activeTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  ← Previous
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
+              {activeTab < CREATE_FIELD_GROUPS.length - 1 ? (
+                <button type="button" onClick={() => setActiveTab(activeTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Next →
+                </button>
+              ) : (
+                <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {submitting ? 'Saving...' : <><CheckCircle size={14} /> Create Assayer</>}
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      }
+    >
+      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+        Fast 1-click onboarding with auto-generated code and pincode geocoding.
       </div>
-    </div>
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ background: 'rgba(255,255,255,0.06)', padding: '3px', borderRadius: '8px', display: 'flex', gap: '2px', border: '1px solid var(--border-color)' }}>
+          <button
+            type="button"
+            onClick={() => setMode('express')}
+            style={{
+              padding: '5px 12px',
+              fontSize: '11px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: mode === 'express' ? 'var(--accent-primary)' : 'transparent',
+              color: mode === 'express' ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            ⚡ Express Mode
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('advanced')}
+            style={{
+              padding: '5px 12px',
+              fontSize: '11px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: 'none',
+              cursor: 'pointer',
+              background: mode === 'advanced' ? 'var(--accent-primary)' : 'transparent',
+              color: mode === 'advanced' ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            📋 Advanced (6 Tabs)
+          </button>
+        </div>
+      </div>
+
+      {mode === 'express' ? (
+        <>
+          <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Auto-Generated Assayer Code</span>
+              <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{form.assayerCode}</span>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Default Department</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: '#34d399' }}>Gold Testing & Assay</span>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <div>
+              <label style={labelStyle}>First Name <span style={{ color: '#ef4444' }}>*</span></label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Deepak"
+                className="form-input"
+                style={formFieldStyle}
+                value={form.firstName || ''}
+                onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle}>Last Name <span style={{ color: '#ef4444' }}>*</span></label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Verma"
+                className="form-input"
+                style={formFieldStyle}
+                value={form.lastName || ''}
+                onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle}>Mobile Phone Number <span style={{ color: '#ef4444' }}>*</span></label>
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>
+                <input
+                  type="tel"
+                  required
+                  placeholder="9876543217"
+                  maxLength={10}
+                  style={{ ...formFieldStyle, paddingLeft: '42px' }}
+                  value={form.phone || ''}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, '') })}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Email Address (Optional)</label>
+              <input
+                type="email"
+                placeholder="deepak.verma@fapoms.com"
+                className="form-input"
+                style={formFieldStyle}
+                value={form.email || ''}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </div>
+
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={labelStyle}>Base Street Address <span style={{ color: '#ef4444' }}>*</span></label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Connaught Place, Radial Road 1, Central Delhi"
+                className="form-input"
+                style={formFieldStyle}
+                value={form.address || ''}
+                onChange={(e) => setForm({ ...form, address: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle}>Pincode (Auto-Fills City & State) <span style={{ color: '#ef4444' }}>*</span></label>
+              <input
+                type="text"
+                required
+                maxLength={6}
+                placeholder="e.g. 110001"
+                className="form-input"
+                style={{ ...formFieldStyle, fontFamily: 'monospace' }}
+                value={form.pincode || ''}
+                onChange={(e) => {
+                  const pin = e.target.value.replace(/\D/g, '');
+                  setForm({ ...form, pincode: pin });
+                  handlePincodeLookup(pin);
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle}>City / Base District <span style={{ color: '#ef4444' }}>*</span></label>
+              <input
+                type="text"
+                required
+                placeholder="New Delhi"
+                className="form-input"
+                style={formFieldStyle}
+                value={form.city || ''}
+                onChange={(e) => setForm({ ...form, city: e.target.value, district: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle}>State <span style={{ color: '#ef4444' }}>*</span></label>
+              <select
+                value={form.state || 'Delhi'}
+                onChange={(e) => setForm({ ...form, state: e.target.value })}
+                style={formSelectStyle}
+              >
+                {INDIAN_STATES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Employment Type</label>
+              <select
+                value={form.employmentType || 'FULL_TIME'}
+                onChange={(e) => setForm({ ...form, employmentType: e.target.value })}
+                style={formSelectStyle}
+              >
+                {EMPLOYMENT_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
+            {CREATE_FIELD_GROUPS.map((group, i) => (
+              <button key={group.title} onClick={() => setActiveTab(i)}
+                style={{
+                  padding: '8px 14px', background: 'transparent', border: 'none',
+                  borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                  color: activeTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
+                  fontWeight: activeTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+                  transition: 'all 0.15s', opacity: activeTab === i ? 1 : 0.6,
+                }}>
+                {group.icon} {group.title}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              {currentGroup.fields.map(key => {
+                const field = fieldsMap.get(key);
+                return field ? renderFormField(field, form, setForm) : null;
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 };
 
@@ -1536,81 +1488,77 @@ const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void; onUpda
   const currentGroup = EDIT_FIELD_GROUPS[activeEditTab];
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
-      <div className="glass-card" style={{ width: '680px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div style={{ padding: '20px 24px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Edit2 size={18} style={{ color: 'var(--accent-primary)' }} /> Edit Assayer
-            </h3>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontFamily: 'monospace' }}>{assayer.assayerCode}</span>
-              <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: statusColor }} />
-                {assayer.lifecycleStatus || assayer.status}
-              </span>
-              <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-              <span>{assayer.displayName}</span>
-            </div>
+    <Modal
+      open
+      onClose={onClose}
+      width="680px"
+      maxHeight="90vh"
+      closeIcon={<X size={18} />}
+      asForm
+      onSubmit={handleSubmit}
+      title={<><Edit2 size={18} style={{ color: 'var(--accent-primary)' }} /> Edit Assayer</>}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {activeEditTab > 0 && (
+              <button type="button" onClick={() => setActiveEditTab(activeEditTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                ← Previous
+              </button>
+            )}
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}><X size={18} /></button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
+            {activeEditTab < EDIT_FIELD_GROUPS.length - 1 ? (
+              <button type="button" onClick={() => setActiveEditTab(activeEditTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Next →
+              </button>
+            ) : (
+              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
+              </button>
+            )}
+          </div>
         </div>
-
-        {/* Tab bar */}
-        <div style={{ display: 'flex', gap: '0', padding: '16px 24px 0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
-          {EDIT_FIELD_GROUPS.map((group, i) => (
-            <button key={group.title} onClick={() => setActiveEditTab(i)}
-              style={{
-                padding: '8px 14px', background: 'transparent', border: 'none',
-                borderBottom: activeEditTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                color: activeEditTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
-                fontWeight: activeEditTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
-                transition: 'all 0.15s', opacity: activeEditTab === i ? 1 : 0.6,
-              }}>
-              {group.icon} {group.title}
-            </button>
-          ))}
-        </div>
-
-        <form onSubmit={handleSubmit} style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
-          {/* Tab content */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              {currentGroup.fields.map(key => {
-                const field = fieldsMap.get(key);
-                return field ? renderFormField(field, form, setForm) : null;
-              })}
-            </div>
-          </div>
-
-          {/* Navigation + Submit */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '20px' }}>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {activeEditTab > 0 && (
-                <button type="button" onClick={() => setActiveEditTab(activeEditTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  ← Previous
-                </button>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
-              {activeEditTab < EDIT_FIELD_GROUPS.length - 1 ? (
-                <button type="button" onClick={() => setActiveEditTab(activeEditTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  Next →
-                </button>
-              ) : (
-                <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
-                </button>
-              )}
-            </div>
-          </div>
-        </form>
+      }
+    >
+      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span style={{ fontFamily: 'monospace' }}>{assayer.assayerCode}</span>
+        <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: statusColor }} />
+          {assayer.lifecycleStatus || assayer.status}
+        </span>
+        <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
+        <span>{assayer.displayName}</span>
       </div>
-    </div>
+
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
+        {EDIT_FIELD_GROUPS.map((group, i) => (
+          <button key={group.title} onClick={() => setActiveEditTab(i)}
+            style={{
+              padding: '8px 14px', background: 'transparent', border: 'none',
+              borderBottom: activeEditTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              color: activeEditTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
+              fontWeight: activeEditTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+              transition: 'all 0.15s', opacity: activeEditTab === i ? 1 : 0.6,
+            }}>
+            {group.icon} {group.title}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          {currentGroup.fields.map(key => {
+            const field = fieldsMap.get(key);
+            return field ? renderFormField(field, form, setForm) : null;
+          })}
+        </div>
+      </div>
+    </Modal>
   );
 };

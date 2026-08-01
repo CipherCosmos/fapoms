@@ -107,7 +107,7 @@ export class ProjectController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('project:update:organization')
+  @RequirePermissions('project:edit:organization')
   @ApiOperation({ summary: 'Update project details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,

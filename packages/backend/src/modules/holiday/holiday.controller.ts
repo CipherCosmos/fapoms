@@ -105,7 +105,7 @@ export class HolidayController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('holiday:update:organization')
+  @RequirePermissions('holiday:edit:organization')
   @ApiOperation({ summary: 'Update holiday record details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,

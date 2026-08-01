@@ -160,7 +160,7 @@ export class BranchController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('branch:update:organization')
+  @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch details' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchRequestDto, @Req() req: any) {
     const branch = await this.branchService.update(id, dto, req.user.id);
@@ -198,7 +198,7 @@ export class BranchController {
 
   @Put(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('branch:update:organization')
+  @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch contact' })
   async updateContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Body() dto: UpdateContactRequestDto, @Req() req: any) {
     const contact = await this.branchService.updateContact(contactId, dto, req.user.id);

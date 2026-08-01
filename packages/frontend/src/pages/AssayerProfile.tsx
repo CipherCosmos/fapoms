@@ -6,6 +6,7 @@ import {
   ArrowLeft, Star, Briefcase, MapPin, Phone, Mail, Award, CheckCircle, XCircle,
   Clock, DollarSign, Calendar, TrendingUp
 } from 'lucide-react';
+import { StatusBadge, KpiCard } from '../components/ui';
 
 interface AssayerProfile {
   id: string;
@@ -196,7 +197,7 @@ export const AssayerProfile: React.FC = () => {
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{assayer.assayerCode}</span>
                 <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-                <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '10px', background: assayer.lifecycleStatus === 'ACTIVE' ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: assayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{assayer.lifecycleStatus}</span>
+                <StatusBadge label={assayer.lifecycleStatus} bg={assayer.lifecycleStatus === 'ACTIVE' ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)'} color={assayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active)' : '#f59e0b'} />
                 <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--text-muted)' }} />
                 <span style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Briefcase size={12} /> {assayer.employmentType}
@@ -254,43 +255,12 @@ export const AssayerProfile: React.FC = () => {
 
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Briefcase size={11} /> Total Assignments
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--accent-primary)' }}>{effectiveTotal}</div>
-        </div>
-        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <CheckCircle size={11} /> Completed
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--status-active)' }}>{effectiveCompleted}</div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{completionRate}% completion</div>
-        </div>
-        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <TrendingUp size={11} /> Acceptance
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 700, color: '#38bdf8' }}>{assayer.acceptanceRate ?? 100}%</div>
-        </div>
-        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <XCircle size={11} /> Rejection Rate
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 700, color: (assayer.rejectionRate || 0) > 15 ? '#ef4444' : '#34d399' }}>{assayer.rejectionRate ?? 0}%</div>
-        </div>
-        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Clock size={11} /> Queries Raised
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 700, color: (assayer.queryCount || 0) > 0 ? '#f59e0b' : '#34d399' }}>{assayer.queryCount ?? 0}</div>
-        </div>
-        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <DollarSign size={11} /> Total Paid
-          </div>
-          <div style={{ fontSize: '22px', fontWeight: 700, color: '#f59e0b' }}>₹{Number(assayer.totalEarnings).toLocaleString()}</div>
-        </div>
+        <KpiCard layout="label-first" icon={<Briefcase />} label="Total Assignments" value={effectiveTotal} valueColor="var(--accent-primary)" iconBg="rgba(99,102,241,0.1)" iconColor="var(--accent-primary)" />
+        <KpiCard layout="label-first" icon={<CheckCircle />} label="Completed" value={<>{effectiveCompleted}<div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{completionRate}% completion</div></>} valueColor="var(--status-active)" iconBg="rgba(16,185,129,0.1)" iconColor="var(--status-active)" />
+        <KpiCard layout="label-first" icon={<TrendingUp />} label="Acceptance" value={`${assayer.acceptanceRate ?? 100}%`} valueColor="#38bdf8" iconBg="rgba(56,189,248,0.1)" iconColor="#38bdf8" />
+        <KpiCard layout="label-first" icon={<XCircle />} label="Rejection Rate" value={`${assayer.rejectionRate ?? 0}%`} valueColor={(assayer.rejectionRate || 0) > 15 ? '#ef4444' : '#34d399'} iconBg={(assayer.rejectionRate || 0) > 15 ? 'rgba(239,68,68,0.1)' : 'rgba(52,211,153,0.1)'} iconColor={(assayer.rejectionRate || 0) > 15 ? '#ef4444' : '#34d399'} />
+        <KpiCard layout="label-first" icon={<Clock />} label="Queries Raised" value={assayer.queryCount ?? 0} valueColor={(assayer.queryCount || 0) > 0 ? '#f59e0b' : '#34d399'} iconBg="rgba(245,158,11,0.1)" iconColor={(assayer.queryCount || 0) > 0 ? '#f59e0b' : '#34d399'} />
+        <KpiCard layout="label-first" icon={<DollarSign />} label="Total Paid" value={`₹${Number(assayer.totalEarnings).toLocaleString()}`} valueColor="#f59e0b" iconBg="rgba(245,158,11,0.1)" iconColor="#f59e0b" />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -385,7 +355,7 @@ export const AssayerProfile: React.FC = () => {
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '13px', fontWeight: 700, color: '#f59e0b' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
-                      <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', background: 'rgba(99,102,241,0.2)', color: '#818cf8', fontWeight: 600 }}>{ah.status}</span>
+                      <StatusBadge variant="tag" label={ah.status} bg="rgba(99,102,241,0.2)" color="#818cf8" />
                     </div>
                   </div>
                 ))}
@@ -441,7 +411,7 @@ export const AssayerProfile: React.FC = () => {
                   <div key={r.id} style={{ padding: '10px 12px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${CATEGORY_COLORS[r.category] || '#6b7280'}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', background: `${CATEGORY_COLORS[r.category] || '#6b7280'}20`, color: CATEGORY_COLORS[r.category] || '#6b7280', fontWeight: 600 }}>{r.category}</span>
+                        <StatusBadge variant="tag" label={r.category} bg={`${CATEGORY_COLORS[r.category] || '#6b7280'}20`} color={CATEGORY_COLORS[r.category] || '#6b7280'} />
                         <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>by {r.authorName}</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>

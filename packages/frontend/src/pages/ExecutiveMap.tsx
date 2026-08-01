@@ -1,249 +1,313 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
-import { Map, Flag, CheckCircle, ExternalLink, ShieldAlert } from 'lucide-react';
+import { TerritoryTable, POSTURE } from './executive/TerritoryTable';
+import type { Territory } from './executive/TerritoryTable';
+import {
+  ShieldAlert, RefreshCw, AlertTriangle, Users, Building2, Clock, IndianRupee, MapPin,
+} from 'lucide-react';
 import { api } from '../services/api';
 
-interface Branch {
-  id: string;
-  name: string;
-  latitude: number | null;
-  longitude: number | null;
-  status: string;
-  state: string;
-  district?: string;
-  city?: string;
-  branchCode?: string;
-  projectId?: string;
-  client?: {
-    name: string;
-  };
+interface BranchPoint {
+  id: string; projectBranchId: string; name: string; branchCode: string | null;
+  district: string | null; state: string;
+  latitude: number | null; longitude: number | null;
+  status: string; clientId: string; clientName: string; projectId: string;
+  packets: number; auditHours: number; scheduledDate: string | null;
+  assigned: boolean;
+  nearestAssayerKm: number | null; nearestAssayerName: string | null;
+  assayersInRange: number; realisedRevenue: number; isolated: boolean;
 }
 
+interface CommandCenter {
+  generatedAt: string;
+  serviceableRadiusKm: number;
+  totals: {
+    branches: number; assayers: number; packets: number; auditHours: number;
+    demandAssayerDays: number; dailyCapacity: number;
+    unassignedBranches: number; isolatedBranches: number;
+    realisedRevenue: number; pipelineValue: number; statesCovered: number;
+  };
+  territories: Territory[];
+  coverageGaps: BranchPoint[];
+  idleAssayers: Array<{ id: string; name: string; state: string; openAssignments: number; territoryPosture: string }>;
+  branchPoints: BranchPoint[];
+  assayerPoints: Array<{ id: string; name: string; state: string; latitude: number | null; longitude: number | null }>;
+}
+
+const money = (n: number) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
+/**
+ * Executive command centre.
+ *
+ * The previous version plotted branches and reported a "compliance rate" derived
+ * from branch statuses. It could not answer the questions this view exists for:
+ * where the work actually is, where the people are, and where those two do not
+ * line up. Assayers were never drawn at all.
+ *
+ * Everything here is built on one geographic-intelligence call that measures
+ * coverage from real coordinates rather than by matching state names — the names
+ * disagree between client branch lists and internal rosters, and distance is what
+ * actually decides whether an assayer can service a branch.
+ */
 export const ExecutiveMap: React.FC = () => {
   const navigate = useNavigate();
-  const [branches, setBranches] = useState<Branch[]>([]);
+  const [data, setData] = useState<CommandCenter | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [clientId, setClientId] = useState('');
+  const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedState, setSelectedState] = useState<string | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
-  const [filterState, setFilterState] = useState('ALL');
-  const [isLoading, setIsLoading] = useState(false);
+  const [lens, setLens] = useState<'ALL' | 'GAPS' | 'UNASSIGNED'>('ALL');
 
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const q = clientId ? `?clientId=${clientId}` : '';
+      setData(await api.request<CommandCenter>(`/planning/command-center${q}`));
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load command centre.');
+    } finally {
+      setLoading(false);
+    }
+  }, [clientId]);
+
+  useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    loadBranches();
+    api.request<any[]>('/clients?limit=100')
+      .then((list) => setClients((list || []).map((c: any) => ({ id: c.id, name: c.name }))))
+      .catch(() => { /* client filter is optional */ });
   }, []);
 
-  const loadBranches = async () => {
-    setIsLoading(true);
-    try {
-      const data = await api.request<any[]>('/projects');
-      const allBranches: Branch[] = [];
-      data.forEach((proj: any) => {
-        if (proj.projectBranches) {
-          proj.projectBranches.forEach((pb: any) => {
-            if (pb.branch) {
-              allBranches.push({
-                id: pb.branch.id,
-                name: pb.branch.name,
-                latitude: pb.branch.latitude,
-                longitude: pb.branch.longitude,
-                status: pb.status || 'PLANNING',
-                state: pb.branch.state || 'MH',
-                city: pb.branch.city,
-                branchCode: pb.branch.branchCode,
-                projectId: proj.id,
-                client: proj.client
-              });
-            }
-          });
-        }
-      });
-      setBranches(allBranches);
-    } catch (err) {
-      console.error('Failed to load branches for executive map', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // The map shows whichever slice the lens and territory selection describe, so
+  // clicking a territory or a lens re-frames the map rather than opening a
+  // separate screen.
+  const visibleBranches = useMemo(() => {
+    if (!data) return [];
+    let rows = data.branchPoints;
+    if (selectedState) rows = rows.filter((b) => b.state === selectedState);
+    if (lens === 'GAPS') rows = rows.filter((b) => b.isolated);
+    if (lens === 'UNASSIGNED') rows = rows.filter((b) => !b.assigned);
+    return rows;
+  }, [data, selectedState, lens]);
 
-  const getFilteredBranches = () => {
-    if (filterState === 'ALL') return branches;
-    return branches.filter((b) => b.state === filterState);
-  };
+  const mapBranches = useMemo(
+    () => visibleBranches.map((b) => ({
+      id: b.id, name: b.name, latitude: b.latitude, longitude: b.longitude,
+      status: b.status, state: b.state, city: b.district ?? undefined,
+      branchCode: b.branchCode ?? undefined,
+    })),
+    [visibleBranches],
+  );
 
-  const filtered = getFilteredBranches();
-
-  // Selected Branch object lookup
-  const selectedBranch = branches.find(b => b.id === selectedBranchId);
-
-  // Calculate executive metrics
-  const totalBranches = branches.length;
-  const completedAudits = branches.filter(b => b.status === 'CLOSED' || b.status === 'AUDIT_COMPLETED').length;
-  const activeAudits = branches.filter(b => b.status === 'SCHEDULED' || b.status === 'ACCEPTED').length;
-  const complianceRate = totalBranches > 0 ? Math.round((completedAudits / totalBranches) * 100) : 100;
-  const pendingAssignments = branches.filter(b => b.status === 'PLANNING' || b.status === 'IMPORTED').length;
-
-  const states = Array.from(new Set(branches.map((b) => b.state)));
+  const selected = data?.branchPoints.find((b) => b.id === selectedBranchId) ?? null;
+  const t = data?.totals;
+  // Capacity is expressed per day; demand in assayer-days. Dividing gives the
+  // number of working days the current book would take at full utilisation.
+  const daysToClear = t && t.dailyCapacity > 0 ? (t.demandAssayerDays / t.dailyCapacity).toFixed(1) : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 14 }}>
         <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ShieldAlert size={24} style={{ color: 'var(--accent-primary)' }} /> Executive Command Center
+          <h2 style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <ShieldAlert size={22} style={{ color: 'var(--accent-primary)' }} /> Executive Command Center
           </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
-            Real-time geospatial intelligence, operational risk metrics, and instant dispatcher controls.
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '4px 0 0' }}>
+            Where the work is, where the people are, and where those two don’t line up.
           </p>
         </div>
-
-        {/* Drill-down selector */}
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Jurisdiction:</span>
-          <select 
-            value={filterState} 
-            onChange={(e) => setFilterState(e.target.value)}
-            style={{
-              padding: '8px 12px',
-              background: 'var(--bg-secondary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              color: '#fff',
-              outline: 'none',
-              fontSize: '12px',
-              cursor: 'pointer'
-            }}
-          >
-            <option value="ALL">All Territories (National)</option>
-            {states.map((st) => (
-              <option key={st} value={st}>{st} State Jurisdiction</option>
-            ))}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select value={clientId} onChange={(e) => { setClientId(e.target.value); setSelectedState(null); }}
+            style={{ padding: '7px 11px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12.5 }}>
+            <option value="">All clients</option>
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
+          </button>
         </div>
       </div>
 
-      {/* KPI Overlays */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', borderLeft: '3px solid var(--accent-primary)' }}>
-          <div style={{ background: 'rgba(99, 102, 241, 0.08)', color: 'var(--accent-primary)', width: '42px', height: '42px', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Map size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>TOTAL STATIONS</span>
-            <h4 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#fff', fontFamily: 'var(--font-display)' }}>{totalBranches}</h4>
-          </div>
+      {error && (
+        <div style={{ padding: 14, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 'var(--radius-md)', color: '#ef4444', fontSize: 13 }}>
+          {error}
         </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', borderLeft: '3px solid var(--status-active)' }}>
-          <div style={{ background: 'rgba(16, 185, 129, 0.08)', color: 'var(--status-active)', width: '42px', height: '42px', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CheckCircle size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>COMPLIANCE RATE</span>
-            <h4 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#fff', fontFamily: 'var(--font-display)' }}>{complianceRate}%</h4>
-          </div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', borderLeft: '3px solid #f59e0b' }}>
-          <div style={{ background: 'rgba(245, 158, 11, 0.08)', color: '#f59e0b', width: '42px', height: '42px', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Flag size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>ACTIVE AUDITS</span>
-            <h4 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#fff', fontFamily: 'var(--font-display)' }}>{activeAudits}</h4>
-          </div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', borderLeft: '3px solid #ef4444' }}>
-          <div style={{ background: 'rgba(239, 68, 68, 0.08)', color: '#ef4444', width: '42px', height: '42px', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <ShieldAlert size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', fontWeight: 600 }}>UNASSIGNED QUEUE</span>
-            <h4 style={{ fontSize: '22px', fontWeight: 800, margin: 0, color: '#fff', fontFamily: 'var(--font-display)' }}>{pendingAssignments}</h4>
-          </div>
-        </div>
-      </div>
+      )}
+      {loading && !data && <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading geographic intelligence…</div>}
 
-      {/* Map visualization split layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '20px', minHeight: '520px' }}>
-        
-        {/* Geographic Map Container */}
-        {isLoading ? (
-          <div className="glass-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-            Loading geographic markers...
+      {data && t && (
+        <>
+          {/* Position — capacity against demand, which is the executive question. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))', gap: 12 }}>
+            <Kpi icon={<Building2 size={16} />} label="Branches" value={String(t.branches)}
+                 sub={`${t.statesCovered} states · ${t.packets.toLocaleString('en-IN')} packets`} color="#60a5fa" />
+            <Kpi icon={<Clock size={16} />} label="Work outstanding" value={`${t.demandAssayerDays} days`}
+                 sub={`${Math.round(t.auditHours).toLocaleString('en-IN')} audit-hours`} color="#a78bfa" />
+            <Kpi icon={<Users size={16} />} label="Capacity" value={`${t.dailyCapacity}/day`}
+                 sub={daysToClear ? `clears the book in ~${daysToClear} days` : `${t.assayers} assayers`} color="#22c55e" />
+            <Kpi icon={<AlertTriangle size={16} />} label="Unreachable" value={String(t.isolatedBranches)}
+                 sub={`no assayer within ${data.serviceableRadiusKm}km`} color={t.isolatedBranches ? '#ef4444' : 'var(--text-muted)'} />
+            <Kpi icon={<MapPin size={16} />} label="Unassigned" value={String(t.unassignedBranches)}
+                 sub="no assayer confirmed yet" color={t.unassignedBranches ? '#f59e0b' : 'var(--text-muted)'} />
+            <Kpi icon={<IndianRupee size={16} />} label="Book value" value={money(t.pipelineValue)}
+                 sub={t.realisedRevenue > 0 ? `${money(t.realisedRevenue)} realised` : 'nothing invoiced yet'} color="#10b981" />
           </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <InteractivePlanningMap 
-              branches={filtered}
-              selectedBranchId={selectedBranchId}
-              onSelectBranch={setSelectedBranchId}
-              fillContainer
-            />
+
+          {/* Lenses re-frame the same map rather than navigating away. */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Lens active={lens === 'ALL'} onClick={() => setLens('ALL')} label="All branches" count={data.branchPoints.length} color="var(--text-secondary)" />
+            <Lens active={lens === 'GAPS'} onClick={() => setLens('GAPS')} label="Coverage gaps" count={t.isolatedBranches} color="#ef4444" />
+            <Lens active={lens === 'UNASSIGNED'} onClick={() => setLens('UNASSIGNED')} label="Unassigned" count={t.unassignedBranches} color="#f59e0b" />
+            {selectedState && (
+              <button onClick={() => setSelectedState(null)}
+                style={{ marginLeft: 4, padding: '6px 11px', fontSize: 11.5, fontWeight: 600, background: 'rgba(99,102,241,0.12)', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                {selectedState} ✕
+              </button>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-muted)' }}>
+              showing {visibleBranches.length} of {data.branchPoints.length} branches
+            </span>
           </div>
-        )}
 
-        {/* Real-time Dispatch detail / Info panel */}
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', padding: '20px', gap: '16px', overflowY: 'auto' }}>
-          {selectedBranch ? (
-            <>
-              <div>
-                <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Selected station</span>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', margin: '4px 0 2px' }}>{selectedBranch.name}</h4>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Code: {selectedBranch.branchCode}</span>
-              </div>
+          {/* Map + selected-branch detail */}
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 16, minHeight: 460 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minHeight: 460 }}>
+              <InteractivePlanningMap
+                branches={mapBranches}
+                selectedBranchId={selectedBranchId}
+                onSelectBranch={setSelectedBranchId}
+                fillContainer
+              />
+            </div>
 
-              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>CLIENT DETAILS</span>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{selectedBranch.client?.name || 'N/A'}</span>
-              </div>
-
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>OPERATIONAL STATE</span>
-                <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '4px', display: 'inline-block', fontWeight: 600,
-                  background: selectedBranch.status === 'CLOSED' || selectedBranch.status === 'AUDIT_COMPLETED' ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
-                  color: selectedBranch.status === 'CLOSED' || selectedBranch.status === 'AUDIT_COMPLETED' ? '#10b981' : '#f59e0b' }}>
-                  {selectedBranch.status}
-                </span>
-              </div>
-
-              <div>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>LOCATION</span>
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{selectedBranch.city}, {selectedBranch.state}</span>
-              </div>
-
-              <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                {selectedBranch.projectId ? (
-                  <button 
-                    onClick={() => navigate(`/planning?projectId=${selectedBranch.projectId}`)} 
-                    className="btn btn-secondary" 
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', padding: '10px' }}
-                  >
-                    <ExternalLink size={13} /> Dispatch Operations
+            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', padding: 16, gap: 12, overflowY: 'auto', maxHeight: 560 }}>
+              {selected ? (
+                <>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{selected.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      {selected.branchCode} · {selected.district}, {selected.state}
+                    </div>
+                  </div>
+                  <Row label="Client" value={selected.clientName} />
+                  <Row label="Workload" value={`${selected.packets} packets · ${selected.auditHours}h`} />
+                  <Row label="Status" value={selected.status} />
+                  <Row label="Assayer confirmed" value={selected.assigned ? 'Yes' : 'Not yet'}
+                       color={selected.assigned ? '#22c55e' : '#f59e0b'} />
+                  <Row label="Nearest assayer"
+                       value={selected.nearestAssayerName ? `${selected.nearestAssayerName} · ${selected.nearestAssayerKm}km` : 'none located'}
+                       color={selected.isolated ? '#ef4444' : undefined} />
+                  <Row label={`Assayers within ${data.serviceableRadiusKm}km`} value={String(selected.assayersInRange)}
+                       color={selected.assayersInRange === 0 ? '#ef4444' : undefined} />
+                  {selected.isolated && (
+                    <div style={{ fontSize: 11.5, color: '#ef4444', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', padding: 9, lineHeight: 1.45 }}>
+                      No assayer lives within serviceable range. This branch needs travel-and-stay costing, a partner, or a local hire — it cannot be scheduled normally.
+                    </div>
+                  )}
+                  <button onClick={() => navigate(`/planning?projectId=${selected.projectId}`)} className="btn btn-secondary"
+                    style={{ marginTop: 'auto', fontSize: 12 }}>
+                    Open in Planning
                   </button>
-                ) : (
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>No associated project found.</span>
-                )}
-                <button 
-                  onClick={() => setSelectedBranchId(null)} 
-                  className="btn btn-secondary" 
-                  style={{ fontSize: '12px', padding: '6px' }}
-                >
-                  Clear Selection
-                </button>
-              </div>
-            </>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center', gap: '12px' }}>
-              <Map size={32} style={{ opacity: 0.3, color: 'var(--accent-primary)' }} />
-              <div>
-                <h5 style={{ fontSize: '13px', fontWeight: 600, color: '#fff', margin: '0 0 4px' }}>Interactive Command Panel</h5>
-                <p style={{ fontSize: '11px', margin: 0 }}>Click any audit station node on the map to load real-time dispatch routes and operations overview.</p>
+                </>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center', gap: 10, fontSize: 12 }}>
+                  <MapPin size={26} style={{ opacity: 0.35 }} />
+                  <div>Select a branch on the map to see its workload and how far its nearest assayer is.</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Territories */}
+          <div>
+            <SectionLabel>Territories — click one to focus the map, expand for districts</SectionLabel>
+            <TerritoryTable territories={data.territories} selectedState={selectedState} onSelectState={setSelectedState} />
+          </div>
+
+          {/* The two lists that translate directly into action. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 16 }}>
+            <div>
+              <SectionLabel>Where to add assayers</SectionLabel>
+              <div className="glass-card" style={{ padding: 14 }}>
+                {data.coverageGaps.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: '#22c55e' }}>Every branch has an assayer within {data.serviceableRadiusKm}km.</div>
+                ) : data.coverageGaps.map((g) => (
+                  <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', fontSize: 12, borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+                    <span>
+                      <strong>{g.name}</strong>
+                      <span style={{ color: 'var(--text-muted)' }}> · {g.district}, {g.state} · {g.packets} pkt</span>
+                    </span>
+                    <span style={{ color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {g.nearestAssayerKm !== null ? `${g.nearestAssayerKm}km away` : 'none located'}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
-          )}
-        </div>
 
-      </div>
-
+            <div>
+              <SectionLabel>Spare capacity</SectionLabel>
+              <div className="glass-card" style={{ padding: 14 }}>
+                {data.idleAssayers.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Every assayer has open work.</div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.45 }}>
+                      {data.idleAssayers.length} assayer(s) with no open assignment. Those sitting in a balanced or
+                      under-utilised territory are the ones worth moving to the gaps on the left.
+                    </div>
+                    {data.idleAssayers.slice(0, 12).map((a) => {
+                      const p = POSTURE[(a.territoryPosture as keyof typeof POSTURE)] ?? null;
+                      return (
+                        <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '4px 0', fontSize: 12, flexWrap: 'wrap' }}>
+                          <span>{a.name} <span style={{ color: 'var(--text-muted)' }}>· {a.state}</span></span>
+                          {p && <span style={{ fontSize: 10.5, fontWeight: 700, color: p.color }}>{p.label}</span>}
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
+
+const Kpi: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; color: string }> = ({ icon, label, value, sub, color }) => (
+  <div className="glass-card" style={{ padding: '13px 15px', borderLeft: `3px solid ${color}` }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
+      <span style={{ color }}>{icon}</span>{label}
+    </div>
+    <div style={{ fontSize: 20, fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>{value}</div>
+    {sub && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
+  </div>
+);
+
+const Lens: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string }> = ({ active, onClick, label, count, color }) => (
+  <button onClick={onClick} style={{
+    padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+    background: active ? `${color}22` : 'transparent', color: active ? color : 'var(--text-secondary)',
+    border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
+  }}>
+    {label}
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? '#0b1120' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 10.5, fontWeight: 700 }}>{count}</span>
+  </button>
+);
+
+const Row: React.FC<{ label: string; value: string; color?: string }> = ({ label, value, color }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', borderBottom: '1px dashed var(--border-color)' }}>
+    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontSize: 12, fontWeight: 600, color: color ?? 'var(--text-primary)', textAlign: 'right' }}>{value}</span>
+  </div>
+);
+
+const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 9 }}>{children}</div>
+);

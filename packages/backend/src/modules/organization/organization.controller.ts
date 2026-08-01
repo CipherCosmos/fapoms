@@ -93,7 +93,7 @@ export class OrganizationController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('organization:update:organization')
+  @RequirePermissions('organization:edit:organization')
   @ApiOperation({ summary: 'Update an organization' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateOrganizationRequestDto, @Req() req: any) {
     const org = await this.organizationService.update(id, dto, req.user.id);

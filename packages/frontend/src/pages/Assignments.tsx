@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardList, AlertCircle, RefreshCw, Calendar, MessageSquare, Clock, Send, Search, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
+import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
+import { StatusBadge, KpiCard, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
 import { ProjectBranchStatus } from '@fapoms/shared';
 import { anyStatusLabel, branchStatusLabel, assessmentStatusLabel } from '../utils/statusLabels';
 import { api } from '../services/api';
@@ -75,21 +76,13 @@ function getStatusBadgeProps(status: string): { bg: string; color: string; icon:
   return { bg, color, icon };
 }
 
-function StatusBadge({ status, size = 'md' }: { status: string; size?: 'sm' | 'md' }) {
+function AssignmentStatusBadge({ status, size = 'md' }: { status: string; size?: 'sm' | 'md' }) {
   const { bg, color, icon } = getStatusBadgeProps(status);
-  return (
-    <span className="badge" style={{ background: bg, color, padding: size === 'sm' ? '3px 8px' : '4px 12px', fontWeight: 700, borderRadius: '6px', fontSize: size === 'sm' ? '11px' : '12px', display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
-      {icon}{anyStatusLabel(status)}
-    </span>
-  );
+  return <StatusBadge label={anyStatusLabel(status)} bg={bg} color={color} icon={icon} variant="tag" size={size} />;
 }
 
 function AutoDeclinedChip() {
-  return (
-    <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', padding: '3px 8px', fontWeight: 700, fontSize: '10.5px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
-      <Hourglass size={11} /> Auto-declined
-    </span>
-  );
+  return <StatusBadge label="Auto-declined" bg="rgba(245, 158, 11, 0.15)" color="#f59e0b" icon={<Hourglass size={11} />} variant="tag" />;
 }
 
 // Only rendered for HIGH/CRITICAL — the default MEDIUM/LOW stay invisible so
@@ -97,11 +90,7 @@ function AutoDeclinedChip() {
 function PriorityBadge({ priority }: { priority?: string }) {
   if (priority !== 'CRITICAL' && priority !== 'HIGH') return null;
   const isCritical = priority === 'CRITICAL';
-  return (
-    <span className="badge" style={{ background: isCritical ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)', color: isCritical ? '#ef4444' : '#f97316', padding: '3px 8px', fontWeight: 700, fontSize: '10.5px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
-      <Flame size={11} /> {priority}
-    </span>
-  );
+  return <StatusBadge label={priority} bg={isCritical ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)'} color={isCritical ? '#ef4444' : '#f97316'} icon={<Flame size={11} />} variant="tag" />;
 }
 
 // ── Compact workflow breadcrumb — replaces the old pipeline-bar + gradient
@@ -419,12 +408,7 @@ export const Assignments: React.FC = () => {
         </button>
       </div>
 
-      {error && (
-        <div style={{ display: 'flex', gap: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '16px', borderRadius: 'var(--radius-md)', color: 'var(--status-inactive)' }}>
-          <AlertCircle size={20} />
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <AlertBanner type="error" message={error} />}
 
       {/* KPI Cards — clickable, filter the single table below. "Needs Attention"
           is not a separate list: it's the same filter mechanism switched to the
@@ -443,44 +427,40 @@ export const Assignments: React.FC = () => {
           const Icon = card.icon;
           const isActive = statusFilter === card.filter;
           return (
-            <div
+            <KpiCard
               key={card.label}
-              className="glass-card"
+              layout="label-first"
+              icon={<Icon />}
+              iconBg="rgba(255,255,255,0.03)"
+              iconColor={card.color}
+              label={card.label}
+              value={card.value}
+              valueColor="#fff"
               onClick={() => applyFilter(card.filter)}
               style={{
-                padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer',
                 border: isActive ? `1px solid ${card.color}` : '1px solid var(--border-color)',
                 background: isActive ? `${card.color}10` : undefined,
               }}
-            >
-              <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color, flexShrink: 0 }}>
-                <Icon size={22} />
-              </div>
-              <div>
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>{card.label}</span>
-                <h4 style={{ fontSize: '24px', fontWeight: 800, margin: '2px 0', color: '#fff' }}>{card.value}</h4>
-              </div>
-            </div>
+            />
           );
         })}
       </div>
 
       {/* Search & Filter */}
       <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
-          <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-          <input type="text" placeholder="Search this page by ID, project, assayer, branch..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '100%', padding: '8px 12px 8px 36px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Filter size={14} style={{ color: 'var(--text-muted)' }} />
-          <select value={statusFilter} onChange={(e) => applyFilter(e.target.value)} style={{ padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
-            <option value="ALL">All Statuses</option>
-            {STAGE3_STATUSES.map(s => (<option key={s} value={s}>{branchStatusLabel(s)}</option>))}
-            <option value={TERMINAL_FILTER}>Cancelled / Rejected</option>
-            <option value={NEEDS_ATTENTION_FILTER}>Needs Attention (awaiting response / auto-declined)</option>
-            <option value={ESCALATED_FILTER}>Escalated (Critical priority)</option>
-          </select>
-        </div>
+        <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search this page by ID, project, assayer, branch..." iconSize={16} />
+        <FilterSelect
+          value={statusFilter}
+          onChange={applyFilter}
+          label={<Filter size={14} style={{ color: 'var(--text-muted)' }} />}
+          options={[
+            { value: 'ALL', label: 'All Statuses' },
+            ...STAGE3_STATUSES.map(s => ({ value: s, label: branchStatusLabel(s) })),
+            { value: TERMINAL_FILTER, label: 'Cancelled / Rejected' },
+            { value: NEEDS_ATTENTION_FILTER, label: 'Needs Attention (awaiting response / auto-declined)' },
+            { value: ESCALATED_FILTER, label: 'Escalated (Critical priority)' },
+          ]}
+        />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr minmax(340px, 420px)', gap: '20px', alignItems: 'start' }}>
@@ -515,7 +495,7 @@ export const Assignments: React.FC = () => {
                     <td style={{ padding: '16px 24px' }}>{asn.assayer?.displayName}</td>
                     <td style={{ padding: '16px 24px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <StatusBadge status={String(asn.projectBranch?.status || asn.status)} size="sm" />
+                        <AssignmentStatusBadge status={String(asn.projectBranch?.status || asn.status)} size="sm" />
                         {asn.status === 'REJECTED' && asn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && <AutoDeclinedChip />}
                         <PriorityBadge priority={asn.priority} />
                       </div>
@@ -583,7 +563,7 @@ export const Assignments: React.FC = () => {
                     <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '1px 0' }}>{selectedAsn.assignmentNumber}</h4>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <StatusBadge status={String(selectedAsn.projectBranch?.status || selectedAsn.status)} />
+                    <AssignmentStatusBadge status={String(selectedAsn.projectBranch?.status || selectedAsn.status)} />
                     {selectedAsn.status === 'REJECTED' && selectedAsn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && <AutoDeclinedChip />}
                     <PriorityBadge priority={selectedAsn.priority} />
                   </div>

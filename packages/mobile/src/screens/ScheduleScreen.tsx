@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Platform, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, Linking } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
 import { MobileApiService } from '../services/api.service';
@@ -15,15 +15,8 @@ interface ScheduleScreenProps {
   onOpenScanner?: (assignment: AssayerAssignment) => void;
   onCounterOffer?: (assignment: AssayerAssignment) => void;
   onOpenQueryChat?: (assignment: AssayerAssignment) => void;
+  onOpenMap?: (assignment: AssayerAssignment) => void;
 }
-
-const openGoogleMaps = (lat: number, lng: number) => {
-  const url =
-    Platform.OS === 'ios'
-      ? `https://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`
-      : `https://maps.google.com/maps?daddr=${lat},${lng}`;
-  Linking.openURL(url).catch(() => Linking.openURL(`https://maps.google.com/maps?daddr=${lat},${lng}`));
-};
 
 export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   assignments,
@@ -34,6 +27,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onOpenScanner,
   onCounterOffer,
   onOpenQueryChat,
+  onOpenMap,
 }) => {
   const [filterTab, setFilterTab] = React.useState<'ACTIVE' | 'COMPLETED'>('ACTIVE');
 
@@ -196,12 +190,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
               <View style={[styles.btnRow, { marginTop: 12 }]}>
                 <TouchableOpacity
                   style={[styles.mapBtn, { flex: 1, backgroundColor: 'rgba(234,88,12,0.2)', borderColor: '#ea580c' }]}
-                  onPress={() => openGoogleMaps(assignment.latitude, assignment.longitude)}
+                  onPress={() => onOpenMap && onOpenMap(assignment)}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                     <Ionicons name="map" size={14} color="#ff8c00" />
                     <Text style={{ color: '#ff8c00', fontSize: 13, fontWeight: '800' }}>
-                      {Platform.OS === 'ios' ? 'Apple Maps' : 'Google Maps'}
+                      In-App Map
                     </Text>
                   </View>
                 </TouchableOpacity>

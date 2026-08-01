@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { 
-  CalendarDays, AlertCircle, RefreshCw, Calendar, CheckCircle2,
+  CalendarDays, RefreshCw, Calendar, CheckCircle2,
   Plus, Download, ChevronLeft, ChevronRight,
   X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
+import { Modal, FilterSelect, AlertBanner } from '../components/ui';
 
 interface Schedule {
   id: string;
@@ -274,19 +275,15 @@ export const Scheduling: React.FC = () => {
         {/* Action Controls & Navigation Shortcuts */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           {/* Filter Dropdown */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-            <Filter size={11} style={{ color: 'var(--text-muted)' }} />
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-              style={{ background: 'none', border: 'none', color: '#fff', fontSize: '11px', outline: 'none', cursor: 'pointer' }}>
-              <option value="ALL">All Schedules</option>
-              <option value="ONGOING">⚡ Ongoing (Today)</option>
-              <option value="UPCOMING">📅 Upcoming</option>
-              <option value="COMPLETED">✓ Completed</option>
-              <option value="RESCHEDULED">🔄 Rescheduled</option>
-              <option value="TENTATIVE">⏳ Tentative</option>
-              <option value="HISTORICAL">📜 History Log</option>
-            </select>
-          </div>
+          <FilterSelect value={statusFilter} onChange={setStatusFilter} label={<Filter size={14} style={{ color: 'var(--text-muted)' }} />} compact options={[
+            { value: 'ALL', label: 'All Schedules' },
+            { value: 'ONGOING', label: '⚡ Ongoing (Today)' },
+            { value: 'UPCOMING', label: '📅 Upcoming' },
+            { value: 'COMPLETED', label: '✓ Completed' },
+            { value: 'RESCHEDULED', label: '🔄 Rescheduled' },
+            { value: 'TENTATIVE', label: '⏳ Tentative' },
+            { value: 'HISTORICAL', label: '📜 History Log' },
+          ]} style={{ background: 'none', border: '1px solid var(--border-color)' }} />
 
           {/* View Toggle */}
           <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
@@ -310,14 +307,10 @@ export const Scheduling: React.FC = () => {
       </div>
 
       {error && (
-        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: '#f87171', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <AlertCircle size={14} /> {error}
-        </div>
+        <AlertBanner type="error" message={error} />
       )}
       {successMsg && (
-        <div style={{ padding: '8px 12px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-sm)', color: '#6ee7b7', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <CheckCircle2 size={14} /> {successMsg}
-        </div>
+        <AlertBanner type="success" message={successMsg} />
       )}
 
       {/* ── WORKSPACE BODY: 3 PANEL FLEX ── */}
@@ -632,88 +625,92 @@ export const Scheduling: React.FC = () => {
 
       {/* ── CREATE SCHEDULE MODAL ── */}
       {showCreateModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <form onSubmit={handleCreateSchedule} className="glass-card" style={{ width: '460px', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h4 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>Create Audit Schedule</h4>
-              <button type="button" onClick={() => setShowCreateModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={16} /></button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Assignment *</label>
-              <select value={selectedAssignmentId} onChange={e => {
-                setSelectedAssignmentId(e.target.value);
-                const sel = assignments.find(a => a.id === e.target.value);
-                if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
-              }} required
-                style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }}>
-                <option value="">— Select Confirmed Offer —</option>
-                {assignments.map(a => (
-                  <option key={a.id} value={a.id}>
-                    {a.assignmentNumber} — {a.projectBranch?.branch?.name} ({a.assayer?.displayName})
-                  </option>
-                ))}
-              </select>
-              {assayerWorkload && (
-                <div style={{ fontSize: '10px', marginTop: '2px', padding: '4px 8px', borderRadius: '4px',
-                  background: assayerWorkload.count >= 3 ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)',
-                  color: assayerWorkload.count >= 3 ? '#f87171' : '#6ee7b7' }}>
-                  Assayer Weekly Load: {assayerWorkload.count} schedule(s)
-                </div>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Audit Date *</label>
-              <input type="date" value={scheduleDate} onChange={e => {
-                setScheduleDate(e.target.value);
-                if (selectedAssignmentId) {
-                  const sel = assignments.find(a => a.id === selectedAssignmentId);
-                  if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, e.target.value);
-                }
-              }} required
-                style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Remarks (optional)</label>
-              <input type="text" value={scheduleRemarks} onChange={e => setScheduleRemarks(e.target.value)} placeholder="e.g., Priority morning slot"
-                style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+        <Modal
+          open
+          onClose={() => setShowCreateModal(false)}
+          title="Create Audit Schedule"
+          width="460px"
+          closeIcon={<X size={16} />}
+          asForm
+          onSubmit={handleCreateSchedule}
+          footer={
+            <>
               <button type="button" onClick={() => setShowCreateModal(false)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px' }}>Cancel</button>
               <button type="submit" className="btn btn-primary" disabled={isCreating} style={{ padding: '6px 12px', fontSize: '11px', background: '#10b981', borderColor: '#10b981' }}>
                 {isCreating ? 'Creating...' : 'Create Schedule'}
               </button>
-            </div>
-          </form>
-        </div>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Assignment *</label>
+            <select value={selectedAssignmentId} onChange={e => {
+              setSelectedAssignmentId(e.target.value);
+              const sel = assignments.find(a => a.id === e.target.value);
+              if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
+            }} required
+              style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }}>
+              <option value="">— Select Confirmed Offer —</option>
+              {assignments.map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.assignmentNumber} — {a.projectBranch?.branch?.name} ({a.assayer?.displayName})
+                </option>
+              ))}
+            </select>
+            {assayerWorkload && (
+              <div style={{ fontSize: '10px', marginTop: '2px', padding: '4px 8px', borderRadius: '4px',
+                background: assayerWorkload.count >= 3 ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)',
+                color: assayerWorkload.count >= 3 ? '#f87171' : '#6ee7b7' }}>
+                Assayer Weekly Load: {assayerWorkload.count} schedule(s)
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Audit Date *</label>
+            <input type="date" value={scheduleDate} onChange={e => {
+              setScheduleDate(e.target.value);
+              if (selectedAssignmentId) {
+                const sel = assignments.find(a => a.id === selectedAssignmentId);
+                if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, e.target.value);
+              }
+            }} required
+              style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Remarks (optional)</label>
+            <input type="text" value={scheduleRemarks} onChange={e => setScheduleRemarks(e.target.value)} placeholder="e.g., Priority morning slot"
+              style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
+          </div>
+        </Modal>
       )}
 
       {/* ── RESCHEDULE DATE MODAL ── */}
       {showRescheduleModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <form onSubmit={handleConfirmReschedule} className="glass-card" style={{ width: '420px', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h4 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>Reschedule Audit Date</h4>
-              <button type="button" onClick={() => setShowRescheduleModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={16} /></button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>New Audit Date *</label>
-              <input type="date" value={rescheduleNewDate} onChange={e => setRescheduleNewDate(e.target.value)} required
-                style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+        <Modal
+          open
+          onClose={() => setShowRescheduleModal(false)}
+          title="Reschedule Audit Date"
+          width="420px"
+          closeIcon={<X size={16} />}
+          asForm
+          onSubmit={handleConfirmReschedule}
+          footer={
+            <>
               <button type="button" onClick={() => setShowRescheduleModal(false)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px' }}>Cancel</button>
               <button type="submit" className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '11px', background: '#8b5cf6', borderColor: '#8b5cf6' }}>
                 Confirm Reschedule
               </button>
-            </div>
-          </form>
-        </div>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>New Audit Date *</label>
+            <input type="date" value={rescheduleNewDate} onChange={e => setRescheduleNewDate(e.target.value)} required
+              style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
+          </div>
+        </Modal>
       )}
     </div>
   );

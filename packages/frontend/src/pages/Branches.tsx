@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Search, Upload, AlertCircle, CheckCircle, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map } from 'lucide-react';
+import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map } from 'lucide-react';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal } from '../components/ui';
 import { api } from '../services/api';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { connectSocket } from '../services/socket';
@@ -249,15 +250,7 @@ export const Branches: React.FC = () => {
         })}
       </div>
 
-      {message && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', borderRadius: 'var(--radius-md)', fontSize: '13px', border: '1px solid',
-          background: message.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-          borderColor: message.type === 'success' ? 'var(--accent-secondary)' : 'rgba(239,68,68,0.4)',
-          color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171' }}>
-          {message.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-          <span>{message.text}</span>
-        </div>
-      )}
+      {message && <AlertBanner type={message.type} message={message.text} />}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: '24px', alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -277,11 +270,7 @@ export const Branches: React.FC = () => {
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isUploading} style={{ display: 'none' }} />
               </label>
             </div>
-            <div style={{ position: 'relative', flex: 1, minWidth: '180px' }}>
-              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input type="text" placeholder="Search by name, code or SOL ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-                style={{ width: '100%', padding: '6px 10px 6px 28px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
-            </div>
+            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name, code or SOL ID..." compact style={{ minWidth: '180px' }} />
             <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Filter size={13} /> Filters <ChevronDown size={12} style={{ transform: showFilters ? 'rotate(180deg)' : '' }} />
             </button>
@@ -293,30 +282,9 @@ export const Branches: React.FC = () => {
           {/* Advanced Filters */}
           {showFilters && (
             <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>State:</span>
-                <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}
-                  style={{ padding: '6px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}>
-                  <option value="ALL">All</option>
-                  {states.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Region:</span>
-                <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)}
-                  style={{ padding: '6px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}>
-                  <option value="ALL">All</option>
-                  {regions.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>
-                <select value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)}
-                  style={{ padding: '6px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}>
-                  <option value="ALL">All</option>
-                  {RISK_CATEGORIES.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-              </div>
+              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>State:</span>} value={stateFilter} onChange={setStateFilter} options={[{ value: 'ALL', label: 'All' }, ...states.map(s => ({ value: s, label: s }))]} compact />
+              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Region:</span>} value={regionFilter} onChange={setRegionFilter} options={[{ value: 'ALL', label: 'All' }, ...regions.map(r => ({ value: r, label: r }))]} compact />
+              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: r }))]} compact />
             </div>
           )}
 
@@ -344,11 +312,7 @@ export const Branches: React.FC = () => {
                       <td style={{ fontSize: '13px' }}>{b.city}, {b.state}</td>
                       <td style={{ fontSize: '13px' }}>{b.region || '-'}</td>
                       <td>
-                        <span className="badge" style={{ padding: '2px 8px', fontSize: '11px',
-                          background: b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'rgba(239,68,68,0.1)' : b.riskCategory === 'MEDIUM' ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)',
-                          color: b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? '#ef4444' : b.riskCategory === 'MEDIUM' ? '#f59e0b' : 'var(--status-active)' }}>
-                          {b.riskCategory || '-'}
-                        </span>
+                        <StatusBadge label={b.riskCategory || '-'} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'rgba(239,68,68,0.1)' : b.riskCategory === 'MEDIUM' ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? '#ef4444' : b.riskCategory === 'MEDIUM' ? '#f59e0b' : 'var(--status-active)'} />
                       </td>
                       <td style={{ fontSize: '12px' }}>{b.branchType || '-'}</td>
                       <td onClick={(e) => e.stopPropagation()}>
@@ -584,54 +548,45 @@ const BranchFormModal: React.FC<{
   };
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
-      <div className="glass-card" style={{ width: '640px', maxHeight: '90vh', overflowY: 'auto', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Building2 size={18} /> {title}
-          </h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>&times;</button>
-        </div>
-        <form onSubmit={handleSubmit}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
-            {field('Branch Code *', 'branchCode', { required: true })}
-            {field('SOL ID', 'solId', { placeholder: 'e.g. 12345' })}
-            {field('Branch Name *', 'name', { required: true, full: true })}
-            {field('Branch Type', 'branchType', { options: BRANCH_TYPES.map(t => ({ value: t, label: t })) })}
-            {field('Client *', 'clientId', { options: clientOptions.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` })), required: true })}
-            {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
+    <Modal open onClose={onClose} title={<><Building2 size={18} /> {title}</>} width="640px" maxHeight="90vh" asForm onSubmit={handleSubmit} bodyStyle={{ overflowY: 'auto' }} footer={
+      <>
+        <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
+        <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save'}</button>
+      </>
+    }>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
+        {field('Branch Code *', 'branchCode', { required: true })}
+        {field('SOL ID', 'solId', { placeholder: 'e.g. 12345' })}
+        {field('Branch Name *', 'name', { required: true, full: true })}
+        {field('Branch Type', 'branchType', { options: BRANCH_TYPES.map(t => ({ value: t, label: t })) })}
+        {field('Client *', 'clientId', { options: clientOptions.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` })), required: true })}
+        {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
 
-            <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
-            {field('Address *', 'address', { required: true, full: true })}
-            {field('City *', 'city', { required: true })}
-            {field('District *', 'district', { required: true })}
-            {field('State *', 'state', { required: true, options: INDIAN_STATES })}
-            {field('Pincode', 'pincode', { placeholder: 'e.g. 400001' })}
-            {field('Region', 'region')}
-            {field('Territory', 'territory')}
-            {field('Zone ID', 'zoneId')}
+        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
+        {field('Address *', 'address', { required: true, full: true })}
+        {field('City *', 'city', { required: true })}
+        {field('District *', 'district', { required: true })}
+        {field('State *', 'state', { required: true, options: INDIAN_STATES })}
+        {field('Pincode', 'pincode', { placeholder: 'e.g. 400001' })}
+        {field('Region', 'region')}
+        {field('Territory', 'territory')}
+        {field('Zone ID', 'zoneId')}
 
-            <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT</span>
-            {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}
-            {field('Email', 'email', { type: 'email' })}
+        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT</span>
+        {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}
+        {field('Email', 'email', { type: 'email' })}
 
-            <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
-            {field('Risk Category', 'riskCategory', { options: RISK_CATEGORIES.map(r => ({ value: r, label: r })) })}
-            {field('Risk Score', 'riskScore', { type: 'number', placeholder: '0.00 - 100.00' })}
-            {field('Complexity', 'complexity', { options: COMPLEXITIES.map(c => ({ value: c, label: c })) })}
-            {field('Est. Duration (hours)', 'estimatedDurationHours', { type: 'number' })}
-            {field('Required Competencies', 'requiredCompetencies', { full: true, placeholder: 'Comma-separated, e.g. Gold Valuation, KYC Audit' })}
-            {field('Opening Date', 'openingDate', { type: 'date' })}
-            {field('Last Audit Date', 'lastAuditDate', { type: 'date' })}
-          </div>
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-            <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-            <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save'}</button>
-          </div>
-        </form>
+        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
+        {field('Risk Category', 'riskCategory', { options: RISK_CATEGORIES.map(r => ({ value: r, label: r })) })}
+        {field('Risk Score', 'riskScore', { type: 'number', placeholder: '0.00 - 100.00' })}
+        {field('Complexity', 'complexity', { options: COMPLEXITIES.map(c => ({ value: c, label: c })) })}
+        {field('Est. Duration (hours)', 'estimatedDurationHours', { type: 'number' })}
+        {field('Required Competencies', 'requiredCompetencies', { full: true, placeholder: 'Comma-separated, e.g. Gold Valuation, KYC Audit' })}
+        {field('Opening Date', 'openingDate', { type: 'date' })}
+        {field('Last Audit Date', 'lastAuditDate', { type: 'date' })}
       </div>
-    </div>
+    </Modal>
   );
 };
 
@@ -660,38 +615,31 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
   };
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
-      <div className="glass-card" style={{ width: '480px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h4 style={{ fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}><User size={16} /> Add Branch Contact</h4>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}>&times;</button>
+    <Modal open onClose={onClose} title={<><User size={16} /> Add Branch Contact</>} width="480px" asForm onSubmit={handleSubmit} footer={
+      <>
+        <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
+        <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save Contact'}</button>
+      </>
+    }>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        {[
+          { placeholder: 'Name *', val: name, set: setName, required: true },
+          { placeholder: 'Email *', val: email, set: setEmail, type: 'email', required: true },
+          { placeholder: 'Phone *', val: phone, set: setPhone, required: true },
+          { placeholder: 'Designation *', val: designation, set: setDesignation, required: true },
+          { placeholder: 'Department', val: department, set: setDepartment },
+        ].map(f => (
+          <input key={f.placeholder} placeholder={f.placeholder} type={f.type || 'text'} value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
+            style={{ padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
+        ))}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <textarea placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', resize: 'vertical' }} />
         </div>
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            {[
-              { placeholder: 'Name *', val: name, set: setName, required: true },
-              { placeholder: 'Email *', val: email, set: setEmail, type: 'email', required: true },
-              { placeholder: 'Phone *', val: phone, set: setPhone, required: true },
-              { placeholder: 'Designation *', val: designation, set: setDesignation, required: true },
-              { placeholder: 'Department', val: department, set: setDepartment },
-            ].map(f => (
-              <input key={f.placeholder} placeholder={f.placeholder} type={f.type || 'text'} value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
-                style={{ padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-            ))}
-            <div style={{ gridColumn: '1 / -1' }}>
-              <textarea placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-                style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', resize: 'vertical' }} />
-            </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-              <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} /> Primary contact
-            </label>
-          </div>
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-            <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-            <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save Contact'}</button>
-          </div>
-        </form>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} /> Primary contact
+        </label>
       </div>
-    </div>
+    </Modal>
   );
 };

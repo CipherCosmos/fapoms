@@ -166,6 +166,13 @@ export var SystemRole;
     SystemRole["DATA_ENTRY_HEAD"] = "DATA_ENTRY_HEAD";
     SystemRole["ASSAYER"] = "ASSAYER";
     SystemRole["CLIENT_USER"] = "CLIENT_USER";
+    /**
+     * Owns the money: client receivables, assayer disbursements, invoicing and
+     * financial reporting. Finance work was previously bundled into the operations
+     * roles because billing had no dedicated owner, which meant anyone who could
+     * plan an audit could also issue an invoice.
+     */
+    SystemRole["FINANCE_MANAGER"] = "FINANCE_MANAGER";
     SystemRole["READ_ONLY_AUDITOR"] = "READ_ONLY_AUDITOR";
 })(SystemRole || (SystemRole = {}));
 export var PermissionAction;
@@ -218,6 +225,12 @@ export var PermissionResource;
     PermissionResource["CONFIGURATION"] = "CONFIGURATION";
     PermissionResource["REFERENCE_DATA"] = "REFERENCE_DATA";
     PermissionResource["AUDIT_LOG"] = "AUDIT_LOG";
+    /**
+     * The unified billing engine: receivables, payables, invoices, payments and
+     * financial reporting. Billing previously had no permission resource of its own
+     * and was guarded only by coarse role checks.
+     */
+    PermissionResource["BILLING"] = "BILLING";
 })(PermissionResource || (PermissionResource = {}));
 export var AuthorizationScope;
 (function (AuthorizationScope) {
@@ -275,6 +288,19 @@ export var ClientType;
     ClientType["GOVERNMENT"] = "GOVERNMENT";
     ClientType["OTHER"] = "OTHER";
 })(ClientType || (ClientType = {}));
+export var ClientBillingStatus;
+(function (ClientBillingStatus) {
+    ClientBillingStatus["DRAFT"] = "DRAFT";
+    ClientBillingStatus["ACTIVE"] = "ACTIVE";
+    ClientBillingStatus["SUSPENDED"] = "SUSPENDED";
+    ClientBillingStatus["INACTIVE"] = "INACTIVE";
+})(ClientBillingStatus || (ClientBillingStatus = {}));
+export var ClientBillingEventType;
+(function (ClientBillingEventType) {
+    ClientBillingEventType["STATUS_CHANGE"] = "STATUS_CHANGE";
+    ClientBillingEventType["REMARK"] = "REMARK";
+    ClientBillingEventType["PROFILE_UPDATE"] = "PROFILE_UPDATE";
+})(ClientBillingEventType || (ClientBillingEventType = {}));
 export var ContractStatus;
 (function (ContractStatus) {
     ContractStatus["DRAFT"] = "DRAFT";
@@ -290,4 +316,152 @@ export var Priority;
     Priority["HIGH"] = "HIGH";
     Priority["CRITICAL"] = "CRITICAL";
 })(Priority || (Priority = {}));
+// ---------------------------------------------------------------------------
+// Multi-level Billing Engine (Client / Project / Assignment / Assayer Payable)
+// ---------------------------------------------------------------------------
+/** The operational entity a billing line belongs to. */
+export var BillingLevel;
+(function (BillingLevel) {
+    BillingLevel["CLIENT"] = "CLIENT";
+    BillingLevel["PROJECT"] = "PROJECT";
+    BillingLevel["ASSIGNMENT"] = "ASSIGNMENT";
+})(BillingLevel || (BillingLevel = {}));
+/**
+ * Canonical billing state machine.
+ *
+ * Forward spine (spec §6):
+ *   Not Billable → Pending Billing → Ready for Billing → Draft → Submitted
+ *     → Under Review → (Rejected ⇄ Draft) → Approved → Invoiced
+ *     → Partially Paid → Paid
+ * Cross-cutting: On Hold, Disputed, Cancelled, Adjusted.
+ */
+export var BillingState;
+(function (BillingState) {
+    BillingState["NOT_BILLABLE"] = "NOT_BILLABLE";
+    BillingState["PENDING_BILLING"] = "PENDING_BILLING";
+    BillingState["READY_FOR_BILLING"] = "READY_FOR_BILLING";
+    BillingState["DRAFT"] = "DRAFT";
+    BillingState["SUBMITTED"] = "SUBMITTED";
+    BillingState["UNDER_REVIEW"] = "UNDER_REVIEW";
+    BillingState["REJECTED"] = "REJECTED";
+    BillingState["APPROVED"] = "APPROVED";
+    BillingState["INVOICED"] = "INVOICED";
+    BillingState["PARTIALLY_PAID"] = "PARTIALLY_PAID";
+    BillingState["PAID"] = "PAID";
+    BillingState["ON_HOLD"] = "ON_HOLD";
+    BillingState["DISPUTED"] = "DISPUTED";
+    BillingState["CANCELLED"] = "CANCELLED";
+    BillingState["ADJUSTED"] = "ADJUSTED";
+})(BillingState || (BillingState = {}));
+/** Money-collection status, tracked independently of the approval pipeline. */
+export var PaymentState;
+(function (PaymentState) {
+    PaymentState["UNPAID"] = "UNPAID";
+    PaymentState["PARTIALLY_PAID"] = "PARTIALLY_PAID";
+    PaymentState["PAID"] = "PAID";
+    PaymentState["REVERSED"] = "REVERSED";
+})(PaymentState || (PaymentState = {}));
+/** How a price is computed. */
+export var BillingPricingModel;
+(function (BillingPricingModel) {
+    BillingPricingModel["FLAT_RATE"] = "FLAT_RATE";
+    BillingPricingModel["PER_ASSIGNMENT"] = "PER_ASSIGNMENT";
+    BillingPricingModel["PER_BRANCH"] = "PER_BRANCH";
+    BillingPricingModel["PER_PACKET"] = "PER_PACKET";
+    BillingPricingModel["HOURLY"] = "HOURLY";
+    BillingPricingModel["RETAINER"] = "RETAINER";
+})(BillingPricingModel || (BillingPricingModel = {}));
+/** Consolidation of a set of approved billing entries into an invoice. */
+export var InvoiceStatus;
+(function (InvoiceStatus) {
+    InvoiceStatus["DRAFT"] = "DRAFT";
+    InvoiceStatus["ISSUED"] = "ISSUED";
+    InvoiceStatus["PARTIALLY_PAID"] = "PARTIALLY_PAID";
+    InvoiceStatus["PAID"] = "PAID";
+    InvoiceStatus["DISPUTED"] = "DISPUTED";
+    InvoiceStatus["CANCELLED"] = "CANCELLED";
+    InvoiceStatus["VOID"] = "VOID";
+})(InvoiceStatus || (InvoiceStatus = {}));
+/** Aggregation scope of an invoice. */
+export var InvoiceType;
+(function (InvoiceType) {
+    InvoiceType["CONSOLIDATED"] = "CONSOLIDATED";
+    InvoiceType["PER_PROJECT"] = "PER_PROJECT";
+})(InvoiceType || (InvoiceType = {}));
+export var PaymentStatus;
+(function (PaymentStatus) {
+    PaymentStatus["PENDING"] = "PENDING";
+    PaymentStatus["RECEIVED"] = "RECEIVED";
+    PaymentStatus["REVERSED"] = "REVERSED";
+    PaymentStatus["ALLOCATED"] = "ALLOCATED";
+})(PaymentStatus || (PaymentStatus = {}));
+/**
+ * Which way money moved. Both directions live in one payments table so that
+ * "every payment the business made or received" is a single query — cash-flow
+ * and the assayer's running balance both derive from it.
+ *
+ * INBOUND  — a client paying one of our invoices (accounts receivable).
+ * OUTBOUND — us disbursing an approved assayer payable (accounts payable).
+ */
+export var PaymentDirection;
+(function (PaymentDirection) {
+    PaymentDirection["INBOUND"] = "INBOUND";
+    PaymentDirection["OUTBOUND"] = "OUTBOUND";
+})(PaymentDirection || (PaymentDirection = {}));
+export var PaymentMethod;
+(function (PaymentMethod) {
+    PaymentMethod["BANK_TRANSFER"] = "BANK_TRANSFER";
+    PaymentMethod["NEFT"] = "NEFT";
+    PaymentMethod["RTGS"] = "RTGS";
+    PaymentMethod["UPI"] = "UPI";
+    PaymentMethod["CHEQUE"] = "CHEQUE";
+    PaymentMethod["CARD"] = "CARD";
+    PaymentMethod["OTHER"] = "OTHER";
+})(PaymentMethod || (PaymentMethod = {}));
+/** Assayer payable is deliberately separate from client billing. */
+export var AssayerPayableStatus;
+(function (AssayerPayableStatus) {
+    AssayerPayableStatus["PENDING"] = "PENDING";
+    AssayerPayableStatus["APPROVED"] = "APPROVED";
+    AssayerPayableStatus["PAID"] = "PAID";
+    AssayerPayableStatus["DISPUTED"] = "DISPUTED";
+    AssayerPayableStatus["ON_HOLD"] = "ON_HOLD";
+})(AssayerPayableStatus || (AssayerPayableStatus = {}));
+export var BillingConflictSeverity;
+(function (BillingConflictSeverity) {
+    BillingConflictSeverity["INFO"] = "INFO";
+    BillingConflictSeverity["WARNING"] = "WARNING";
+    BillingConflictSeverity["CRITICAL"] = "CRITICAL";
+})(BillingConflictSeverity || (BillingConflictSeverity = {}));
+export var BillingConflictStatus;
+(function (BillingConflictStatus) {
+    BillingConflictStatus["OPEN"] = "OPEN";
+    BillingConflictStatus["RESOLVED"] = "RESOLVED";
+    BillingConflictStatus["MERGED"] = "MERGED";
+    BillingConflictStatus["SEPARATED"] = "SEPARATED";
+    BillingConflictStatus["REASSIGNED"] = "REASSIGNED";
+    BillingConflictStatus["OVERRIDDEN"] = "OVERRIDDEN";
+    BillingConflictStatus["REJECTED"] = "REJECTED";
+    BillingConflictStatus["ON_HOLD"] = "ON_HOLD";
+})(BillingConflictStatus || (BillingConflictStatus = {}));
+/** Resolution actions offered on the conflict screen. */
+export var BillingConflictAction;
+(function (BillingConflictAction) {
+    BillingConflictAction["RESOLVE"] = "RESOLVE";
+    BillingConflictAction["MERGE"] = "MERGE";
+    BillingConflictAction["SEPARATE"] = "SEPARATE";
+    BillingConflictAction["REASSIGN"] = "REASSIGN";
+    BillingConflictAction["OVERRIDE"] = "OVERRIDE";
+    BillingConflictAction["REJECT"] = "REJECT";
+    BillingConflictAction["PUT_ON_HOLD"] = "PUT_ON_HOLD";
+})(BillingConflictAction || (BillingConflictAction = {}));
+/** What kind of record a billing history/audit event refers to. */
+export var BillingEntityType;
+(function (BillingEntityType) {
+    BillingEntityType["ENTRY"] = "ENTRY";
+    BillingEntityType["INVOICE"] = "INVOICE";
+    BillingEntityType["PAYMENT"] = "PAYMENT";
+    BillingEntityType["PAYABLE"] = "PAYABLE";
+    BillingEntityType["CONFLICT"] = "CONFLICT";
+})(BillingEntityType || (BillingEntityType = {}));
 //# sourceMappingURL=enums.js.map

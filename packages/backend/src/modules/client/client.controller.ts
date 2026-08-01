@@ -18,7 +18,7 @@ import {
 } from 'class-validator';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
-import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
+import { SystemRole, ClientLifecycleStatus, ClientBillingStatus } from '@fapoms/shared';
 
 class CreateClientConfigDto {
   @IsOptional() @IsObject() importMapping?: Record<string, string>;
@@ -138,6 +138,19 @@ class LifecycleTransitionDto {
   reason?: string;
 }
 
+class BillingStatusTransitionDto {
+  @IsEnum(ClientBillingStatus)
+  status: string;
+
+  @IsOptional() @IsString()
+  remarks?: string;
+}
+
+class BillingRemarkDto {
+  @IsString() @IsNotEmpty()
+  remarks: string;
+}
+
 @ApiTags('Clients')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -160,8 +173,24 @@ export class ClientController {
 
   @Get()
   @ApiOperation({ summary: 'List all active client profiles' })
-  async findAll(@Query('page') page = 1, @Query('limit') limit = 20) {
-    const { clients, total } = await this.clientService.findAll(page, limit);
+  async findAll(
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('clientType') clientType?: string,
+    @Query('priority') priority?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: 'ASC' | 'DESC',
+  ) {
+    const { clients, total } = await this.clientService.findAll(page, limit, {
+      search,
+      status,
+      clientType,
+      priority,
+      sortBy,
+      sortOrder,
+    });
     return {
       success: true,
       data: clients,
@@ -185,7 +214,7 @@ export class ClientController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client profile and configuration' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientRequestDto, @Req() req: any) {
     const client = await this.clientService.update(id, dto, req.user.id);
@@ -207,7 +236,7 @@ export class ClientController {
 
   @Patch(':id/lifecycle')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Transition client lifecycle status' })
   async transitionLifecycle(
     @Param('id', ParseUUIDPipe) id: string,
@@ -244,7 +273,7 @@ export class ClientController {
 
   @Put(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client contact' })
   async updateContact(
     @Param('contactId', ParseUUIDPipe) contactId: string,
@@ -293,7 +322,7 @@ export class ClientController {
 
   @Put(':id/contracts/:contractId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client contract' })
   async updateContract(
     @Param('contractId', ParseUUIDPipe) contractId: string,
@@ -327,9 +356,16 @@ export class ClientController {
     return { success: true, data: billing };
   }
 
+  @Get(':id/billing/history')
+  @ApiOperation({ summary: 'Get client billing timeline (status changes, remarks, profile edits)' })
+  async findBillingHistory(@Param('id', ParseUUIDPipe) id: string) {
+    const history = await this.clientService.findBillingHistory(id);
+    return { success: true, data: history };
+  }
+
   @Put(':id/billing')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Create or update client billing information' })
   async upsertBilling(
     @Param('id', ParseUUIDPipe) id: string,
@@ -338,5 +374,31 @@ export class ClientController {
   ) {
     const billing = await this.clientService.upsertBilling(id, dto, req.user.id);
     return { success: true, data: billing };
+  }
+
+  @Patch(':id/billing/status')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('client:edit:organization')
+  @ApiOperation({ summary: 'Transition client billing status' })
+  async transitionBillingStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: BillingStatusTransitionDto,
+    @Req() req: any,
+  ) {
+    const billing = await this.clientService.transitionBillingStatus(id, dto.status as ClientBillingStatus, req.user.id, dto.remarks);
+    return { success: true, data: billing };
+  }
+
+  @Post(':id/billing/remarks')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:edit:organization')
+  @ApiOperation({ summary: 'Add a remark to client billing timeline' })
+  async addBillingRemark(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: BillingRemarkDto,
+    @Req() req: any,
+  ) {
+    const entry = await this.clientService.addBillingRemark(id, dto.remarks, req.user.id);
+    return { success: true, data: entry };
   }
 }

@@ -9,6 +9,8 @@ import {
   ProjectValidationStartedEvent,
   ProjectCompletedEvent,
   ProjectCancelledEvent,
+  ProjectOnHoldEvent,
+  ProjectArchivedEvent,
   ProjectBranchPlanningStartedEvent,
   ProjectBranchAssignmentConfirmedEvent,
   ProjectBranchAuditScheduledEvent,
@@ -34,7 +36,9 @@ export class ProjectStateMachine {
     if (!project.isActive) {
       throw new BadRequestException('Cannot start scheduling on inactive project.');
     }
-    if (project.status !== ProjectStatus.PLANNING) {
+    // ON_HOLD is also accepted: resuming a paused project back into SCHEDULING is the same
+    // transition as reaching it the first time from PLANNING.
+    if (project.status !== ProjectStatus.PLANNING && project.status !== ProjectStatus.ON_HOLD) {
       throw new BadRequestException(`Cannot transition project from ${project.status} to SCHEDULING.`);
     }
     const prev = project.status;
@@ -46,7 +50,9 @@ export class ProjectStateMachine {
     if (!project.isActive) {
       throw new BadRequestException('Cannot start execution on inactive project.');
     }
-    if (project.status !== ProjectStatus.SCHEDULING) {
+    // ON_HOLD is also accepted: resuming a paused project back into EXECUTION is the same
+    // transition as reaching it the first time from SCHEDULING.
+    if (project.status !== ProjectStatus.SCHEDULING && project.status !== ProjectStatus.ON_HOLD) {
       throw new BadRequestException(`Cannot transition project from ${project.status} to EXECUTION.`);
     }
     const prev = project.status;
@@ -88,6 +94,30 @@ export class ProjectStateMachine {
     const prev = project.status;
     project.status = ProjectStatus.CANCELLED;
     return new ProjectCancelledEvent(project.id, prev, project.status, userId);
+  }
+
+  static holdProject(project: ProjectEntity, userId: string): ProjectOnHoldEvent {
+    if (!project.isActive) {
+      throw new BadRequestException('Cannot put an inactive project on hold.');
+    }
+    if (project.status !== ProjectStatus.SCHEDULING && project.status !== ProjectStatus.EXECUTION) {
+      throw new BadRequestException(`Cannot transition project from ${project.status} to ON_HOLD.`);
+    }
+    const prev = project.status;
+    project.status = ProjectStatus.ON_HOLD;
+    return new ProjectOnHoldEvent(project.id, prev, project.status, userId);
+  }
+
+  static archiveProject(project: ProjectEntity, userId: string): ProjectArchivedEvent {
+    if (!project.isActive) {
+      throw new BadRequestException('Cannot archive an inactive project.');
+    }
+    if (project.status !== ProjectStatus.COMPLETED) {
+      throw new BadRequestException(`Cannot transition project from ${project.status} to ARCHIVED.`);
+    }
+    const prev = project.status;
+    project.status = ProjectStatus.ARCHIVED;
+    return new ProjectArchivedEvent(project.id, prev, project.status, userId);
   }
 }
 

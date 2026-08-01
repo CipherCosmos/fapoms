@@ -1,6 +1,6 @@
-import { Controller, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, Res, Body, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import * as xlsx from 'xlsx';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -47,10 +47,23 @@ export class DocumentController {
     @Query('assessmentId', ParseUUIDPipe) assessmentId: string,
     @Query('type') type: DocumentType,
     @Req() req: any,
+    // Set when this packet was generated from a client batch, so the day's run can
+    // report how many of its branches have had their PDF produced.
+    @Query('customerMasterVersionId') customerMasterVersionId?: string,
   ) {
     const savedPath = await this.localStorageService.saveFile(file.originalname, file.buffer);
     const validTypes = Object.values(DocumentType) as string[];
     const targetType = validTypes.includes(type as any) ? type : DocumentType.PRE_FIELD_AUDIT_PDF;
+
+    // The client's customer master file is a multi-branch batch belonging to one
+    // audit date — it is not a per-branch document and must go through
+    // /customer-master/upload, which reconciles it and registers a version.
+    // Accepting it here filed one branch's row against a file covering ten.
+    if (targetType === DocumentType.CUSTOMER_MASTER_DATA) {
+      throw new BadRequestException(
+        'Customer master data is a multi-branch batch for one audit date — upload it via /customer-master/upload, not as a per-branch document.',
+      );
+    }
 
     const doc = await this.documentService.create({
       assessmentId,
@@ -59,11 +72,8 @@ export class DocumentController {
       fileSize: file.size,
       mimeType: file.mimetype,
       type: targetType,
+      customerMasterVersionId,
     }, req?.user?.id || '00000000-0000-0000-0000-000000000000');
-
-    if (targetType === DocumentType.CUSTOMER_MASTER_DATA) {
-      await this.ocrProcessingService.createJob(doc.id, req?.user?.id || '00000000-0000-0000-0000-000000000000');
-    }
 
     return { success: true, data: doc };
   }
@@ -527,9 +537,19 @@ export class DocumentController {
     SystemRole.DATA_ENTRY_HEAD,
   )
   @ApiOperation({ summary: 'Issue a short-lived signed download URL for a document' })
-  async issueDownloadToken(@Param('id', ParseUUIDPipe) id: string) {
+  async issueDownloadToken(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     // Confirms the document exists (and 404s if not) before minting a token for it.
     await this.documentService.findOne(id);
+
+    // Field assayers are additionally constrained to documents that have actually
+    // been dispatched to a branch they are assigned to. Previously this endpoint
+    // minted a token for any document id to any assayer, so undispatched paperwork
+    // — and other branches' paperwork — was downloadable.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
+    const isPrivileged = roles.some((r) => r !== SystemRole.ASSAYER);
+    if (!isPrivileged && roles.includes(SystemRole.ASSAYER)) {
+      await this.documentService.assertAssayerMayDownload(id, req.user.assayerId ?? req.user.id);
+    }
     const { token, expiresAt } = this.documentAccessTokenService.issue(id);
     return {
       success: true,
@@ -562,7 +582,7 @@ export class DocumentController {
 
   @Patch(':id/status')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
-  @RequirePermissions('document:update:organization')
+  @RequirePermissions('document:edit:organization')
   @ApiOperation({ summary: 'Update document status' })
   async updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: { status: DocumentStatus }, @Req() req: any) {
     const doc = await this.documentService.updateStatus(id, dto.status, req.user.id);
@@ -590,12 +610,15 @@ export class DocumentController {
   @Get('project-branch/:projectBranchId/download-pdf')
   @ApiOperation({ summary: 'Directly download the Pre-Audit PDF file for a project branch' })
   async downloadBranchPdf(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any, @Res() res: Response) {
-    const list = await this.documentService.findByProjectBranch(projectBranchId);
-    const doc = list.find(d => d.type === DocumentType.PRE_FIELD_AUDIT_PDF) ||
-                list.find(d => d.type === DocumentType.CUSTOMER_MASTER_DATA) ||
-                list[0];
+    // Resolves only from *dispatched* paperwork. This used to pick the first
+    // matching document of any status — so an assayer following this link could
+    // pull down a pre-audit PDF operations had not released yet.
+    const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
+    const doc = documents.find(d => d.type === DocumentType.PRE_FIELD_AUDIT_PDF) ||
+                documents.find(d => d.type === DocumentType.CUSTOMER_MASTER_DATA) ||
+                documents[0];
     if (!doc) {
-      res.status(404).send('Document not found for branch');
+      res.status(404).json({ success: false, message: readiness.message, readiness });
       return;
     }
     // Internal re-dispatch to the token-protected handler: the caller already passed this
@@ -607,9 +630,132 @@ export class DocumentController {
 
   @Get('project-branch/:projectBranchId')
   @ApiOperation({ summary: 'Get documents for a project branch' })
-  async findByProjectBranch(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
+  async findByProjectBranch(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any) {
+    // Assayers get the dispatch-gated view: only paperwork operations has actually
+    // released to them, never documents still being prepared internally.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
+    const assayerOnly = roles.includes(SystemRole.ASSAYER) && !roles.some((r) => r !== SystemRole.ASSAYER);
+    if (assayerOnly) {
+      const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
+      return { success: true, data: documents, meta: { readiness } };
+    }
     const list = await this.documentService.findByProjectBranch(projectBranchId);
     return { success: true, data: list };
+  }
+
+  @Get('operations/overview')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+    SystemRole.DATA_ENTRY_HEAD,
+  )
+  @ApiOperation({ summary: 'Document control console: branch context, transport trail, pipeline and action queues' })
+  async operationsOverview(
+    @Query('projectId') projectId?: string,
+    @Query('status') status?: string,
+    @Query('type') type?: string,
+  ) {
+    return { success: true, data: await this.documentService.operationsOverview({ projectId, status, type }) };
+  }
+
+  @Post('upload-generated-batch')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @UseInterceptors(FilesInterceptor('files', 100))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
+  async uploadGeneratedBatch(
+    @UploadedFiles() files: any[],
+    @Query('projectId', ParseUUIDPipe) projectId: string,
+    @Query('auditDate') auditDate: string,
+    @Req() req: any,
+    @Query('customerMasterVersionId') customerMasterVersionId?: string,
+  ) {
+    if (!files?.length) throw new BadRequestException('No files received.');
+    if (!auditDate) throw new BadRequestException('auditDate is required.');
+
+    const { matches, unmatched, branchesWithoutFile } =
+      await this.documentService.matchPdfsToBranches(projectId, auditDate, files.map((f) => f.originalname));
+
+    const byName = new Map(files.map((f) => [f.originalname, f]));
+    const created: Array<{ documentId: string; fileName: string; branchName: string }> = [];
+    const failed: Array<{ fileName: string; reason: string }> = [];
+
+    // Only files that matched exactly one branch are stored. An unmatched file is
+    // returned to the operator rather than filed against a guessed branch — a
+    // misfiled packet sends one branch's customers to another branch's assayer.
+    for (const m of matches) {
+      const file = byName.get(m.fileName);
+      if (!file) continue;
+      try {
+        const savedPath = await this.localStorageService.saveFile(file.originalname, file.buffer);
+        const doc = await this.documentService.create({
+          assessmentId: m.projectBranchId,
+          fileName: file.originalname,
+          filePath: savedPath,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          type: DocumentType.PRE_FIELD_AUDIT_PDF,
+          customerMasterVersionId,
+        }, req.user.id);
+        created.push({ documentId: doc.id, fileName: file.originalname, branchName: m.branchName });
+      } catch (err) {
+        failed.push({ fileName: file.originalname, reason: (err as Error).message });
+      }
+    }
+
+    return {
+      success: true,
+      data: { created, unmatched, failed, branchesWithoutFile },
+      message:
+        `Filed ${created.length} of ${files.length} packet(s).` +
+        (unmatched.length ? ` ${unmatched.length} could not be matched to a branch.` : '') +
+        (branchesWithoutFile.length ? ` ${branchesWithoutFile.length} scheduled branch(es) still have no packet.` : ''),
+    };
+  }
+
+  @Post('dispatch-batch')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: 'Release several documents to their assayers in one action' })
+  async dispatchBatch(@Body() body: { documentIds: string[] }, @Req() req: any) {
+    if (!body?.documentIds?.length) {
+      throw new BadRequestException('documentIds is required.');
+    }
+    const result = await this.documentService.dispatchMany(body.documentIds, req.user.id);
+    return {
+      success: true,
+      data: result,
+      message: `Dispatched ${result.dispatched.length} document(s)${result.failed.length ? `, ${result.failed.length} failed` : ''}.`,
+    };
+  }
+
+  @Get('project-branch/:projectBranchId/assayer-view')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: "Dispatch-gated documents for a branch, with readiness so the field app can explain what to expect" })
+  async assayerBranchDocuments(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
+    const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
+    return { success: true, data: documents, meta: { readiness } };
   }
 
   @Get('assessment/:assessmentId')

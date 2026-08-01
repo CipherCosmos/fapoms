@@ -54,7 +54,7 @@ export class AuditController {
 
   @Post(':id/close')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('audit:update:organization')
+  @RequirePermissions('audit:edit:organization')
   @ApiOperation({ summary: 'Close a field audit and trigger billing and ledger credits' })
   async closeAudit(
     @Param('id', ParseUUIDPipe) id: string,

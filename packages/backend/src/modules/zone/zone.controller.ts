@@ -110,7 +110,7 @@ export class ZoneController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('zone:update:organization')
+  @RequirePermissions('zone:edit:organization')
   @ApiOperation({ summary: 'Update operational zone mappings' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,

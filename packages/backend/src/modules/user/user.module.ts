@@ -11,6 +11,7 @@ import { CapabilityEntity } from './capability.entity';
 import { ResponsibilityEntity } from './responsibility.entity';
 import { UserService } from './user.service';
 import { UserController } from './user.controller';
+import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemDashboardController } from './system-dashboard.controller';
 
 @Module({
@@ -18,7 +19,7 @@ import { SystemDashboardController } from './system-dashboard.controller';
     TypeOrmModule.forFeature([UserEntity, RoleEntity, PermissionEntity, CapabilityEntity, ResponsibilityEntity]),
   ],
   controllers: [UserController, SystemDashboardController],
-  providers: [UserService],
+  providers: [OperationsSnapshotService, UserService],
   exports: [UserService],
 })
 export class UserModule {}

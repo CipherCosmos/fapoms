@@ -34,6 +34,46 @@ describe('ProjectStateMachine', () => {
       ProjectStateMachine.startPlanning(project, 'user-1');
     }).toThrow(BadRequestException);
   });
+
+  it('should put a SCHEDULING project on hold, and an EXECUTION project on hold', () => {
+    project.status = ProjectStatus.SCHEDULING;
+    const event = ProjectStateMachine.holdProject(project, 'user-1');
+    expect(project.status).toBe(ProjectStatus.ON_HOLD);
+    expect(event.previousState).toBe(ProjectStatus.SCHEDULING);
+
+    project.status = ProjectStatus.EXECUTION;
+    ProjectStateMachine.holdProject(project, 'user-1');
+    expect(project.status).toBe(ProjectStatus.ON_HOLD);
+  });
+
+  it('should refuse to hold a project outside SCHEDULING/EXECUTION', () => {
+    project.status = ProjectStatus.PLANNING;
+    expect(() => {
+      ProjectStateMachine.holdProject(project, 'user-1');
+    }).toThrow(BadRequestException);
+  });
+
+  it('should resume an ON_HOLD project into either SCHEDULING or EXECUTION', () => {
+    project.status = ProjectStatus.ON_HOLD;
+    ProjectStateMachine.readyForScheduling(project, 'user-1');
+    expect(project.status).toBe(ProjectStatus.SCHEDULING);
+
+    project.status = ProjectStatus.ON_HOLD;
+    ProjectStateMachine.startExecution(project, 'user-1');
+    expect(project.status).toBe(ProjectStatus.EXECUTION);
+  });
+
+  it('should archive a COMPLETED project but refuse any other status', () => {
+    project.status = ProjectStatus.COMPLETED;
+    const event = ProjectStateMachine.archiveProject(project, 'user-1');
+    expect(project.status).toBe(ProjectStatus.ARCHIVED);
+    expect(event.previousState).toBe(ProjectStatus.COMPLETED);
+
+    project.status = ProjectStatus.EXECUTION;
+    expect(() => {
+      ProjectStateMachine.archiveProject(project, 'user-1');
+    }).toThrow(BadRequestException);
+  });
 });
 
 describe('ProjectBranchStateMachine', () => {

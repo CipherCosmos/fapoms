@@ -16,6 +16,17 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
   ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
   ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
+  ['client:created', queryKeys.clients.all, queryKeys.clients.list({})],
+  ['client:updated', queryKeys.clients.all, queryKeys.clients.list({})],
+  ['client:status-changed', queryKeys.clients.all, queryKeys.clients.list({})],
+  ['billing:entry-created', queryKeys.billing.entries({}), queryKeys.billing.dashboard(undefined), queryKeys.billing.all],
+  ['billing:entry-state-changed', queryKeys.billing.entries({}), queryKeys.billing.all, queryKeys.billing.dashboard(undefined)],
+  ['billing:duplicate-detected', queryKeys.billing.conflicts(undefined), queryKeys.billing.all],
+  ['billing:conflict-resolved', queryKeys.billing.conflicts(undefined), queryKeys.billing.all],
+  ['billing:invoice-created', queryKeys.billing.invoices({}), queryKeys.billing.all],
+  ['billing:invoice-status-changed', queryKeys.billing.invoices({}), queryKeys.billing.all],
+  ['billing:payment-received', queryKeys.billing.invoices({}), queryKeys.billing.entries({}), queryKeys.billing.all],
+  ['billing:payable-status-changed', queryKeys.billing.payables({}), queryKeys.billing.all],
 ];
 
 export function useSocketInvalidation() {

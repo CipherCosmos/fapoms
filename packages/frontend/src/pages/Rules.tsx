@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { Plus, Trash2, Shield, Search, Sliders } from 'lucide-react';
+import { Trash2, Shield, Sliders } from 'lucide-react';
+import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton } from '../components/ui';
 
 interface BusinessRule {
   id: string;
@@ -67,10 +68,7 @@ export const Rules: React.FC = () => {
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Business Rule Engine</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>Configure candidate eligibility filters and scoring rules</p>
         </div>
-        <button onClick={() => setShowModal(true)}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)', border: 'none', color: '#fff', padding: '10px 18px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer', boxShadow: 'var(--shadow-neon)' }}>
-          <Plus size={16} /> Create Rule
-        </button>
+        <PrimaryButton onClick={() => setShowModal(true)}>Create Rule</PrimaryButton>
       </div>
 
       {/* KPI Cards */}
@@ -103,11 +101,7 @@ export const Rules: React.FC = () => {
 
       {/* Search */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div style={{ flex: 1, maxWidth: '320px', position: 'relative' }}>
-          <Search size={14} style={{ position: 'absolute', left: '10px', top: '8px', color: 'var(--text-muted)' }} />
-          <input type="text" placeholder="Search rules..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-            style={{ width: '100%', padding: '7px 10px 7px 30px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-        </div>
+        <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search rules..." style={{ maxWidth: '320px' }} />
         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} rules</span>
       </div>
 
@@ -134,12 +128,8 @@ export const Rules: React.FC = () => {
                 </button>
               </div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)' }}>
-                  Scope: {rule.scope}
-                </span>
-                <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: 'rgba(99,102,241,0.1)', color: 'var(--accent-primary)' }}>
-                  {rule.ruleType}
-                </span>
+                <StatusBadge label={`Scope: ${rule.scope}`} bg="rgba(255,255,255,0.05)" color="var(--text-secondary)" />
+                <StatusBadge label={rule.ruleType} bg="rgba(99,102,241,0.1)" color="var(--accent-primary)" />
               </div>
               <div style={{ padding: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: 'var(--radius-md)', fontSize: '12px' }}>
                 <div style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.5px' }}>Conditions</div>
@@ -154,11 +144,15 @@ export const Rules: React.FC = () => {
 
       {/* Create Modal */}
       {showModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-card" style={{ width: '500px', padding: '24px' }}>
-            <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '20px' }}>Create Business Rule</h3>
-            <form onSubmit={handleCreateRule}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+        <Modal open onClose={() => setShowModal(false)} title="Create Business Rule" width="500px" asForm onSubmit={handleCreateRule}
+          footer={
+            <>
+              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Creating...' : 'Create Rule'}</button>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Rule Name</label>
                   <input type="text" value={name} onChange={e => setName(e.target.value)} required placeholder="e.g. Require Gold Assayer Certification"
@@ -166,12 +160,11 @@ export const Rules: React.FC = () => {
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Scope</label>
-                  <select value={scope} onChange={e => setScope(e.target.value)}
-                    style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-                    <option value="GLOBAL">Global</option>
-                    <option value="CLIENT">Client</option>
-                    <option value="BRANCH">Branch</option>
-                  </select>
+                  <FilterSelect value={scope} onChange={setScope} options={[
+                    { value: 'GLOBAL', label: 'Global' },
+                    { value: 'CLIENT', label: 'Client' },
+                    { value: 'BRANCH', label: 'Branch' },
+                  ]} />
                 </div>
                 {scope !== 'GLOBAL' && (
                   <div>
@@ -182,11 +175,10 @@ export const Rules: React.FC = () => {
                 )}
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Rule Type</label>
-                  <select value={ruleType} onChange={e => { setRuleType(e.target.value); setConditionKey(e.target.value === 'SKILL' ? 'requiredSkill' : 'requiredCertification'); }}
-                    style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-                    <option value="SKILL">Required Skill</option>
-                    <option value="CERTIFICATION">Required Certification</option>
-                  </select>
+                  <FilterSelect value={ruleType} onChange={(v) => { setRuleType(v); setConditionKey(v === 'SKILL' ? 'requiredSkill' : 'requiredCertification'); }} options={[
+                    { value: 'SKILL', label: 'Required Skill' },
+                    { value: 'CERTIFICATION', label: 'Required Certification' },
+                  ]} />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Required Value</label>
@@ -194,13 +186,7 @@ export const Rules: React.FC = () => {
                     style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Creating...' : 'Create Rule'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

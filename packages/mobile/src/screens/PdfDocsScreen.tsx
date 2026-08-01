@@ -29,11 +29,21 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
 
   const branchId = activeAssignment?.projectBranchId;
 
+  // Readiness tells the assayer *why* there is nothing to download — paperwork not
+  // prepared at all, versus prepared but not yet released by operations. Without it
+  // an empty list looked identical in both cases and the only option was to keep
+  // re-checking blindly.
+  const [readiness, setReadiness] = useState<{
+    state: 'READY' | 'PREPARING' | 'NONE'; message: string;
+    awaitingDispatchCount: number; lastDispatchedAt: string | null;
+  } | null>(null);
+
   const loadDocuments = useCallback(async () => {
     if (!branchId) return;
     setLoadingDocs(true);
     const res = await MobileApiService.getBranchDocuments(branchId);
     setBranchDocuments(res.success && res.data ? res.data : []);
+    setReadiness(res.readiness ?? null);
     setLoadingDocs(false);
   }, [branchId]);
 
@@ -60,13 +70,35 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
             indistinguishable from "still loading" — and previously the backend papered over it
             by fabricating a placeholder PDF on read, so this case never appeared at all. */}
         {!loadingDocs && branchDocuments.length === 0 && (
-          <View style={{ paddingVertical: 14, alignItems: 'center' }}>
-            <Ionicons name="document-outline" size={22} color="#64748b" />
-            <Text style={{ color: '#94a3b8', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
-              No audit paperwork has been dispatched for this branch yet.
+          <View style={{
+            paddingVertical: 16, paddingHorizontal: 12, alignItems: 'center',
+            backgroundColor: readiness?.state === 'PREPARING' ? 'rgba(251,191,36,0.08)' : 'transparent',
+            borderRadius: 8,
+            borderWidth: readiness?.state === 'PREPARING' ? 1 : 0,
+            borderColor: 'rgba(251,191,36,0.3)',
+          }}>
+            <Ionicons
+              name={readiness?.state === 'PREPARING' ? 'time-outline' : 'document-outline'}
+              size={22}
+              color={readiness?.state === 'PREPARING' ? '#fbbf24' : '#64748b'}
+            />
+            <Text style={{
+              color: readiness?.state === 'PREPARING' ? '#fbbf24' : '#94a3b8',
+              fontSize: 12, marginTop: 6, textAlign: 'center', fontWeight: '600',
+            }}>
+              {readiness?.state === 'PREPARING' ? 'Paperwork is on its way' : 'Nothing to download yet'}
             </Text>
-            <Text style={{ color: '#64748b', fontSize: 11, marginTop: 2, textAlign: 'center' }}>
-              You'll be notified as soon as operations sends it.
+            <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4, textAlign: 'center', lineHeight: 16 }}>
+              {readiness?.message ?? 'No audit paperwork has been dispatched for this branch yet.'}
+            </Text>
+          </View>
+        )}
+
+        {branchDocuments.length > 0 && readiness?.lastDispatchedAt && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 }}>
+            <Ionicons name="checkmark-circle" size={13} color="#34d399" />
+            <Text style={{ fontSize: 11, color: '#34d399', fontWeight: '600' }}>
+              Released by operations {new Date(readiness.lastDispatchedAt).toLocaleString()}
             </Text>
           </View>
         )}
@@ -79,16 +111,21 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
                 style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#334155' }}
                 onPress={async () => {
                   // Downloads are no longer an open URL — the endpoint requires a short-lived
-                  // token scoped to this document, so fetch one with our session first.
-                  const url = await MobileApiService.getDocumentDownloadUrl(doc.id);
-                  if (!url) {
+                  // token scoped to this document, so fetch one with our session first. The
+                  // result names the actual reason for a failure (expired session vs. the
+                  // document genuinely not being ready vs. a dropped connection) instead of
+                  // collapsing everything into one "check your connection" message that was
+                  // wrong whenever the real cause was something else — most often an expired
+                  // session, which "check your connection" gives no way to recover from.
+                  const result = await MobileApiService.getDocumentDownloadUrl(doc.id);
+                  if (!result.ok) {
                     Alert.alert(
-                      'Download unavailable',
-                      'Could not authorise this download. Please check your connection and try again.',
+                      result.reason === 'SESSION_EXPIRED' ? 'Session Expired' : 'Download unavailable',
+                      result.message,
                     );
                     return;
                   }
-                  Linking.openURL(url);
+                  Linking.openURL(result.url);
                 }}
               >
                 <Text style={{ fontSize: 14, color: '#818cf8', fontWeight: '600', flex: 1 }}>{doc.fileName || doc.documentType || 'Document'}</Text>

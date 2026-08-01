@@ -13,6 +13,7 @@ import {
   Users,
   Sliders,
   Building2,
+  Receipt,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -52,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
       category: 'Management',
       items: [
         { name: 'Clients', path: '/clients', icon: Building2 },
+        { name: 'Billing', path: '/billing', icon: Receipt },
         { name: 'Branches', path: '/branches', icon: GitMerge },
         { name: 'Assayers', path: '/assayers', icon: Users },
         { name: 'Documents', path: '/documents', icon: Files },

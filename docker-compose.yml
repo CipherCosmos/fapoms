@@ -74,6 +74,8 @@ services:
       - ./packages/backend/tsconfig.json:/app/packages/backend/tsconfig.json
       # Bind-mount shared source so shared changes propagate
       - ./packages/shared/src:/app/packages/shared/src
+      # Firebase service account (for FCM push notifications)
+      - ./fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json:/app/packages/backend/fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json
       # Persist uploads
       - ./packages/uploads:/app/packages/backend/uploads
       # Anonymous volume: keep container's node_modules (don't clobber with host)
@@ -128,10 +130,13 @@ services:
     environment:
       - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
       - REACT_NATIVE_PACKAGER_HOSTNAME=0.0.0.0
+    env_file:
+      - .env.docker
     volumes:
       # Bind-mount source code for hot reload
       - ./packages/mobile/src:/app/packages/mobile/src
       - ./packages/mobile/App.tsx:/app/packages/mobile/App.tsx
+      - ./packages/mobile/app.config.js:/app/packages/mobile/app.config.js
       - ./packages/mobile/tsconfig.json:/app/packages/mobile/tsconfig.json
       - ./packages/mobile/assets:/app/packages/mobile/assets
       # Bind-mount shared source

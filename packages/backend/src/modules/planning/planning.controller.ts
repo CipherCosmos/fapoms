@@ -14,6 +14,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsObject } from 'class-validator';
 
+import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
 import { PlanningOrchestratorService } from './planning-orchestrator.service';
 import { ProjectPlanningService } from './project-planning.service';
@@ -82,6 +83,7 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
 export class PlanningController {
   constructor(
     private readonly planningService: PlanningService,
+    private readonly commandCenterService: CommandCenterService,
     private readonly planningOrchestratorService: PlanningOrchestratorService,
     private readonly projectPlanningService: ProjectPlanningService,
     private readonly optimizationEngine: OptimizationEngine,
@@ -397,6 +399,13 @@ export class PlanningController {
       success: true,
       data: plan,
     };
+  }
+
+  @Get('command-center')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER)
+  @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
+  async commandCenter(@Query('clientId') clientId?: string, @Query('state') state?: string) {
+    return { success: true, data: await this.commandCenterService.overview({ clientId, state }) };
   }
 
   @Get('recommendations')

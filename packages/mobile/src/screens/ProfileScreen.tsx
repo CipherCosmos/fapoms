@@ -37,6 +37,8 @@ export interface ProfileDataState {
   onTimeCompletions: number;
   totalEarnings: number | string;
   runningBalance: number | string;
+  earningsPaid: number | string;
+  earningsAwaitingApproval: number | string;
   assayerCode: string;
   biometricsEnabled?: boolean;
   pinCode?: string;

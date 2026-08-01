@@ -165,8 +165,6 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 })
   averageRating: number;
 
-  @Column({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, default: 0 })
-  runningBalance: number;
 }
 
 /**

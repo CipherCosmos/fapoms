@@ -63,6 +63,17 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
+    path: '/billing',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      // Finance owns billing; this route existed before the role did, so finance
+      // staff previously had to be given an operations role to reach their own tools.
+      SystemRole.FINANCE_MANAGER,
+      SystemRole.OPERATIONS_MANAGER,
+    ],
+  },
+  {
     path: '/branches',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,

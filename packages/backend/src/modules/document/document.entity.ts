@@ -44,6 +44,17 @@ export class DocumentEntity extends BaseEntity {
   @Column({ name: 'doc_version', type: 'integer', default: 1 })
   docVersion: number;
 
+  /**
+   * For a PRE_FIELD_AUDIT_PDF: the customer-master batch it was generated from.
+   *
+   * One client batch produces one PDF per branch in it. Without this link there was
+   * no way to ask "the batch covered ten branches — have all ten PDFs been produced
+   * and sent?", because each PDF was uploaded individually with no memory of the
+   * run it belonged to.
+   */
+  @Column({ name: 'customer_master_version_id', type: 'uuid', nullable: true })
+  customerMasterVersionId: string | null;
+
   // ── Transport audit trail (spec §8.6) ──────────────────────────────────────────
   // "Every document carries its full history: uploaded → dispatched (auto/manual, by whom,
   // when) → received back → sent to data entry → sent to external OCR → finalized."

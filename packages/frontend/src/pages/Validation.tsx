@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, AlertCircle, RefreshCw, Check, X, ClipboardList, Info, Search, FileCheck, FileX, Clock, FileText, Lock, CheckCheck, Download, Paperclip, ArrowRight, FileSpreadsheet, Reply } from 'lucide-react';
+import { ShieldAlert, RefreshCw, Check, X, ClipboardList, Info, FileCheck, FileX, Clock, FileText, Lock, CheckCheck, Download, Paperclip, ArrowRight, FileSpreadsheet, Reply } from 'lucide-react';
 import { ValidationStatus } from '@fapoms/shared';
 import { api } from '../services/api';
 import { connectSocket } from '../services/socket';
+import { StatusBadge, KpiCard, SearchInput, AlertBanner } from '../components/ui';
 
 interface ValidationCase {
   id: string;
@@ -170,53 +171,22 @@ export const Validation: React.FC = () => {
 
       {/* KPI Cards for Data Entry Head (Nitin) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '14px' }}>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <ClipboardList size={20} style={{ color: 'var(--accent-primary)' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{cases.length}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Received PDFs</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(245,158,11,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Clock size={20} style={{ color: '#f59e0b' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{pending}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>In-Progress</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <FileCheck size={20} style={{ color: 'var(--status-active)' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{approved}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Completed</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <FileX size={20} style={{ color: '#ef4444' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{flagged}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>On-Hold / Queries</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(168,85,247,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <FileText size={20} style={{ color: '#a855f7' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{Math.round((approved / (cases.length || 1)) * 100)}%</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Productivity</div></div>
-        </div>
+        <KpiCard icon={<ClipboardList />} label="Received PDFs" value={cases.length} />
+        <KpiCard icon={<Clock />} iconBg="rgba(245,158,11,0.1)" iconColor="#f59e0b" label="In-Progress" value={pending} />
+        <KpiCard icon={<FileCheck />} iconBg="rgba(16,185,129,0.1)" iconColor="var(--status-active)" label="Completed" value={approved} />
+        <KpiCard icon={<FileX />} iconBg="rgba(239,68,68,0.1)" iconColor="#ef4444" label="On-Hold / Queries" value={flagged} />
+        <KpiCard icon={<FileText />} iconBg="rgba(168,85,247,0.1)" iconColor="#a855f7" label="Productivity" value={`${Math.round((approved / (cases.length || 1)) * 100)}%`} />
       </div>
 
       {error && (
-        <div style={{ display: 'flex', gap: '8px', padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 'var(--radius-md)', color: '#f87171', fontSize: '13px', border: '1px solid rgba(239,68,68,0.2)' }}>
-          <AlertCircle size={14} /><span>{error}</span>
-        </div>
+        <AlertBanner type="error" message={error} />
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: '20px', alignItems: 'start' }}>
         {/* Left: Cases List */}
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ flex: 1, position: 'relative' }}>
-              <Search size={14} style={{ position: 'absolute', left: '10px', top: '8px', color: 'var(--text-muted)' }} />
-              <input type="text" placeholder="Search by branch or status..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                style={{ width: '100%', padding: '7px 10px 7px 30px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-            </div>
+            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by branch or status..." compact />
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} cases</span>
           </div>
           {isLoading ? (
@@ -239,7 +209,7 @@ export const Validation: React.FC = () => {
                       <tr key={c.id} onClick={() => selectCase(c.id)}
                         style={{ cursor: 'pointer', background: selectedCaseId === c.id ? 'rgba(99,102,241,0.08)' : 'transparent', borderLeft: selectedCaseId === c.id ? '3px solid var(--accent-primary)' : '3px solid transparent' }}>
                         <td style={{ fontWeight: 600 }}>{c.projectBranch?.branch?.name || '—'}</td>
-                        <td><span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, background: badge.bg, color: badge.color }}>{c.status}</span></td>
+                        <td><StatusBadge label={c.status} bg={badge.bg} color={badge.color} /></td>
                         <td style={{ fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.remarks || '-'}</td>
                         <td style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{c.id.slice(0, 8)}...</td>
                       </tr>
@@ -269,8 +239,8 @@ export const Validation: React.FC = () => {
               )}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>Status: </span>
-                  <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, background: (STATUS_BADGE[selectedCase.status] || STATUS_BADGE.PENDING).bg, color: (STATUS_BADGE[selectedCase.status] || STATUS_BADGE.PENDING).color }}>{selectedCase.status}</span>
+                <div>                  <span style={{ color: 'var(--text-muted)' }}>Status: </span>
+                  <StatusBadge label={selectedCase.status} bg={(STATUS_BADGE[selectedCase.status] || STATUS_BADGE.PENDING).bg} color={(STATUS_BADGE[selectedCase.status] || STATUS_BADGE.PENDING).color} />
                 </div>
                 {selectedCase.correctionNotes && (
                   <div style={{ padding: '10px', background: 'rgba(239,68,68,0.05)', borderLeft: '3px solid #ef4444', borderRadius: 'var(--radius-sm)' }}>

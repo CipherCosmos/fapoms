@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { User, Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, UserX } from 'lucide-react';
 import { api } from '../services/api';
 import { connectSocket } from '../services/socket';
+import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal } from '../components/ui';
 
 interface UserRole {
   id: string;
@@ -195,25 +196,9 @@ export const Users: React.FC = () => {
           <h3 style={{ fontSize: '20px', fontWeight: 700 }}>User Administration</h3>
           <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Configure organization users, permissions, and security roles.</p>
         </div>
-        <button 
-          onClick={() => setShowCreateModal(true)}
-          style={{
-            background: 'var(--gradient-neon)',
-            border: 'none',
-            color: '#fff',
-            padding: '10px 18px',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            boxShadow: 'var(--shadow-neon)'
-          }}
-        >
-          <UserPlus size={16} />
+        <PrimaryButton onClick={() => setShowCreateModal(true)} icon={<UserPlus size={16} />}>
           <span>Add New User</span>
-        </button>
+        </PrimaryButton>
       </div>
 
       {/* KPI Cards */}
@@ -245,36 +230,17 @@ export const Users: React.FC = () => {
       </div>
 
       {error && (
-        <div style={{
-          background: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.2)',
-          color: '#f87171',
-          padding: '12px 16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '13px'
-        }}>
-          {error}
-        </div>
+        <AlertBanner type="error">{error}</AlertBanner>
       )}
 
       {/* Filter Bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
-          <input type="text" placeholder="Search by name, username, email..." value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: '100%', padding: '8px 12px 8px 34px', fontSize: '13px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}
-          />
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-            style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-          </svg>
-        </div>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as any)}
-          style={{ padding: '8px 12px', fontSize: '12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
-          <option value="ALL">All Status</option>
-          <option value="ACTIVE">Active</option>
-          <option value="INACTIVE">Inactive</option>
-        </select>
+        <SearchInput value={searchText} onChange={setSearchText} placeholder="Search by name, username, email..." style={{ minWidth: '200px' }} />
+        <FilterSelect value={filterStatus} onChange={(v) => setFilterStatus(v as any)} options={[
+          { value: 'ALL', label: 'All Status' },
+          { value: 'ACTIVE', label: 'Active' },
+          { value: 'INACTIVE', label: 'Inactive' },
+        ]} />
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} users</span>
       </div>
 
@@ -486,22 +452,19 @@ export const Users: React.FC = () => {
 
       {/* User Creation Modal */}
       {showCreateModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.7)',
-          backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div className="glass-card" style={{ width: '480px', padding: '24px' }}>
-            <h4 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '16px' }}>Add User Profile</h4>
-            <form onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <Modal open onClose={() => setShowCreateModal(false)} title="Add User Profile" width="480px" asForm onSubmit={handleCreateUser}
+          footer={
+            <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+              <button type="submit" style={{ flex: 1, background: 'var(--gradient-neon)', color: '#fff', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>
+                Create Profile
+              </button>
+              <button type="button" onClick={() => setShowCreateModal(false)} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               
               <div>
                 <label className="form-label">Username</label>
@@ -583,42 +546,8 @@ export const Users: React.FC = () => {
                   })}
                 </div>
               </div>
-
-              <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
-                <button 
-                  type="submit" 
-                  style={{
-                    flex: 1,
-                    background: 'var(--gradient-neon)',
-                    color: '#fff',
-                    border: 'none',
-                    padding: '10px',
-                    borderRadius: 'var(--radius-md)',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Create Profile
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => setShowCreateModal(false)}
-                  style={{
-                    background: 'var(--bg-tertiary)',
-                    border: '1px solid var(--border-color)',
-                    color: 'var(--text-primary)',
-                    padding: '10px 16px',
-                    borderRadius: 'var(--radius-md)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-
-            </form>
           </div>
-        </div>
+        </Modal>
       )}
 
     </div>

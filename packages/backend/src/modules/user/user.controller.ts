@@ -129,7 +129,7 @@ export class UserController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('user:update:organization')
+  @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Update user' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -145,7 +145,7 @@ export class UserController {
 
   @Put(':id/roles')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('user:update:organization')
+  @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Assign roles to user' })
   async assignRoles(
     @Param('id', ParseUUIDPipe) id: string,

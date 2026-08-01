@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Calendar, Plus, Trash2, Edit2, ShieldAlert, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { Calendar, Plus, Trash2, Edit2, ShieldAlert, X } from 'lucide-react';
 import { api } from '../services/api';
+import { StatusBadge, Modal, AlertBanner } from '../components/ui';
 
 interface Holiday {
   id: string;
@@ -158,14 +159,10 @@ export const Holidays: React.FC = () => {
       </div>
 
       {error && (
-        <div style={{ padding: '10px 16px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '6px', color: '#f87171', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <AlertCircle size={16} /> {error}
-        </div>
+        <AlertBanner type="error">{error}</AlertBanner>
       )}
       {success && (
-        <div style={{ padding: '10px 16px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: '6px', color: '#34d399', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <CheckCircle2 size={16} /> {success}
-        </div>
+        <AlertBanner type="success">{success}</AlertBanner>
       )}
 
       {/* Holiday Table Card */}
@@ -199,9 +196,7 @@ export const Holidays: React.FC = () => {
                     </td>
                     <td style={{ padding: '12px 10px', fontWeight: 600, color: '#fff' }}>{h.name}</td>
                     <td style={{ padding: '12px 10px' }}>
-                      <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, backgroundColor: h.type === 'NATIONAL' ? 'rgba(239,68,68,0.15)' : h.type === 'BANK' ? 'rgba(245,158,11,0.15)' : 'rgba(99,102,241,0.15)', color: h.type === 'NATIONAL' ? '#ef4444' : h.type === 'BANK' ? '#f59e0b' : '#818cf8' }}>
-                        {h.type}
-                      </span>
+                      <StatusBadge label={h.type} bg={h.type === 'NATIONAL' ? 'rgba(239,68,68,0.15)' : h.type === 'BANK' ? 'rgba(245,158,11,0.15)' : 'rgba(99,102,241,0.15)'} color={h.type === 'NATIONAL' ? '#ef4444' : h.type === 'BANK' ? '#f59e0b' : '#818cf8'} />
                     </td>
                     <td style={{ padding: '12px 10px', fontSize: '12px' }}>
                       {!h.clientId ? (
@@ -237,16 +232,15 @@ export const Holidays: React.FC = () => {
 
       {/* Add/Edit Modal */}
       {showModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div className="glass-card" style={{ width: '500px', padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>
-                {editingId ? 'Edit Holiday Record' : 'Add New State / Bank Holiday'}
-              </h3>
-              <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}><X size={18} /></button>
+        <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Holiday Record' : 'Add New State / Bank Holiday'} width="500px" closeIcon={<X size={18} />} asForm onSubmit={handleSubmit}
+          footer={
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
+              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Holiday</button>
             </div>
-
-            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Client Scope (Optional)</label>
                 <select
@@ -316,14 +310,8 @@ export const Holidays: React.FC = () => {
                   })}
                 </div>
               </div>
-
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-                <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Holiday</button>
-              </div>
-            </form>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

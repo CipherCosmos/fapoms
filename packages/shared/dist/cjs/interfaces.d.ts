@@ -8,7 +8,7 @@
  * System identifiers (id) are separate from business identifiers
  * (clientCode, branchCode, solId, etc.) per Part 7 §12.
  */
-import { AssessmentStatus, AssayerStatus, AssayerLifecycleStatus, AssignmentStatus, AuthorizationScope, ClientLifecycleStatus, ClientType, CommunicationType, ContractStatus, DocumentStatus, DocumentType, EventCategory, PermissionAction, PermissionResource, Priority, ProjectStatus, ScheduleStatus, SystemRole, TravelMode, UserStatus, ValidationStatus } from './enums';
+import { AssessmentStatus, AssayerStatus, AssayerLifecycleStatus, AssignmentStatus, AuthorizationScope, ClientLifecycleStatus, ClientType, ClientBillingStatus, ClientBillingEventType, CommunicationType, ContractStatus, DocumentStatus, DocumentType, EventCategory, PermissionAction, PermissionResource, Priority, ProjectStatus, ScheduleStatus, SystemRole, TravelMode, UserStatus, ValidationStatus, BillingLevel, BillingState, PaymentState, BillingPricingModel, InvoiceStatus, InvoiceType, PaymentStatus, PaymentMethod, AssayerPayableStatus, BillingConflictSeverity, BillingConflictStatus, BillingConflictAction, BillingEntityType } from './enums';
 /** Audit metadata present on every transactional entity */
 export interface AuditMetadata {
     createdBy: string;
@@ -112,6 +112,18 @@ export interface ClientBilling extends AuditMetadata {
     bankName?: string;
     ifscCode?: string;
     notes?: string;
+    status: ClientBillingStatus;
+}
+export interface ClientBillingHistory extends AuditMetadata {
+    id: string;
+    clientId: string;
+    eventType: ClientBillingEventType;
+    fromStatus?: ClientBillingStatus;
+    toStatus?: ClientBillingStatus;
+    remarks?: string;
+    field?: string;
+    fromValue?: string;
+    toValue?: string;
 }
 export interface Project extends ExtendedAuditMetadata {
     id: string;
@@ -512,5 +524,194 @@ export interface CandidateRecommendation {
     lastAssignmentDate?: string;
     availabilityStatus: AssayerStatus;
     score: number;
+}
+export interface BillingMoney {
+    baseAmount: number;
+    travelAmount?: number;
+    adjustmentAmount?: number;
+    discountAmount?: number;
+    taxAmount?: number;
+    taxRate?: number;
+    tdsAmount?: number;
+    totalAmount: number;
+    currency: string;
+}
+export interface BillingEntry extends AuditMetadata {
+    id: string;
+    entryNumber: string;
+    level: BillingLevel;
+    clientId: string;
+    projectId?: string;
+    assignmentId?: string;
+    assayerId?: string;
+    state: BillingState;
+    paymentState: PaymentState;
+    pricingModel: BillingPricingModel;
+    rate?: number;
+    quantity?: number;
+    billingPeriodStart?: string;
+    billingPeriodEnd?: string;
+    description?: string;
+    parentEntryId?: string;
+    sourceEntryId?: string;
+    conflictIds?: string[];
+    invoiceId?: string;
+    baseAmount: number;
+    travelAmount?: number;
+    adjustmentAmount?: number;
+    discountAmount?: number;
+    taxRate?: number;
+    taxAmount?: number;
+    tdsRate?: number;
+    tdsAmount?: number;
+    /** base + travel + adjustment − discount: the value GST and TDS are computed on. */
+    taxableAmount?: number;
+    totalAmount: number;
+    currency: string;
+    billedAmount?: number;
+    paidAmount?: number;
+    outstandingAmount?: number;
+    disputedAmount?: number;
+    cancelledAmount?: number;
+    adjustedAmount?: number;
+}
+export interface BillingInvoice extends AuditMetadata {
+    id: string;
+    invoiceNumber: string;
+    clientId: string;
+    projectId?: string;
+    type: InvoiceType;
+    status: InvoiceStatus;
+    issueDate?: string;
+    dueDate?: string;
+    currency: string;
+    /** Pre-tax taxable value of the invoiced lines. */
+    subtotal: number;
+    taxAmount?: number;
+    /** Total TDS withheld by the client across this invoice's lines. */
+    tdsAmount?: number;
+    discountAmount?: number;
+    /** subtotal + GST − TDS. */
+    total: number;
+    paidAmount?: number;
+    outstandingAmount?: number;
+    notes?: string;
+    entryIds?: string[];
+    payments?: BillingPayment[];
+}
+export interface BillingPayment extends AuditMetadata {
+    id: string;
+    invoiceId: string;
+    paymentReference: string;
+    method: PaymentMethod;
+    amount: number;
+    currency: string;
+    receivedDate?: string;
+    status: PaymentStatus;
+    allocatedToEntryIds?: string[];
+    notes?: string;
+}
+export interface AssayerPayable extends AuditMetadata {
+    id: string;
+    payableNumber: string;
+    assayerId: string;
+    clientId?: string;
+    projectId?: string;
+    assignmentId?: string;
+    status: AssayerPayableStatus;
+    baseAmount: number;
+    travelAmount?: number;
+    taxAmount?: number;
+    tdsAmount?: number;
+    totalAmount: number;
+    currency: string;
+    paidAmount?: number;
+    approvedAt?: string;
+    approvedBy?: string;
+    paidAt?: string;
+    paidBy?: string;
+    rateSnapshot?: Record<string, unknown>;
+    remarks?: string;
+}
+export interface BillingConflict extends AuditMetadata {
+    id: string;
+    conflictNumber: string;
+    severity: BillingConflictSeverity;
+    entityType: BillingEntityType;
+    entryIds: string[];
+    description: string;
+    reason?: string;
+    createdById: string;
+    createdByName?: string;
+    status: BillingConflictStatus;
+    resolutionAction?: BillingConflictAction;
+    resolutionNote?: string;
+    resolvedById?: string;
+    resolvedByName?: string;
+    resolvedAt?: string;
+}
+export interface BillingHistoryEvent extends AuditMetadata {
+    id: string;
+    clientId?: string;
+    projectId?: string;
+    assignmentId?: string;
+    assayerId?: string;
+    entityType: BillingEntityType;
+    entityId: string;
+    action: string;
+    fromState?: string;
+    toState?: string;
+    previousValue?: Record<string, unknown>;
+    newValue?: Record<string, unknown>;
+    reason?: string;
+    userId?: string;
+    userName?: string;
+    occurredAt: string;
+}
+export interface BillingDashboardSummary {
+    currency: string;
+    totals: {
+        billed: number;
+        paid: number;
+        outstanding: number;
+        pending: number;
+        disputed: number;
+        cancelledAdjusted: number;
+        /** Earned in the field but not yet on an invoice. */
+        unbilledRevenue: number;
+        /** Net of GST — what we actually earn. */
+        revenue: number;
+        /** Assayer fee + travel owed for completed work. */
+        assayerCost: number;
+        margin: number;
+        marginPct: number | null;
+    };
+    /** Outstanding receivables bucketed by days past due. */
+    aging: {
+        current: number;
+        d1_30: number;
+        d31_60: number;
+        d61_90: number;
+        d90_plus: number;
+    };
+    byLevel: Record<BillingLevel, {
+        billed: number;
+        paid: number;
+        outstanding: number;
+    }>;
+    payable: {
+        pending: number;
+        approved: number;
+        paid: number;
+        disputed: number;
+        onHold: number;
+    };
+    invoices: {
+        total: number;
+        issued: number;
+        paid: number;
+        outstanding: number;
+    };
+    openConflicts: number;
 }
 //# sourceMappingURL=interfaces.d.ts.map

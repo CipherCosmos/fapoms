@@ -5,6 +5,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { CommandCenterService } from './command-center.service';
 import { PlanningService } from './planning.service';
 import { PlanningController } from './planning.controller';
 import { PlanningOrchestratorService } from './planning-orchestrator.service';
@@ -104,6 +105,7 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
   controllers: [PlanningController],
   providers: [
     PlanningService,
+    CommandCenterService,
     PlanningOrchestratorService,
     ProjectPlanningService,
     OptimizationEngine,

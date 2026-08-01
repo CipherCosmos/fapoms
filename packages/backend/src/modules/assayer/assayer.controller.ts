@@ -598,7 +598,7 @@ export class AssayerController {
 
   @Put('commercial/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:update:organization')
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a commercial profile by ID' })
   async updateCommercial(
     @Param('id', ParseUUIDPipe) id: string,
@@ -657,7 +657,7 @@ export class AssayerController {
 
   @Put('workforce-attribute/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:update:organization')
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a workforce attribute by ID' })
   async updateWorkforceAttribute(
     @Param('id', ParseUUIDPipe) id: string,
@@ -700,7 +700,7 @@ export class AssayerController {
   @Post(':id/lifecycle')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:update:organization')
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Transition assayer lifecycle status' })
   async transitionLifecycle(
     @Param('id', ParseUUIDPipe) id: string,
@@ -728,7 +728,7 @@ export class AssayerController {
 
   @Put('government-document/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:update:organization')
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a government document verification status' })
   async updateGovernmentDocument(
     @Param('id', ParseUUIDPipe) id: string,
@@ -773,7 +773,7 @@ export class AssayerController {
 
   @Put(':assayerId/document/:docId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:update:organization')
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update document metadata' })
   async updateAssayerDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -820,7 +820,7 @@ export class AssayerController {
 
   @Put(':assayerId/remark/:remarkId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:update:organization')
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a remark' })
   async updateRemark(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,

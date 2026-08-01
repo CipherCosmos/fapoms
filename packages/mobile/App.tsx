@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Linking, Platform, Modal, TouchableOpacity } from 'react-native';
+import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Platform, Modal, TouchableOpacity } from 'react-native';
 import { registerRootComponent } from 'expo';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -29,6 +29,7 @@ import { NotificationsScreen } from './src/screens/NotificationsScreen';
 import { NotificationDetailModal } from './src/components/NotificationDetailModal';
 import { MLKitScannerModal } from './src/components/MLKitScannerModal';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
+import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 
 export default function App() {
   // Authentication State (Read saved session synchronously to prevent flash on refresh)
@@ -42,6 +43,7 @@ export default function App() {
     initialSession ? (initialSession.userName || `Assayer Session (${(initialSession.userId || 'active').slice(0, 8)})`) : ''
   );
   const [assignments, setAssignments] = useState<AssayerAssignment[]>([]);
+  const [billingEntries, setBillingEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedTab, setSelectedTab] = useState<TabType>('SCHEDULE');
 
@@ -56,6 +58,9 @@ export default function App() {
 
   // Notification Detail Modal State
   const [notifDetailAssignment, setNotifDetailAssignment] = useState<AssayerAssignment | null>(null);
+
+  // In-App Navigation Modal State
+  const [navAssignment, setNavAssignment] = useState<AssayerAssignment | null>(null);
 
   // Public Profile Updatable State (Synchronous Cache & Backend Restoration)
   const defaults: ProfileDataState = {
@@ -90,6 +95,8 @@ export default function App() {
     onTimeCompletions: 0,
     totalEarnings: 0,
     runningBalance: 0,
+    earningsPaid: 0,
+    earningsAwaitingApproval: 0,
     assayerCode: '',
   };
 
@@ -152,6 +159,7 @@ export default function App() {
     if (isAuthenticated) {
       loadAssignments().then(() => {
         loadAssayerProfile();
+        loadBillingEntries();
         registerForPushNotificationsAsync();
         loadNotifications();
       });
@@ -228,6 +236,13 @@ export default function App() {
         'document:status-changed': () => { loadAssignments(); },
         'communication:created': () => { loadAssignments(); },
         'billing:created': () => { loadAssignments(); },
+        'billing:entry-created': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
+        'billing:entry-state-changed': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
+        'billing:duplicate-detected': () => { loadAssignments(); },
+        'billing:invoice-created': () => { loadAssignments(); },
+        'billing:invoice-status-changed': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
+        'billing:payment-received': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
+        'billing:payable-status-changed': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
       };
 
       if (socket) {
@@ -340,6 +355,8 @@ export default function App() {
           onTimeCompletions: d.onTimeCompletions ?? profile.onTimeCompletions,
           totalEarnings: d.totalEarnings ?? profile.totalEarnings,
           runningBalance: d.runningBalance ?? profile.runningBalance,
+          earningsPaid: d.earningsPaid ?? (profile as any).earningsPaid,
+          earningsAwaitingApproval: d.earningsAwaitingApproval ?? (profile as any).earningsAwaitingApproval,
           assayerCode: d.assayerCode ?? profile.assayerCode,
         };
         setProfile(fetchedProfile);
@@ -351,6 +368,13 @@ export default function App() {
         } catch (e) {}
       }
     } catch (e) {}
+  };
+
+  const loadBillingEntries = async () => {
+    const userId = MobileApiService.getCurrentUserId();
+    if (!userId) return;
+    const res = await MobileApiService.getAssayerBillingEngineEntries(userId);
+    if (res.success) setBillingEntries(res.data || []);
   };
 
   const loadAssignments = async () => {
@@ -445,12 +469,8 @@ export default function App() {
     }
   };
 
-  const openGoogleMaps = (lat: number, lng: number) => {
-    const url =
-      Platform.OS === 'ios'
-        ? `https://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`
-        : `https://maps.google.com/maps?daddr=${lat},${lng}`;
-    Linking.openURL(url).catch(() => Linking.openURL(`https://maps.google.com/maps?daddr=${lat},${lng}`));
+  const openInAppMap = (assignment: AssayerAssignment) => {
+    setNavAssignment(assignment);
   };
 
   const handleLogout = () => {
@@ -619,7 +639,13 @@ export default function App() {
   // ScheduleScreen all share the exact same fee formula (no more diverging totals).
 
   const totalCompleted = profile.completedAssignments || assignments.filter((a) => a.status === 'COMPLETED').length;
+  // Earnings come from the billing engine (via the profile endpoint), which is the
+  // record finance actually pays against. The local fee formula remains only as a
+  // fallback for work not yet booked as a payable — previously it was the primary
+  // source, so the app could show a different total from what the assayer was paid.
   const completedEarnings = Number(profile.totalEarnings) || assignments.reduce((sum, a) => sum + (a.status === 'COMPLETED' ? getAssignmentTotalFee(a) : 0), 0);
+  const earningsPaid = Number((profile as any).earningsPaid) || 0;
+  const earningsAwaitingApproval = Number((profile as any).earningsAwaitingApproval) || 0;
   // Only assignments still on track to be paid out count as "pending" — a rejected
   // assignment (mobile status also covers backend CANCELLED, see BACKEND_TO_MOBILE_STATUS
   // in api.service.ts) never gets billed, so its fee isn't money awaiting payout.
@@ -707,6 +733,7 @@ export default function App() {
                 setQueryChatAssignment(a);
                 setQueryChatModalVisible(true);
               }}
+              onOpenMap={(a) => openInAppMap(a)}
               onCounterOffer={async (a) => {
                 const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
                 const promptFn = g.prompt || null;
@@ -814,8 +841,11 @@ export default function App() {
             <EarningsScreen
               totalEarnings={completedEarnings}
               pendingEarnings={pendingEarnings}
+              earningsPaid={earningsPaid}
+              earningsAwaitingApproval={earningsAwaitingApproval}
               runningBalance={Number(profile.runningBalance) || 0}
               assignments={assignments}
+              billingEntries={billingEntries}
               onOpenExpenseModal={() => setExpenseModalVisible(true)}
               qualityScore={qualityScore}
               queryResolutionRate={queryResolutionRate}
@@ -902,7 +932,7 @@ export default function App() {
         onAccept={handleAcceptAssignment}
         onNavigate={(assignment) => {
           setNotifDetailAssignment(null);
-          openGoogleMaps(assignment.latitude, assignment.longitude);
+          openInAppMap(assignment);
         }}
       />
       <MLKitScannerModal
@@ -920,6 +950,11 @@ export default function App() {
         visible={queryChatModalVisible}
         assignment={queryChatAssignment}
         onClose={() => setQueryChatModalVisible(false)}
+      />
+      <InAppNavigationModal
+        visible={Boolean(navAssignment)}
+        assignment={navAssignment}
+        onClose={() => setNavAssignment(null)}
       />
       
       {/* ── Slide-over Notifications Drawer Modal ── */}

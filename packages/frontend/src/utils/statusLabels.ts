@@ -15,6 +15,10 @@ import {
   AssignmentStatus,
   ScheduleStatus,
   AssessmentStatus,
+  ClientLifecycleStatus,
+  ClientType,
+  ContractStatus,
+  ClientBillingStatus,
 } from '@fapoms/shared';
 
 /** Where a branch sits in the audit lifecycle. */
@@ -75,6 +79,46 @@ const SCHEDULE_STATUS_LABELS: Record<ScheduleStatus, string> = {
   [ScheduleStatus.COMPLETED]: 'Visit Completed',
 };
 
+/** Where a client sits in its commercial lifecycle. */
+const CLIENT_LIFECYCLE_LABELS: Record<ClientLifecycleStatus, string> = {
+  [ClientLifecycleStatus.PROSPECT]: 'Prospect',
+  [ClientLifecycleStatus.ONBOARDING]: 'Onboarding',
+  [ClientLifecycleStatus.ACTIVE]: 'Active',
+  [ClientLifecycleStatus.SUSPENDED]: 'Suspended',
+  [ClientLifecycleStatus.UNDER_REVIEW]: 'Under Review',
+  [ClientLifecycleStatus.INACTIVE]: 'Inactive',
+  [ClientLifecycleStatus.TERMINATED]: 'Terminated',
+  [ClientLifecycleStatus.ARCHIVED]: 'Archived',
+};
+
+/** Client industry segment. */
+const CLIENT_TYPE_LABELS: Record<ClientType, string> = {
+  [ClientType.BANK]: 'Bank',
+  [ClientType.NBFC]: 'NBFC',
+  [ClientType.MICROFINANCE]: 'Microfinance',
+  [ClientType.INSURANCE]: 'Insurance',
+  [ClientType.CORPORATE]: 'Corporate',
+  [ClientType.GOVERNMENT]: 'Government',
+  [ClientType.OTHER]: 'Other',
+};
+
+/** Client contract state. */
+const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
+  [ContractStatus.DRAFT]: 'Draft',
+  [ContractStatus.ACTIVE]: 'Active',
+  [ContractStatus.EXPIRED]: 'Expired',
+  [ContractStatus.TERMINATED]: 'Terminated',
+  [ContractStatus.RENEWED]: 'Renewed',
+};
+
+/** Client billing state. */
+const BILLING_STATUS_LABELS: Record<ClientBillingStatus, string> = {
+  [ClientBillingStatus.DRAFT]: 'Draft',
+  [ClientBillingStatus.ACTIVE]: 'Active',
+  [ClientBillingStatus.SUSPENDED]: 'Suspended',
+  [ClientBillingStatus.INACTIVE]: 'Inactive',
+};
+
 /**
  * Fallback for any value not in the maps above (e.g. a status added to the backend
  * before the UI catches up): turn SCREAMING_SNAKE into Title Case rather than
@@ -105,6 +149,26 @@ export function scheduleStatusLabel(status?: string | null): string {
 export function assessmentStatusLabel(status?: string | null): string {
   if (!status) return '—';
   return ASSESSMENT_STATUS_LABELS[status as AssessmentStatus] ?? humanize(status);
+}
+
+export function clientLifecycleLabel(status?: string | null): string {
+  if (!status) return '—';
+  return CLIENT_LIFECYCLE_LABELS[status as ClientLifecycleStatus] ?? humanize(status);
+}
+
+export function clientTypeLabel(type?: string | null): string {
+  if (!type) return '—';
+  return CLIENT_TYPE_LABELS[type as ClientType] ?? humanize(type);
+}
+
+export function contractStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return CONTRACT_STATUS_LABELS[status as ContractStatus] ?? humanize(status);
+}
+
+export function billingStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return BILLING_STATUS_LABELS[status as ClientBillingStatus] ?? humanize(status);
 }
 
 /**

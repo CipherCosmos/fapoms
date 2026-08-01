@@ -110,8 +110,6 @@ function getStateZone(stateName: string): string {
   return 'East Zone';
 }
 
-const INDIAN_NAMES = ['Aravind Swamy', 'Karthik Raja', 'Siddharth Rao', 'Vijay Shankar', 'Rohan Mehta', 'Vikram Sen', 'Pranav Nair', 'Anand Krishnan', 'Rahul Sharma', 'Manish Patil'];
-
 export interface CreateProjectDto {
   name: string;
   projectNumber: string;
@@ -175,6 +173,22 @@ export class ProjectService implements OnModuleInit {
       {
         from: [ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION, ProjectStatus.VALIDATION],
         to: ProjectStatus.CANCELLED,
+      },
+      {
+        from: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION],
+        to: ProjectStatus.ON_HOLD,
+      },
+      {
+        from: [ProjectStatus.ON_HOLD],
+        to: ProjectStatus.SCHEDULING,
+      },
+      {
+        from: [ProjectStatus.ON_HOLD],
+        to: ProjectStatus.EXECUTION,
+      },
+      {
+        from: [ProjectStatus.COMPLETED],
+        to: ProjectStatus.ARCHIVED,
       },
     ]);
   }
@@ -263,6 +277,10 @@ export class ProjectService implements OnModuleInit {
         await this.completeProject(project.id, userId);
       } else if (dto.status === ProjectStatus.CANCELLED) {
         await this.cancelProject(project.id, userId);
+      } else if (dto.status === ProjectStatus.ON_HOLD) {
+        await this.holdProject(project.id, userId);
+      } else if (dto.status === ProjectStatus.ARCHIVED) {
+        await this.archiveProject(project.id, userId);
       } else {
         throw new BadRequestException(`Invalid project status transition to ${dto.status}`);
       }
@@ -382,15 +400,17 @@ export class ProjectService implements OnModuleInit {
       ? await this.clientRepository.findOne({ where: { id: project.clientId } })
       : null;
 
+    // Headers match the column names on the branch lists actually received from
+    // clients (BRANCH / BRANCH_NAME / DISTRICT / STATE / Branch Address) so a
+    // client's own export can be filled in and returned without restructuring.
+    // The importer accepts both these and the friendlier equivalents.
     const headers = [
-      'Branch Code',
-      'Branch Name',
-      'Address',
-      'State',
-      'District',
-      'City',
-      'Pincode',
-      'Packets',
+      // Identity + location (required)
+      'BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets',
+      // Optional, but each one removes guesswork the system otherwise has to do
+      'Pincode', 'Latitude', 'Longitude',
+      'Branch Manager', 'Branch Phone', 'Branch Email',
+      'Risk Category', 'Complexity', 'Estimated Hours',
     ];
 
     // Prefill existing branches if any
@@ -399,34 +419,54 @@ export class ProjectService implements OnModuleInit {
       relations: ['branch'],
     });
 
-    const rows = projectBranches.map((pb) => ({
-      'Branch Code': pb.branch.branchCode,
-      'Branch Name': pb.branch.name,
-      Address: pb.branch.address || '',
-      State: pb.branch.state,
-      District: pb.branch.district,
-      City: pb.branch.city,
-      Pincode: pb.branch.pincode || '',
+    const rows: Record<string, any>[] = projectBranches.map((pb) => ({
+      BRANCH: pb.branch.branchCode,
+      BRANCH_NAME: pb.branch.name,
+      DISTRICT: pb.branch.district,
+      STATE: pb.branch.state,
+      'Branch Address': pb.branch.address || '',
       Packets: pb.packetCount ?? '',
+      Pincode: pb.branch.pincode || '',
+      Latitude: pb.branch.latitude ?? '',
+      Longitude: pb.branch.longitude ?? '',
+      'Branch Manager': pb.branch.managerName || '',
+      'Branch Phone': pb.branch.phone || '',
+      'Branch Email': pb.branch.email || '',
+      'Risk Category': pb.branch.riskCategory || '',
+      Complexity: pb.branch.complexity || '',
+      'Estimated Hours': pb.branch.estimatedDurationHours ?? '',
     }));
 
     if (rows.length === 0) {
-      rows.push({
-        'Branch Code': '',
-        'Branch Name': '',
-        Address: '',
-        State: '',
-        District: '',
-        City: '',
-        Pincode: '',
-        Packets: '',
-      });
+      rows.push(Object.fromEntries(headers.map((h) => [h, ''])));
     }
 
     const ws = xlsx.utils.json_to_sheet(rows, { header: headers });
-    ws['!cols'] = headers.map(() => ({ wch: 20 }));
+    ws['!cols'] = headers.map((h) => ({ wch: h === 'Branch Address' ? 55 : Math.max(14, h.length + 4) }));
     const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Branches');
+    xlsx.utils.book_append_sheet(wb, ws, 'Branch');
+
+    const instructions = [
+      { Field: 'BRANCH', Required: 'Yes', Description: 'Branch code from the client, e.g. 8 or BR-0010. Re-importing the same code updates that branch rather than creating a duplicate.' },
+      { Field: 'BRANCH_NAME', Required: 'Yes', Description: 'Branch name, e.g. THENKURISSI.' },
+      { Field: 'DISTRICT', Required: 'Yes', Description: 'District name — used to cluster nearby branches into one assayer-day and to compute travel.' },
+      { Field: 'STATE', Required: 'Yes', Description: 'State name — used to apply state-specific public holidays when scheduling.' },
+      { Field: 'Branch Address', Required: 'Yes', Description: 'Full address. Used to geocode the branch; a 6-digit pincode inside this text is detected automatically.' },
+      { Field: 'Packets', Required: 'Yes', Description: 'Estimated packets to audit at this branch this cycle. Drives how long the audit takes, how many branches one assayer can cover in a day, and the coverage figure quoted to the client. Left blank, the system assumes a flat 6 hours and the plan will be wrong.' },
+      { Field: 'Pincode', Required: 'No', Description: '6-digit pincode. Leave blank if it already appears in the address.' },
+      { Field: 'Latitude', Required: 'No', Description: 'Decimal degrees, e.g. 10.7867. Supply with Longitude to skip geocoding entirely — faster on import and exact, instead of relying on an address lookup that can place the branch imprecisely or fail.' },
+      { Field: 'Longitude', Required: 'No', Description: 'Decimal degrees, e.g. 76.6548. Must be supplied together with Latitude.' },
+      { Field: 'Branch Manager', Required: 'No', Description: 'Contact name at the branch, shown to the assayer before the visit.' },
+      { Field: 'Branch Phone', Required: 'No', Description: 'Branch contact number, shown to the assayer before the visit.' },
+      { Field: 'Branch Email', Required: 'No', Description: 'Branch email for correspondence.' },
+      { Field: 'Risk Category', Required: 'No', Description: 'LOW / MEDIUM / HIGH / CRITICAL. Higher-risk branches are preferentially matched to more experienced assayers.' },
+      { Field: 'Complexity', Required: 'No', Description: 'SIMPLE / STANDARD / COMPLEX. Feeds the same matching, and the time allowance per branch.' },
+      { Field: 'Estimated Hours', Required: 'No', Description: 'Override the audit duration for this branch. Normally leave blank — it is calculated from Packets, which stays accurate as packet counts change each cycle.' },
+    ];
+    const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
+    instrWs['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 110 }];
+    xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
+
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
@@ -465,17 +505,29 @@ export class ProjectService implements OnModuleInit {
         ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
         : null;
 
+      // Client-supplied coordinates win over geocoding: they are exact, and they
+      // avoid a network lookup per branch that is rate-limited to ~1/second and
+      // throws when it cannot resolve an address.
+      const latRaw = parseFloat(String(row.Latitude ?? row.latitude ?? ''));
+      const lngRaw = parseFloat(String(row.Longitude ?? row.longitude ?? ''));
+      const suppliedCoords = Number.isFinite(latRaw) && Number.isFinite(lngRaw)
+        ? { lat: latRaw, lng: lngRaw }
+        : null;
+
       let branch = await this.branchQueryService.findOneByCode(branchCode);
       if (!branch) {
-        const coords = await getRealCoordinates(address, branchName, district, state);
+        const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
         const zoneName = getStateZone(state);
         
         const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
 
         const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
         const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
-        const managerName = INDIAN_NAMES[Math.floor(Math.random() * INDIAN_NAMES.length)];
-        const phone = `+9144${Math.floor(10000000 + Math.random() * 90000000)}`;
+        // Was a random name from a hardcoded list and a random phone number, which
+        // put fabricated contact details in front of an assayer about to visit the
+        // branch. Use what the client supplied; leave blank when they supplied nothing.
+        const managerName = (row['Branch Manager'] || '').toString().trim() || null;
+        const phone = (row['Branch Phone'] || '').toString().trim() || null;
 
         branch = await this.branchService.registerImportedBranch({
           branchCode,
@@ -497,11 +549,15 @@ export class ProjectService implements OnModuleInit {
           territory: `${district} Area`,
           managerName,
           phone,
-          email: `${branchName.toLowerCase().replace(/\s+/g, '')}@rblbank.com`,
+          email: (row['Branch Email'] || '').toString().trim() || null,
           riskScore: 2.0,
-          riskCategory: 'LOW',
-          complexity: 'STANDARD',
-          estimatedDurationHours: calculatedHours ?? 6.0,
+          // Optional operational attributes: taken from the sheet when the client
+          // supplies them, otherwise sensible defaults. These feed assayer matching,
+          // so a real value here produces a better-matched assayer than the default.
+          riskCategory: (row['Risk Category'] || '').toString().trim().toUpperCase() || 'LOW',
+          complexity: (row.Complexity || '').toString().trim().toUpperCase() || 'STANDARD',
+          estimatedDurationHours:
+            parseFloat(String(row['Estimated Hours'] ?? '')) || calculatedHours || 6.0,
           createdBy: userId,
           updatedBy: userId,
         }, userId);
@@ -699,6 +755,50 @@ export class ProjectService implements OnModuleInit {
       [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
       async () => {
         const event = ProjectStateMachine.cancelProject(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async holdProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.ON_HOLD;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'HoldProjectCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.holdProject(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async archiveProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.ARCHIVED;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'ArchiveProjectCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.archiveProject(project, userId);
         const saved = await this.projectRepository.save(project);
         this.eventPublisher.publish(event.constructor.name, event);
         return saved;

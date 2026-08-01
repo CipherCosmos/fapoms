@@ -39,8 +39,6 @@ import { OcrModule } from './infrastructure/ocr/ocr.module';
 import { GeoModule } from './modules/geo/geo.module';
 import { SearchModule } from './modules/search/search.module';
 import { AuditHistoryModule } from './modules/audit-history/audit-history.module';
-import { BillingModule } from './modules/billing/billing.module';
-import { LedgerModule } from './modules/ledger/ledger.module';
 import { AuditPlatformModule } from './modules/audit/audit.module';
 import { CustomerMasterModule } from './modules/customer-master/customer-master.module';
 import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
@@ -48,6 +46,7 @@ import { QueueModule } from './infrastructure/queue/queue.module';
 import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module';
 import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 import { RealtimeModule } from './modules/realtime/realtime.module';
+import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
 
 @Module({
   imports: [
@@ -103,8 +102,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
     GeoModule,
     SearchModule,
     AuditHistoryModule,
-    BillingModule,
-    LedgerModule,
+    BillingEngineModule,
     AuditPlatformModule,
     CustomerMasterModule,
     ValidationQueryModule,

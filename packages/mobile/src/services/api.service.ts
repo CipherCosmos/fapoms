@@ -25,6 +25,15 @@ const MOBILE_TO_BACKEND_STATUS: Record<string, string> = {
 export class MobileApiService {
   static authToken: string | null = null;
   static refreshToken: string | null = null;
+  /**
+   * Refresh tokens are single-use and rotated on each call (the server issues a
+   * new one and invalidates the old). If two requests expire around the same
+   * moment, each independently calling `tryRefresh()` means the first consumes
+   * and rotates the token while the second — already holding the now-stale
+   * value — fails and gets treated as a dead session. Sharing one in-flight
+   * refresh promise across all callers is what makes concurrent expiry safe.
+   */
+  private static refreshInFlight: Promise<boolean> | null = null;
   static currentUserId: string | null = null;
   static currentUserName: string | null = null;
 
@@ -145,6 +154,14 @@ export class MobileApiService {
   }
 
   static async tryRefresh(): Promise<boolean> {
+    // Join an already-running refresh instead of starting a second one that
+    // would race the first for the same single-use token.
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = this.doRefresh().finally(() => { this.refreshInFlight = null; });
+    return this.refreshInFlight;
+  }
+
+  private static async doRefresh(): Promise<boolean> {
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) return false;
     try {
@@ -167,6 +184,10 @@ export class MobileApiService {
         }
         return true;
       }
+      // The refresh token itself was rejected (expired, already rotated away by
+      // a concurrent call that lost this race anyway, or revoked) — the session
+      // is genuinely over, so stop holding tokens that will only keep failing.
+      this.clearSession();
       return false;
     } catch {
       return false;
@@ -328,6 +349,19 @@ export class MobileApiService {
     }
   }
 
+  static async getAssayerBillingEngineEntries(assayerId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/billing-engine/entries?assayerId=${assayerId}`);
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success) {
+        return { success: true, data: data.data };
+      }
+      return { success: false, error: data.message || 'Failed to fetch billing entries' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error fetching billing entries' };
+    }
+  }
+
   static async getAssayerLedger(assayerId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/ledger/assayer/${assayerId}`);
@@ -341,12 +375,20 @@ export class MobileApiService {
     }
   }
 
-  static async getBranchDocuments(projectBranchId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  static async getBranchDocuments(projectBranchId: string): Promise<{
+    success: boolean;
+    data?: any[];
+    /** Why there is nothing to download yet, so the app can say so precisely. */
+    readiness?: { state: 'READY' | 'PREPARING' | 'NONE'; message: string; awaitingDispatchCount: number; lastDispatchedAt: string | null };
+    error?: string;
+  }> {
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/project-branch/${projectBranchId}`);
+      // Dispatch-gated view: returns only paperwork operations has actually released,
+      // plus a `readiness` block explaining what to expect when nothing is available yet.
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/project-branch/${projectBranchId}/assayer-view`);
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success) {
-        return { success: true, data: data.data };
+        return { success: true, data: data.data, readiness: data.meta?.readiness };
       }
       return { success: false, error: data.message || 'Failed to fetch branch documents' };
     } catch (err: any) {
@@ -585,14 +627,29 @@ export class MobileApiService {
    * cannot send our Authorization header. So we exchange the authenticated session for a
    * scoped token first, then open the signed URL.
    */
-  static async getDocumentDownloadUrl(documentId: string): Promise<string | null> {
+  /**
+   * A failure here used to collapse to a bare `null`, so the screen showed the
+   * same "check your connection" message whether the real cause was an expired
+   * session, the document not being dispatched yet, or a genuine network drop —
+   * none of which "check your connection" is the right advice for. `fetchWithAuth`
+   * already retries once after a token refresh, so a 401 that still comes back
+   * here means the refresh itself failed and the session is genuinely over.
+   */
+  static async getDocumentDownloadUrl(documentId: string): Promise<
+    { ok: true; url: string } | { ok: false; reason: 'SESSION_EXPIRED' | 'NOT_AVAILABLE' | 'NETWORK'; message: string }
+  > {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/${documentId}/download-token`);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success || !data?.data?.token) return null;
-      return `${this.getBaseUrl()}/documents/${documentId}/download?token=${data.data.token}`;
+      if (response.status === 401) {
+        return { ok: false, reason: 'SESSION_EXPIRED', message: 'Your session has expired. Please log out and sign in again.' };
+      }
+      if (!response.ok || !data?.success || !data?.data?.token) {
+        return { ok: false, reason: 'NOT_AVAILABLE', message: data?.message || 'This document is not available to download right now.' };
+      }
+      return { ok: true, url: `${this.getBaseUrl()}/documents/${documentId}/download?token=${data.data.token}` };
     } catch {
-      return null;
+      return { ok: false, reason: 'NETWORK', message: 'Could not reach the server. Check your connection and try again.' };
     }
   }
 

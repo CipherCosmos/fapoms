@@ -29,6 +29,8 @@ export class ProjectExecutionStartedEvent extends DomainEvent {}
 export class ProjectValidationStartedEvent extends DomainEvent {}
 export class ProjectCompletedEvent extends DomainEvent {}
 export class ProjectCancelledEvent extends DomainEvent {}
+export class ProjectOnHoldEvent extends DomainEvent {}
+export class ProjectArchivedEvent extends DomainEvent {}
 
 // Project Branch Events
 export class ProjectBranchPlanningStartedEvent extends DomainEvent {}
