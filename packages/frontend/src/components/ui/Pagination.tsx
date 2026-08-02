@@ -31,14 +31,14 @@ export const Pagination: React.FC<{
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button style={{ ...btn, ...(page <= 1 ? disabled : {}) }} onClick={() => page > 1 && onPageChange(page - 1)} aria-label="Previous page">
+        <button disabled={page <= 1} style={{ ...btn, ...(page <= 1 ? disabled : {}) }} onClick={() => page > 1 && onPageChange(page - 1)} aria-label="Previous page">
           ‹
         </button>
         <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
           Page <b style={{ color: 'var(--text-primary)' }}>{page}</b> of{' '}
           <b style={{ color: 'var(--text-primary)' }}>{Math.max(1, totalPages)}</b>
         </span>
-        <button style={{ ...btn, ...(page >= totalPages ? disabled : {}) }} onClick={() => page < totalPages && onPageChange(page + 1)} aria-label="Next page">
+        <button disabled={page >= totalPages} style={{ ...btn, ...(page >= totalPages ? disabled : {}) }} onClick={() => page < totalPages && onPageChange(page + 1)} aria-label="Next page">
           ›
         </button>
       </div>
@@ -53,10 +53,10 @@ export const Pagination: React.FC<{
             style={{
               padding: '6px 8px',
               fontSize: 12,
-              background: 'var(--bg-primary)',
+              background: 'var(--bg-input)',
               border: '1px solid var(--border-color)',
               borderRadius: 'var(--radius-sm)',
-              color: '#fff',
+              color: 'var(--text-primary)',
               outline: 'none',
             }}
           >

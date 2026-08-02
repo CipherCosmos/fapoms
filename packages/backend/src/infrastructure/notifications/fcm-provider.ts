@@ -106,7 +106,7 @@ export class FcmProvider implements PushProvider, OnModuleInit {
       return { success: true, messageId };
     } catch (err: any) {
       this.logger.error(`FCM send failed: ${err.message}`);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message, errorCode: err?.code };
     }
   }
 
@@ -131,10 +131,11 @@ export class FcmProvider implements PushProvider, OnModuleInit {
         success: r.success,
         messageId: r.messageId ?? undefined,
         error: r.error?.message,
+        errorCode: r.error?.code,
       }));
     } catch (err: any) {
       this.logger.error(`FCM multicast failed: ${err.message}`);
-      return tokens.map(() => ({ success: false, error: err.message }));
+      return tokens.map(() => ({ success: false, error: err.message, errorCode: err?.code }));
     }
   }
 }

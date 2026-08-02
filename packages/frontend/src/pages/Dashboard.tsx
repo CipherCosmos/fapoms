@@ -51,7 +51,7 @@ interface Snapshot {
 const money = (n: number) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 const SEVERITY: Record<Attention['severity'], string> = {
-  critical: '#ef4444', high: '#f59e0b', medium: '#60a5fa',
+  critical: 'var(--danger)', high: 'var(--warning)', medium: 'var(--accent)',
 };
 
 const BLOCKER_TEXT: Record<string, string> = {
@@ -75,7 +75,7 @@ export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   useSocketInvalidation();
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: [...queryKeys.dashboard.all, 'operations'],
     queryFn: () => api.request<Snapshot>('/system-dashboard/operations'),
     staleTime: 30_000,
@@ -114,8 +114,9 @@ export const Dashboard: React.FC = () => {
 
       {isLoading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading operational snapshot…</div>}
       {error && (
-        <div style={{ padding: 14, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 'var(--radius-md)', color: '#ef4444', fontSize: 13 }}>
-          Could not load the operational snapshot.
+        <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+          <span>Could not load the operational snapshot.</span>
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}>Retry</button>
         </div>
       )}
 
@@ -125,7 +126,7 @@ export const Dashboard: React.FC = () => {
           <div>
             <SectionLabel>Needs attention</SectionLabel>
             {data.attention.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius-md)', color: '#22c55e', fontSize: 13 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'var(--status-active-bg)', border: '1px solid var(--status-active-bg)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 13 }}>
                 <CheckCircle2 size={16} /> Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled.
               </div>
             ) : (
@@ -166,8 +167,8 @@ export const Dashboard: React.FC = () => {
                     <span style={{
                       fontSize: 10.5, fontWeight: 700, minWidth: 54, textAlign: 'center',
                       padding: '2px 7px', borderRadius: 'var(--radius-sm)',
-                      background: d.daysAway === 0 ? 'rgba(239,68,68,0.15)' : 'var(--bg-tertiary)',
-                      color: d.daysAway === 0 ? '#ef4444' : 'var(--text-secondary)',
+                      background: d.daysAway === 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-tertiary)',
+                      color: d.daysAway === 0 ? 'var(--danger)' : 'var(--text-secondary)',
                     }}>
                       {d.daysAway === 0 ? 'today' : d.daysAway === 1 ? 'tomorrow' : `${d.daysAway}d`}
                     </span>
@@ -176,11 +177,11 @@ export const Dashboard: React.FC = () => {
                       <span style={{ color: 'var(--text-muted)' }}> · {d.district}</span>
                     </span>
                     {d.blocker ? (
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: '#f59e0b', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warning)', whiteSpace: 'nowrap' }}>
                         {BLOCKER_TEXT[d.blocker]}
                       </span>
                     ) : (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: '#22c55e' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--success)' }}>
                         <CheckCircle2 size={11} /> ready
                       </span>
                     )}
@@ -222,14 +223,14 @@ export const Dashboard: React.FC = () => {
               <SectionLabel>Validation queue</SectionLabel>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                 <Stat icon={<Inbox size={15} />} label="Assigned to you" value={String(data.validation.assignedToMe)}
-                      sub="cases where you are the reviewer" color="#a78bfa" onClick={() => navigate('/validation')} />
+                      sub="cases where you are the reviewer" color="var(--accent)" onClick={() => navigate('/validation')} />
                 <Stat icon={<Layers size={15} />} label="Awaiting review" value={String(data.validation.pending + data.validation.inReview)}
-                      sub={`${data.validation.pending} pending · ${data.validation.inReview} in review`} color="#60a5fa" onClick={() => navigate('/validation')} />
+                      sub={`${data.validation.pending} pending · ${data.validation.inReview} in review`} color="var(--accent)" onClick={() => navigate('/validation')} />
                 <Stat icon={<AlertTriangle size={15} />} label="Needs correction" value={String(data.validation.needsCorrection)}
-                      sub="sent back for rework" color={data.validation.needsCorrection ? '#f59e0b' : 'var(--text-muted)'} onClick={() => navigate('/validation')} />
+                      sub="sent back for rework" color={data.validation.needsCorrection ? 'var(--warning)' : 'var(--text-muted)'} onClick={() => navigate('/validation')} />
                 <Stat icon={<AlertTriangle size={15} />} label="Open clarifications" value={String(data.validation.openQueries)}
                       sub={data.validation.overdueQueries > 0 ? `${data.validation.overdueQueries} past deadline` : 'none overdue'}
-                      color={data.validation.overdueQueries ? '#ef4444' : '#22c55e'} onClick={() => navigate('/validation')} />
+                      color={data.validation.overdueQueries ? 'var(--danger)' : 'var(--success)'} onClick={() => navigate('/validation')} />
               </div>
             </div>
           )}
@@ -239,22 +240,22 @@ export const Dashboard: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
               {data.capacity && (
                 <Stat icon={<Users size={15} />} label="Assayer capacity" value={`${data.capacity.dailyCapacity}/day`}
-                      sub={`${data.capacity.assayers} active · ${data.capacity.idle} idle`} color="#22c55e"
+                      sub={`${data.capacity.assayers} active · ${data.capacity.idle} idle`} color="var(--success)"
                       onClick={() => navigate('/assayers')} />
               )}
               {data.documents && (
                 <Stat icon={<Inbox size={15} />} label="Paperwork in flight"
                       value={String(data.documents.awaitingReturn + data.documents.awaitingOcr + data.documents.inOcr)}
                       sub={`${data.documents.awaitingReturn} with assayers · ${data.documents.awaitingOcr} at data entry`}
-                      color="#a78bfa" onClick={() => navigate('/documents')} />
+                      color="var(--accent)" onClick={() => navigate('/documents')} />
               )}
               {data.money && (
                 <>
                   <Stat icon={<IndianRupee size={15} />} label="Unbilled" value={money(data.money.unbilled)}
                         sub={data.money.outstanding > 0 ? `${money(data.money.outstanding)} awaiting payment` : 'nothing outstanding'}
-                        color="#f59e0b" onClick={() => navigate('/billing')} />
+                        color="var(--warning)" onClick={() => navigate('/billing')} />
                   <Stat icon={<IndianRupee size={15} />} label="Collected" value={money(data.money.collected)}
-                        sub="received from clients" color="#10b981" onClick={() => navigate('/billing')} />
+                        sub="received from clients" color="var(--success)" onClick={() => navigate('/billing')} />
                 </>
               )}
             </div>
@@ -277,13 +278,13 @@ export const Dashboard: React.FC = () => {
                     </span>
                   </div>
                   <div style={{ height: 6, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden', margin: '6px 0 4px' }}>
-                    <div style={{ width: `${p.progressPct}%`, height: '100%', background: 'var(--gradient-neon, #22c55e)' }} />
+                    <div style={{ width: `${p.progressPct}%`, height: '100%', background: 'var(--gradient-neon, var(--success))' }} />
                   </div>
                   <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                     <span><Layers size={10} style={{ display: 'inline' }} /> {p.totalBranches} branches</span>
                     <span>{p.packets.toLocaleString('en-IN')} packets</span>
                     <span>{p.audited} audited</span>
-                    {p.unplanned > 0 && <span style={{ color: '#f59e0b' }}>{p.unplanned} not yet planned</span>}
+                    {p.unplanned > 0 && <span style={{ color: 'var(--warning)' }}>{p.unplanned} not yet planned</span>}
                   </div>
                 </div>
               ))}

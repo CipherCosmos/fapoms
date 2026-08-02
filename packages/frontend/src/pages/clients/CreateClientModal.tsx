@@ -70,10 +70,10 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
         <StyledInput {...inputProps} placeholder="Contact Phone" value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Website" value={form.website} onChange={(e) => set('website', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Industry" value={form.industry} onChange={(e) => set('industry', e.target.value)} />
-        <select value={form.clientType} onChange={(e) => set('clientType', e.target.value)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%' }}>
+        <select value={form.clientType} onChange={(e) => set('clientType', e.target.value)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' }}>
           {CLIENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
-        <select value={form.priority} onChange={(e) => set('priority', e.target.value)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%' }}>
+        <select value={form.priority} onChange={(e) => set('priority', e.target.value)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' }}>
           {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <StyledInput {...inputProps} placeholder="Budget" type="number" value={form.budget} onChange={(e) => set('budget', e.target.value)} style={{ gridColumn: '1 / -1', width: '100%' }} />

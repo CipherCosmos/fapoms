@@ -9,3 +9,4 @@ export type { Column } from './DataTable';
 export { Pagination } from './Pagination';
 export { DetailDrawer } from './DetailDrawer';
 export { ToastProvider, useToast } from './Toast';
+export type { ToastType, ToastOptions } from './Toast';

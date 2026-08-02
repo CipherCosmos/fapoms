@@ -20,13 +20,20 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
+    // Everyone who works the book needs to see which project a branch belongs to.
     path: '/projects',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
       SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.VALIDATION_MANAGER,
+      SystemRole.VALIDATOR,
+      SystemRole.DOCUMENT_EXECUTIVE,
+      SystemRole.DATA_ENTRY_HEAD,
+      SystemRole.FINANCE_MANAGER,
       SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.HR_MANAGER,
     ],
   },
   {
@@ -35,36 +42,43 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
     ],
   },
   {
+    // Operations executives work this queue daily; finance needs it to see what was billable.
     path: '/assignments',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.FINANCE_MANAGER,
+      SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
+    // Document dispatch is driven by the schedule, so the desk needs to see it.
     path: '/scheduling',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
       SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.DOCUMENT_EXECUTIVE,
       SystemRole.HR_MANAGER,
+      SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
+    // CLIENT_USER stays out: `users` has no client_id, so an external user cannot be scoped.
     path: '/clients',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
       SystemRole.FINANCE_MANAGER,
-      // CLIENT_USER deliberately absent: `users` has no client_id, so an external
-      // client user cannot be scoped to their own record and would see every
-      // client's data. Restore once per-client scoping exists.
+      SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
@@ -72,26 +86,29 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
-      // Finance owns billing; this route existed before the role did, so finance
-      // staff previously had to be given an operations role to reach their own tools.
       SystemRole.FINANCE_MANAGER,
-      SystemRole.OPERATIONS_MANAGER,
-    ],
-  },
-  {
-    path: '/branches',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
       SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
-    // The workforce console, roster included. Assayer administration belongs to HR
-    // and admins only — other roles reach the assayer data they need through their
-    // own tools (planning candidates, billing payees, client preferred-assayers),
-    // not through a general-purpose roster.
+    // Read-only for most; write controls are gated separately by canManageBranches().
+    path: '/branches',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.VALIDATION_MANAGER,
+      SystemRole.VALIDATOR,
+      SystemRole.DOCUMENT_EXECUTIVE,
+      SystemRole.DATA_ENTRY_HEAD,
+      SystemRole.FINANCE_MANAGER,
+      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.HR_MANAGER,
+    ],
+  },
+  {
     path: '/hr',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
@@ -100,7 +117,6 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    // Individual workforce record — same audience as the console it opens from.
     path: '/assayers/:id',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
@@ -118,15 +134,11 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.DOCUMENT_EXECUTIVE,
       SystemRole.VALIDATION_MANAGER,
       SystemRole.VALIDATOR,
-      // Delegating returned packets to the data entry team is this role's whole
-      // job, but it had no route to the page that does it.
       SystemRole.DATA_ENTRY_HEAD,
       SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
-    // The data entry desk: returned packets, delegation, and clarifications with
-    // the assayer. Validation sees it because they review what the desk produces.
     path: '/data-entry',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
@@ -135,25 +147,27 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.DOCUMENT_EXECUTIVE,
       SystemRole.VALIDATION_MANAGER,
       SystemRole.VALIDATOR,
+      SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
-    // Was absent entirely, and canAccessRoute() returns true for unknown routes —
-    // so every role, including ASSAYER and CLIENT_USER, could open the internal
-    // holiday administration page. Operations is included because holidays drive
-    // audit scheduling, which they own.
+    // Read for most; create/edit/delete is gated by canManageHolidays().
     path: '/holidays',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.READ_ONLY_AUDITOR,
     ],
   },
   {
+    // Operations own planning rules — they hold the write permission, so they need the page.
     path: '/rules',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
     ],
   },
   {

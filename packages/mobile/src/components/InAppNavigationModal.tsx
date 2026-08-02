@@ -3,7 +3,8 @@ import { View, Text, TouchableOpacity, Modal as RNModal, Platform, ActivityIndic
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
-import { Icon } from './ui/primitives';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Badge, Button, Icon, IconButton, Tappable } from './ui/primitives';
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
 import { InteractiveMap } from './MapEntry';
@@ -175,6 +176,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   assignment,
   onClose,
 }) => {
+  const t = useTheme();
   const [origin, setOrigin] = useState<LatLng | null>(null);
   const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
@@ -483,22 +485,13 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           }}
         >
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff' }}>
-              {assignment?.branchName || 'In-App Navigation'}
-            </Text>
-            <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }} numberOfLines={1}>
-              {assignment?.branchAddress || ''}
-            </Text>
+            <AppText variant="h3" numberOfLines={1}>{assignment?.branchName || 'In-App Navigation'}</AppText>
+            <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment?.branchAddress || ''}</AppText>
           </View>
-          <TouchableOpacity
-            onPress={onClose}
-            style={{ backgroundColor: 'rgba(239,68,68,0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}
-          >
-            <Text style={{ color: '#f87171', fontWeight: '800', fontSize: 13 }}>✕ Close</Text>
-          </TouchableOpacity>
+          <Button label="Close" variant="danger" icon="close" onPress={onClose} size="sm" />
         </View>
 
-        {/* Map (platform-split: Leaflet/OSM on web, react-native-maps on native) */}
+        {/* Map */}
         {destination && (
           <View style={{ flex: 1 }}>
             <View style={{ flex: 1 }}>
@@ -512,68 +505,60 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
             {/* Mode toggle */}
             <View style={{ position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'center' }}>
-              <View style={{ flexDirection: 'row', backgroundColor: 'rgba(15,23,42,0.95)', borderRadius: 24, padding: 3, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)' }}>
+              <View style={{ flexDirection: 'row', backgroundColor: t.colors.surface, borderRadius: t.radius.pill, padding: 4, borderWidth: 1, borderColor: t.colors.border }}>
                 {(['driving', 'transit'] as RouteMode[]).map((m) => {
                   const active = mode === m;
                   return (
-                    <TouchableOpacity
-                      key={m}
-                      onPress={() => setMode(m)}
-                      style={{
+                    <Tappable key={m} onPress={() => setMode(m)}>
+                      <View style={{
                         flexDirection: 'row',
                         alignItems: 'center',
                         gap: 6,
-                        paddingHorizontal: 16,
-                        paddingVertical: 8,
-                        borderRadius: 20,
-                        backgroundColor: active ? '#2563eb' : 'transparent',
-                      }}
-                    >
-                      <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? '#fff' : '#94a3b8'} />
-                      <Text style={{ color: active ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 13 }}>
-                        {m === 'driving' ? 'Drive' : 'Transit'}
-                      </Text>
-                    </TouchableOpacity>
+                        paddingHorizontal: t.space.lg,
+                        paddingVertical: t.space.sm,
+                        borderRadius: t.radius.pill,
+                        backgroundColor: active ? t.colors.primarySoft : 'transparent',
+                      }}>
+                        <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? t.colors.primary : t.colors.textFaint} />
+                        <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
+                          {m === 'driving' ? 'Drive' : 'Transit'}
+                        </AppText>
+                      </View>
+                    </Tappable>
                   );
                 })}
               </View>
             </View>
 
             {/* Bottom panel */}
-            <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, maxHeight: 260, backgroundColor: 'rgba(15,23,42,0.97)', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: 'rgba(99,102,241,0.25)' }}>
+            <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, maxHeight: 260, backgroundColor: t.colors.surface, borderRadius: t.radius.lg, padding: t.space.lg, borderWidth: 1, borderColor: t.colors.border }}>
               {loading ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 }}>
-                  <ActivityIndicator size="small" color="#2563eb" />
-                  <Text style={{ color: '#94a3b8', fontSize: 13 }}>Calculating {mode === 'driving' ? 'drive' : 'transit'} route...</Text>
+                  <ActivityIndicator size="small" color={t.colors.primary} />
+                  <AppText variant="body" tone="muted">Calculating {mode === 'driving' ? 'drive' : 'transit'} route...</AppText>
                 </View>
               ) : (
                 <>
                   {/* ETA + fare row */}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Icon name="time-outline" size={18} color="#38bdf8" />
-                      <Text style={{ fontSize: 24, fontWeight: '900', color: '#fff' }}>
-                        {travelSeconds != null ? formatDuration(travelSeconds) : '--'}
-                      </Text>
+                      <Icon name="time-outline" size={18} color={t.colors.primary} />
+                      <AppText variant="h1">{travelSeconds != null ? formatDuration(travelSeconds) : '--'}</AppText>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       {fare && mode === 'transit' && (
-                        <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
-                          <Text style={{ fontSize: 11, color: '#34d399', fontWeight: '800' }}>Fare {fare.text || `₹${fare.value}`}</Text>
-                        </View>
+                        <Badge label={`Fare ${fare.text || `₹${fare.value}`}`} tone="success" />
                       )}
                       {usingFallback && (
-                        <View style={{ backgroundColor: 'rgba(245,158,11,0.15)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}>
-                          <Text style={{ fontSize: 10, color: '#fbbf24', fontWeight: '700' }}>ESTIMATE</Text>
-                        </View>
+                        <Badge label="ESTIMATE" tone="warning" />
                       )}
                     </View>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                    <Icon name="navigate" size={13} color="#94a3b8" />
-                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>
+                    <Icon name="navigate" size={13} color={t.colors.textFaint} />
+                    <AppText variant="caption" tone="muted">
                       {distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—'} {mode === 'driving' ? 'driving' : 'transit'} distance
-                    </Text>
+                    </AppText>
                   </View>
 
                   {/* Turn-by-turn steps */}
@@ -582,15 +567,14 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                       <ScrollView nestedScrollEnabled style={{ flex: 1 }}>
                         {steps.map((s, i) => (
                           <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 }}>
-                            <Icon name={maneuverIcon(s.maneuver)} size={14} color="#60a5fa" />
-                            <Text style={{ color: '#e2e8f0', fontSize: 12, flex: 1 }} numberOfLines={2}>
-                              {i === 0 ? <Text style={{ color: '#38bdf8', fontWeight: '800' }}>• </Text> : null}
+                            <Icon name={maneuverIcon(s.maneuver)} size={14} color={t.colors.primary} />
+                            <AppText variant="small" style={{ flex: 1 }} numberOfLines={2}>
                               {s.instruction}
-                            </Text>
+                            </AppText>
                             {s.distanceM > 0 && (
-                              <Text style={{ color: '#64748b', fontSize: 11 }}>
+                              <AppText variant="caption" tone="faint">
                                 {s.distanceM >= 1000 ? `${(s.distanceM / 1000).toFixed(1)} km` : `${Math.round(s.distanceM)} m`}
-                              </Text>
+                              </AppText>
                             )}
                           </View>
                         ))}
@@ -598,36 +582,20 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                     </View>
                   )}
 
-                  {error && <Text style={{ color: '#f87171', fontSize: 11, marginTop: 6 }}>{error}</Text>}
-                  {mode === 'transit' && !apiKey && (
-                    <Text style={{ color: '#fbbf24', fontSize: 10, marginTop: 4 }}>
-                      Transit requires GOOGLE_MAPS_API_KEY.
-                    </Text>
-                  )}
-                  {usingFallback && !isWeb && mode === 'driving' && (
-                    <Text style={{ color: '#fbbf24', fontSize: 10, marginTop: 4 }}>
-                      No Google Maps API key set — showing straight-line estimate. Add GOOGLE_MAPS_API_KEY for live routing.
-                    </Text>
-                  )}
+                  {error && <AppText variant="caption" tone="danger" style={{ marginTop: 6 }}>{error}</AppText>}
 
                   {/* Action buttons */}
                   {origin && (
-                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                      <TouchableOpacity
-                        onPress={() => buildRoute(origin, mode)}
-                        style={[styles.mapBtn, { flex: 1, backgroundColor: '#2563eb', borderColor: '#2563eb' }]}
-                      >
-                        <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>↻ Refresh</Text>
-                      </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.md }}>
+                      <Button label="Refresh" icon="refresh" variant="neutral" onPress={() => buildRoute(origin, mode)} style={{ flex: 1 }} />
                       {steps.length > 0 && (
-                        <TouchableOpacity
+                        <Button
+                          label={navigating ? 'Stop Nav' : 'Start Nav'}
+                          icon={navigating ? 'square' : 'play'}
+                          variant={navigating ? 'danger' : 'primary'}
                           onPress={() => setNavigating((n) => !n)}
-                          style={[styles.mapBtn, { flex: 1, backgroundColor: navigating ? 'rgba(239,68,68,0.9)' : 'rgba(16,185,129,0.2)', borderColor: navigating ? '#ef4444' : '#10b981' }]}
-                        >
-                          <Text style={{ color: navigating ? '#fff' : '#34d399', fontSize: 13, fontWeight: '800' }}>
-                            {navigating ? '⏹ Stop Nav' : '▶ Start Nav'}
-                          </Text>
-                        </TouchableOpacity>
+                          style={{ flex: 1 }}
+                        />
                       )}
                     </View>
                   )}

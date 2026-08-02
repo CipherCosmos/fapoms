@@ -7,11 +7,11 @@ import type { ClientContract } from '@fapoms/shared';
 import { ContractStatus } from '@fapoms/shared';
 
 const CONTRACT_STATUS_COLORS: Record<string, { color: string; bg: string }> = {
-  [ContractStatus.DRAFT]: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  [ContractStatus.ACTIVE]: { color: '#10b981', bg: 'rgba(16,185,129,0.1)' },
-  [ContractStatus.EXPIRED]: { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
-  [ContractStatus.TERMINATED]: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
-  [ContractStatus.RENEWED]: { color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
+  [ContractStatus.DRAFT]: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  [ContractStatus.ACTIVE]: { color: 'var(--success)', bg: 'var(--status-active-bg)' },
+  [ContractStatus.EXPIRED]: { color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' },
+  [ContractStatus.TERMINATED]: { color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
+  [ContractStatus.RENEWED]: { color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
 };
 
 export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
@@ -47,6 +47,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
   };
 
   const handleDelete = async (contract: ClientContract) => {
+    if (!window.confirm(`Remove contract "${contract.title}"? This cannot be undone.`)) return;
     try {
       await del.mutateAsync({ clientId, contractId: contract.id });
       toast('success', 'Contract removed');
@@ -72,9 +73,9 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
         </div>
       ) : (
         contracts.map((c) => {
-          const colors = CONTRACT_STATUS_COLORS[c.status] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' };
+          const colors = CONTRACT_STATUS_COLORS[c.status] ?? { color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
           return (
-            <div key={c.id} style={{ padding: 12, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+            <div key={c.id} style={{ padding: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{c.title}</div>
@@ -84,7 +85,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
                   {c.contractNumber} • {c.value ? `₹${c.value.toLocaleString()}` : 'N/A'} • {new Date(c.effectiveFrom).toLocaleDateString()} — {c.effectiveTo ? new Date(c.effectiveTo).toLocaleDateString() : 'Open'}
                 </div>
               </div>
-              <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }} aria-label="Remove contract"><X size={14} /></button>
+              <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 4 }} aria-label="Remove contract"><X size={14} /></button>
             </div>
           );
         })
@@ -104,7 +105,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
             <StyledInput placeholder="Effective To" type="date" value={form.effectiveTo} onChange={(e) => setForm((f) => ({ ...f, effectiveTo: e.target.value }))} />
             <StyledInput placeholder="Value (₹)" type="number" value={form.value} onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))} />
           </div>
-          <textarea placeholder="Description" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={3} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', resize: 'vertical' }} />
+          <textarea placeholder="Description" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} rows={3} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', resize: 'vertical' }} />
         </Modal>
       )}
     </div>

@@ -88,7 +88,7 @@ function tenureMonths(a: Assayer): number | null {
 const cell: React.CSSProperties = { padding: '9px 12px', fontSize: '12.5px', verticalAlign: 'middle' };
 const head: React.CSSProperties = {
   padding: '8px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted, #7c8595)', textAlign: 'left',
+  letterSpacing: '0.05em',   color: 'var(--text-muted)', textAlign: 'left',
   whiteSpace: 'nowrap', userSelect: 'none',
 };
 
@@ -113,6 +113,8 @@ export const AssayerRoster: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
   const [busy, setBusy] = useState(false);
+  const RENDER_CHUNK = 200;
+  const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -172,6 +174,8 @@ export const AssayerRoster: React.FC = () => {
       return String(a).localeCompare(String(b)) * dir;
     });
   }, [assayers, search, segment, stateFilter, statusFilter, sort]);
+
+  useEffect(() => { setVisibleCount(RENDER_CHUNK); }, [assayers, search, segment, stateFilter, statusFilter, sort]);
 
   const allShownSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
   const selected = useMemo(() => assayers.filter((a) => selectedIds.has(a.id)), [assayers, selectedIds]);
@@ -272,8 +276,8 @@ export const AssayerRoster: React.FC = () => {
         <div style={{
           padding: '10px 14px', borderRadius: '8px', fontSize: '13px',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          background: notice.tone === 'ok' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-          color: notice.tone === 'ok' ? '#34d399' : '#f87171',
+          background: notice.tone === 'ok' ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
+          color: notice.tone === 'ok' ? 'var(--success)' : 'var(--danger)',
         }}>
           <span>{notice.text}</span>
           <button onClick={() => setNotice(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}><X size={14} /></button>
@@ -291,9 +295,9 @@ export const AssayerRoster: React.FC = () => {
               onClick={() => setSegment(s.key)}
               style={{
                 padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${on ? 'transparent' : 'var(--border-color, #232833)'}`,
-                background: on ? '#4f46e5' : 'transparent',
-                color: on ? '#fff' : 'var(--text-secondary, #9aa4b5)',
+                border: `1px solid ${on ? 'transparent' : 'var(--border-color)'}`,
+                background: on ? 'var(--accent)' : 'transparent',
+                color: on ? 'var(--on-accent)' : 'var(--text-secondary)',
               }}
             >
               {s.label} <span style={{ opacity: 0.75 }}>{n}</span>
@@ -305,14 +309,14 @@ export const AssayerRoster: React.FC = () => {
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
-          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted,#7c8595)' }} />
+          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search name, code, phone, city, skill…"
             style={{
               width: '100%', padding: '8px 10px 8px 30px', fontSize: '13px', borderRadius: '8px',
-              border: '1px solid var(--border-color,#232833)', background: 'var(--bg-page,#0d1016)', color: 'inherit', outline: 'none',
+              border: '1px solid var(--border-color)', background: 'var(--bg-page)', color: 'inherit', outline: 'none',
             }}
           />
         </div>
@@ -336,7 +340,7 @@ export const AssayerRoster: React.FC = () => {
       </div>
 
       {showFilters && (
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'rgba(148,163,184,0.05)' }}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
           <Select label="State" value={stateFilter} onChange={setStateFilter} options={states} />
           <Select label="Lifecycle" value={statusFilter} onChange={setStatusFilter} options={statuses} />
           {(stateFilter !== 'ALL' || statusFilter !== 'ALL' || search) && (
@@ -355,16 +359,16 @@ export const AssayerRoster: React.FC = () => {
         <div style={{
           display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
           padding: '10px 14px', borderRadius: '8px',
-          background: 'rgba(79,70,229,0.1)', border: '1px solid rgba(79,70,229,0.3)',
+          background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
         }}>
           <strong style={{ fontSize: '13px' }}>{selected.length} selected</strong>
           {bulkOptions.length > 0 ? (
             <>
-              <ArrowRightLeft size={13} style={{ color: 'var(--text-muted,#7c8595)' }} />
+              <ArrowRightLeft size={13} style={{ color: 'var(--text-muted)' }} />
               <select
                 value={bulkTarget}
                 onChange={(e) => setBulkTarget(e.target.value)}
-                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }}
+                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}
               >
                 <option value="">Move all to…</option>
                 {bulkOptions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
@@ -374,7 +378,7 @@ export const AssayerRoster: React.FC = () => {
               </button>
             </>
           ) : (
-            <span style={{ fontSize: '12px', color: 'var(--text-muted,#7c8595)' }}>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
               These rows are at different stages — no single next step applies to all of them.
             </span>
           )}
@@ -385,10 +389,10 @@ export const AssayerRoster: React.FC = () => {
       )}
 
       {/* Roster */}
-      <div style={{ border: '1px solid var(--border-color,#232833)', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-card,#12151c)' }}>
+      <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-card)' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{ background: 'rgba(148,163,184,0.04)' }}>
+            <thead style={{ background: 'var(--bg-surface-2)' }}>
               <tr>
                 {canManage && (
                   <th style={{ ...head, width: '36px' }}>
@@ -412,28 +416,28 @@ export const AssayerRoster: React.FC = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={9} style={{ ...cell, textAlign: 'center', padding: '40px', color: 'var(--text-muted,#7c8595)' }}>Loading roster…</td></tr>
+                <tr><td colSpan={9} style={{ ...cell, textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading roster…</td></tr>
               ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={9} style={{ ...cell, textAlign: 'center', padding: '48px' }}>
                     <Users size={26} style={{ opacity: 0.35 }} />
                     <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '10px' }}>Nobody matches this view</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted,#7c8595)', marginTop: '3px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
                       {assayers.length === 0 ? 'The roster is empty — import a workforce file or add someone.' : 'Try a different segment or clear the filters.'}
                     </div>
                   </td>
                 </tr>
-              ) : rows.map((a) => {
+              ) : rows.slice(0, visibleCount).map((a) => {
                 const missing = missingFields(a);
-                const tone = STATUS_COLORS[a.lifecycleStatus] ?? '#6b7280';
+                const tone = STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)';
                 const months = tenureMonths(a);
                 return (
                   <tr
                     key={a.id}
                     onClick={() => setOpenId(a.id)}
                     style={{
-                      borderTop: '1px solid rgba(148,163,184,0.07)', cursor: 'pointer',
-                      background: selectedIds.has(a.id) ? 'rgba(79,70,229,0.07)' : undefined,
+                      borderTop: '1px solid var(--border-hair)', cursor: 'pointer',
+                      background: selectedIds.has(a.id) ? 'rgba(216,174,71,0.12)' : undefined,
                     }}
                   >
                     {canManage && (
@@ -443,7 +447,7 @@ export const AssayerRoster: React.FC = () => {
                     )}
                     <td style={cell}>
                       <div style={{ fontWeight: 600 }}>{a.displayName}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted,#7c8595)' }}>{a.phone}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.phone}</div>
                     </td>
                     <td style={{ ...cell, fontFamily: 'monospace', fontSize: '11px' }}>{a.assayerCode}</td>
                     <td style={cell}>
@@ -454,19 +458,19 @@ export const AssayerRoster: React.FC = () => {
                     </td>
                     <td style={cell}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <MapPin size={11} style={{ color: 'var(--text-muted,#7c8595)' }} />
+                        <MapPin size={11} style={{ color: 'var(--text-muted)' }} />
                         {[a.city, a.state].filter(Boolean).join(', ') || '—'}
                       </span>
                     </td>
                     <td style={cell}>
                       {missing.length === 0 ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#34d399', fontSize: '11.5px' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: '11.5px' }}>
                           <CheckCircle2 size={12} /> Complete
                         </span>
                       ) : (
                         <span
                           title={`Missing: ${missing.join(', ')}`}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#fb923c', fontSize: '11.5px', fontWeight: 600 }}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--warning)', fontSize: '11.5px', fontWeight: 600 }}
                         >
                           <AlertTriangle size={12} /> {missing.length} missing
                         </span>
@@ -474,13 +478,13 @@ export const AssayerRoster: React.FC = () => {
                     </td>
                     <td style={{ ...cell, whiteSpace: 'nowrap' }}>
                       {fmtDate(a.joiningDate)}
-                      {months !== null && <span style={{ color: 'var(--text-muted,#7c8595)', fontSize: '11px' }}> · {months}m</span>}
+                      {months !== null && <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}> · {months}m</span>}
                     </td>
                     <td style={cell}>{a.experienceYears ?? 0}y</td>
                     <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                       <IconBtn title="Open full profile" onClick={() => navigate(`/assayers/${a.id}`)}><ExternalLink size={13} /></IconBtn>
                       {canManage && <IconBtn title="Edit" onClick={() => setEditing(a)}><Edit2 size={13} /></IconBtn>}
-                      {canManage && <IconBtn title="Delete" tone="#ef4444" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
+                      {canManage && <IconBtn title="Delete" tone="var(--danger)" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
                     </td>
                   </tr>
                 );
@@ -489,10 +493,17 @@ export const AssayerRoster: React.FC = () => {
           </table>
         </div>
         {!loading && rows.length > 0 && (
-          <div style={{ padding: '8px 12px', fontSize: '11.5px', color: 'var(--text-muted,#7c8595)', borderTop: '1px solid var(--border-color,#232833)' }}>
-            Showing {rows.length} of {assayers.length}
-            {rows.filter((r) => missingFields(r).length > 0).length > 0 &&
-              ` · ${rows.filter((r) => missingFields(r).length > 0).length} with an incomplete record`}
+          <div style={{ padding: '8px 12px', fontSize: '11.5px', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+            <span>
+              Showing {Math.min(visibleCount, rows.length)} of {rows.length}
+              {rows.filter((r) => missingFields(r).length > 0).length > 0 &&
+                ` · ${rows.filter((r) => missingFields(r).length > 0).length} with an incomplete record`}
+            </span>
+            {rows.length > visibleCount && (
+              <button onClick={() => setVisibleCount((c) => c + RENDER_CHUNK)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11.5px' }}>
+                Show more ({rows.length - visibleCount} more)
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -541,7 +552,7 @@ const IconBtn: React.FC<{ title: string; onClick: () => void; tone?: string; chi
   <button
     title={title}
     onClick={onClick}
-    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 5px', color: tone ?? 'var(--text-muted,#7c8595)' }}
+    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 5px', color: tone ?? 'var(--text-muted)' }}
   >
     {children}
   </button>
@@ -551,11 +562,11 @@ const Select: React.FC<{ label: string; value: string; onChange: (v: string) => 
   label, value, onChange, options,
 }) => (
   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-    <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)' }}>{label}</span>
+    <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', minWidth: '150px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }}
+      style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', minWidth: '150px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}
     >
       <option value="ALL">All</option>
       {options.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}

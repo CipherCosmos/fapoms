@@ -41,17 +41,17 @@ interface QueryRow {
 }
 
 const STATUS_TONE: Record<string, string> = {
-  PENDING: '#94a3b8', ASSIGNED: '#60a5fa', OCR_PROCESSING: '#a78bfa',
-  HUMAN_REVIEW: '#facc15', CORRECTION_REQUIRED: '#f87171',
-  APPROVED: '#34d399', SUBMITTED: '#22c55e',
+  PENDING: 'var(--text-muted)', ASSIGNED: 'var(--accent)', OCR_PROCESSING: 'var(--accent)',
+  HUMAN_REVIEW: 'var(--warning)', CORRECTION_REQUIRED: 'var(--danger)',
+  APPROVED: 'var(--success)', SUBMITTED: 'var(--success)',
 };
 
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)',
+  letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 const panel: React.CSSProperties = {
-  background: 'var(--bg-card,#12151c)', border: '1px solid var(--border-color,#232833)',
+  background: 'var(--bg-surface)', border: '1px solid var(--border-color)',
   borderRadius: '10px', overflow: 'hidden', minHeight: 0,
 };
 
@@ -164,7 +164,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
 
   const openCount = (queries ?? []).filter((q) => q.status !== 'RESOLVED').length;
   const status = validationCase?.status;
-  const tone = status ? STATUS_TONE[status] ?? '#94a3b8' : '#94a3b8';
+  const tone = status ? STATUS_TONE[status] ?? 'var(--text-muted)' : 'var(--text-muted)';
   const branchName = validationCase?.projectBranch?.branch?.name;
   const branchCode = validationCase?.projectBranch?.branch?.branchCode;
 
@@ -176,7 +176,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
         </button>
         {branchName && (
           <div style={{ fontSize: '13.5px', fontWeight: 700 }}>
-            {branchName} <span style={{ fontFamily: 'monospace', fontWeight: 400, color: 'var(--text-muted,#7c8595)', fontSize: '12px' }}>{branchCode}</span>
+            {branchName} <span style={{ fontFamily: 'monospace', fontWeight: 400, color: 'var(--text-muted)', fontSize: '12px' }}>{branchCode}</span>
           </div>
         )}
         {status && (
@@ -193,17 +193,17 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
       }}>
         <section style={panel}>
           {!returnedDoc && docs !== null && (
-            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted,#7c8595)' }}>
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
               <FileWarning size={24} style={{ opacity: 0.4 }} />
               <div style={{ fontSize: '13px', marginTop: '10px' }}>No returned PDF has been uploaded for this branch yet.</div>
             </div>
           )}
           {returnedDoc && !fileUrl && !err && (
-            <div style={{ padding: '14px', display: 'flex', gap: '8px', alignItems: 'center', color: 'var(--text-muted,#7c8595)', fontSize: '13px' }}>
+            <div style={{ padding: '14px', display: 'flex', gap: '8px', alignItems: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
               <Loader2 size={15} className="spin" /> Preparing document…
             </div>
           )}
-          {err && !fileUrl && <div style={{ padding: '14px', color: '#f87171', fontSize: '13px' }}>{err}</div>}
+          {err && !fileUrl && <div style={{ padding: '14px', color: 'var(--danger)', fontSize: '13px' }}>{err}</div>}
           {fileUrl && <PdfRegionViewer fileUrl={fileUrl} focus={focus} onCapture={setPending} />}
         </section>
 
@@ -213,20 +213,20 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           {validationCase === undefined ? (
             <div style={{ padding: '14px' }}><Loader2 size={14} className="spin" /></div>
           ) : validationCase === null ? (
-            <div style={{ padding: '11px 13px', fontSize: '12px', color: 'var(--text-muted,#7c8595)', borderBottom: '1px solid var(--border-color,#232833)' }}>
+            <div style={{ padding: '11px 13px', fontSize: '12px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
               No review case yet — still being worked. Raising a clarification below opens one.
             </div>
           ) : (
-            <div style={{ padding: '11px 13px', borderBottom: '1px solid var(--border-color,#232833)' }}>
+            <div style={{ padding: '11px 13px', borderBottom: '1px solid var(--border-color)' }}>
               {validationCase.correctionNotes && (
-                <div style={{ fontSize: '12px', color: '#f87171', marginBottom: '8px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--danger)', marginBottom: '8px' }}>
                   <strong>Correction requested:</strong> {validationCase.correctionNotes}
                 </div>
               )}
               {validationCase.ocrResult && (
                 <details style={{ marginBottom: '8px' }}>
                   <summary style={{ ...label, cursor: 'pointer' }}>OCR extraction</summary>
-                  <pre style={{ fontSize: '11px', margin: '6px 0 0', overflowX: 'auto', maxHeight: '90px', color: 'var(--text-secondary,#9aa4b5)' }}>
+                  <pre style={{ fontSize: '11px', margin: '6px 0 0', overflowX: 'auto', maxHeight: '90px', color: 'var(--text-secondary)' }}>
                     {JSON.stringify(validationCase.ocrResult, null, 2)}
                   </pre>
                 </details>
@@ -240,8 +240,8 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                     rows={2}
                     style={{
                       width: '100%', boxSizing: 'border-box', padding: '7px 9px', fontSize: '12px',
-                      borderRadius: '7px', background: 'var(--bg-page,#0d1016)', color: 'inherit',
-                      border: '1px solid var(--border-color,#232833)', resize: 'vertical', marginBottom: '8px',
+                      borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit',
+                      border: '1px solid var(--border-color)', resize: 'vertical', marginBottom: '8px',
                     }}
                   />
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -253,13 +253,13 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                     )}
                     {(status === 'HUMAN_REVIEW') && (
                       <button onClick={() => decide('CORRECTION_REQUIRED')} disabled={busy || !notes.trim()} className="btn btn-secondary"
-                        style={{ fontSize: '11.5px', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', color: '#f87171', borderColor: 'rgba(239,68,68,0.35)' }}>
+                        style={{ fontSize: '11.5px', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
                         <RotateCcw size={12} /> Request correction
                       </button>
                     )}
                     {status === 'APPROVED' && (
                       <button onClick={() => decide('SUBMITTED')} disabled={busy} className="btn btn-primary"
-                        style={{ fontSize: '11.5px', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', background: '#16a34a', borderColor: '#16a34a' }}>
+                        style={{ fontSize: '11.5px', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                         <SubmitIcon size={12} /> Submit to client
                       </button>
                     )}
@@ -267,7 +267,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                 </>
               )}
               {status === 'SUBMITTED' && (
-                <div style={{ fontSize: '12px', color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Check size={13} /> Sent to the client.
                 </div>
               )}
@@ -275,7 +275,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           )}
 
           {/* Clarifications */}
-          <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-color,#232833)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={label}>Clarifications {openCount > 0 && `(${openCount} open)`}</span>
             <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-secondary"
               style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -284,13 +284,13 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           </div>
 
           {showNewQuery && (
-            <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-color,#232833)', display: 'flex', gap: '6px' }}>
+            <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '6px' }}>
               <input
                 value={newQueryText}
                 onChange={(e) => setNewQueryText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') raiseQuery(); }}
                 placeholder="What's unclear? e.g. gross weight on row 3…"
-                style={{ flex: 1, padding: '7px 9px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }}
+                style={{ flex: 1, padding: '7px 9px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}
               />
               <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 11px' }}>
                 Raise
@@ -299,16 +299,16 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           )}
 
           {err && (
-            <div style={{ padding: '7px 13px', fontSize: '11.5px', color: '#f87171', display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <div style={{ padding: '7px 13px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
               <AlertTriangle size={12} /> {err}
             </div>
           )}
 
           {!selectedQuery ? (
             <div style={{ flex: 1, overflowY: 'auto', padding: '4px 13px' }}>
-              {queries === null && <div style={{ fontSize: '12px', color: 'var(--text-muted,#7c8595)', padding: '10px 0' }}>Loading…</div>}
+              {queries === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>Loading…</div>}
               {queries?.length === 0 && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted,#7c8595)', padding: '10px 0' }}>None raised yet.</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>None raised yet.</div>
               )}
               {queries?.map((q) => (
                 <button
@@ -317,12 +317,12 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                   style={{
                     display: 'block', width: '100%', textAlign: 'left', padding: '9px 10px', marginTop: '6px',
                     borderRadius: '8px', cursor: 'pointer', fontSize: '12.5px',
-                    background: q.status === 'RESOLVED' ? 'rgba(148,163,184,0.06)' : 'rgba(250,204,21,0.09)',
-                    border: `1px solid ${q.status === 'RESOLVED' ? 'var(--border-color,#232833)' : 'rgba(250,204,21,0.3)'}`,
+                    background: q.status === 'RESOLVED' ? 'var(--status-completed-bg)' : 'var(--status-pending-bg)',
+                    border: `1px solid ${q.status === 'RESOLVED' ? 'var(--border-color)' : 'var(--status-pending-bg)'}`,
                     color: 'inherit',
                   }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <MessageSquare size={12} style={{ color: q.status === 'RESOLVED' ? 'var(--text-muted,#7c8595)' : '#facc15', flexShrink: 0 }} />
+                    <MessageSquare size={12} style={{ color: q.status === 'RESOLVED' ? 'var(--text-muted)' : 'var(--warning)', flexShrink: 0 }} />
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.queryText}</span>
                   </div>
                   <div style={{ ...label, marginTop: '3px' }}>{q.status.toLowerCase()}{q.targetField ? ` · ${q.targetField}` : ''}</div>
@@ -331,7 +331,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <div style={{ padding: '7px 13px', borderBottom: '1px solid var(--border-color,#232833)' }}>
+              <div style={{ padding: '7px 13px', borderBottom: '1px solid var(--border-color)' }}>
                 <button onClick={() => setSelectedQuery(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 8px' }}>
                   ← All clarifications
                 </button>

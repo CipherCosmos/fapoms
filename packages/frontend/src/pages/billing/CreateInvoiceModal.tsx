@@ -59,7 +59,7 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
 
   const selStyle: React.CSSProperties = {
     padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%',
+    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
   };
 
   return (

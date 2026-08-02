@@ -19,7 +19,8 @@ import { MobileApiService } from '../services/api.service';
 import { connectMobileSocket } from '../services/socket';
 import { MLKitScannerModal } from './MLKitScannerModal';
 import { Ionicons } from '@expo/vector-icons';
-import { Icon } from './ui/primitives';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Icon, IconButton, Tappable } from './ui/primitives';
 
 interface AssayerQueryChatModalProps {
   visible: boolean;
@@ -32,6 +33,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   onClose,
   assignment,
 }) => {
+  const t = useTheme();
   const [queries, setQueries] = useState<any[]>([]);
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
   const [responseText, setResponseText] = useState('');
@@ -156,36 +158,37 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
 
   if (!visible || !assignment) return null;
 
-  // Flatten queries into a chronological message stream for WhatsApp chat view
-  const currentQuery = queries.find((q) => q.id === activeQueryId) || queries[0];
-
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* WhatsApp-style Header Bar */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.backBtn}>
-            <Text style={styles.backArrow}>←</Text>
-          </TouchableOpacity>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>DE</Text>
+        <View style={{
+          paddingTop: Platform.OS === 'ios' ? 50 : 20,
+          paddingHorizontal: t.space.lg,
+          paddingBottom: t.space.md,
+          backgroundColor: t.colors.surface,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: t.space.md,
+          borderBottomWidth: 1,
+          borderColor: t.colors.border,
+        }}>
+          <IconButton icon="arrow-back" onPress={onClose} />
+          <View style={{
+            width: 40, height: 40, borderRadius: 20,
+            backgroundColor: t.colors.primarySoft,
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <AppText variant="bodyStrong" tone="primary">DE</AppText>
           </View>
-          <View style={styles.headerInfo}>
-            <Text style={styles.headerName}>Data Entry Team</Text>
-            <Text style={styles.headerSubtext}>
-              {assignment.branchName} • <Text style={{ color: '#25D366' }}>● Online</Text>
-            </Text>
-          </View>
-          <View style={styles.lockBadge}>
-            <Icon name="lock-closed" size={10} color="#00a884" />
-            <Text style={styles.lockText}>Confidential</Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <AppText variant="h3" numberOfLines={1}>Data Entry Team</AppText>
+            <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment.branchName}</AppText>
           </View>
         </View>
 
-        {/* WhatsApp Wallpaper Chat Area */}
         <ScrollView
           ref={scrollViewRef}
           style={styles.chatArea}

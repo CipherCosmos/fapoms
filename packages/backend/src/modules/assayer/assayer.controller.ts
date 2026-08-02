@@ -567,7 +567,7 @@ export class AssayerController {
   }
 
   // The assayer app reads this for the signed-in user; it authenticates already.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.ASSAYER)
   @Get(':assayerId/profile')
   @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
   async getProfile(@Param('assayerId') assayerId: string, @Req() req: any) {

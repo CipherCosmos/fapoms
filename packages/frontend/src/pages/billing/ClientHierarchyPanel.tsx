@@ -32,15 +32,15 @@ export const ClientHierarchyPanel: React.FC<{ clientId: string | null }> = ({ cl
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <Stat label="Net Revenue" value={money(t.revenue)} hint="Taxable value, excludes GST" />
-        <Stat label="Assayer Cost" value={money(t.assayerCost)} hint="Fee + travel owed to assayers" color="#f59e0b" />
+        <Stat label="Assayer Cost" value={money(t.assayerCost)} hint="Fee + travel owed to assayers" color="var(--warning)" />
         <Stat
           label="Margin"
           value={`${money(t.margin)}${t.marginPct !== null ? `  (${t.marginPct}%)` : ''}`}
-          color={t.margin < 0 ? '#ef4444' : '#22c55e'}
+          color={t.margin < 0 ? 'var(--danger)' : 'var(--success)'}
           hint={t.margin < 0 ? 'Costs exceed billed revenue' : undefined}
         />
-        <Stat label="Unbilled" value={money(t.pending)} hint="Earned but not yet invoiced" color="#a78bfa" />
-        <Stat label="Outstanding" value={money(t.outstanding)} hint="Invoiced, awaiting payment" color="#60a5fa" />
+        <Stat label="Unbilled" value={money(t.pending)} hint="Earned but not yet invoiced" color="var(--accent)" />
+        <Stat label="Outstanding" value={money(t.outstanding)} hint="Invoiced, awaiting payment" color="var(--accent)" />
       </div>
 
       <AgingBar aging={data.aging} />
@@ -84,7 +84,7 @@ const ProjectRow: React.FC<{ project: BillingProjectRollup; open: boolean; onTog
         <Metric
           label="Margin"
           value={`${money(p.margin)}${p.marginPct !== null ? ` (${p.marginPct}%)` : ''}`}
-          color={p.margin < 0 ? '#ef4444' : '#22c55e'}
+          color={p.margin < 0 ? 'var(--danger)' : 'var(--success)'}
         />
         <Metric label="Lines" value={String(p.entryCount)} />
       </div>
@@ -114,7 +114,7 @@ const AssignmentRow: React.FC<{ a: BillingAssignmentRollup }> = ({ a }) => {
         <div style={{ fontSize: 13, fontWeight: 500 }}>
           {a.branchName ?? 'Unknown branch'}
           {loss && (
-            <span title="This job costs more than it earns" style={{ marginLeft: 8, color: '#ef4444', display: 'inline-flex', verticalAlign: 'middle' }}>
+            <span title="This job costs more than it earns" style={{ marginLeft: 8, color: 'var(--danger)', display: 'inline-flex', verticalAlign: 'middle' }}>
               <AlertCircle size={13} />
             </span>
           )}
@@ -129,12 +129,12 @@ const AssignmentRow: React.FC<{ a: BillingAssignmentRollup }> = ({ a }) => {
         <Metric
           label="Margin"
           value={`${money(a.margin)}${a.marginPct !== null ? ` (${a.marginPct}%)` : ''}`}
-          color={loss ? '#ef4444' : '#22c55e'}
+          color={loss ? 'var(--danger)' : 'var(--success)'}
           icon={loss ? <TrendingDown size={12} /> : <TrendingUp size={12} />}
         />
         <span style={{
           fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
-          background: 'rgba(148,163,184,0.15)', color: 'var(--text-secondary)', whiteSpace: 'nowrap',
+          background: 'var(--status-draft-bg)', color: 'var(--text-secondary)', whiteSpace: 'nowrap',
         }}>{a.state}</span>
       </div>
     </div>
@@ -144,11 +144,11 @@ const AssignmentRow: React.FC<{ a: BillingAssignmentRollup }> = ({ a }) => {
 /** Receivables ageing — collections work is driven off these buckets. */
 const AgingBar: React.FC<{ aging: import('../../services/billing').BillingAging }> = ({ aging }) => {
   const buckets = [
-    { label: 'Current', value: aging.current, color: '#22c55e' },
-    { label: '1–30d', value: aging.d1_30, color: '#a3e635' },
-    { label: '31–60d', value: aging.d31_60, color: '#f59e0b' },
-    { label: '61–90d', value: aging.d61_90, color: '#fb923c' },
-    { label: '90d+', value: aging.d90_plus, color: '#ef4444' },
+    { label: 'Current', value: aging.current, color: 'var(--success)' },
+    { label: '1–30d', value: aging.d1_30, color: 'var(--warning)' },
+    { label: '31–60d', value: aging.d31_60, color: 'var(--warning)' },
+    { label: '61–90d', value: aging.d61_90, color: 'var(--warning)' },
+    { label: '90d+', value: aging.d90_plus, color: 'var(--danger)' },
   ];
   const total = buckets.reduce((s, b) => s + b.value, 0);
   return (
@@ -188,6 +188,6 @@ const Stat: React.FC<{ label: string; value: string; color?: string; hint?: stri
 const Empty: React.FC<{ children: React.ReactNode; tone?: 'error' }> = ({ children, tone }) => (
   <div style={{
     background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
-    padding: 20, fontSize: 13, color: tone === 'error' ? '#ef4444' : 'var(--text-muted)',
+    padding: 20, fontSize: 13, color: tone === 'error' ? 'var(--danger)' : 'var(--text-muted)',
   }}>{children}</div>
 );

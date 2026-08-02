@@ -16,8 +16,8 @@ interface MapLayerControlsProps {
   setShowWorkforceDensity: (val: boolean) => void;
   showRevenueDensity: boolean;
   setShowRevenueDensity: (val: boolean) => void;
-  mapStyle: 'voyager' | 'dark' | 'satellite';
-  setMapStyle: (val: 'voyager' | 'dark' | 'satellite') => void;
+  mapStyle: 'auto' | 'voyager' | 'dark' | 'satellite';
+  setMapStyle: (val: 'auto' | 'voyager' | 'dark' | 'satellite') => void;
   radiusKm: number;
   setRadiusKm: (val: number) => void;
   searchQuery: string;
@@ -71,33 +71,33 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
         <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Basemap</span>
         <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
-          {(['voyager', 'dark', 'satellite'] as const).map(style => (
+          {(['auto', 'voyager', 'dark', 'satellite'] as const).map(style => (
             <button key={style} type="button" onClick={() => setMapStyle(style)}
               style={{
                 flex: 1, padding: '4px 6px', fontSize: '10px', textTransform: 'uppercase',
                 fontWeight: 600, background: mapStyle === style ? 'var(--accent-primary)' : 'transparent',
-                color: '#fff', border: 'none', borderRadius: 'var(--radius-xs)', cursor: 'pointer', transition: 'all 0.2s'
+                color: mapStyle === style ? 'var(--on-accent)' : 'var(--text-primary)', border: 'none', borderRadius: 'var(--radius-xs)', cursor: 'pointer', transition: 'all 0.2s'
               }}
             >
-              {style === 'voyager' ? 'Light' : style === 'dark' ? 'Dark' : 'Sat'}
+              {style === 'auto' ? 'Auto' : style === 'voyager' ? 'Light' : style === 'dark' ? 'Dark' : 'Sat'}
             </button>
           ))}
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Proximity Search</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-primary)', padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Radius:</span>
           <input type="number" min="10" max="2000" value={radiusKm}
             onChange={(e) => setRadiusKm(Math.max(1, Number(e.target.value)))}
-            style={{ width: '60px', background: 'transparent', border: 'none', color: '#fff', outline: 'none', fontSize: '12px', fontWeight: 600, textAlign: 'right' }}
+            style={{ width: '60px', background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: '12px', fontWeight: 600, textAlign: 'right' }}
           />
           <span style={{ color: 'var(--text-muted)' }}>km</span>
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <div onClick={() => setFiltersOpen(!filtersOpen)}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           <span>Search &amp; Filters</span>
@@ -107,11 +107,11 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <input type="text" placeholder="Search branch name..." value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ width: '100%', padding: '4px 8px', fontSize: '11px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}
+              style={{ width: '100%', padding: '4px 8px', fontSize: '11px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
             />
             <input type="text" placeholder="Filter by city..." value={cityFilter}
               onChange={(e) => setCityFilter(e.target.value)}
-              style={{ width: '100%', padding: '4px 8px', fontSize: '11px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}
+              style={{ width: '100%', padding: '4px 8px', fontSize: '11px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
             />
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Branch Status</span>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
@@ -121,9 +121,9 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
                   <button key={s} type="button" onClick={() => toggleStatus(s)}
                     style={{
                       padding: '2px 6px', fontSize: '9px', fontWeight: 600,
-                      background: active ? 'rgba(99,102,241,0.2)' : 'transparent',
-                      color: active ? '#fff' : 'var(--text-muted)',
-                      border: active ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.08)',
+                      background: active ? 'var(--status-pending-bg)' : 'transparent',
+                      color: active ? 'var(--text-primary)' : 'var(--text-muted)',
+                      border: active ? '1px solid var(--accent-primary)' : '1px solid var(--border-hair)',
                       borderRadius: 'var(--radius-xs)', cursor: 'pointer',
                     }}
                   >
@@ -143,7 +143,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
         )}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Data Layers</span>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showBranches} onChange={(e) => setShowBranches(e.target.checked)} /> Audit Branches
@@ -156,14 +156,14 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
         </label>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Geographic Analytics</span>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showSlaRisk} onChange={(e) => setShowSlaRisk(e.target.checked)} /> ⚠️ SLA Breach Risk
         </label>
         {showSlaRisk && setSlaRadiusKm && (
-          <div style={{ marginLeft: '22px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 8px', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '4px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#fca5a5' }}>
+          <div style={{ marginLeft: '22px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 8px', backgroundColor: 'var(--status-cancelled-bg)', borderRadius: '6px', border: '1px solid var(--status-cancelled)', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--danger)' }}>
               <span>SLA Radius: <strong>{slaRadiusKm || 15} km</strong></span>
             </div>
             <input
@@ -173,7 +173,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
               step="1"
               value={slaRadiusKm || 15}
               onChange={(e) => setSlaRadiusKm(Number(e.target.value))}
-              style={{ accentColor: '#ef4444', width: '100%', cursor: 'pointer' }}
+              style={{ accentColor: 'var(--danger)', width: '100%', cursor: 'pointer' }}
             />
             <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
               {[5, 15, 30, 50].map((preset) => (
@@ -186,9 +186,9 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
                     fontSize: '9px',
                     padding: '2px 0',
                     borderRadius: '4px',
-                    border: (slaRadiusKm || 15) === preset ? '1px solid #ef4444' : '1px solid rgba(255,255,255,0.1)',
-                    backgroundColor: (slaRadiusKm || 15) === preset ? 'rgba(239, 68, 68, 0.3)' : 'rgba(15,23,42,0.4)',
-                    color: (slaRadiusKm || 15) === preset ? '#ffffff' : '#94a3b8',
+                    border: (slaRadiusKm || 15) === preset ? '1px solid var(--danger)' : '1px solid var(--border-hair)',
+                    backgroundColor: (slaRadiusKm || 15) === preset ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
+                    color: (slaRadiusKm || 15) === preset ? 'var(--text-primary)' : 'var(--text-muted)',
                     cursor: 'pointer',
                     fontWeight: 600,
                   }}
@@ -216,7 +216,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
         {!collapsed && (
           <div style={{
             position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 1000,
-            background: 'rgba(21, 23, 30, 0.95)', backdropFilter: 'blur(8px)',
+            background: 'var(--bg-surface-2)', backdropFilter: 'blur(8px)',
             border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
             padding: '12px 16px', boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
             display: 'flex', flexDirection: 'column', gap: '10px',
@@ -232,7 +232,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
   return (
     <div style={{
       position: 'absolute', top: '10px', right: '10px', zIndex: 1000,
-      background: 'rgba(21, 23, 30, 0.9)', backdropFilter: 'blur(8px)',
+      background: 'var(--bg-surface-2)', backdropFilter: 'blur(8px)',
       border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
       boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
       display: 'flex', flexDirection: 'column', gap: collapsed ? 0 : '10px',

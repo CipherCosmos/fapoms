@@ -5,13 +5,13 @@ import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle
  * What still has to happen for a branch on this audit date. Ordered as the day
  * actually runs, so the board reads left-to-right as work moves.
  */
-const ACTION_META: Record<string, { label: string; color: string; hint: string }> = {
-  AWAITING_CLIENT_DATA: { label: 'No client data', color: '#ef4444', hint: 'This branch is scheduled today but is not in the client\'s file.' },
-  GENERATE_PDF: { label: 'Generate packet', color: '#a78bfa', hint: 'Client data is in. Produce the audit PDF in the external app, then upload it here.' },
-  DISPATCH: { label: 'Send to assayer', color: '#60a5fa', hint: 'Packet is ready but the assayer cannot see it until it is sent.' },
-  AWAITING_ASSAYER_RETURN: { label: 'With assayer', color: '#f59e0b', hint: 'Sent. Waiting for the scanned paperwork to come back.' },
-  SEND_TO_OCR: { label: 'Send to OCR', color: '#38bdf8', hint: 'Paperwork is back. Push it to the external OCR application.' },
-  IN_PROGRESS: { label: 'In processing', color: '#22c55e', hint: 'With OCR / data entry.' },
+const ACTION_META: Record<string, { label: string; color: string; bg: string; hint: string }> = {
+  AWAITING_CLIENT_DATA: { label: 'No client data', color: 'var(--danger)', bg: 'var(--status-cancelled-bg)', hint: 'This branch is scheduled today but is not in the client\'s file.' },
+  GENERATE_PDF: { label: 'Generate packet', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Client data is in. Produce the audit PDF in the external app, then upload it here.' },
+  DISPATCH: { label: 'Send to assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Packet is ready but the assayer cannot see it until it is sent.' },
+  AWAITING_ASSAYER_RETURN: { label: 'With assayer', color: 'var(--warning)', bg: 'var(--status-pending-bg)', hint: 'Sent. Waiting for the scanned paperwork to come back.' },
+  SEND_TO_OCR: { label: 'Send to OCR', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Paperwork is back. Push it to the external OCR application.' },
+  IN_PROGRESS: { label: 'In processing', color: 'var(--success)', bg: 'var(--status-completed-bg)', hint: 'With OCR / data entry.' },
 };
 
 export interface DailyRunBranch {
@@ -163,7 +163,7 @@ export const DailyRunPanel: React.FC<{
       {/* Step 1 — the client's file for this date. */}
       <div style={{
         background: 'var(--bg-secondary)',
-        border: `1px solid ${run?.batch ? 'var(--border-color)' : 'rgba(239,68,68,0.4)'}`,
+        border: `1px solid ${run?.batch ? 'var(--border-color)' : 'var(--status-cancelled-bg)'}`,
         borderRadius: 'var(--radius-md)', padding: 15,
       }}>
         <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)', marginBottom: 9 }}>
@@ -171,24 +171,24 @@ export const DailyRunPanel: React.FC<{
         </div>
         {run?.batch ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <CheckCircle2 size={17} color="#22c55e" />
+            <CheckCircle2 size={17} color="var(--success)" />
             <div style={{ flex: 1, minWidth: 200 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600 }}>{run.batch.fileName}</div>
               <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
                 v{run.batch.versionNumber} · {run.batch.totalRows} rows · {run.batch.uniqueAccounts} accounts
-                {run.batch.duplicateAccounts > 0 && <span style={{ color: '#f59e0b' }}> · {run.batch.duplicateAccounts} duplicates</span>}
+                {run.batch.duplicateAccounts > 0 && <span style={{ color: 'var(--warning)' }}> · {run.batch.duplicateAccounts} duplicates</span>}
                 {' · '}covers {s?.inBatch} of {s?.scheduledBranches} scheduled branches
               </div>
             </div>
-            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: 'var(--status-completed-bg)', color: 'var(--success)' }}>
               {run.batch.status}
             </span>
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, flexWrap: 'wrap' }}>
-            <AlertTriangle size={17} color="#ef4444" />
+            <AlertTriangle size={17} color="var(--danger)" />
             <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444' }}>No client data received for this date</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger)' }}>No client data received for this date</div>
               <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
                 Nothing can be generated until the client sends the customer master file for {auditDate}.
               </div>
@@ -197,7 +197,7 @@ export const DailyRunPanel: React.FC<{
           </div>
         )}
         {s && s.unexpectedBranchesInBatch > 0 && (
-          <div style={{ marginTop: 9, fontSize: 11.5, color: '#f59e0b' }}>
+          <div style={{ marginTop: 9, fontSize: 11.5, color: 'var(--warning)' }}>
             {s.unexpectedBranchesInBatch} branch(es) in the client file are not scheduled for this date.
           </div>
         )}
@@ -220,8 +220,8 @@ export const DailyRunPanel: React.FC<{
               <label style={{
                 marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '5px 12px', fontSize: 11.5, fontWeight: 600,
-                background: 'rgba(99,102,241,0.1)', color: 'var(--accent-primary)',
-                border: '1px solid rgba(99,102,241,0.4)', borderRadius: 'var(--radius-sm)',
+                background: 'var(--status-pending-bg)', color: 'var(--accent-primary)',
+                border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)',
                 cursor: acting.has('bulk') ? 'wait' : 'pointer',
               }}>
                 <UploadCloud size={12} />
@@ -233,8 +233,8 @@ export const DailyRunPanel: React.FC<{
           </div>
 
           {unmatched.length > 0 && (
-            <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 'var(--radius-md)', padding: 12, marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#f59e0b', fontWeight: 700, fontSize: 12.5, marginBottom: 6 }}>
+            <div style={{ background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--warning)', fontWeight: 700, fontSize: 12.5, marginBottom: 6 }}>
                 <AlertTriangle size={14} />
                 {unmatched.length} file(s) could not be matched to a branch — upload these individually below
               </div>
@@ -250,7 +250,7 @@ export const DailyRunPanel: React.FC<{
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {run.branches.map((b) => {
-              const meta = ACTION_META[b.nextAction] ?? { label: b.nextAction, color: '#94a3b8', hint: '' };
+              const meta = ACTION_META[b.nextAction] ?? { label: b.nextAction, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)', hint: '' };
               const busy = acting.has(b.projectBranchId);
               return (
                 <div key={b.projectBranchId} style={{
@@ -270,7 +270,7 @@ export const DailyRunPanel: React.FC<{
 
                   <span title={meta.hint} style={{
                     fontSize: 10.5, fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)',
-                    background: `${meta.color}22`, color: meta.color, whiteSpace: 'nowrap',
+                    background: meta.bg, color: meta.color, whiteSpace: 'nowrap',
                   }}>{meta.label}</span>
 
                   {/* Exactly one action, matching nextAction — no menu of mostly-invalid buttons. */}
@@ -290,7 +290,7 @@ export const DailyRunPanel: React.FC<{
                   )}
                   {b.nextAction === 'SEND_TO_OCR' && b.pdf && (
                     <button onClick={() => withActing(b.projectBranchId, () => onSendToOcr(b.pdf!.id))} disabled={busy}
-                      className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5, color: '#38bdf8', borderColor: 'rgba(56,189,248,0.4)' }}>
+                      className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent)', borderColor: 'var(--status-pending-bg)' }}>
                       <ArrowRightCircle size={11} /> {busy ? '…' : 'Send to OCR'}
                     </button>
                   )}
@@ -312,7 +312,7 @@ export const DailyRunPanel: React.FC<{
 const FileUploadButton: React.FC<{ label: string; busy: boolean; onFile: (f: File) => void }> = ({ label, busy, onFile }) => (
   <label style={{
     display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', fontSize: 11.5, fontWeight: 600,
-    background: 'rgba(99,102,241,0.1)', color: 'var(--accent-primary)', border: '1px solid rgba(99,102,241,0.4)',
+    background: 'var(--status-pending-bg)', color: 'var(--accent-primary)', border: '1px solid var(--status-pending-bg)',
     borderRadius: 'var(--radius-sm)', cursor: busy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
   }}>
     <UploadCloud size={12} />

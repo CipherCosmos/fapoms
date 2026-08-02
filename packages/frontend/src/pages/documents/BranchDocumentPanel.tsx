@@ -21,15 +21,15 @@ const TYPE_ORDER = ['CUSTOMER_MASTER_DATA', 'PRE_FIELD_AUDIT_PDF', 'AUDITED_RETU
 // return via its own action below — neither has a generic "upload this type" slot.
 const UPLOADABLE_TYPES = new Set(['CUSTOMER_MASTER_DATA', 'PRE_FIELD_AUDIT_PDF']);
 
-const STAGE_META: Record<string, { label: string; color: string }> = {
-  UPLOADED: { label: 'Prepared', color: '#a78bfa' },
-  DISPATCHED: { label: 'With assayer', color: '#60a5fa' },
-  RECEIVED: { label: 'Returned', color: '#22c55e' },
-  SENT_TO_DATA_ENTRY: { label: 'Data entry', color: '#38bdf8' },
-  SENT_TO_EXTERNAL_OCR: { label: 'External OCR', color: '#f59e0b' },
-  EXCEL_GENERATED: { label: 'Excel ready', color: '#10b981' },
-  PROCESSED: { label: 'Processed', color: '#34d399' },
-  COMPLETED: { label: 'Completed', color: '#22c55e' },
+const STAGE_META: Record<string, { label: string; color: string; bg: string }> = {
+  UPLOADED: { label: 'Prepared', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  DISPATCHED: { label: 'With assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  RECEIVED: { label: 'Returned', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
+  SENT_TO_DATA_ENTRY: { label: 'Data entry', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  SENT_TO_EXTERNAL_OCR: { label: 'External OCR', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  EXCEL_GENERATED: { label: 'Excel ready', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
+  PROCESSED: { label: 'Processed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
+  COMPLETED: { label: 'Completed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
 };
 // Same lifecycle order the backend pipeline counts use, so the strip here and
 // the one on the "All Files" view never disagree about what order stages come in.
@@ -94,30 +94,30 @@ export const BranchDocumentPanel: React.FC<{
       {/* Pipeline strip: click a stage to see only branches with a document sitting
           there right now — the fast way to answer "what's stuck and where". */}
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-        <StageChip active={stageFilter === 'ALL'} onClick={() => setStageFilter('ALL')} label="All branches" count={branches.length} color="var(--text-secondary)" />
+        <StageChip active={stageFilter === 'ALL'} onClick={() => setStageFilter('ALL')} label="All branches" count={branches.length} color="var(--text-secondary)" bg="var(--bg-surface-2)" />
         {STAGE_ORDER.map((stage) => {
           const count = pipeline.find((p) => p.stage === stage)?.count ?? 0;
           if (count === 0) return null;
           const meta = STAGE_META[stage];
           return (
-            <StageChip key={stage} active={stageFilter === stage} onClick={() => setStageFilter(stageFilter === stage ? 'ALL' : stage)} label={meta.label} count={count} color={meta.color} />
+            <StageChip key={stage} active={stageFilter === stage} onClick={() => setStageFilter(stageFilter === stage ? 'ALL' : stage)} label={meta.label} count={count} color={meta.color} bg={meta.bg} />
           );
         })}
         {neverPrepared.length > 0 && (
-          <StageChip active={stageFilter === 'NEVER_PREPARED'} onClick={() => setStageFilter(stageFilter === 'NEVER_PREPARED' ? 'ALL' : 'NEVER_PREPARED')} label="Nothing prepared" count={neverPrepared.length} color="#ef4444" />
+          <StageChip active={stageFilter === 'NEVER_PREPARED'} onClick={() => setStageFilter(stageFilter === 'NEVER_PREPARED' ? 'ALL' : 'NEVER_PREPARED')} label="Nothing prepared" count={neverPrepared.length} color="var(--danger)" bg="var(--status-cancelled-bg)" />
         )}
       </div>
 
       {neverPrepared.length > 0 && stageFilter !== 'NEVER_PREPARED' && (
-        <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 'var(--radius-md)', padding: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#ef4444', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+        <div style={{ background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
             <AlertTriangle size={15} />
             {neverPrepared.length} branch{neverPrepared.length === 1 ? '' : 'es'} confirmed with no paperwork prepared at all
           </div>
           {neverPrepared.map((b) => (
             <div key={b.projectBranchId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', fontSize: 12.5, flexWrap: 'wrap', gap: 6 }}>
               <span><strong>{b.branchName}</strong> <span style={{ color: 'var(--text-muted)' }}>· {b.projectName}</span></span>
-              <span style={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>
+              <span style={{ fontSize: 11.5, color: 'var(--danger)', fontWeight: 600 }}>
                 {b.daysUntilAudit != null && b.daysUntilAudit < 0
                   ? `audit was ${Math.abs(b.daysUntilAudit)} day(s) ago — nothing to send yet`
                   : `audit in ${b.daysUntilAudit} day(s) — no packet uploaded`}
@@ -148,7 +148,7 @@ export const BranchDocumentPanel: React.FC<{
           return (
             <div key={b.projectBranchId} style={{
               background: 'var(--bg-secondary)',
-              border: `1px solid ${gapFlag ? 'rgba(239,68,68,0.4)' : 'var(--border-color)'}`,
+              border: `1px solid ${gapFlag ? 'var(--status-cancelled-bg)' : 'var(--border-color)'}`,
               borderRadius: 'var(--radius-md)', overflow: 'hidden',
             }}>
               <button
@@ -192,11 +192,11 @@ export const BranchDocumentPanel: React.FC<{
                       );
                     }
                     const latest = docs[0];
-                    const stage = STAGE_META[latest.status] ?? { label: latest.status, color: '#94a3b8' };
+                    const stage = STAGE_META[latest.status] ?? { label: latest.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                     return (
                       <span key={t} title={`${meta.label}: ${stage.label}${docs.length > 1 ? ` (${docs.length} files)` : ''}`} style={{
                         fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
-                        background: `${stage.color}22`, color: stage.color,
+                        background: stage.bg, color: stage.color,
                       }}>{meta.short}{docs.length > 1 ? ` ×${docs.length}` : ''}</span>
                     );
                   })}
@@ -211,7 +211,7 @@ export const BranchDocumentPanel: React.FC<{
                         {TYPE_META[t].label}
                       </div>
                       {b.documentsByType[t].map((d) => {
-                        const stage = STAGE_META[d.status] ?? { label: d.status, color: '#94a3b8' };
+                        const stage = STAGE_META[d.status] ?? { label: d.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                         const isReturn = d.type === 'AUDITED_RETURN_PDF';
                         const canMarkReceived = isReturn && d.status === 'UPLOADED';
                         const canSendToOcr = isReturn && (d.status === 'RECEIVED' || d.status === 'SENT_TO_DATA_ENTRY');
@@ -221,12 +221,12 @@ export const BranchDocumentPanel: React.FC<{
                           <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 0', flexWrap: 'wrap' }}>
                             <FileText size={13} color={stage.color} style={{ flexShrink: 0 }} />
                             <span style={{ fontSize: 12, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.fileName}</span>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-sm)', background: `${stage.color}22`, color: stage.color, whiteSpace: 'nowrap' }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-sm)', background: stage.bg, color: stage.color, whiteSpace: 'nowrap' }}>
                               {stage.label}
                             </span>
                             {d.trail?.dispatchedAt && (
                               <span title={`Sent to assayer ${fmtDateTime(d.trail.dispatchedAt)}`} style={{ display: 'flex' }}>
-                                <CheckCircle2 size={12} color="#22c55e" />
+                                <CheckCircle2 size={12} color="var(--success)" />
                               </span>
                             )}
                             {d.status === 'UPLOADED' && !isReturn && (
@@ -235,12 +235,12 @@ export const BranchDocumentPanel: React.FC<{
                               </button>
                             )}
                             {canMarkReceived && (
-                              <button onClick={() => withActing(d.id, () => onMarkReceived(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: '#22c55e', borderColor: 'rgba(34,197,94,0.4)' }}>
+                              <button onClick={() => withActing(d.id, () => onMarkReceived(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', borderColor: 'var(--status-completed-bg)' }}>
                                 <Inbox size={11} /> {rowBusy ? '…' : 'Mark Received'}
                               </button>
                             )}
                             {canSendToOcr && (
-                              <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)' }}>
+                              <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
                                 <ArrowRightCircle size={11} /> {rowBusy ? '…' : 'Send to OCR'}
                               </button>
                             )}
@@ -262,7 +262,7 @@ export const BranchDocumentPanel: React.FC<{
                     </div>
                   ))}
                   {b.documentCount === 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: gapFlag ? '#ef4444' : 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: gapFlag ? 'var(--danger)' : 'var(--text-muted)' }}>
                       <Clock size={13} />
                       {gapFlag
                         ? 'Audit is confirmed but no paperwork has been uploaded for this branch yet — use the chips above to add it.'
@@ -279,14 +279,14 @@ export const BranchDocumentPanel: React.FC<{
   );
 };
 
-const StageChip: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string }> = ({ active, onClick, label, count, color }) => (
+const StageChip: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string; bg: string }> = ({ active, onClick, label, count, color, bg }) => (
   <button onClick={onClick} style={{
     padding: '6px 11px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 11.5, fontWeight: 600,
-    background: active ? `${color}22` : 'transparent', color: active ? color : 'var(--text-secondary)',
+    background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 6,
   }}>
     {label}
-    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? '#0b1120' : 'var(--text-muted)', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>{count}</span>
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>{count}</span>
   </button>
 );
 
@@ -297,11 +297,11 @@ const UploadChip: React.FC<{ label: string; title: string; busy: boolean; onFile
     title={title}
     style={variant === 'button' ? {
       display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', fontSize: 11, fontWeight: 600,
-      background: 'rgba(16,185,129,0.1)', color: '#22c55e', border: '1px solid rgba(16,185,129,0.4)',
+      background: 'var(--status-completed-bg)', color: 'var(--success)', border: '1px solid var(--status-completed-bg)',
       borderRadius: 'var(--radius-sm)', cursor: busy ? 'wait' : 'pointer',
     } : {
       display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
-      background: 'rgba(99,102,241,0.08)', border: '1px dashed var(--accent-primary)', color: 'var(--accent-primary)',
+      background: 'var(--status-pending-bg)', border: '1px dashed var(--accent-primary)', color: 'var(--accent-primary)',
       cursor: busy ? 'wait' : 'pointer', fontWeight: 600,
     }}
   >

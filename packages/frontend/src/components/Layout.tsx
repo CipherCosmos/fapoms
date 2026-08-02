@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { SystemRole } from '@fapoms/shared';
 import { Sidebar } from './Sidebar';
 import { SearchOverlay } from './SearchOverlay';
 import { Header } from './Header';
@@ -6,7 +7,11 @@ import { Header } from './Header';
 interface LayoutProps {
   children: React.ReactNode;
   onLogout?: () => void;
-  user?: { displayName: string; email: string };
+  // Must carry roles: Sidebar filters its menu on them, and a type that omits
+  // the field silently reduces every non-admin to an empty menu the moment
+  // anything constructs this object rather than passing the fetched user straight
+  // through.
+  user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {

@@ -29,6 +29,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   };
 
   const handleDelete = async (contact: ClientContact) => {
+    if (!window.confirm(`Remove contact "${contact.name}" from this client?`)) return;
     try {
       await del.mutateAsync({ clientId, contactId: contact.id });
       toast('success', 'Contact removed');
@@ -54,7 +55,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
         </div>
       ) : (
         contacts.map((c) => (
-          <div key={c.id} style={{ padding: 12, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div key={c.id} style={{ padding: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 14 }}>
                 {c.name}
@@ -66,7 +67,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
                 <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={11} /> {c.phone}</span>
               </div>
             </div>
-            <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }} aria-label="Remove contact"><X size={14} /></button>
+            <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 4 }} aria-label="Remove contact"><X size={14} /></button>
           </div>
         ))
       )}

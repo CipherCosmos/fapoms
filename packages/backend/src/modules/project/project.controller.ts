@@ -185,6 +185,15 @@ export class ProjectController {
   // fees and negotiation state without authenticating. Fixed alongside adding operator
   // attribution below, since that made the gap more consequential (it would have exposed
   // which staff member is handling which negotiation to an unauthenticated caller too).
+  // Any staff role that can see the book can ask how a branch got where it is;
+  // this is read-only history, and "why is this branch CLOSED" is a question
+  // planning, validation and audit all legitimately need to answer.
+  @Get('branches/:projectBranchId/history')
+  @ApiOperation({ summary: 'Full timeline for one project branch: status, assignments, documents, validation' })
+  async getBranchHistory(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
+    return { success: true, data: await this.projectService.getBranchHistory(projectBranchId) };
+  }
+
   @Get(':id/branches')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get unassigned and planning branches queue for project' })

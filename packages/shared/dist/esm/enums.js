@@ -471,4 +471,55 @@ export var BillingEntityType;
     BillingEntityType["PAYABLE"] = "PAYABLE";
     BillingEntityType["CONFLICT"] = "CONFLICT";
 })(BillingEntityType || (BillingEntityType = {}));
+/**
+ * Notification classification and delivery lifecycle.
+ *
+ * Before this, a notification row carried only a title, a message and `is_read`.
+ * That made three things impossible: knowing *why* a notification exists (no
+ * type), knowing whether it ever actually reached anyone (no delivery state),
+ * and grouping or filtering a person's inbox (no category). All three are
+ * required for the notification centre and for push retry, so they are modelled
+ * here rather than encoded into the title string.
+ */
+export var NotificationCategory;
+(function (NotificationCategory) {
+    NotificationCategory["ASSIGNMENT"] = "ASSIGNMENT";
+    NotificationCategory["VALIDATION"] = "VALIDATION";
+    NotificationCategory["DOCUMENT"] = "DOCUMENT";
+    NotificationCategory["PLANNING"] = "PLANNING";
+    NotificationCategory["WORKFORCE"] = "WORKFORCE";
+    NotificationCategory["BILLING"] = "BILLING";
+    NotificationCategory["SYSTEM"] = "SYSTEM";
+})(NotificationCategory || (NotificationCategory = {}));
+/**
+ * Delivery lifecycle for one notification row.
+ *
+ * `PENDING` → `SENT` → `DELIVERED` → `READ` is the happy path. `FAILED` is
+ * terminal only once attempts are exhausted; `SUPPRESSED` means a preference or
+ * a dedupe rule deliberately stopped it, which is distinct from failure and must
+ * not be retried.
+ */
+export var NotificationStatus;
+(function (NotificationStatus) {
+    NotificationStatus["PENDING"] = "PENDING";
+    NotificationStatus["SENT"] = "SENT";
+    NotificationStatus["DELIVERED"] = "DELIVERED";
+    NotificationStatus["READ"] = "READ";
+    NotificationStatus["FAILED"] = "FAILED";
+    NotificationStatus["SUPPRESSED"] = "SUPPRESSED";
+})(NotificationStatus || (NotificationStatus = {}));
+export var NotificationChannel;
+(function (NotificationChannel) {
+    NotificationChannel["IN_APP"] = "IN_APP";
+    NotificationChannel["PUSH"] = "PUSH";
+    NotificationChannel["EMAIL"] = "EMAIL";
+})(NotificationChannel || (NotificationChannel = {}));
+/** Drives ordering and, later, whether a push may bypass quiet hours. */
+export var NotificationPriority;
+(function (NotificationPriority) {
+    NotificationPriority["LOW"] = "LOW";
+    NotificationPriority["NORMAL"] = "NORMAL";
+    NotificationPriority["HIGH"] = "HIGH";
+    NotificationPriority["CRITICAL"] = "CRITICAL";
+})(NotificationPriority || (NotificationPriority = {}));
 //# sourceMappingURL=enums.js.map

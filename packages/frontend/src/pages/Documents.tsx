@@ -148,6 +148,7 @@ export const Documents: React.FC = () => {
 
   /** Releases one or many documents, then refreshes the console. */
   const handleDispatchMany = async (ids: string[]) => {
+    if (!window.confirm(`Dispatch ${ids.length} document(s)? This updates the paperwork workflow.`)) return;
     setBusyKey('batch-dispatch');
     setError(null);
     setSuccessMsg(null);
@@ -180,6 +181,7 @@ export const Documents: React.FC = () => {
   };
 
   const handleMarkReceived = async (docId: string) => {
+    if (!window.confirm('Mark this document as received?')) return;
     setError(null);
     setSuccessMsg(null);
     try {
@@ -192,6 +194,7 @@ export const Documents: React.FC = () => {
   };
 
   const handleSendToOcr = async (docId: string) => {
+    if (!window.confirm('Send this document to the external OCR application?')) return;
     setError(null);
     setSuccessMsg(null);
     try {
@@ -220,9 +223,9 @@ export const Documents: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header */}
-      <div style={{ background: 'linear-gradient(90deg, rgba(99,102,241,0.12) 0%, rgba(16,185,129,0.06) 100%)', border: '1px solid rgba(99,102,241,0.25)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ background: 'linear-gradient(90deg, var(--status-pending-bg) 0%, var(--status-completed-bg) 100%)', border: '1px solid var(--status-pending-bg)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ backgroundColor: '#6366f1', color: '#fff', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          <span style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             Document Management
           </span>
           <div>

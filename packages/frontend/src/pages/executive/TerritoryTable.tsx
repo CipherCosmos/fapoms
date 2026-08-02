@@ -24,10 +24,10 @@ export interface Territory {
  * whether it is good or bad.
  */
 export const POSTURE: Record<Territory['posture'], { label: string; color: string; icon: React.ReactNode; meaning: string }> = {
-  NO_COVERAGE:     { label: 'No coverage',     color: '#ef4444', icon: <XCircle size={13} />,       meaning: 'Work here, nobody living here. Needs hiring or a partner.' },
-  UNDER_RESOURCED: { label: 'Under-resourced', color: '#f59e0b', icon: <AlertTriangle size={13} />, meaning: 'More work than local assayers can absorb. Expect travel cost or slipped dates.' },
-  UNDER_UTILISED:  { label: 'Under-utilised',  color: '#60a5fa', icon: <TrendingDown size={13} />,  meaning: 'Spare capacity. Could take work from a neighbouring territory.' },
-  BALANCED:        { label: 'Balanced',        color: '#22c55e', icon: <CheckCircle2 size={13} />,  meaning: 'Demand and local capacity are broadly matched.' },
+  NO_COVERAGE:     { label: 'No coverage',     color: 'var(--danger)', icon: <XCircle size={13} />,       meaning: 'Work here, nobody living here. Needs hiring or a partner.' },
+  UNDER_RESOURCED: { label: 'Under-resourced', color: 'var(--warning)', icon: <AlertTriangle size={13} />, meaning: 'More work than local assayers can absorb. Expect travel cost or slipped dates.' },
+  UNDER_UTILISED:  { label: 'Under-utilised',  color: 'var(--accent)', icon: <TrendingDown size={13} />,  meaning: 'Spare capacity. Could take work from a neighbouring territory.' },
+  BALANCED:        { label: 'Balanced',        color: 'var(--success)', icon: <CheckCircle2 size={13} />,  meaning: 'Demand and local capacity are broadly matched.' },
 };
 
 const money = (n: number) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
@@ -93,7 +93,7 @@ export const TerritoryTable: React.FC<{
               <Metric
                 label="Load"
                 value={t.loadRatio === null ? '—' : `${t.loadRatio}×`}
-                color={t.loadRatio === null ? undefined : t.loadRatio > 1.5 ? '#f59e0b' : t.loadRatio < 0.35 ? '#60a5fa' : '#22c55e'}
+                color={t.loadRatio === null ? undefined : t.loadRatio > 1.5 ? 'var(--warning)' : t.loadRatio < 0.35 ? 'var(--accent)' : 'var(--success)'}
               />
               <Metric label="Value" value={money(t.pipelineValue)} />
 
@@ -115,11 +115,11 @@ export const TerritoryTable: React.FC<{
                     <span style={{ color: 'var(--text-muted)' }}>{d.branches} br</span>
                     <span style={{ color: 'var(--text-muted)' }}>{d.packets.toLocaleString('en-IN')} pkt</span>
                     <span style={{ color: 'var(--text-muted)' }}>{Math.round(d.auditHours)}h</span>
-                    <span style={{ color: d.assayers === 0 ? '#ef4444' : 'var(--text-secondary)' }}>
+                    <span style={{ color: d.assayers === 0 ? 'var(--danger)' : 'var(--text-secondary)' }}>
                       {d.assayers} assayer{d.assayers === 1 ? '' : 's'}
                     </span>
-                    {d.isolated > 0 && <span style={{ color: '#ef4444', fontWeight: 600 }}>{d.isolated} unreachable</span>}
-                    {d.unassigned > 0 && <span style={{ color: '#f59e0b' }}>{d.unassigned} unassigned</span>}
+                    {d.isolated > 0 && <span style={{ color: 'var(--danger)', fontWeight: 600 }}>{d.isolated} unreachable</span>}
+                    {d.unassigned > 0 && <span style={{ color: 'var(--warning)' }}>{d.unassigned} unassigned</span>}
                   </div>
                 ))}
               </div>

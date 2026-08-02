@@ -74,14 +74,32 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   useEffect(() => localStorage.setItem('map_showWorkforceDensity', String(showWorkforceDensity)), [showWorkforceDensity]);
   useEffect(() => localStorage.setItem('map_showRevenueDensity', String(showRevenueDensity)), [showRevenueDensity]);
 
-  // Basemap selection state (persisted in localStorage)
-  const [mapStyle, setMapStyle] = useState<'voyager' | 'dark' | 'satellite'>(() => {
+  // Basemap selection state (persisted in localStorage).
+  // 'auto' tracks the app theme: dark/glass-dark/custom-dark -> Dark, else -> Light.
+  const [mapStyle, setMapStyle] = useState<'auto' | 'voyager' | 'dark' | 'satellite'>(() => {
     const saved = localStorage.getItem('map_style');
-    return (saved === 'voyager' || saved === 'dark' || saved === 'satellite') ? saved : 'dark';
+    return (saved === 'voyager' || saved === 'dark' || saved === 'satellite' || saved === 'auto') ? saved : 'auto';
   });
+  const [appTheme, setAppTheme] = useState(() =>
+    typeof document !== 'undefined' ? (document.documentElement.dataset.theme || '') : ''
+  );
   const [showLegend, setShowLegend] = useState(false);
 
   useEffect(() => localStorage.setItem('map_style', mapStyle), [mapStyle]);
+
+  // Keep the map basemap in sync with the app theme (listens for data-theme changes).
+  useEffect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => setAppTheme(root.dataset.theme || ''));
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
+
+  const DARK_THEMES = ['noir', 'black-gold', 'black-white', 'slate', 'midnight', 'glass-dark'];
+  const effectiveMapStyle: 'voyager' | 'dark' | 'satellite' =
+    mapStyle === 'auto'
+      ? DARK_THEMES.includes(appTheme) ? 'dark' : 'voyager'
+      : mapStyle;
 
   // Radius search filter config (persisted in localStorage)
   const [radiusKm, setRadiusKm] = useState<number>(() => {
@@ -238,13 +256,13 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       tileLayerRef.current.remove();
     }
 
-    const tileUrl = mapStyle === 'satellite'
+    const tileUrl = effectiveMapStyle === 'satellite'
       ? 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}' // Google Hybrid Satellite
-      : mapStyle === 'dark'
+      : effectiveMapStyle === 'dark'
       ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' // CartoDB Dark Matter
       : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'; // CartoDB Voyager
 
-    const isSatellite = mapStyle === 'satellite';
+    const isSatellite = effectiveMapStyle === 'satellite';
     tileLayerRef.current = L.tileLayer(tileUrl, {
       subdomains: isSatellite ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c', 'd'],
       attribution: isSatellite ? '&copy; Google Maps' : '&copy; OpenStreetMap &copy; CARTO',
@@ -606,7 +624,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         map.fitBounds(bounds, { padding: [30, 30] });
       }
     }
-  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
+  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, appTheme, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
@@ -663,7 +681,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             bottom: '20px',
             left: '20px',
             zIndex: 1000,
-            background: 'rgba(21, 23, 30, 0.9)',
+            background: 'var(--bg-surface-2)',
             backdropFilter: 'blur(8px)',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-md)',
@@ -673,12 +691,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             flexDirection: 'column',
             gap: '8px',
             fontSize: '11px',
-            color: '#fff',
+            color: 'var(--text-primary)',
             minWidth: '160px'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', borderBottom: '1px solid var(--border-hair)', paddingBottom: '4px' }}>
               <span style={{ fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-primary)' }}>Map Legend</span>
-              <button type="button" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}>&times;</button>
+              <button type="button" aria-label="Close legend" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}>&times;</button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#6366f1' }} />
@@ -715,12 +733,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             bottom: '20px',
             left: '20px',
             zIndex: 1000,
-            background: 'rgba(21, 23, 30, 0.85)',
+            background: 'var(--bg-surface-2)',
             backdropFilter: 'blur(8px)',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-sm)',
             padding: '6px 10px',
-            color: '#fff',
+            color: 'var(--text-primary)',
             fontSize: '11px',
             fontWeight: 600,
             cursor: 'pointer',
@@ -751,10 +769,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <b style={{ color: '#a855f7', fontSize: '13px' }}>{selectedAssayerForRouting.firstName} {selectedAssayerForRouting.lastName}</b>
+              <b style={{ color: 'var(--accent)', fontSize: '13px' }}>{selectedAssayerForRouting.firstName} {selectedAssayerForRouting.lastName}</b>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Route to {selectedAssayerForRouting.branchName}</div>
             </div>
-            <button onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>&times;</button>
+            <button type="button" aria-label="Close routing panel" onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>&times;</button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
@@ -764,10 +782,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                 onClick={() => setTravelMode(mode)}
                 style={{
                   padding: '4px',
-                  background: travelMode === mode ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
+                  background: travelMode === mode ? 'var(--status-pending-bg)' : 'transparent',
                   border: 'none',
                   borderRadius: 'var(--radius-sm)',
-                  color: travelMode === mode ? '#fff' : 'var(--text-secondary)',
+                  color: travelMode === mode ? 'var(--text-primary)' : 'var(--text-secondary)',
                   fontSize: '11px',
                   cursor: 'pointer',
                   textAlign: 'center'
@@ -792,9 +810,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span>{travelMode === 'driving' ? '🚗 Car' : travelMode === 'two-wheeler' ? '🏍️ Motorcycle' : '🚶 Walking'}</span>
               <span>| Speed: ~{speed} km/h</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '6px', marginTop: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-hair)', paddingTop: '6px', marginTop: '4px' }}>
               <span>{roadDistanceKm !== null ? 'Est. Travel Cost:' : 'Est. Travel Cost (approx):'}</span>
-              <b style={{ color: '#fff', fontSize: '12px' }}>₹{estCost}</b>
+              <b style={{ color: 'var(--text-primary)', fontSize: '12px' }}>₹{estCost}</b>
             </div>
             <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {roadDistanceKm !== null ? 'Road distance from OSRM' : 'Estimate based on straight-line distance'} — traffic not included

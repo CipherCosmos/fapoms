@@ -133,7 +133,7 @@ export const ExecutiveMap: React.FC = () => {
       </div>
 
       {error && (
-        <div style={{ padding: 14, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 'var(--radius-md)', color: '#ef4444', fontSize: 13 }}>
+        <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13 }}>
           {error}
         </div>
       )}
@@ -144,27 +144,27 @@ export const ExecutiveMap: React.FC = () => {
           {/* Position — capacity against demand, which is the executive question. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))', gap: 12 }}>
             <Kpi icon={<Building2 size={16} />} label="Branches" value={String(t.branches)}
-                 sub={`${t.statesCovered} states · ${t.packets.toLocaleString('en-IN')} packets`} color="#60a5fa" />
+                 sub={`${t.statesCovered} states · ${t.packets.toLocaleString('en-IN')} packets`} color="var(--accent)" />
             <Kpi icon={<Clock size={16} />} label="Work outstanding" value={`${t.demandAssayerDays} days`}
-                 sub={`${Math.round(t.auditHours).toLocaleString('en-IN')} audit-hours`} color="#a78bfa" />
+                 sub={`${Math.round(t.auditHours).toLocaleString('en-IN')} audit-hours`} color="var(--accent)" />
             <Kpi icon={<Users size={16} />} label="Capacity" value={`${t.dailyCapacity}/day`}
-                 sub={daysToClear ? `clears the book in ~${daysToClear} days` : `${t.assayers} assayers`} color="#22c55e" />
+                 sub={daysToClear ? `clears the book in ~${daysToClear} days` : `${t.assayers} assayers`} color="var(--success)" />
             <Kpi icon={<AlertTriangle size={16} />} label="Unreachable" value={String(t.isolatedBranches)}
-                 sub={`no assayer within ${data.serviceableRadiusKm}km`} color={t.isolatedBranches ? '#ef4444' : 'var(--text-muted)'} />
+                 sub={`no assayer within ${data.serviceableRadiusKm}km`} color={t.isolatedBranches ? 'var(--danger)' : 'var(--text-muted)'} />
             <Kpi icon={<MapPin size={16} />} label="Unassigned" value={String(t.unassignedBranches)}
-                 sub="no assayer confirmed yet" color={t.unassignedBranches ? '#f59e0b' : 'var(--text-muted)'} />
+                 sub="no assayer confirmed yet" color={t.unassignedBranches ? 'var(--warning)' : 'var(--text-muted)'} />
             <Kpi icon={<IndianRupee size={16} />} label="Book value" value={money(t.pipelineValue)}
-                 sub={t.realisedRevenue > 0 ? `${money(t.realisedRevenue)} realised` : 'nothing invoiced yet'} color="#10b981" />
+                 sub={t.realisedRevenue > 0 ? `${money(t.realisedRevenue)} realised` : 'nothing invoiced yet'} color="var(--success)" />
           </div>
 
           {/* Lenses re-frame the same map rather than navigating away. */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <Lens active={lens === 'ALL'} onClick={() => setLens('ALL')} label="All branches" count={data.branchPoints.length} color="var(--text-secondary)" />
-            <Lens active={lens === 'GAPS'} onClick={() => setLens('GAPS')} label="Coverage gaps" count={t.isolatedBranches} color="#ef4444" />
-            <Lens active={lens === 'UNASSIGNED'} onClick={() => setLens('UNASSIGNED')} label="Unassigned" count={t.unassignedBranches} color="#f59e0b" />
+            <Lens active={lens === 'GAPS'} onClick={() => setLens('GAPS')} label="Coverage gaps" count={t.isolatedBranches} color="var(--danger)" />
+            <Lens active={lens === 'UNASSIGNED'} onClick={() => setLens('UNASSIGNED')} label="Unassigned" count={t.unassignedBranches} color="var(--warning)" />
             {selectedState && (
               <button onClick={() => setSelectedState(null)}
-                style={{ marginLeft: 4, padding: '6px 11px', fontSize: 11.5, fontWeight: 600, background: 'rgba(99,102,241,0.12)', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                style={{ marginLeft: 4, padding: '6px 11px', fontSize: 11.5, fontWeight: 600, background: 'rgba(216,174,71,0.12)', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
                 {selectedState} ✕
               </button>
             )}
@@ -197,14 +197,14 @@ export const ExecutiveMap: React.FC = () => {
                   <Row label="Workload" value={`${selected.packets} packets · ${selected.auditHours}h`} />
                   <Row label="Status" value={selected.status} />
                   <Row label="Assayer confirmed" value={selected.assigned ? 'Yes' : 'Not yet'}
-                       color={selected.assigned ? '#22c55e' : '#f59e0b'} />
+                       color={selected.assigned ? 'var(--success)' : 'var(--warning)'} />
                   <Row label="Nearest assayer"
                        value={selected.nearestAssayerName ? `${selected.nearestAssayerName} · ${selected.nearestAssayerKm}km` : 'none located'}
-                       color={selected.isolated ? '#ef4444' : undefined} />
+                       color={selected.isolated ? 'var(--danger)' : undefined} />
                   <Row label={`Assayers within ${data.serviceableRadiusKm}km`} value={String(selected.assayersInRange)}
-                       color={selected.assayersInRange === 0 ? '#ef4444' : undefined} />
+                       color={selected.assayersInRange === 0 ? 'var(--danger)' : undefined} />
                   {selected.isolated && (
-                    <div style={{ fontSize: 11.5, color: '#ef4444', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', padding: 9, lineHeight: 1.45 }}>
+                    <div style={{ fontSize: 11.5, color: 'var(--danger)', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-sm)', padding: 9, lineHeight: 1.45 }}>
                       No assayer lives within serviceable range. This branch needs travel-and-stay costing, a partner, or a local hire — it cannot be scheduled normally.
                     </div>
                   )}
@@ -234,14 +234,14 @@ export const ExecutiveMap: React.FC = () => {
               <SectionLabel>Where to add assayers</SectionLabel>
               <div className="glass-card" style={{ padding: 14 }}>
                 {data.coverageGaps.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: '#22c55e' }}>Every branch has an assayer within {data.serviceableRadiusKm}km.</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--success)' }}>Every branch has an assayer within {data.serviceableRadiusKm}km.</div>
                 ) : data.coverageGaps.map((g) => (
                   <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', fontSize: 12, borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
                     <span>
                       <strong>{g.name}</strong>
                       <span style={{ color: 'var(--text-muted)' }}> · {g.district}, {g.state} · {g.packets} pkt</span>
                     </span>
-                    <span style={{ color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--danger)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                       {g.nearestAssayerKm !== null ? `${g.nearestAssayerKm}km away` : 'none located'}
                     </span>
                   </div>
@@ -297,7 +297,7 @@ const Lens: React.FC<{ active: boolean; onClick: () => void; label: string; coun
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
   }}>
     {label}
-    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? '#0b1120' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 10.5, fontWeight: 700 }}>{count}</span>
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--bg-page)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 10.5, fontWeight: 700 }}>{count}</span>
   </button>
 );
 

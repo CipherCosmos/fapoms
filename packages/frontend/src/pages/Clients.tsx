@@ -15,21 +15,21 @@ import { BillingPanel } from './clients/BillingPanel';
 import { ConfigurationPanel } from './clients/ConfigurationPanel';
 
 const LIFECYCLE_COLORS: Record<string, { color: string; bg: string }> = {
-  PROSPECT: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  ONBOARDING: { color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
-  ACTIVE: { color: '#10b981', bg: 'rgba(16,185,129,0.1)' },
-  SUSPENDED: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
-  UNDER_REVIEW: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  INACTIVE: { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
-  TERMINATED: { color: '#dc2626', bg: 'rgba(220,38,38,0.1)' },
-  ARCHIVED: { color: '#9ca3af', bg: 'rgba(156,163,175,0.1)' },
+  PROSPECT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  ONBOARDING: { color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  ACTIVE: { color: 'var(--success)', bg: 'var(--status-active-bg)' },
+  SUSPENDED: { color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
+  UNDER_REVIEW: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  INACTIVE: { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' },
+  TERMINATED: { color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
+  ARCHIVED: { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' },
 };
 
 const PRIORITY_COLORS: Record<string, { color: string; bg: string }> = {
-  LOW: { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
-  MEDIUM: { color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
-  HIGH: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  CRITICAL: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+  LOW: { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' },
+  MEDIUM: { color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  HIGH: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  CRITICAL: { color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
 };
 
 const LIFECYCLE_FILTERS = ['PROSPECT', 'ONBOARDING', 'ACTIVE', 'SUSPENDED', 'UNDER_REVIEW', 'INACTIVE', 'TERMINATED', 'ARCHIVED'];
@@ -113,7 +113,7 @@ const Clients: React.FC = () => {
       header: 'Lifecycle',
       sortValue: (r) => r.lifecycleStatus,
       render: (r) => {
-        const c = LIFECYCLE_COLORS[r.lifecycleStatus] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' };
+        const c = LIFECYCLE_COLORS[r.lifecycleStatus] ?? { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' };
         return <StatusBadge label={clientLifecycleLabel(r.lifecycleStatus)} color={c.color} bg={c.bg} />;
       },
     },
@@ -122,7 +122,7 @@ const Clients: React.FC = () => {
       header: 'Priority',
       sortValue: (r) => r.priority,
       render: (r) => {
-        const c = PRIORITY_COLORS[r.priority] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' };
+        const c = PRIORITY_COLORS[r.priority] ?? { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' };
         return <StatusBadge label={r.priority} color={c.color} bg={c.bg} variant="tag" />;
       },
     },
@@ -172,7 +172,22 @@ const Clients: React.FC = () => {
         sortKey={sortBy}
         sortOrder={sortOrder}
         onSort={handleSort}
-        emptyMessage="No clients found."
+        emptyState={
+          <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <Building2 size={34} style={{ color: 'var(--text-muted)', opacity: 0.4 }} />
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600 }}>No clients found</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+              {status || clientType || priority || debouncedSearch
+                ? 'Try adjusting your search or filters.'
+                : 'Add your first client to start booking audits.'}
+            </div>
+            {!(status || clientType || priority || debouncedSearch) && (
+              <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Plus size={13} /> Add Client
+              </button>
+            )}
+          </div>
+        }
       />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -196,8 +211,8 @@ const Clients: React.FC = () => {
           selectedClient && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
               <div style={{ display: 'flex', gap: 6 }}>
-                <StatusBadge label={clientLifecycleLabel(selectedClient.lifecycleStatus)} color={LIFECYCLE_COLORS[selectedClient.lifecycleStatus]?.color ?? '#6b7280'} bg={LIFECYCLE_COLORS[selectedClient.lifecycleStatus]?.bg ?? 'rgba(107,114,128,0.1)'} />
-                <StatusBadge label={selectedClient.priority} color={PRIORITY_COLORS[selectedClient.priority]?.color ?? '#6b7280'} bg={PRIORITY_COLORS[selectedClient.priority]?.bg ?? 'rgba(107,114,128,0.1)'} variant="tag" />
+                <StatusBadge label={clientLifecycleLabel(selectedClient.lifecycleStatus)} color={LIFECYCLE_COLORS[selectedClient.lifecycleStatus]?.color ?? 'var(--text-muted)'} bg={LIFECYCLE_COLORS[selectedClient.lifecycleStatus]?.bg ?? 'var(--bg-surface-2)'} />
+                <StatusBadge label={selectedClient.priority} color={PRIORITY_COLORS[selectedClient.priority]?.color ?? 'var(--text-muted)'} bg={PRIORITY_COLORS[selectedClient.priority]?.bg ?? 'var(--bg-surface-2)'} variant="tag" />
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button onClick={() => setShowEdit(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

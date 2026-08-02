@@ -29,14 +29,14 @@ export const LifecycleModal: React.FC<{
 
   const options = LIFECYCLE_OPTIONS[currentStatus] ?? [];
   const colorMap: Record<string, string> = {
-    [ClientLifecycleStatus.PROSPECT]: '#f59e0b',
-    [ClientLifecycleStatus.ONBOARDING]: '#3b82f6',
-    [ClientLifecycleStatus.ACTIVE]: '#10b981',
-    [ClientLifecycleStatus.SUSPENDED]: '#ef4444',
-    [ClientLifecycleStatus.UNDER_REVIEW]: '#f59e0b',
-    [ClientLifecycleStatus.INACTIVE]: '#6b7280',
-    [ClientLifecycleStatus.TERMINATED]: '#dc2626',
-    [ClientLifecycleStatus.ARCHIVED]: '#9ca3af',
+    [ClientLifecycleStatus.PROSPECT]: 'var(--warning)',
+    [ClientLifecycleStatus.ONBOARDING]: 'var(--accent)',
+    [ClientLifecycleStatus.ACTIVE]: 'var(--success)',
+    [ClientLifecycleStatus.SUSPENDED]: 'var(--danger)',
+    [ClientLifecycleStatus.UNDER_REVIEW]: 'var(--warning)',
+    [ClientLifecycleStatus.INACTIVE]: 'var(--text-muted)',
+    [ClientLifecycleStatus.TERMINATED]: 'var(--danger)',
+    [ClientLifecycleStatus.ARCHIVED]: 'var(--text-muted)',
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -66,11 +66,11 @@ export const LifecycleModal: React.FC<{
         {clientName} — Current: <b style={{ color: colorMap[currentStatus] }}>{clientLifecycleLabel(currentStatus)}</b>
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <select value={targetLifecycle} onChange={(e) => setTargetLifecycle(e.target.value)} style={{ padding: 10, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+        <select value={targetLifecycle} onChange={(e) => setTargetLifecycle(e.target.value)} style={{ padding: 10, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}>
           <option value="">-- Select target status --</option>
           {options.map((s) => <option key={s} value={s}>{clientLifecycleLabel(s)}</option>)}
         </select>
-        <input type="text" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ padding: 10, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+        <input type="text" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ padding: 10, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
       </div>
     </Modal>
   );

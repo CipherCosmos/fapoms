@@ -9,6 +9,8 @@ import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { useSocket } from '../hooks/useSocket';
 import { connectSocket } from '../services/socket';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
+import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
+import { useToast } from '../components/ui';
 
 interface ProjectOption {
   id: string;
@@ -245,11 +247,11 @@ interface ProjectDayPlan {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  PERFORMANCE: '#8b5cf6',
-  QUALITY: '#3b82f6',
-  BEHAVIORAL: '#f59e0b',
-  TRAINING: '#10b981',
-  GENERAL: '#6b7280',
+  PERFORMANCE: '#d8ae47',
+  QUALITY: '#d8ae47',
+  BEHAVIORAL: '#b8791f',
+  TRAINING: '#3f7d53',
+  GENERAL: '#7c6e59',
 };
 
 // Values derive straight from the shared enum, wording from the shared status
@@ -300,8 +302,8 @@ const ScoreBreakdown: React.FC<{ breakdown?: Record<string, number> }> = ({ brea
   const pill = (k: string, v: number, good: boolean) => (
     <span key={k} title={`${SCORE_DIMENSION_LABELS[k]}: ${Math.round(v)}/100`}
       style={{ fontSize: '9.5px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', whiteSpace: 'nowrap',
-        background: good ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
-        color: good ? '#34d399' : '#f87171' }}>
+        background: good ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
+        color: good ? 'var(--success)' : 'var(--danger)' }}>
       {SCORE_DIMENSION_LABELS[k]} {Math.round(v)}
     </span>
   );
@@ -325,7 +327,7 @@ const ExcludedCandidatesPanel: React.FC<{ excluded: ExcludedCandidate[] }> = ({ 
   const [open, setOpen] = useState(false);
   if (excluded.length === 0) return null;
   return (
-    <div style={{ marginTop: '10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.02)' }}>
+    <div style={{ marginTop: '10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface-2)' }}>
       <button onClick={() => setOpen(!open)}
         style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer' }}>
         <span>{excluded.length} assayer{excluded.length > 1 ? 's' : ''} not shown — why?</span>
@@ -335,9 +337,9 @@ const ExcludedCandidatesPanel: React.FC<{ excluded: ExcludedCandidate[] }> = ({ 
         <div style={{ padding: '0 10px 10px' }}>
           {excluded.map(e => (
             <div key={e.assayerId} style={{ padding: '6px 0', borderTop: '1px solid var(--border-color)' }}>
-              <div style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{e.displayName}</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{e.displayName}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{e.reason}</div>
-              {e.detail && <div style={{ fontSize: '10.5px', color: '#f59e0b', marginTop: '2px' }}>└─ {e.detail}</div>}
+              {e.detail && <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '2px' }}>└─ {e.detail}</div>}
             </div>
           ))}
         </div>
@@ -372,40 +374,40 @@ const NegotiationBanner: React.FC<{
   return (
     <div style={{
       padding: '12px 14px',
-      background: 'linear-gradient(135deg, rgba(245,158,11,0.10), rgba(245,158,11,0.03))',
-      borderBottom: '1px solid rgba(245,158,11,0.25)',
-      borderLeft: '3px solid #f59e0b',
+      background: 'linear-gradient(135deg, var(--status-pending-bg), var(--status-pending-bg))',
+      borderBottom: '1px solid var(--status-pending-bg)',
+      borderLeft: '3px solid var(--warning)',
       display: 'flex', flexDirection: 'column', gap: '10px',
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-        <div style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'rgba(245,158,11,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px' }}>
+        <div style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'var(--status-pending-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px' }}>
           💬
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#fbbf24' }}>
+            <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--warning)' }}>
               Counter offer from {assignment.assayer?.displayName || 'assayer'}
             </span>
-            <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)', whiteSpace: 'nowrap' }}>
               Round {round} of {MAX_NEGOTIATION_ROUNDS}
             </span>
           </div>
-          <div style={{ fontSize: '19px', fontWeight: 800, color: '#fff', marginTop: '3px' }}>
+          <div style={{ fontSize: '19px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '3px' }}>
             ₹{assignment.proposedFee?.toLocaleString()}
           </div>
           {assignment.remarks && (
-            <div style={{ fontSize: '11px', color: '#fcd34d', marginTop: '3px', fontStyle: 'italic' }}>
+            <div style={{ fontSize: '11px', color: 'var(--warning)', marginTop: '3px', fontStyle: 'italic' }}>
               "{assignment.remarks}"
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '5px' }}>
             {assignment.negotiatedByName && (
-              <span style={{ fontSize: '10px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Users size={10} /> Handled by <b style={{ color: '#cbd5e1', fontWeight: 700 }}>{assignment.negotiatedByName}</b>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Users size={10} /> Handled by <b style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{assignment.negotiatedByName}</b>
               </span>
             )}
             {roundsLeft <= 1 && (
-              <span style={{ fontSize: '10px', color: '#f87171', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '3px' }}>
+              <span style={{ fontSize: '10px', color: 'var(--danger)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '3px' }}>
                 <AlertTriangle size={10} />
                 {roundsLeft === 0 ? 'Next counter auto-declines this offer' : 'Last round before auto-decline'}
               </span>
@@ -415,15 +417,15 @@ const NegotiationBanner: React.FC<{
       </div>
       <div style={{ display: 'flex', gap: '6px' }}>
         <button type="button" onClick={onAccept} className="btn btn-primary"
-          style={{ flex: 1.3, padding: '7px 10px', fontSize: '11.5px', background: '#10b981', borderColor: '#10b981', color: '#fff', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          style={{ flex: 1.3, padding: '7px 10px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)', color: 'var(--text-primary)', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
           <Check size={13} /> Accept
         </button>
         <button type="button" onClick={onCounter} className="btn btn-secondary"
-          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: '#a78bfa', borderColor: 'rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: 'var(--accent)', borderColor: 'rgba(216,174,71,0.4)', background: 'rgba(216,174,71,0.1)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
           <RefreshCw size={12} /> Counter
         </button>
         <button type="button" onClick={onDecline} className="btn btn-secondary"
-          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: '#f87171', borderColor: 'rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)', background: 'var(--status-cancelled-bg)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
           <X size={13} /> Decline
         </button>
       </div>
@@ -446,25 +448,33 @@ const BranchListPanel: React.FC<{
   onSelectBranch: (id: string) => void;
   searchTerm: string;
   onSearchTermChange: (value: string) => void;
+  loading?: boolean;
   width?: number;
-}> = ({ branches, selectedBranchId, onSelectBranch, searchTerm, onSearchTermChange, width = 340 }) => {
+}> = ({ branches, selectedBranchId, onSelectBranch, searchTerm, onSearchTermChange, loading = false, width = 340 }) => {
   return (
     <div style={{ width: `${width}px`, minWidth: `${width}px`, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(30, 41, 59, 0.5)' }}>
-        <Search size={13} style={{ color: '#64748b', flexShrink: 0 }} />
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)' }}>
+        <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => onSearchTermChange(e.target.value)}
-          style={{ flex: 1, background: 'none', border: 'none', color: '#fff', outline: 'none', fontSize: '12px' }} />
+          style={{ flex: 1, background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
-        {branches.map(pb => {
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>
+            <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
+            <div>Loading branches…</div>
+          </div>
+        ) : branches.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>No branches in this project.</div>
+        ) : branches.map(pb => {
           const isSelected = pb.id === selectedBranchId;
           const isAssigned = !!pb.assignment;
           const isDone = ['CLOSED'].includes(pb.status);
           const isValidationPending = ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED'].includes(pb.status) || pb.assignment?.status === 'COMPLETED';
           const isNegotiating = pb.status === 'NEGOTIATION' || pb.assignment?.status === 'COUNTER_OFFER';
 
-          const badgeBg = isDone ? 'rgba(16, 185, 129, 0.2)' : isValidationPending ? 'rgba(245, 158, 11, 0.2)' : isAssigned ? 'rgba(56, 189, 248, 0.15)' : isNegotiating ? 'rgba(139, 92, 246, 0.2)' : 'rgba(148, 163, 184, 0.1)';
-          const badgeColor = isDone ? '#34d399' : isValidationPending ? '#f59e0b' : isAssigned ? '#38bdf8' : isNegotiating ? '#a78bfa' : '#94a3b8';
+          const badgeBg = isDone ? 'var(--status-active-bg)' : isValidationPending ? 'var(--status-pending-bg)' : isAssigned ? 'rgba(216,174,71,0.15)' : isNegotiating ? 'rgba(216,174,71,0.2)' : 'var(--border-hair)';
+          const badgeColor = isDone ? 'var(--success)' : isValidationPending ? 'var(--warning)' : isAssigned ? 'var(--accent)' : isNegotiating ? 'var(--accent)' : 'var(--text-muted)';
           // Wording comes from the shared status vocabulary so this badge matches
           // Field Execution and Scheduling for the same branch.
           const statusLabel = isDone
@@ -481,27 +491,27 @@ const BranchListPanel: React.FC<{
             <div key={pb.id} onClick={() => onSelectBranch(pb.id)}
               style={{
                 padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
-                background: isSelected ? 'rgba(99, 102, 241, 0.25)' : isDone ? 'rgba(16, 185, 129, 0.08)' : isAssigned ? 'rgba(56, 189, 248, 0.06)' : 'rgba(30, 41, 59, 0.4)',
-                borderLeft: isSelected ? '4px solid #6366f1' : isDone ? '4px solid #10b981' : isAssigned ? '4px solid #38bdf8' : isNegotiating ? '4px solid #f59e0b' : '4px solid transparent',
-                border: isSelected ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid rgba(255, 255, 255, 0.05)',
+                background: isSelected ? 'rgba(216,174,71,0.25)' : isDone ? 'var(--status-active-bg)' : isAssigned ? 'rgba(216,174,71,0.06)' : 'var(--bg-surface-2)',
+                borderLeft: isSelected ? '4px solid var(--accent)' : isDone ? '4px solid var(--success)' : isAssigned ? '4px solid var(--accent)' : isNegotiating ? '4px solid var(--warning)' : '4px solid transparent',
+                border: isSelected ? '1px solid rgba(216,174,71,0.5)' : '1px solid var(--border-hair)',
               }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
                 <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {statusLabel}
                 </span>
               </div>
-              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>{pb.branch.city}, {pb.branch.state}</span>
                 {pb.assignment?.assayer?.displayName && (
-                  <span style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
+                  <span style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
                 )}
               </div>
               {/* Operators previously had no way to tell, from the queue, whether a
                   colleague was already negotiating this branch — risking duplicate
                   outreach to the same assayer. */}
               {isNegotiating && pb.assignment?.negotiatedByName && (
-                <div style={{ fontSize: '9.5px', color: '#f59e0b', marginTop: '2px' }}>
+                <div style={{ fontSize: '9.5px', color: 'var(--warning)', marginTop: '2px' }}>
                   💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
                 </div>
               )}
@@ -542,10 +552,12 @@ const RecommendationPanel: React.FC<{
   onAccept: (assignmentId: string, proposedFee: number) => void;
   onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
   onDecline: (assignmentId: string) => void;
+  /** Opens the branch's full timeline — the completed/closed panel is otherwise a dead end. */
+  onViewHistory: (projectBranchId: string) => void;
 }> = ({
   selectedPb, renderCandidatesList, width = 380, flex = false, horizontal = false,
   showAllCandidates, onToggleShowAll, slaEnabled, onToggleSla, slaRadius, onSlaRadiusChange,
-  onRefresh, onAccept, onCounter, onDecline,
+  onRefresh, onAccept, onCounter, onDecline, onViewHistory,
 }) => {
   const isDone = selectedPb && (
     ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(selectedPb.status) ||
@@ -561,37 +573,48 @@ const RecommendationPanel: React.FC<{
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span style={{ fontSize: '24px' }}>{selectedPb.status === 'CLOSED' ? '✅' : '🔍'}</span>
               <div>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b' }}>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: selectedPb.status === 'CLOSED' ? 'var(--success)' : 'var(--warning)' }}>
                   {selectedPb.status === 'CLOSED' ? 'Audit Closed & Finalized' : 'Audit Completed — Under Validation'}
                 </div>
-                <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '3px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
                   {selectedPb.branch.name} • {selectedPb.branch.city}, {selectedPb.branch.state}
                 </div>
               </div>
             </div>
             {selectedPb.assignment && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: 'rgba(30,41,59,0.5)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: 'var(--bg-surface-2)', borderRadius: '8px', border: '1px solid var(--border-hair)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div>
-                    <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '2px' }}>ASSAYER</div>
-                    <div style={{ fontSize: '13px', color: '#38bdf8', fontWeight: 600 }}>👤 {selectedPb.assignment.assayer?.displayName}</div>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>ASSAYER</div>
+                    <div style={{ fontSize: '13px', color: 'var(--accent)', fontWeight: 600 }}>👤 {selectedPb.assignment.assayer?.displayName}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '2px' }}>AGREED FEE</div>
-                    <div style={{ fontSize: '13px', color: '#10b981', fontWeight: 700 }}>₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee ?? '—'}</div>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>AGREED FEE</div>
+                    <div style={{ fontSize: '13px', color: 'var(--success)', fontWeight: 700 }}>₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee ?? '—'}</div>
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', marginBottom: '2px' }}>BRANCH STATUS</div>
-                  <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '4px', background: selectedPb.status === 'CLOSED' ? 'rgba(52,211,153,0.15)' : 'rgba(245,158,11,0.15)', color: selectedPb.status === 'CLOSED' ? '#34d399' : '#f59e0b', fontWeight: 700 }}>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>BRANCH STATUS</div>
+                  <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '4px', background: selectedPb.status === 'CLOSED' ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: selectedPb.status === 'CLOSED' ? 'var(--success)' : 'var(--warning)', fontWeight: 700 }}>
                     {selectedPb.status.replace(/_/g, ' ')}
                   </span>
                 </div>
               </div>
             )}
-            <div style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', lineHeight: 1.5 }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: 1.5 }}>
               This branch audit is {selectedPb.status === 'CLOSED' ? 'closed and finalized' : 'completed and currently under validator review'}. No further scheduling or reassignment actions are available.
             </div>
+            <button
+              onClick={() => onViewHistory(selectedPb.id)}
+              style={{
+                marginTop: '10px', padding: '8px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                background: 'var(--bg-page)', border: '1px solid var(--border-color)',
+                color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: '6px', width: '100%', justifyContent: 'center',
+              }}
+            >
+              View full branch history
+            </button>
           </div>
         ) : (
           <>
@@ -605,11 +628,11 @@ const RecommendationPanel: React.FC<{
             )}
 
             {/* Branch Header & SLA Controls Bar */}
-            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'rgba(30, 41, 59, 0.6)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>MATCHING INSPECTOR</span>
-                  <div style={{ fontSize: '15px', fontWeight: 800, color: '#fff', marginTop: '1px' }}>{selectedPb.branch.name}</div>
+                  <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '1px' }}>{selectedPb.branch.name}</div>
                 </div>
                 <button onClick={onRefresh}
                   className="btn btn-secondary" title="Refresh candidates"
@@ -623,13 +646,13 @@ const RecommendationPanel: React.FC<{
                   <input type="checkbox" checked={showAllCandidates} onChange={(e) => onToggleShowAll(e.target.checked)} />
                   Show Distant (&gt;700km)
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
                   Min Radius Filter
                 </label>
                 {slaEnabled && (
                   <select value={slaRadius} onChange={e => onSlaRadiusChange(Number(e.target.value))}
-                    style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', cursor: 'pointer' }}>
+                    style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none', cursor: 'pointer' }}>
                     {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
                   </select>
                 )}
@@ -643,7 +666,7 @@ const RecommendationPanel: React.FC<{
           </>
         )
       ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
           👈 Select a branch from the left queue or click a map marker to inspect candidate matches.
         </div>
       )}
@@ -652,6 +675,7 @@ const RecommendationPanel: React.FC<{
 };
 
 export const PlanningWorkspace: React.FC = () => {
+  const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -659,8 +683,9 @@ export const PlanningWorkspace: React.FC = () => {
   const [branches, setBranches] = useState<ProjectBranch[]>([]);
   const [zones, setZones] = useState<{ id: string; name: string }[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
+  const [historyBranchId, setHistoryBranchId] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [, setIsLoadingQueue] = useState(false);
+  const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
   const [excludedCandidates, setExcludedCandidates] = useState<ExcludedCandidate[]>([]);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
@@ -803,14 +828,14 @@ export const PlanningWorkspace: React.FC = () => {
       }
     }
     if (assignedBranches.length === 0) {
-      alert(`No branch allocations or selected branch found for ${candidate.displayName}.`);
+      toast({ type: 'warning', title: 'Nothing to route', message: `${candidate.displayName} has no branches selected yet. Pick at least one branch first.` });
       return;
     }
     const originLat = candidate.latitude ?? assignedBranches[0].branch.latitude;
     const originLng = candidate.longitude ?? assignedBranches[0].branch.longitude;
-    if (!originLat || !originLng) { alert('Missing location coordinates: Cannot calculate route.'); return; }
+    if (!originLat || !originLng) { toast({ type: 'warning', title: 'No starting location', message: 'This assayer has no saved location yet, so a route cannot be worked out. Add their address in Workforce first.' }); return; }
     const destinations = assignedBranches.filter(b => b.branch.latitude !== null && b.branch.longitude !== null).map(b => ({ id: b.branch.id, latitude: b.branch.latitude!, longitude: b.branch.longitude! }));
-    if (destinations.length === 0) { alert('No valid branch coordinates found to optimize.'); return; }
+    if (destinations.length === 0) { toast({ type: 'warning', title: 'No branch locations', message: 'None of these branches have a location saved, so a route cannot be worked out.' }); return; }
     setIsOptimizing(true);
     setOptimizedSummary(null);
     setRoutePoints(undefined);
@@ -828,7 +853,7 @@ export const PlanningWorkspace: React.FC = () => {
       points.push({ latitude: originLat, longitude: originLng });
       setRoutePoints(points);
       setOptimizedSummary({ totalDistanceKm, totalDurationMinutes });
-    } catch { alert('Network request failure while optimizing route.'); }
+    } catch { toast({ type: 'error', title: 'Route could not be calculated', message: 'Could not reach the routing service. Check your connection and try again.' }); }
     finally { setIsOptimizing(false); }
   };
 
@@ -1089,7 +1114,7 @@ export const PlanningWorkspace: React.FC = () => {
 
   const s = (sel: string, set: (v: string) => void, opts: { value: string; label: string }[]) => (
     <select value={sel} onChange={e => set(e.target.value)}
-      style={{ padding: '7px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', cursor: 'pointer' }}>
+      style={{ padding: '7px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', cursor: 'pointer' }}>
       {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   );
@@ -1102,7 +1127,7 @@ export const PlanningWorkspace: React.FC = () => {
     // a genuine empty result — the operator would go looking for assayers that were never queried.
     if (candidatesError) {
       return (
-        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: '#f87171', fontSize: '12.5px', textAlign: 'center' }}>
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontSize: '12.5px', textAlign: 'center' }}>
           <AlertTriangle size={18} />
           <div>{candidatesError}</div>
           <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 10px' }}
@@ -1135,8 +1160,8 @@ export const PlanningWorkspace: React.FC = () => {
           const slaStatus = slaEnabled && c.distanceKm !== null
             ? (c.distanceKm >= slaRadius ? 'compliant' : 'breach')
             : null;
-          const cardBorderColor = slaStatus === 'compliant' ? 'rgba(16,185,129,0.4)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.4)' : 'var(--border-color)';
-          const cardBg = slaStatus === 'compliant' ? 'rgba(16,185,129,0.04)' : slaStatus === 'breach' ? 'rgba(239,68,68,0.04)' : 'rgba(255,255,255,0.02)';
+          const cardBorderColor = slaStatus === 'compliant' ? 'var(--status-active-bg)' : slaStatus === 'breach' ? 'var(--status-cancelled-bg)' : 'var(--border-color)';
+          const cardBg = slaStatus === 'compliant' ? 'var(--status-active-bg)' : slaStatus === 'breach' ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)';
           return (
             <div key={c.id} style={{
               minWidth: horizontal ? '320px' : 'auto', maxWidth: horizontal ? '340px' : 'auto', flexShrink: horizontal ? 0 : undefined,
@@ -1145,10 +1170,10 @@ export const PlanningWorkspace: React.FC = () => {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {c.displayName}
                     {c.pendingOnThisBranch && (
-                      <span title="This assayer already has a pending offer on this branch awaiting their response" style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      <span title="This assayer already has a pending offer on this branch awaiting their response" style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'var(--status-pending-bg)', color: 'var(--warning)', whiteSpace: 'nowrap', flexShrink: 0 }}>
                         ⏳ Pending Response
                       </span>
                     )}
@@ -1157,18 +1182,18 @@ export const PlanningWorkspace: React.FC = () => {
                     <Compass size={11} style={{ flexShrink: 0 }} />
                     <span>{c.distanceKm !== null ? `${c.distanceKm} km away` : 'Distance unavailable'}</span>
                     {slaEnabled && c.distanceKm !== null && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', color: c.distanceKm >= slaRadius ? '#10b981' : '#ef4444' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
                         {c.distanceKm >= slaRadius ? `✓ >${slaRadius}km Radius` : `✗ Inside Radius`}
                       </span>
                     )}
                   </div>
                 </div>
-                <span title="Weighted across 15 dimensions including SLA compliance, acceptance history, proximity, workload, paperwork quality and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf >= 90 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: conf >= 90 ? 'var(--status-active)' : '#f59e0b', flexShrink: 0 }}>
+                <span title="Weighted across 15 dimensions including SLA compliance, acceptance history, proximity, workload, paperwork quality and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
                   {conf}% Match
                 </span>
               </div>
 
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'var(--bg-surface-2)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span>📞 {c.phone}</span>
                 <span>📍 {c.city}, {c.state}</span>
                 <span>Base: ₹{c.baseFee ?? 1200}</span>
@@ -1184,7 +1209,7 @@ export const PlanningWorkspace: React.FC = () => {
                     setLayoutMode('three-col');
                   }
                 }}
-                  className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: selectedCandidateForMap?.id === c.id ? 'rgba(139, 92, 246, 0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : '#fff' }}>
+                  className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: selectedCandidateForMap?.id === c.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--text-primary)' }}>
                   👁️ Map
                 </button>
                 <button onClick={async () => {
@@ -1251,13 +1276,13 @@ export const PlanningWorkspace: React.FC = () => {
                     setMessage({ type: 'error', text: err.message || 'Direct dispatch failed' });
                   }
                 }}
-                  className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: 'rgba(16,185,129,0.12)', color: 'var(--status-active)', borderColor: 'rgba(16,185,129,0.3)' }}>
+                  className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: 'var(--status-active-bg)', color: 'var(--status-active)', borderColor: 'var(--status-active-bg)' }}>
                   📲 Direct App Invite
                 </button>
               </div>
 
               {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
-                <div style={{ padding: '8px 10px', background: 'rgba(99,102,241,0.05)', border: '1px dashed rgba(99,102,241,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div style={{ padding: '8px 10px', background: 'rgba(216,174,71,0.05)', border: '1px dashed rgba(216,174,71,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div><b>🗺️ Optimized Route Details:</b></div>
                   <div>• Distance: {optimizedSummary.totalDistanceKm} km</div>
                   <div>• Est. Travel Time: {optimizedSummary.totalDurationMinutes} minutes</div>
@@ -1274,11 +1299,11 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-20px', background: '#090d16' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-20px', background: 'var(--bg-page)' }}>
       {/* ── HIGH-DENSITY TOP COMMAND HEADER ── */}
       <div style={{
-        background: 'rgba(15, 23, 42, 0.95)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+        background: 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border-hair)',
         padding: '8px 16px',
         display: 'flex',
         alignItems: 'center',
@@ -1290,7 +1315,7 @@ export const PlanningWorkspace: React.FC = () => {
         {/* Left: Workspace Title & Project Dropdown */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 800, color: '#38bdf8', letterSpacing: '0.5px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.5px' }}>
               📍 STAGE 1: ASSAYER MATCHING
             </span>
           </div>
@@ -1299,10 +1324,10 @@ export const PlanningWorkspace: React.FC = () => {
             onChange={e => setSelectedProjectId(e.target.value)}
             style={{
               padding: '5px 10px',
-              background: '#1e293b',
-              border: '1px solid rgba(99, 102, 241, 0.35)',
+              background: 'var(--bg-input)',
+              border: '1px solid rgba(216,174,71,0.35)',
               borderRadius: '6px',
-              color: '#ffffff',
+              color: 'var(--text-primary)',
               fontSize: '12px',
               fontWeight: 700,
               outline: 'none',
@@ -1315,16 +1340,16 @@ export const PlanningWorkspace: React.FC = () => {
         </div>
 
         {/* Center: Stage Pipeline Switcher */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(30, 41, 59, 0.6)', padding: '3px 6px', borderRadius: '16px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-          <div onClick={() => navigate('/planning')} style={{ padding: '3px 10px', background: '#4f46e5', borderRadius: '12px', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--bg-surface-2)', padding: '3px 6px', borderRadius: '16px', border: '1px solid var(--border-hair)' }}>
+          <div onClick={() => navigate('/planning')} style={{ padding: '3px 10px', background: 'var(--accent)', borderRadius: '12px', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>
             Stage 1: Match Assayers
           </div>
-          <span style={{ color: '#475569', fontSize: '10px' }}>➔</span>
-          <div onClick={() => navigate('/scheduling')} style={{ padding: '3px 10px', color: '#94a3b8', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/scheduling')} style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
             Stage 2: Dispatch
           </div>
-          <span style={{ color: '#475569', fontSize: '10px' }}>➔</span>
-          <div onClick={() => navigate('/assignments')} style={{ padding: '3px 10px', color: '#94a3b8', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>➔</span>
+          <div onClick={() => navigate('/assignments')} style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
             Stage 3: Execution
           </div>
         </div>
@@ -1332,11 +1357,11 @@ export const PlanningWorkspace: React.FC = () => {
         {/* Right: Key Metrics & Report Export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-            <span style={{ color: '#94a3b8' }}>Total: <b style={{ color: '#fff' }}>{totalCount}</b></span>
-            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'rgba(16,185,129,0.15)', color: '#34d399', fontWeight: 700 }}>
+            <span style={{ color: 'var(--text-muted)' }}>Total: <b style={{ color: 'var(--text-primary)' }}>{totalCount}</b></span>
+            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-active-bg)', color: 'var(--success)', fontWeight: 700 }}>
               {coveragePct}% ({confirmedCount})
             </span>
-            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'rgba(245,158,11,0.15)', color: '#fbbf24', fontWeight: 700 }}>
+            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
               Pending ({totalCount - confirmedCount})
             </span>
           </div>
@@ -1344,10 +1369,10 @@ export const PlanningWorkspace: React.FC = () => {
           <button
             onClick={handleExportCoverageReport}
             style={{
-              background: 'rgba(16,185,129,0.15)',
-              border: '1px solid rgba(16,185,129,0.4)',
+              background: 'var(--status-active-bg)',
+              border: '1px solid var(--status-active-bg)',
               borderRadius: '6px',
-              color: '#34d399',
+              color: 'var(--success)',
               cursor: 'pointer',
               padding: '4px 10px',
               fontSize: '11px',
@@ -1364,8 +1389,8 @@ export const PlanningWorkspace: React.FC = () => {
 
       {/* ── SECONDARY INLINE FILTERS BAR ── */}
       <div style={{
-        background: 'rgba(15, 23, 42, 0.6)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+        background: 'var(--bg-surface-2)',
+        borderBottom: '1px solid var(--border-hair)',
         padding: '5px 16px',
         display: 'flex',
         alignItems: 'center',
@@ -1382,15 +1407,30 @@ export const PlanningWorkspace: React.FC = () => {
           placeholder="Filter city..."
           value={cityFilter}
           onChange={e => setCityFilter(e.target.value)}
-          style={{ width: '100px', padding: '4px 8px', background: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '4px', color: '#fff', outline: 'none', fontSize: '11px' }}
+          style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: '11px' }}
         />
         <input
           type="text"
           placeholder="Filter district..."
           value={districtFilter}
           onChange={e => setDistrictFilter(e.target.value)}
-          style={{ width: '100px', padding: '4px 8px', background: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '4px', color: '#fff', outline: 'none', fontSize: '11px' }}
+          style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: '11px' }}
         />
+
+        {(() => {
+          const activeCount = [stateFilter !== 'ALL', statusFilter !== 'ALL', priorityFilter !== 'ALL', zoneFilter !== 'ALL', cityFilter !== '', districtFilter !== '', searchTerm !== ''].filter(Boolean).length;
+          if (activeCount === 0) return null;
+          return (
+            <button
+              type="button"
+              onClick={() => { setStateFilter('ALL'); setStatusFilter('ALL'); setPriorityFilter('ALL'); setZoneFilter('ALL'); setCityFilter(''); setDistrictFilter(''); setSearchTerm(''); }}
+              title="Clear all filters"
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', fontSize: '11px', fontWeight: 600, color: 'var(--accent)', background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <X size={12} /> Clear {activeCount}
+            </button>
+          );
+        })()}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '3px', alignItems: 'center' }}>
           {[
@@ -1405,10 +1445,10 @@ export const PlanningWorkspace: React.FC = () => {
               key={k}
               onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
               style={{
-                background: layout === k ? 'rgba(99,102,241,0.2)' : 'transparent',
-                border: `1px solid ${layout === k ? '#6366f1' : 'rgba(255,255,255,0.08)'}`,
+                background: layout === k ? 'rgba(216,174,71,0.2)' : 'transparent',
+                border: `1px solid ${layout === k ? 'var(--accent)' : 'var(--border-hair)'}`,
                 borderRadius: '4px',
-                color: layout === k ? '#ffffff' : '#94a3b8',
+                color: layout === k ? 'var(--text-primary)' : 'var(--text-muted)',
                 cursor: 'pointer',
                 padding: '3px 7px',
                 fontSize: '10px',
@@ -1423,7 +1463,7 @@ export const PlanningWorkspace: React.FC = () => {
 
       {/* ── Message Banner ── */}
       {message && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 16px', fontSize: '11px', borderBottom: '1px solid', background: message.type === 'success' ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)', borderColor: message.type === 'success' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', color: message.type === 'success' ? 'var(--accent-secondary)' : '#f87171', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 16px', fontSize: '11px', borderBottom: '1px solid', background: message.type === 'success' ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', borderColor: message.type === 'success' ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: message.type === 'success' ? 'var(--accent-secondary)' : 'var(--danger)', flexShrink: 0 }}>
           <span>{message.text}</span>
         </div>
       )}
@@ -1434,6 +1474,7 @@ export const PlanningWorkspace: React.FC = () => {
           {/* Column 1: Branch Queue */}
           <BranchListPanel
             branches={filteredBranches}
+            loading={isLoadingQueue}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -1443,6 +1484,7 @@ export const PlanningWorkspace: React.FC = () => {
 
           {/* Column 2: Assayer Recommendations & Match Details */}
           <RecommendationPanel
+            onViewHistory={setHistoryBranchId}
             selectedPb={selectedPb}
             renderCandidatesList={renderCandidatesList}
             flex
@@ -1466,6 +1508,7 @@ export const PlanningWorkspace: React.FC = () => {
           {/* Column 1: Branch Queue */}
           <BranchListPanel
             branches={filteredBranches}
+            loading={isLoadingQueue}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -1495,6 +1538,7 @@ export const PlanningWorkspace: React.FC = () => {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '8px', padding: '8px', overflow: 'hidden' }}>
           <BranchListPanel
             branches={filteredBranches}
+            loading={isLoadingQueue}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -1524,6 +1568,7 @@ export const PlanningWorkspace: React.FC = () => {
               {selectedPb && (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <RecommendationPanel
+                    onViewHistory={setHistoryBranchId}
                     selectedPb={selectedPb}
                     renderCandidatesList={renderCandidatesList}
                     flex
@@ -1552,6 +1597,7 @@ export const PlanningWorkspace: React.FC = () => {
           {/* Column 1: Branch Queue Panel */}
           <BranchListPanel
             branches={filteredBranches}
+            loading={isLoadingQueue}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -1576,6 +1622,7 @@ export const PlanningWorkspace: React.FC = () => {
 
           {/* Column 3: Right Match & Counter-Offer Inspector Panel */}
           <RecommendationPanel
+            onViewHistory={setHistoryBranchId}
             selectedPb={selectedPb}
             renderCandidatesList={renderCandidatesList}
             width={380}
@@ -1618,12 +1665,12 @@ export const PlanningWorkspace: React.FC = () => {
             </div>
 
             {/* Assayer Summary */}
-            <div style={{ display: 'flex', gap: '14px', padding: '14px', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-              <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '17px', fontWeight: 700, flexShrink: 0 }}>
+            <div style={{ display: 'flex', gap: '14px', padding: '14px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+              <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', fontSize: '17px', fontWeight: 700, flexShrink: 0 }}>
                 {selectedCandidate.displayName.charAt(0).toUpperCase()}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>{selectedCandidate.displayName}</div>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>{selectedCandidate.displayName}</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>{selectedCandidate.assayerCode}</div>
                 <div style={{ display: 'flex', gap: '10px', marginTop: '6px', fontSize: '11px', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {selectedCandidate.city}, {selectedCandidate.state}</span>
@@ -1632,7 +1679,7 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
-                <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, background: (selectedCandidate.score ?? 74) >= 90 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: (selectedCandidate.score ?? 74) >= 90 ? 'var(--status-active)' : '#f59e0b' }}>
+                <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, background: (selectedCandidate.score ?? 74) >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: (selectedCandidate.score ?? 74) >= 90 ? 'var(--status-active)' : 'var(--warning)' }}>
                   {selectedCandidate.score != null ? Math.round(selectedCandidate.score) : selectedCandidate.distanceKm != null && selectedCandidate.distanceKm < 30 ? 98 : selectedCandidate.distanceKm != null && selectedCandidate.distanceKm < 60 ? 88 : 74}% Match
                 </span>
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}><Compass size={10} /> {selectedCandidate.distanceKm ?? 'N/A'} km</span>
@@ -1641,30 +1688,30 @@ export const PlanningWorkspace: React.FC = () => {
 
             {/* Branch + Assignment details in 2-col grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ padding: '12px', background: 'rgba(99,102,241,0.05)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(99,102,241,0.15)' }}>
+              <div style={{ padding: '12px', background: 'rgba(216,174,71,0.05)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(216,174,71,0.15)' }}>
                 <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Building2 size={11} /> BRANCH
                 </div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{selectedPb.branch.name}</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedPb.branch.name}</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{selectedPb.branch.city}, {selectedPb.branch.state}</div>
                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>Code: {selectedPb.branch.branchCode}</div>
               </div>
-              <div style={{ padding: '12px', background: 'rgba(16,185,129,0.05)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16,185,129,0.15)' }}>
+              <div style={{ padding: '12px', background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--status-active-bg)' }}>
                 <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <TrendingUp size={11} /> ASSIGNMENT
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Status: </span>
-                  <span style={{ color: '#f59e0b', fontWeight: 600 }}>{selectedPb.status.replace(/_/g, ' ')}</span>
+                  <span style={{ color: 'var(--warning)', fontWeight: 600 }}>{selectedPb.status.replace(/_/g, ' ')}</span>
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Priority: </span>
-                  <span style={{ color: '#fff', fontWeight: 600 }}>{selectedPb.priority || 'Normal'}</span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{selectedPb.priority || 'Normal'}</span>
                 </div>
                 {selectedCandidate.baseFee != null && (
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Suggested Fee: </span>
-                    <span style={{ color: '#f59e0b', fontWeight: 600 }}>₹{selectedCandidate.baseFee.toLocaleString()}</span>
+                    <span style={{ color: 'var(--warning)', fontWeight: 600 }}>₹{selectedCandidate.baseFee.toLocaleString()}</span>
                   </div>
                 )}
               </div>
@@ -1676,7 +1723,7 @@ export const PlanningWorkspace: React.FC = () => {
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <DollarSign size={11} /> Base Fee
                 </label>
-                <div style={{ padding: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: loadingCommercial ? 'var(--text-muted)' : '#f59e0b', fontSize: '14px', fontWeight: 600 }}>
+                <div style={{ padding: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: loadingCommercial ? 'var(--text-muted)' : 'var(--warning)', fontSize: '14px', fontWeight: 600 }}>
                   {loadingCommercial ? 'Loading...' : commercialBaseFee != null ? `₹${commercialBaseFee.toLocaleString()}` : selectedCandidate.baseFee != null ? `₹${selectedCandidate.baseFee.toLocaleString()}` : 'Not set'}
                 </div>
               </div>
@@ -1687,7 +1734,7 @@ export const PlanningWorkspace: React.FC = () => {
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '13px' }}>₹</span>
                   <input type="number" value={negotiatingFee} onChange={e => setNegotiatingFee(e.target.value)} required
-                    style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
+                    style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -1695,15 +1742,15 @@ export const PlanningWorkspace: React.FC = () => {
                   <Calendar size={11} /> Audit Scheduled Date
                 </label>
                 <input type="date" value={scheduledAuditDate} onChange={e => setScheduledAuditDate(e.target.value)} required
-                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
+                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>
 
             {/* Auto-Dispatch Toggle Option */}
-            <div style={{ padding: '10px 12px', background: 'rgba(30,41,59,0.5)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ padding: '10px 12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <input type="checkbox" id="autoDispatchToggle" checked={autoDispatch} onChange={e => setAutoDispatch(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-              <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: '#fff', cursor: 'pointer', userSelect: 'none' }}>
-                <span style={{ fontWeight: 700, color: autoDispatch ? '#10b981' : '#f59e0b' }}>
+              <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
+                <span style={{ fontWeight: 700, color: autoDispatch ? 'var(--success)' : 'var(--warning)' }}>
                   {autoDispatch ? '⚡ Fast-Track Direct Lock: ' : '📋 Send to Unscheduled Queue: '}
                 </span>
                 <span style={{ color: 'var(--text-secondary)' }}>
@@ -1753,7 +1800,7 @@ export const PlanningWorkspace: React.FC = () => {
                         <div className="glass-card" style={{ padding: '20px', borderRadius: 'var(--radius-md)', marginBottom: '16px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '18px', fontWeight: 700 }}>
+                              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', fontSize: '18px', fontWeight: 700 }}>
                                 {detailAssayer.displayName.charAt(0).toUpperCase()}
                               </div>
                               <div>
@@ -1761,7 +1808,7 @@ export const PlanningWorkspace: React.FC = () => {
                                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '2px', flexWrap: 'wrap' }}>
                                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{detailAssayer.assayerCode}</span>
                                   <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-                                  <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: detailAssayer.lifecycleStatus === 'ACTIVE' ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: detailAssayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active)' : '#f59e0b', fontWeight: 500 }}>{detailAssayer.lifecycleStatus}</span>
+                                  <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: detailAssayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: detailAssayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active)' : 'var(--warning)', fontWeight: 500 }}>{detailAssayer.lifecycleStatus}</span>
                                   <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
                                   <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px' }}><Briefcase size={10} /> {detailAssayer.employmentType}</span>
                                   <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
@@ -1771,7 +1818,7 @@ export const PlanningWorkspace: React.FC = () => {
                             </div>
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                               <div style={{ textAlign: 'center' }}>
-                                <div style={{ fontSize: '24px', fontWeight: 700, color: detailAssayer.averageRating >= 4 ? 'var(--status-active)' : detailAssayer.averageRating >= 3 ? '#f59e0b' : '#ef4444' }}>
+                                <div style={{ fontSize: '24px', fontWeight: 700, color: detailAssayer.averageRating >= 4 ? 'var(--status-active)' : detailAssayer.averageRating >= 3 ? 'var(--warning)' : 'var(--danger)' }}>
                                   {Number(detailAssayer.averageRating) > 0 ? Number(detailAssayer.averageRating).toFixed(1) : '—'}
                                 </div>
                                 <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>Avg Rating</div>
@@ -1806,19 +1853,19 @@ export const PlanningWorkspace: React.FC = () => {
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><TrendingUp size={10} /> Acceptance</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: '#38bdf8' }}>{detailAssayer.acceptanceRate ?? 100}%</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--accent)' }}>{detailAssayer.acceptanceRate ?? 100}%</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><X size={10} /> Rejection Rate</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.rejectionRate || 0) > 15 ? '#ef4444' : '#34d399' }}>{detailAssayer.rejectionRate ?? 0}%</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.rejectionRate || 0) > 15 ? 'var(--danger)' : 'var(--success)' }}>{detailAssayer.rejectionRate ?? 0}%</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><AlertTriangle size={10} /> Queries Raised</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.queryCount || 0) > 0 ? '#f59e0b' : '#34d399' }}>{detailAssayer.queryCount ?? 0}</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.queryCount || 0) > 0 ? 'var(--warning)' : 'var(--success)' }}>{detailAssayer.queryCount ?? 0}</div>
                           </div>
                           <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><DollarSign size={10} /> Total Paid</div>
-                            <div style={{ fontSize: '18px', fontWeight: 700, color: '#f59e0b' }}>₹{Number(detailAssayer.totalEarnings).toLocaleString()}</div>
+                            <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--warning)' }}>₹{Number(detailAssayer.totalEarnings).toLocaleString()}</div>
                           </div>
                         </div>
 
@@ -1831,7 +1878,7 @@ export const PlanningWorkspace: React.FC = () => {
                               {detailAssayer.skills && detailAssayer.skills.length > 0 ? (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
                                   {detailAssayer.skills.map(s => (
-                                    <span key={s} style={{ padding: '2px 6px', background: 'rgba(99,102,241,0.1)', color: 'var(--accent-primary)', borderRadius: '8px', fontSize: '10px' }}>{s}</span>
+                                    <span key={s} style={{ padding: '2px 6px', background: 'rgba(216,174,71,0.1)', color: 'var(--accent-primary)', borderRadius: '8px', fontSize: '10px' }}>{s}</span>
                                   ))}
                                 </div>
                               ) : (
@@ -1843,8 +1890,8 @@ export const PlanningWorkspace: React.FC = () => {
                               {detailAssayer.certifications && detailAssayer.certifications.length > 0 ? (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                   {detailAssayer.certifications.map(c => (
-                                    <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 6px', background: 'rgba(16,185,129,0.05)', borderRadius: 'var(--radius-sm)' }}>
-                                      <span style={{ fontSize: '11px', color: '#fff' }}>{c.name}</span>
+                                    <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 6px', background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)' }}>
+                                      <span style={{ fontSize: '11px', color: 'var(--text-primary)' }}>{c.name}</span>
                                       <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Exp: {new Date(c.expiryDate).toLocaleDateString()}</span>
                                     </div>
                                   ))}
@@ -1862,22 +1909,22 @@ export const PlanningWorkspace: React.FC = () => {
                               <div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>COMPLETION RATE</div>
                                 <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${completionRate}%`, background: completionRate >= 80 ? 'var(--status-active)' : completionRate >= 50 ? '#f59e0b' : '#ef4444', borderRadius: '3px', transition: 'width 0.3s' }} />
+                                  <div style={{ height: '100%', width: `${completionRate}%`, background: completionRate >= 80 ? 'var(--status-active)' : completionRate >= 50 ? 'var(--warning)' : 'var(--danger)', borderRadius: '3px', transition: 'width 0.3s' }} />
                                 </div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '1px' }}>{completionRate}%</div>
                               </div>
                               <div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>ON-TIME DELIVERY</div>
                                 <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${onTimeRate}%`, background: onTimeRate >= 80 ? 'var(--status-active)' : onTimeRate >= 50 ? '#f59e0b' : '#ef4444', borderRadius: '3px', transition: 'width 0.3s' }} />
+                                  <div style={{ height: '100%', width: `${onTimeRate}%`, background: onTimeRate >= 80 ? 'var(--status-active)' : onTimeRate >= 50 ? 'var(--warning)' : 'var(--danger)', borderRadius: '3px', transition: 'width 0.3s' }} />
                                 </div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '1px' }}>{onTimeRate}%</div>
                               </div>
                               {detailAssayer.activeCommercialProfile && (
-                                <div style={{ padding: '8px', background: 'rgba(56,189,248,0.1)', borderRadius: '6px', border: '1px solid rgba(56,189,248,0.2)' }}>
-                                  <div style={{ fontSize: '10px', color: '#38bdf8', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
-                                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>₹{detailAssayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
-                                  <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '2px' }}>
+                                <div style={{ padding: '8px', background: 'rgba(216,174,71,0.1)', borderRadius: '6px', border: '1px solid rgba(216,174,71,0.2)' }}>
+                                  <div style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>₹{detailAssayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
+                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
                                     Travel: ₹{detailAssayer.activeCommercialProfile.travelReimbursement || 0}/km | Daily: ₹{detailAssayer.activeCommercialProfile.dailyRate || 0}
                                   </div>
                                 </div>
@@ -1885,7 +1932,7 @@ export const PlanningWorkspace: React.FC = () => {
                               {detailAssayer.totalEarnings > 0 && (
                                 <div>
                                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>AVERAGE EARNINGS PER JOB</div>
-                                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#f59e0b' }}>
+                                  <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--warning)' }}>
                                     ₹{Math.round(Number(detailAssayer.totalEarnings) / Math.max(detailAssayer.completedAssignments, 1)).toLocaleString()}
                                   </div>
                                 </div>
@@ -1900,14 +1947,14 @@ export const PlanningWorkspace: React.FC = () => {
                           {detailAssayer.auditHistory && detailAssayer.auditHistory.length > 0 ? (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
                               {detailAssayer.auditHistory.map(ah => (
-                                <div key={ah.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid #6366f1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div key={ah.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--accent)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                   <div>
-                                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>{ah.branch_name || 'Branch Audit'}</div>
-                                    <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>{ah.branch_city}, {ah.branch_state} | {ah.project_name || 'GSS Project'}</div>
+                                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{ah.branch_name || 'Branch Audit'}</div>
+                                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{ah.branch_city}, {ah.branch_state} | {ah.project_name || 'GSS Project'}</div>
                                   </div>
                                   <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
-                                    <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(99,102,241,0.2)', color: '#818cf8', fontWeight: 600 }}>{ah.status}</span>
+                                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--warning)' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
+                                    <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(216,174,71,0.2)', color: 'var(--accent)', fontWeight: 600 }}>{ah.status}</span>
                                   </div>
                                 </div>
                               ))}
@@ -1925,15 +1972,15 @@ export const PlanningWorkspace: React.FC = () => {
                           ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '300px', overflowY: 'auto' }}>
                               {detailRemarks.map(r => (
-                                <div key={r.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${CATEGORY_COLORS[r.category] || '#6b7280'}` }}>
+                                <div key={r.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${CATEGORY_COLORS[r.category] || 'var(--text-muted)'}` }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3px' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                                      <span style={{ fontSize: '9px', padding: '1px 4px', borderRadius: '3px', background: `${CATEGORY_COLORS[r.category] || '#6b7280'}20`, color: CATEGORY_COLORS[r.category] || '#6b7280', fontWeight: 600 }}>{r.category}</span>
+                                      <span style={{ fontSize: '9px', padding: '1px 4px', borderRadius: '3px', background: `${CATEGORY_COLORS[r.category] || 'var(--text-muted)'}20`, color: CATEGORY_COLORS[r.category] || 'var(--text-muted)', fontWeight: 600 }}>{r.category}</span>
                                       <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>by {r.authorName}</span>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '1px' }}>
                                       {r.rating != null && [1, 2, 3, 4, 5].map(s => (
-                                        <Star key={s} size={9} fill={s <= r.rating! ? '#f59e0b' : 'none'} color={s <= r.rating! ? '#f59e0b' : 'var(--text-muted)'} />
+                                        <Star key={s} size={9} fill={s <= r.rating! ? 'var(--warning)' : 'none'} color={s <= r.rating! ? 'var(--warning)' : 'var(--text-muted)'} />
                                       ))}
                                     </div>
                                   </div>
@@ -1961,7 +2008,7 @@ export const PlanningWorkspace: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px', flexWrap: 'wrap', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <Layers size={18} style={{ color: 'var(--accent-primary)' }} />
-              <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>Multi-Branch Day Plans</h2>
+              <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Multi-Branch Day Plans</h2>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Clusters nearby branches → assigns single assayer per cluster for one-day coverage</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -1969,18 +2016,18 @@ export const PlanningWorkspace: React.FC = () => {
                 <Calendar size={12} />
                 <input type="date" value={dayPlanTargetDate} min={new Date().toISOString().split('T')[0]}
                   onChange={(e) => setDayPlanTargetDate(e.target.value)}
-                  style={{ padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#fff', fontSize: '11px', outline: 'none' }} />
+                  style={{ padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontSize: '11px', outline: 'none' }} />
               </label>
               {/* Same control that drives the single-branch candidate list and map — reused
                   here rather than a separate day-plans-only setting, so "Min Radius Filter"
                   means one thing everywhere on this page. */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? '#f97316' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
                 <input type="checkbox" checked={slaEnabled} onChange={(e) => setSlaEnabled(e.target.checked)} />
                 Min Radius Filter
               </label>
               {slaEnabled && (
                 <select value={slaRadius} onChange={(e) => setSlaRadius(Number(e.target.value))}
-                  style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: '#f97316', outline: 'none', cursor: 'pointer' }}>
+                  style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none', cursor: 'pointer' }}>
                   {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
                 </select>
               )}
@@ -1992,7 +2039,7 @@ export const PlanningWorkspace: React.FC = () => {
           </div>
 
           {dayPlanData?.effectiveMinDistanceKm != null && (
-            <div style={{ fontSize: '10.5px', color: '#94a3b8', paddingBottom: '4px' }}>
+            <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', paddingBottom: '4px' }}>
               Enforcing a {dayPlanData.effectiveMinDistanceKm}km minimum distance
               {!slaEnabled || dayPlanData.effectiveMinDistanceKm > slaRadius
                 ? " (this client's own configured floor — it always applies, regardless of the filter above)"
@@ -2023,14 +2070,14 @@ export const PlanningWorkspace: React.FC = () => {
                   // cost-per-packet are what decide whether the day is worth committing —
                   // more so than the branch count.
                   { label: 'Packets / Day', value: dayPlanData.summary.averagePacketsPerDay || '—', icon: <Layers size={13} />, color: 'var(--accent-primary)' },
-                  { label: 'Cost / Packet', value: dayPlanData.summary.averageCostPerPacket != null ? `₹${dayPlanData.summary.averageCostPerPacket.toLocaleString()}` : '—', icon: <DollarSign size={13} />, color: '#8b5cf6' },
+                  { label: 'Cost / Packet', value: dayPlanData.summary.averageCostPerPacket != null ? `₹${dayPlanData.summary.averageCostPerPacket.toLocaleString()}` : '—', icon: <DollarSign size={13} />, color: 'var(--accent)' },
                   { label: 'Total Packets', value: dayPlanData.summary.totalPackets || '—', icon: <Briefcase size={13} />, color: 'var(--status-active)' },
-                  { label: 'Assayer-Days', value: dayPlanData.summary.totalAssayersNeeded, icon: <Users size={13} />, color: '#f59e0b' },
+                  { label: 'Assayer-Days', value: dayPlanData.summary.totalAssayersNeeded, icon: <Users size={13} />, color: 'var(--warning)' },
                   { label: 'Branches Covered', value: dayPlanData.summary.totalBranchesCovered, icon: <Building2 size={13} />, color: 'var(--status-active)' },
-                  { label: 'Est. Total Cost', value: `₹${dayPlanData.summary.estimatedTotalCost.toLocaleString()}`, icon: <DollarSign size={13} />, color: '#8b5cf6' },
-                  { label: 'Avg Utilization', value: `${dayPlanData.summary.averageUtilization.toFixed(0)}%`, icon: <TrendingUp size={13} />, color: dayPlanData.summary.averageUtilization >= 70 ? 'var(--status-active)' : '#f59e0b' },
+                  { label: 'Est. Total Cost', value: `₹${dayPlanData.summary.estimatedTotalCost.toLocaleString()}`, icon: <DollarSign size={13} />, color: 'var(--accent)' },
+                  { label: 'Avg Utilization', value: `${dayPlanData.summary.averageUtilization.toFixed(0)}%`, icon: <TrendingUp size={13} />, color: dayPlanData.summary.averageUtilization >= 70 ? 'var(--status-active)' : 'var(--warning)' },
                 ].map((kpi, idx) => (
-                  <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: '130px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div key={idx} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: '130px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{kpi.icon} {kpi.label}</div>
                     <div style={{ fontSize: '20px', fontWeight: 700, color: kpi.color }}>{kpi.value}</div>
                   </div>
@@ -2040,9 +2087,9 @@ export const PlanningWorkspace: React.FC = () => {
               {/* Date moved because the requested day couldn't be worked. Previously the
                   planner would plan a holiday and only fail later, at assign time. */}
               {dayPlanData.dateAdjustment && (
-                <div style={{ background: 'rgba(56,189,248,0.06)', border: '1px solid rgba(56,189,248,0.25)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Calendar size={14} style={{ color: '#38bdf8', flexShrink: 0 }} />
-                  <div style={{ fontSize: '11.5px', color: '#bae6fd' }}>
+                <div style={{ background: 'rgba(216,174,71,0.06)', border: '1px solid rgba(216,174,71,0.25)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Calendar size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                  <div style={{ fontSize: '11.5px', color: 'var(--accent)' }}>
                     <b>{dayPlanData.dateAdjustment.requestedDate}</b> can't be worked — {dayPlanData.dateAdjustment.reason}
                     {' '}Planned for <b>{dayPlanData.targetDate}</b> instead.
                   </div>
@@ -2052,17 +2099,17 @@ export const PlanningWorkspace: React.FC = () => {
               {/* The core signal this whole mechanism exists to surface: a full paid day
                   being spent on a couple of hours of work. */}
               {dayPlanData.underutilizedBranches.length > 0 && (
-                <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.22)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#f87171', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div style={{ background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--danger)', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <AlertTriangle size={13} /> {dayPlanData.underutilizedBranches.length} branch(es) would use a full paid day for a few hours of work
                   </div>
-                  <div style={{ fontSize: '10.5px', color: '#94a3b8', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
                     No neighbouring branch was close enough to bundle. Consider deferring these into a cycle where they can share a day.
                   </div>
                   {dayPlanData.underutilizedBranches.map((b, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
-                      <span style={{ fontWeight: 600, color: '#fff', minWidth: '160px' }}>{b.branchName}</span>
-                      <span style={{ color: '#f87171', fontWeight: 700 }}>{b.idleHours}h idle</span>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', minWidth: '160px' }}>{b.branchName}</span>
+                      <span style={{ color: 'var(--danger)', fontWeight: 700 }}>{b.idleHours}h idle</span>
                       <span style={{ color: 'var(--text-muted)' }}>
                         {b.packetCount != null ? `${b.packetCount} packets ≈ ${b.auditHours}h` : `~${b.auditHours}h (no packet count recorded)`}
                       </span>
@@ -2073,8 +2120,8 @@ export const PlanningWorkspace: React.FC = () => {
 
               {/* Unclustered branches warning */}
               {dayPlanData.unclusteredBranches.length > 0 && (
-                <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#f59e0b', marginBottom: '6px' }}>⚠️ {dayPlanData.unclusteredBranches.length} Branch(es) Could Not Be Clustered</div>
+                <div style={{ background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--warning)', marginBottom: '6px' }}>⚠️ {dayPlanData.unclusteredBranches.length} Branch(es) Could Not Be Clustered</div>
                   {dayPlanData.unclusteredBranches.map((b, i) => (
                     <div key={i} style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '2px' }}>• {b.branchName}: {b.reason}</div>
                   ))}
@@ -2088,11 +2135,11 @@ export const PlanningWorkspace: React.FC = () => {
                     {/* Cluster Header */}
                     <div onClick={() => setExpandedCluster(expandedCluster === cluster.clusterId ? null : cluster.clusterId)}
                       style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        background: expandedCluster === cluster.clusterId ? 'rgba(99,102,241,0.06)' : 'transparent',
+                        background: expandedCluster === cluster.clusterId ? 'rgba(216,174,71,0.06)' : 'transparent',
                         borderBottom: expandedCluster === cluster.clusterId ? '1px solid var(--border-color)' : 'none' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(99,102,241,0.1)', padding: '3px 8px', borderRadius: '4px' }}>{cluster.clusterId}</span>
-                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{cluster.branches.length} Branches</span>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(216,174,71,0.1)', padding: '3px 8px', borderRadius: '4px' }}>{cluster.clusterId}</span>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{cluster.branches.length} Branches</span>
                         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                           {cluster.branches.map(b => b.branchName.replace(/^(Pune |Nashik |Mumbai |Bangalore )/, '')).join(' → ')}
                         </span>
@@ -2103,11 +2150,11 @@ export const PlanningWorkspace: React.FC = () => {
                         )}
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><Clock size={11} /> {cluster.totalEstimatedAuditHours}h audit</span>
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> {cluster.radiusKm.toFixed(0)}km radius</span>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : '#ef4444' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : 'var(--danger)' }}>
                           {cluster.feasibleForOneDay ? '✅ Fits 1 day' : '❌ Exceeds capacity'}
                         </span>
                         {bestPlan && (
-                          <span style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600 }}>
+                          <span style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 600 }}>
                             Best: {bestPlan.assayerName} (₹{bestPlan.estimatedTotalCost.toLocaleString()})
                           </span>
                         )}
@@ -2121,8 +2168,8 @@ export const PlanningWorkspace: React.FC = () => {
                         {/* Branches in this cluster */}
                         <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
                           {cluster.branches.map(b => (
-                            <div key={b.branchId} style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '11px' }}>
-                              <div style={{ fontWeight: 600, color: '#fff' }}>{b.branchName}</div>
+                            <div key={b.branchId} style={{ background: 'rgba(216,174,71,0.06)', border: '1px solid rgba(216,174,71,0.15)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '11px' }}>
+                              <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{b.branchName}</div>
                               <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
                                 {b.branchCode} • {b.city} •{' '}
                                 {b.packetCount != null
@@ -2131,7 +2178,7 @@ export const PlanningWorkspace: React.FC = () => {
                                     // Distinguished from a real packet-derived figure: this is a
                                     // stale per-branch default that may not reflect this cycle.
                                     <span title="No packet count recorded for this cycle — estimated from the branch default, which may be out of date.">
-                                      ~{b.estimatedDurationHours}h <span style={{ color: '#f59e0b' }}>(est.)</span>
+                                      ~{b.estimatedDurationHours}h <span style={{ color: 'var(--warning)' }}>(est.)</span>
                                     </span>
                                   )}
                               </div>
@@ -2141,7 +2188,7 @@ export const PlanningWorkspace: React.FC = () => {
 
                         {dayPlans.length === 0 ? (
                           <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '12px' }}>
-                            <AlertTriangle size={18} style={{ color: '#f59e0b', marginBottom: '6px' }} />
+                            <AlertTriangle size={18} style={{ color: 'var(--warning)', marginBottom: '6px' }} />
                             <div>No eligible assayers found for this cluster.</div>
                             {/* Previously the only signal here — this generic dead end hid
                                 whether it was a genuine no-coverage gap or one misconfigured
@@ -2156,12 +2203,12 @@ export const PlanningWorkspace: React.FC = () => {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             {dayPlans.map((plan, pIdx) => (
                               <div key={plan.assayerId} style={{
-                                background: pIdx === 0 ? 'rgba(16,185,129,0.04)' : 'rgba(255,255,255,0.02)',
-                                border: `1px solid ${pIdx === 0 ? 'rgba(16,185,129,0.3)' : 'var(--border-color)'}`,
+                                background: pIdx === 0 ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
+                                border: `1px solid ${pIdx === 0 ? 'var(--status-active-bg)' : 'var(--border-color)'}`,
                                 borderRadius: 'var(--radius-md)', padding: '14px', position: 'relative' as const,
                               }}>
                                 {pIdx === 0 && (
-                                  <span style={{ position: 'absolute' as const, top: '-1px', right: '12px', background: 'var(--status-active)', color: '#000', fontSize: '9px', fontWeight: 700, padding: '2px 8px', borderRadius: '0 0 4px 4px' }}>
+                                  <span style={{ position: 'absolute' as const, top: '-1px', right: '12px', background: 'var(--status-active)', color: 'var(--text-primary)', fontSize: '9px', fontWeight: 700, padding: '2px 8px', borderRadius: '0 0 4px 4px' }}>
                                     ⭐ RECOMMENDED
                                   </span>
                                 )}
@@ -2169,7 +2216,7 @@ export const PlanningWorkspace: React.FC = () => {
                                 {/* Assayer Info Row */}
                                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px' }}>
                                   <div>
-                                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                       {plan.assayerName}
                                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 400 }}>({plan.assayerCode})</span>
                                     </div>
@@ -2181,8 +2228,8 @@ export const PlanningWorkspace: React.FC = () => {
                                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                     <span style={{
                                       padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                      background: plan.overallScore >= 70 ? 'rgba(16,185,129,0.1)' : plan.overallScore >= 50 ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)',
-                                      color: plan.overallScore >= 70 ? 'var(--status-active)' : plan.overallScore >= 50 ? '#f59e0b' : '#ef4444',
+                                      background: plan.overallScore >= 70 ? 'var(--status-active-bg)' : plan.overallScore >= 50 ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)',
+                                      color: plan.overallScore >= 70 ? 'var(--status-active)' : plan.overallScore >= 50 ? 'var(--warning)' : 'var(--danger)',
                                     }}>
                                       {plan.overallScore}% Score
                                     </span>
@@ -2222,17 +2269,17 @@ export const PlanningWorkspace: React.FC = () => {
                                   ].map((m, mi) => (
                                     <div key={mi} style={{ background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' }}>
                                       <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{m.icon} {m.label}</div>
-                                      <div style={{ fontSize: '13px', fontWeight: 600, color: m.warn ? '#f59e0b' : '#fff', marginTop: '2px' }}>{m.val}</div>
+                                      <div style={{ fontSize: '13px', fontWeight: 600, color: m.warn ? 'var(--warning)' : 'var(--text-primary)', marginTop: '2px' }}>{m.val}</div>
                                     </div>
                                   ))}
                                 </div>
 
                                 {/* Cost Breakdown */}
-                                <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', padding: '8px 12px', background: 'rgba(139,92,246,0.04)', border: '1px dashed rgba(139,92,246,0.2)', borderRadius: 'var(--radius-sm)' }}>
+                                <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', padding: '8px 12px', background: 'rgba(216,174,71,0.04)', border: '1px dashed rgba(216,174,71,0.2)', borderRadius: 'var(--radius-sm)' }}>
                                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                                     <span style={{ fontWeight: 600 }}>💰 Cost:</span>{' '}
                                     Base ₹{plan.estimatedBaseFee.toLocaleString()} + Travel ₹{plan.estimatedTravelFee.toLocaleString()} ={' '}
-                                    <span style={{ fontWeight: 700, color: '#f59e0b' }}>₹{plan.estimatedTotalCost.toLocaleString()}</span>
+                                    <span style={{ fontWeight: 700, color: 'var(--warning)' }}>₹{plan.estimatedTotalCost.toLocaleString()}</span>
                                   </div>
                                 </div>
 
@@ -2246,8 +2293,8 @@ export const PlanningWorkspace: React.FC = () => {
                                   ].map((pm, pi) => (
                                     <span key={pi} style={{
                                       fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
-                                      background: pm.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                                      color: pm.ok ? 'var(--status-active)' : '#ef4444',
+                                      background: pm.ok ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
+                                      color: pm.ok ? 'var(--status-active)' : 'var(--danger)',
                                       fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px',
                                     }}>
                                       {pm.ok ? <Check size={9} /> : <X size={9} />} {pm.label}
@@ -2271,7 +2318,7 @@ export const PlanningWorkspace: React.FC = () => {
                                         {/* Stop content */}
                                         <div style={{ flex: 1, paddingBottom: '10px' }}>
                                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>
+                                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
                                               #{stop.order} {stop.branchName}
                                             </span>
                                             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({stop.branchCode})</span>
@@ -2289,9 +2336,9 @@ export const PlanningWorkspace: React.FC = () => {
                                     {/* Return leg */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '20px' }}>
-                                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+                                        <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--warning)', flexShrink: 0 }} />
                                       </div>
-                                      <div style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600 }}>🏠 Return Home by {plan.dayEndTime}</div>
+                                      <div style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 600 }}>🏠 Return Home by {plan.dayEndTime}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -2313,6 +2360,10 @@ export const PlanningWorkspace: React.FC = () => {
             </>
           )}
         </div>
+      )}
+
+      {historyBranchId && (
+        <BranchHistoryDrawer projectBranchId={historyBranchId} onClose={() => setHistoryBranchId(null)} />
       )}
     </div>
   );

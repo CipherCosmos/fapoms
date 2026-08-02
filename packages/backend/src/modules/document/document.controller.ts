@@ -842,7 +842,8 @@ export class DocumentController {
   @Roles(
     SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
     SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
-    SystemRole.VALIDATION_MANAGER, SystemRole.OPERATIONS_MANAGER,
+    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
+    SystemRole.OPERATIONS_MANAGER, SystemRole.READ_ONLY_AUDITOR,
   )
   @ApiOperation({ summary: "Returned packets at the data entry desk and who owns each" })
   async dataEntryQueue(@Query('assignedTo') assignedTo?: string) {

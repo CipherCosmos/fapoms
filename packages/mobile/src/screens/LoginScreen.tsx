@@ -7,13 +7,14 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 
 interface LoginScreenProps {
-  loginUsername: string;
-  loginPassword: string;
-  authenticating: boolean;
-  onChangeUsername: (val: string) => void;
-  onChangePassword: (val: string) => void;
-  onLogin: () => void;
-  onBiometricLogin: () => void;
+  loginUsername?: string;
+  loginPassword?: string;
+  authenticating?: boolean;
+  onChangeUsername?: (val: string) => void;
+  onChangePassword?: (val: string) => void;
+  onLogin?: (u?: string, p?: string) => void | Promise<any>;
+  onVerifyIdentity?: (id: string) => Promise<any>;
+  onBiometricLogin?: () => void | Promise<any>;
 }
 
 /**
@@ -28,15 +29,44 @@ interface LoginScreenProps {
  * same endpoint, so it was a mode that did not exist on the backend.
  */
 export const LoginScreen: React.FC<LoginScreenProps> = ({
-  loginUsername,
-  loginPassword,
-  authenticating,
-  onChangeUsername,
-  onChangePassword,
+  loginUsername: controlledUsername,
+  loginPassword: controlledPassword,
+  authenticating: controlledAuthenticating,
+  onChangeUsername: controlledOnChangeUsername,
+  onChangePassword: controlledOnChangePassword,
   onLogin,
   onBiometricLogin,
 }) => {
   const t = useTheme();
+  const [internalUsername, setInternalUsername] = useState('');
+  const [internalPassword, setInternalPassword] = useState('');
+  const [internalLoading, setInternalLoading] = useState(false);
+
+  const username = controlledUsername !== undefined ? controlledUsername : internalUsername;
+  const password = controlledPassword !== undefined ? controlledPassword : internalPassword;
+  const authenticating = controlledAuthenticating !== undefined ? controlledAuthenticating : internalLoading;
+
+  const setUsername = (val: string) => {
+    setInternalUsername(val);
+    controlledOnChangeUsername?.(val);
+  };
+
+  const setPassword = (val: string) => {
+    setInternalPassword(val);
+    controlledOnChangePassword?.(val);
+  };
+
+  const handleLoginPress = async () => {
+    if (onLogin) {
+      setInternalLoading(true);
+      try {
+        await onLogin(username, password);
+      } finally {
+        setInternalLoading(false);
+      }
+    }
+  };
+
   const [showPassword, setShowPassword] = useState(false);
   const [focused, setFocused] = useState<'user' | 'pass' | null>(null);
 
@@ -100,8 +130,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <View style={inputWrap(focused === 'user')}>
                 <Icon name="person-outline" size={18} color={focused === 'user' ? t.colors.primary : t.colors.textFaint} />
                 <TextInput
-                  value={loginUsername}
-                  onChangeText={onChangeUsername}
+                  value={username}
+                  onChangeText={setUsername}
                   onFocus={() => setFocused('user')}
                   onBlur={() => setFocused(null)}
                   placeholder="AS0001"
@@ -119,8 +149,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <View style={inputWrap(focused === 'pass')}>
                 <Icon name="lock-closed-outline" size={18} color={focused === 'pass' ? t.colors.primary : t.colors.textFaint} />
                 <TextInput
-                  value={loginPassword}
-                  onChangeText={onChangePassword}
+                  value={password}
+                  onChangeText={setPassword}
                   onFocus={() => setFocused('pass')}
                   onBlur={() => setFocused(null)}
                   placeholder="••••••••"
@@ -130,7 +160,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   autoCorrect={false}
                   style={inputStyle}
                   returnKeyType="go"
-                  onSubmitEditing={onLogin}
+                  onSubmitEditing={handleLoginPress}
                 />
                 <Pressable onPress={() => setShowPassword((v) => !v)} hitSlop={10}>
                   <Icon name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
@@ -140,9 +170,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
             <Button
               label={authenticating ? 'Signing in…' : 'Sign in'}
-              onPress={onLogin}
+              onPress={handleLoginPress}
               loading={authenticating}
-              disabled={!loginUsername || !loginPassword}
+              disabled={!username || !password}
               size="lg"
               full
             />

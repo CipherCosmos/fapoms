@@ -471,3 +471,54 @@ export enum BillingEntityType {
   PAYABLE = 'PAYABLE',
   CONFLICT = 'CONFLICT',
 }
+
+/**
+ * Notification classification and delivery lifecycle.
+ *
+ * Before this, a notification row carried only a title, a message and `is_read`.
+ * That made three things impossible: knowing *why* a notification exists (no
+ * type), knowing whether it ever actually reached anyone (no delivery state),
+ * and grouping or filtering a person's inbox (no category). All three are
+ * required for the notification centre and for push retry, so they are modelled
+ * here rather than encoded into the title string.
+ */
+export enum NotificationCategory {
+  ASSIGNMENT = 'ASSIGNMENT',
+  VALIDATION = 'VALIDATION',
+  DOCUMENT = 'DOCUMENT',
+  PLANNING = 'PLANNING',
+  WORKFORCE = 'WORKFORCE',
+  BILLING = 'BILLING',
+  SYSTEM = 'SYSTEM',
+}
+
+/**
+ * Delivery lifecycle for one notification row.
+ *
+ * `PENDING` → `SENT` → `DELIVERED` → `READ` is the happy path. `FAILED` is
+ * terminal only once attempts are exhausted; `SUPPRESSED` means a preference or
+ * a dedupe rule deliberately stopped it, which is distinct from failure and must
+ * not be retried.
+ */
+export enum NotificationStatus {
+  PENDING = 'PENDING',
+  SENT = 'SENT',
+  DELIVERED = 'DELIVERED',
+  READ = 'READ',
+  FAILED = 'FAILED',
+  SUPPRESSED = 'SUPPRESSED',
+}
+
+export enum NotificationChannel {
+  IN_APP = 'IN_APP',
+  PUSH = 'PUSH',
+  EMAIL = 'EMAIL',
+}
+
+/** Drives ordering and, later, whether a push may bypass quiet hours. */
+export enum NotificationPriority {
+  LOW = 'LOW',
+  NORMAL = 'NORMAL',
+  HIGH = 'HIGH',
+  CRITICAL = 'CRITICAL',
+}

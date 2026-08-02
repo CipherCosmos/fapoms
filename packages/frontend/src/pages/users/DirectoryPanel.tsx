@@ -27,8 +27,8 @@ interface UserProfile {
 }
 
 const STATUS_TONE: Record<string, string> = {
-  ACTIVE: 'var(--status-active)', INVITED: '#60a5fa', SUSPENDED: '#f59e0b',
-  LOCKED: '#ef4444', DISABLED: '#6b7280', ARCHIVED: '#6b7280',
+  ACTIVE: 'var(--status-active)', INVITED: 'var(--accent)', SUSPENDED: 'var(--warning)',
+  LOCKED: 'var(--danger)', DISABLED: 'var(--text-muted)', ARCHIVED: 'var(--text-muted)',
 };
 
 const fmtRelative = (iso: string | null): string => {
@@ -90,6 +90,7 @@ export const DirectoryPanel: React.FC = () => {
   const [newPassword, setNewPassword] = useState('');
   const [resetting, setResetting] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => { loadUsers(); loadRoles(); }, []);
 
@@ -121,6 +122,7 @@ export const DirectoryPanel: React.FC = () => {
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSubmitting(true);
     try {
       await api.request('/users', {
         method: 'POST',
@@ -131,6 +133,8 @@ export const DirectoryPanel: React.FC = () => {
       loadUsers();
     } catch (err: any) {
       setError(err?.message || 'Failed to create user');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -147,6 +151,7 @@ export const DirectoryPanel: React.FC = () => {
     e.preventDefault();
     if (!editingUser) return;
     setError(null);
+    setSubmitting(true);
     try {
       await api.request(`/users/${editingUser.id}`, {
         method: 'PUT',
@@ -154,15 +159,18 @@ export const DirectoryPanel: React.FC = () => {
       });
     } catch (err: any) {
       setError(err?.message || 'Failed to update the profile — roles were not touched.');
+      setSubmitting(false);
       return;
     }
     try {
       await api.request(`/users/${editingUser.id}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds: editRoleIds }) });
     } catch (err: any) {
       setError(`Profile saved, but role changes failed: ${err?.message || 'unknown error'}`);
+      setSubmitting(false);
       loadUsers();
       return;
     }
+    setSubmitting(false);
     setEditingUser(null);
     setNotice('Profile and roles updated.');
     loadUsers();
@@ -182,6 +190,7 @@ export const DirectoryPanel: React.FC = () => {
 
   const handleResetPassword = async () => {
     if (!editingUser || newPassword.length < 8) return;
+    if (!window.confirm(`Reset the password for ${editingUser.displayName}? They'll need the new password to sign in.`)) return;
     setResetting(true);
     setError(null);
     try {
@@ -226,8 +235,8 @@ export const DirectoryPanel: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
         <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={filteredUsers.length} label="Total Users" />
         <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active" />
-        <Kpi icon={<Lock size={20} />} tone="#ef4444" value={users.filter(isLocked).length} label="Locked Out" />
-        <Kpi icon={<Shield size={20} />} tone="#8b5cf6" value={new Set(users.flatMap((u) => u.roles.map((r) => r.name))).size} label="Distinct Roles" />
+        <Kpi icon={<Lock size={20} />} tone="var(--danger)" value={users.filter(isLocked).length} label="Locked Out" />
+        <Kpi icon={<Shield size={20} />} tone="var(--accent)" value={new Set(users.flatMap((u) => u.roles.map((r) => r.name))).size} label="Distinct Roles" />
       </div>
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
@@ -266,7 +275,17 @@ export const DirectoryPanel: React.FC = () => {
               </thead>
               <tbody>
                 {filteredUsers.length === 0 ? (
-                  <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No users match filters.</td></tr>
+                  <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                      <UsersIcon size={30} style={{ opacity: 0.4 }} />
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{searchText || filterStatus !== 'ALL' ? 'No users match your filters' : 'No users yet'}</span>
+                      {!(searchText || filterStatus !== 'ALL') && (
+                        <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ marginTop: 6, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <UserPlus size={13} /> Add User
+                        </button>
+                      )}
+                    </div>
+                  </td></tr>
                 ) : (filteredUsers.map((u) => {
                   const self = isSelf(u);
                   const locked = isLocked(u);
@@ -281,7 +300,7 @@ export const DirectoryPanel: React.FC = () => {
                             <div style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                               {u.displayName}
                               {self && <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
-                              {locked && <span title={`${u.failedLoginAttempts} failed attempt(s)`}><Lock size={12} style={{ color: '#ef4444' }} /></span>}
+                              {locked && <span title={`${u.failedLoginAttempts} failed attempt(s)`}><Lock size={12} style={{ color: 'var(--danger)' }} /></span>}
                             </div>
                             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>@{u.username} · {u.email}</div>
                           </div>
@@ -290,7 +309,7 @@ export const DirectoryPanel: React.FC = () => {
                       <td style={{ padding: '14px 24px' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                           {u.roles.map((r) => (
-                            <span key={r.id} style={{ fontSize: '10px', background: 'rgba(99, 102, 241, 0.15)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
+                            <span key={r.id} style={{ fontSize: '10px', background: 'var(--status-pending-bg)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
                               {r.name.replace(/_/g, ' ')}
                             </span>
                           ))}
@@ -313,7 +332,7 @@ export const DirectoryPanel: React.FC = () => {
                       </td>
                       <td style={{ padding: '14px 24px', textAlign: 'right' }}>
                         <button onClick={() => startEditUser(u)}
-                          style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.2)', color: 'var(--accent-secondary)', padding: '6px 12px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
+                          style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', color: 'var(--accent-secondary)', padding: '6px 12px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
                           Edit / Map
                         </button>
                       </td>
@@ -334,10 +353,10 @@ export const DirectoryPanel: React.FC = () => {
               </div>
 
               {isLocked(editingUser) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '16px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
-                  <Lock size={15} style={{ color: '#ef4444', flexShrink: 0 }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '16px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled)' }}>
+                  <Lock size={15} style={{ color: 'var(--danger)', flexShrink: 0 }} />
                   <div style={{ flex: 1, fontSize: '12px' }}>
-                    <strong style={{ color: '#f87171' }}>Locked out</strong> — {editingUser.failedLoginAttempts} failed login attempt(s).
+                    <strong style={{ color: 'var(--danger)' }}>Locked out</strong> — {editingUser.failedLoginAttempts} failed login attempt(s).
                   </div>
                   <button type="button" onClick={handleUnlock} disabled={unlocking} className="btn btn-secondary"
                     style={{ fontSize: '11.5px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}>
@@ -373,14 +392,14 @@ export const DirectoryPanel: React.FC = () => {
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
-                  <button type="submit" style={{ flex: 1, background: 'var(--gradient-neon)', color: '#fff', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>Save Modifications</button>
+                  <button type="submit" disabled={submitting} style={{ flex: 1, background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>{submitting ? 'Saving…' : 'Save Modifications'}</button>
                   <button type="button" onClick={() => setEditingUser(null)} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>Cancel</button>
                 </div>
               </form>
 
               <div style={{ marginTop: '20px', paddingTop: '18px', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                  <KeyRound size={15} style={{ color: '#f59e0b' }} />
+                  <KeyRound size={15} style={{ color: 'var(--warning)' }} />
                   <span style={{ fontSize: '13px', fontWeight: 600 }}>Reset Password</span>
                 </div>
                 <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '10px' }}>
@@ -414,7 +433,7 @@ export const DirectoryPanel: React.FC = () => {
         <Modal open onClose={() => setShowCreateModal(false)} title="Add User Profile" width="480px" asForm onSubmit={handleCreateUser}
           footer={
             <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
-              <button type="submit" style={{ flex: 1, background: 'var(--gradient-neon)', color: '#fff', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>Create Profile</button>
+              <button type="submit" disabled={submitting} style={{ flex: 1, background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>{submitting ? 'Creating…' : 'Create Profile'}</button>
               <button type="button" onClick={() => setShowCreateModal(false)} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>Cancel</button>
             </div>
           }
@@ -450,7 +469,7 @@ export const DirectoryPanel: React.FC = () => {
 
 const Kpi: React.FC<{ icon: React.ReactNode; tone: string; value: React.ReactNode; label: string }> = ({ icon, tone, value, label }) => (
   <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-    <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
+    <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--status-pending-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
     <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{value}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{label}</div></div>
   </div>
 );

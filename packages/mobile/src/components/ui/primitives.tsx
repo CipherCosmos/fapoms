@@ -3,43 +3,50 @@ import {
   View, Text, Pressable, Animated, StyleProp, ViewStyle, TextStyle,
   ActivityIndicator, Platform, ScrollView,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme/ThemeProvider';
+import * as Font from 'expo-font';
 
 /**
- * The shared primitive set.
- *
- * Every screen previously styled itself inline with hardcoded hex values, so
- * nothing matched and nothing could respond to a theme change. These components
- * read from the theme, so light/dark and the whole visual identity are one
- * change away, and a screen is assembled rather than hand-painted.
- *
- * Animation uses React Native's built-in Animated with `useNativeDriver`, so it
- * runs on the UI thread on both platforms without adding Reanimated as a
- * dependency — transform and opacity only, which is what the native driver
- * supports.
+ * Ionicons glyph map — loaded from the @expo/vector-icons data files.
+ * We render icons directly as <Text> with the ionicons font family,
+ * bypassing the @expo/vector-icons class component entirely.
+ * This avoids the Hermes bytecode issue where the class component's
+ * React.Component prototype chain gets broken during compilation,
+ * causing "Objects are not valid as a React child" crashes.
  */
+const _glyphMap: Record<string, number> = require('@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json');
+const _fontAsset = require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf');
 
-type IconName = keyof typeof Ionicons.glyphMap;
+// Ensure the Ionicons font is loaded
+let _fontLoaded = Font.isLoaded('ionicons');
+if (!_fontLoaded) {
+  Font.loadAsync({ ionicons: _fontAsset }).then(() => { _fontLoaded = true; }).catch(() => {});
+}
 
-/**
- * `@expo/vector-icons` is typed against an older @types/react, so under the v19
- * types this repo resolves every direct `<Ionicons />` usage fails TS2786 —
- * 51 of them across the package, none real: Metro strips types with Babel and
- * the icons render correctly. Casting once here, behind a properly-typed
- * component, keeps that noise out of every screen instead of scattering
- * `as any` at each call site.
- */
-const IoniconsAny = Ionicons as unknown as React.ComponentType<{
-  name: IconName;
-  size?: number;
-  color?: string;
-  style?: StyleProp<TextStyle>;
-}>;
+type IconName = keyof typeof _glyphMap;
 
-export const Icon: React.FC<{ name: IconName; size?: number; color?: string; style?: StyleProp<TextStyle> }> = (props) => (
-  <IoniconsAny {...props} />
-);
+export const Icon: React.FC<{ name: IconName; size?: number; color?: string; style?: StyleProp<TextStyle> }> = ({ name, size = 20, color = '#fff', style }) => {
+  const glyph = _glyphMap[name as string];
+  const char = glyph != null ? String.fromCodePoint(glyph) : '?';
+
+  return (
+    <Text
+      selectable={false}
+      style={[
+        {
+          fontSize: size,
+          color,
+          fontFamily: Platform.OS === 'android' ? 'ionicons' : 'Ionicons',
+          fontWeight: 'normal',
+          fontStyle: 'normal',
+        },
+        style,
+      ]}
+    >
+      {char}
+    </Text>
+  );
+};
 
 // ─────────────────────────────────────────────────────────── Text
 

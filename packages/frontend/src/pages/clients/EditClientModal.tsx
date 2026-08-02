@@ -59,7 +59,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
   };
 
   const inputProps = { style: { width: '100%' } };
-  const selectStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%' };
+  const selectStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' };
 
   return (
     <Modal open onClose={onClose} title={<><Building2 size={18} /> Edit Client — {client.clientCode}</>} width="560px" asForm onSubmit={handleSubmit} footer={
@@ -92,7 +92,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
           value={form.address}
           onChange={(e) => set('address', e.target.value)}
           rows={2}
-          style={{ gridColumn: '1 / -1', padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', resize: 'vertical' }}
+          style={{ gridColumn: '1 / -1', padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', resize: 'vertical' }}
         />
       </div>
     </Modal>

@@ -40,6 +40,13 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['@fapoms/shared'],
+    include: ['@fapoms/shared', 'pdfjs-dist'],
+    esbuildOptions: {
+      // The shared package ships .d.ts next to .js in dist/ (and src/). esbuild
+      // prefers .d.ts over .js when resolving, which silently drops re-exported
+      // named exports (AssessmentStatus, SystemRole) from the pre-bundled module.
+      // Resolve real modules first so the enum exports are preserved.
+      resolveExtensions: ['.js', '.mjs', '.jsx', '.cjs', '.ts', '.tsx', '.json'],
+    },
   },
 });

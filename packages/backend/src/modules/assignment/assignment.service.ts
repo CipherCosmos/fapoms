@@ -10,6 +10,7 @@ import { CustomerMasterVersionEntity } from '../customer-master/customer-master-
 import { CustomerRecordEntity } from '../customer-master/customer-record.entity';
 import { UserEntity } from '../user/user.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
@@ -80,6 +81,7 @@ export class AssignmentService {
     private readonly projectService: ProjectService,
     private readonly assayerService: AssayerService,
     private readonly notificationService: NotificationService,
+    private readonly notificationDispatch: NotificationDispatchService,
     private readonly pushNotificationService: PushNotificationService,
     private readonly holidayService: HolidayService,
     private readonly auditService: AuditService,
@@ -279,28 +281,31 @@ export class AssignmentService {
 
       return savedAssignment;
     }).then(async (saved) => {
-      try {
-        if (assayer.email) {
-          const userObj = await this.dataSource.getRepository(UserEntity).findOne({ where: { email: assayer.email } }).catch(() => null);
-          if (userObj) {
-            await this.notificationService.create({
-              userId: userObj.id,
-              title: 'New Assignment',
-              message: `You have been assigned to ${projectBranch.branch.name} on ${dto.scheduledDate}. Proposed fee: ₹${dto.proposedFee}.`,
-              link: `/assignments/${saved.id}`,
-            }, userId);
-          }
-        }
-
-        await this.pushNotificationService.sendToUser(
-          assayer.id,
-          'New Assignment',
-          `You have been assigned to ${projectBranch.branch.name} on ${dto.scheduledDate}. Fee: ₹${dto.proposedFee}.`,
-          { assignmentId: saved.id, type: 'assignment_created' },
-        );
-      } catch (err) {
-        console.error('Failed to send assignment creation notification:', err);
-      }
+      // The offer notification.
+      //
+      // This previously tried to find a `users` row matching the assayer's
+      // email and notify that — but assayers authenticate from the `assayers`
+      // table and have no `users` row at all (0 of 25 match), so the in-app
+      // half of this never fired once. The push half went out separately with
+      // no record that it had, so a missed offer left no trace either way.
+      // Both channels now go through one emit against the assayer's own id,
+      // and the row records whether it actually arrived.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_OFFERED',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: assayer.id,
+        ownerUserId: userId,
+        dedupeKey: `ASSIGNMENT_OFFERED:${saved.id}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: projectBranch.branch?.name ?? 'the branch',
+          scheduledDate: dto.scheduledDate ?? 'a date to be confirmed',
+          proposedFee: dto.proposedFee,
+        },
+      });
 
       // Emit real-time event
       try {
@@ -492,28 +497,39 @@ export class AssignmentService {
       this.eventPublisher.publish(pbEvent.constructor.name, pbEvent);
     }
 
-    // Notifications — every terminal/near-terminal transition notifies the assigning user,
-    // not just ACCEPTED/REJECTED (CANCELLED/COMPLETED used to fall through silently).
-    try {
-      const notifyTargetUser = async (title: string, message: string) => {
-        if (!saved.createdBy) return;
-        const targetUser = await this.dataSource.getRepository(UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
-        if (targetUser) {
-          await this.notificationService.create({ userId: saved.createdBy, title, message }, userId);
-        }
-      };
+    // Notifications.
+    //
+    // These used to go to `saved.createdBy` alone — the one person who happened
+    // to raise the offer. If they were on leave, a rejection that needs a
+    // same-day replacement reached nobody. Routing through the catalog sends it
+    // to whoever currently holds the operations roles instead, so cover follows
+    // the org chart rather than a stale user id.
+    const notifyType =
+      targetStatus === AssignmentStatus.ACCEPTED ? 'ASSIGNMENT_ACCEPTED'
+      : targetStatus === AssignmentStatus.REJECTED ? 'ASSIGNMENT_REJECTED'
+      : null;
 
-      if (targetStatus === AssignmentStatus.ACCEPTED) {
-        await notifyTargetUser('Assignment Accepted', `Assignment offer ${saved.assignmentNumber} has been accepted by the assayer.`);
-      } else if (targetStatus === AssignmentStatus.REJECTED) {
-        await notifyTargetUser('Assignment Rejected', `Assignment offer ${saved.assignmentNumber} was rejected. Reason: ${reason ?? 'None'}.`);
-      } else if (targetStatus === AssignmentStatus.CANCELLED) {
-        await notifyTargetUser('Assignment Cancelled', `Assignment ${saved.assignmentNumber} was cancelled. Reason: ${reason ?? 'None'}.`);
-      } else if (targetStatus === AssignmentStatus.COMPLETED) {
-        await notifyTargetUser('Assignment Completed', `Assignment ${saved.assignmentNumber} has been marked complete.`);
-      }
-    } catch (err) {
-      console.error('Failed to dispatch transition notification', err);
+    if (notifyType) {
+      this.notificationDispatch.emitSafe({
+        type: notifyType,
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        ownerUserId: saved.createdBy,
+        // Status is part of the key so a later transition on the same
+        // assignment is a new notification rather than a suppressed duplicate.
+        dedupeKey: `${notifyType}:${saved.id}:${targetStatus}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          assayerName: assignment.assayer
+            ? `${assignment.assayer.firstName} ${assignment.assayer.lastName}`.trim()
+            : 'The assayer',
+          branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
+          reason: reason ?? 'No reason given',
+        },
+      });
     }
 
     if (targetStatus === AssignmentStatus.COMPLETED) {
@@ -647,19 +663,24 @@ export class AssignmentService {
       remarks: reason ?? `Assignment ${saved.assignmentNumber} escalated to CRITICAL priority.`,
     });
 
-    if (!alreadyCritical && saved.createdBy) {
-      try {
-        const targetUser = await this.dataSource.getRepository(UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
-        if (targetUser) {
-          await this.notificationService.create({
-            userId: saved.createdBy,
-            title: 'Assignment Escalated',
-            message: `Assignment ${saved.assignmentNumber} was escalated to CRITICAL priority.${reason ? ` ${reason}` : ''}`,
-          }, userId);
-        }
-      } catch (err) {
-        console.error('Failed to dispatch escalation notification', err);
-      }
+    // An escalation is precisely the case where notifying only the raiser is
+    // wrong: it exists to pull in people who are not already watching. Goes to
+    // operations *and* administrators.
+    if (!alreadyCritical) {
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_ESCALATED',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        ownerUserId: saved.createdBy,
+        dedupeKey: `ASSIGNMENT_ESCALATED:${saved.id}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
+          reason: reason ?? 'No reason given.',
+        },
+      });
     }
 
     this.publishAssignmentEvent('assignment:escalated', saved, { userId, previousState: assignment.status, timestamp: new Date() });

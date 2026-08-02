@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BillingEntityType = exports.BillingConflictAction = exports.BillingConflictStatus = exports.BillingConflictSeverity = exports.AssayerPayableStatus = exports.PaymentMethod = exports.PaymentDirection = exports.PaymentStatus = exports.InvoiceType = exports.InvoiceStatus = exports.BillingPricingModel = exports.PaymentState = exports.BillingState = exports.BillingLevel = exports.Priority = exports.ContractStatus = exports.ClientBillingEventType = exports.ClientBillingStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DispatchMethod = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.AssessmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
+exports.NotificationPriority = exports.NotificationChannel = exports.NotificationStatus = exports.NotificationCategory = exports.BillingEntityType = exports.BillingConflictAction = exports.BillingConflictStatus = exports.BillingConflictSeverity = exports.AssayerPayableStatus = exports.PaymentMethod = exports.PaymentDirection = exports.PaymentStatus = exports.InvoiceType = exports.InvoiceStatus = exports.BillingPricingModel = exports.PaymentState = exports.BillingState = exports.BillingLevel = exports.Priority = exports.ContractStatus = exports.ClientBillingEventType = exports.ClientBillingStatus = exports.ClientType = exports.ClientLifecycleStatus = exports.EventCategory = exports.TravelMode = exports.CommunicationType = exports.AuthorizationScope = exports.PermissionResource = exports.PermissionAction = exports.SystemRole = exports.UserStatus = exports.AssayerLifecycleStatus = exports.AssayerStatus = exports.ValidationQueryStatus = exports.CustomerMasterStatus = exports.ValidationStatus = exports.DocumentType = exports.DispatchMethod = exports.DocumentStatus = exports.ScheduleStatus = exports.AssignmentStatus = exports.AssessmentStatus = exports.ProjectBranchStatus = exports.ProjectStatus = void 0;
 var ProjectStatus;
 (function (ProjectStatus) {
     ProjectStatus["DRAFT"] = "DRAFT";
@@ -474,4 +474,55 @@ var BillingEntityType;
     BillingEntityType["PAYABLE"] = "PAYABLE";
     BillingEntityType["CONFLICT"] = "CONFLICT";
 })(BillingEntityType || (exports.BillingEntityType = BillingEntityType = {}));
+/**
+ * Notification classification and delivery lifecycle.
+ *
+ * Before this, a notification row carried only a title, a message and `is_read`.
+ * That made three things impossible: knowing *why* a notification exists (no
+ * type), knowing whether it ever actually reached anyone (no delivery state),
+ * and grouping or filtering a person's inbox (no category). All three are
+ * required for the notification centre and for push retry, so they are modelled
+ * here rather than encoded into the title string.
+ */
+var NotificationCategory;
+(function (NotificationCategory) {
+    NotificationCategory["ASSIGNMENT"] = "ASSIGNMENT";
+    NotificationCategory["VALIDATION"] = "VALIDATION";
+    NotificationCategory["DOCUMENT"] = "DOCUMENT";
+    NotificationCategory["PLANNING"] = "PLANNING";
+    NotificationCategory["WORKFORCE"] = "WORKFORCE";
+    NotificationCategory["BILLING"] = "BILLING";
+    NotificationCategory["SYSTEM"] = "SYSTEM";
+})(NotificationCategory || (exports.NotificationCategory = NotificationCategory = {}));
+/**
+ * Delivery lifecycle for one notification row.
+ *
+ * `PENDING` → `SENT` → `DELIVERED` → `READ` is the happy path. `FAILED` is
+ * terminal only once attempts are exhausted; `SUPPRESSED` means a preference or
+ * a dedupe rule deliberately stopped it, which is distinct from failure and must
+ * not be retried.
+ */
+var NotificationStatus;
+(function (NotificationStatus) {
+    NotificationStatus["PENDING"] = "PENDING";
+    NotificationStatus["SENT"] = "SENT";
+    NotificationStatus["DELIVERED"] = "DELIVERED";
+    NotificationStatus["READ"] = "READ";
+    NotificationStatus["FAILED"] = "FAILED";
+    NotificationStatus["SUPPRESSED"] = "SUPPRESSED";
+})(NotificationStatus || (exports.NotificationStatus = NotificationStatus = {}));
+var NotificationChannel;
+(function (NotificationChannel) {
+    NotificationChannel["IN_APP"] = "IN_APP";
+    NotificationChannel["PUSH"] = "PUSH";
+    NotificationChannel["EMAIL"] = "EMAIL";
+})(NotificationChannel || (exports.NotificationChannel = NotificationChannel = {}));
+/** Drives ordering and, later, whether a push may bypass quiet hours. */
+var NotificationPriority;
+(function (NotificationPriority) {
+    NotificationPriority["LOW"] = "LOW";
+    NotificationPriority["NORMAL"] = "NORMAL";
+    NotificationPriority["HIGH"] = "HIGH";
+    NotificationPriority["CRITICAL"] = "CRITICAL";
+})(NotificationPriority || (exports.NotificationPriority = NotificationPriority = {}));
 //# sourceMappingURL=enums.js.map

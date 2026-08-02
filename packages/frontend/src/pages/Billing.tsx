@@ -41,61 +41,61 @@ type Tab = 'finance' | 'overview' | 'hierarchy' | 'entries' | 'invoices' | 'paya
 const STATE_BADGE: Record<BillingState, string> = {
   NOT_BILLABLE: 'var(--text-muted)',
   PENDING_BILLING: 'var(--text-secondary)',
-  READY_FOR_BILLING: '#60a5fa',
-  DRAFT: '#a78bfa',
-  SUBMITTED: '#f59e0b',
-  UNDER_REVIEW: '#38bdf8',
-  REJECTED: '#ef4444',
-  APPROVED: '#22c55e',
-  INVOICED: '#10b981',
-  PARTIALLY_PAID: '#f59e0b',
-  PAID: '#22c55e',
-  ON_HOLD: '#64748b',
-  DISPUTED: '#ef4444',
-  CANCELLED: '#64748b',
-  ADJUSTED: '#f43f5e',
+  READY_FOR_BILLING: '#d8ae47',
+  DRAFT: '#d8ae47',
+  SUBMITTED: '#b8791f',
+  UNDER_REVIEW: '#d8ae47',
+  REJECTED: '#b14444',
+  APPROVED: '#3f7d53',
+  INVOICED: '#3f7d53',
+  PARTIALLY_PAID: '#b8791f',
+  PAID: '#3f7d53',
+  ON_HOLD: '#7c6e59',
+  DISPUTED: '#b14444',
+  CANCELLED: '#7c6e59',
+  ADJUSTED: '#b14444',
 };
 
 const PAY_STATE_BADGE: Record<PaymentState, string> = {
   UNPAID: 'var(--text-secondary)',
-  PARTIALLY_PAID: '#f59e0b',
-  PAID: '#22c55e',
-  REVERSED: '#ef4444',
+  PARTIALLY_PAID: '#b8791f',
+  PAID: '#3f7d53',
+  REVERSED: '#b14444',
 };
 
 const INV_BADGE: Record<InvoiceStatus, string> = {
-  DRAFT: '#a78bfa',
-  ISSUED: '#60a5fa',
-  PARTIALLY_PAID: '#f59e0b',
-  PAID: '#22c55e',
-  DISPUTED: '#ef4444',
-  CANCELLED: '#64748b',
-  VOID: '#64748b',
+  DRAFT: '#d8ae47',
+  ISSUED: '#d8ae47',
+  PARTIALLY_PAID: '#b8791f',
+  PAID: '#3f7d53',
+  DISPUTED: '#b14444',
+  CANCELLED: '#7c6e59',
+  VOID: '#7c6e59',
 };
 
 const PAYABLE_BADGE: Record<AssayerPayableStatus, string> = {
-  PENDING: '#f59e0b',
-  APPROVED: '#60a5fa',
-  PAID: '#22c55e',
-  DISPUTED: '#ef4444',
-  ON_HOLD: '#64748b',
+  PENDING: '#b8791f',
+  APPROVED: '#d8ae47',
+  PAID: '#3f7d53',
+  DISPUTED: '#b14444',
+  ON_HOLD: '#7c6e59',
 };
 
 const CONFLICT_BADGE: Record<BillingConflictSeverity, string> = {
-  INFO: '#60a5fa',
-  WARNING: '#f59e0b',
-  CRITICAL: '#ef4444',
+  INFO: '#d8ae47',
+  WARNING: '#b8791f',
+  CRITICAL: '#b14444',
 };
 
 const CONFLICT_STATUS_BADGE: Record<BillingConflictStatus, string> = {
-  OPEN: '#f59e0b',
-  RESOLVED: '#22c55e',
-  MERGED: '#10b981',
-  SEPARATED: '#38bdf8',
-  REASSIGNED: '#60a5fa',
-  OVERRIDDEN: '#a78bfa',
-  REJECTED: '#ef4444',
-  ON_HOLD: '#64748b',
+  OPEN: '#b8791f',
+  RESOLVED: '#3f7d53',
+  MERGED: '#3f7d53',
+  SEPARATED: '#d8ae47',
+  REASSIGNED: '#d8ae47',
+  OVERRIDDEN: '#d8ae47',
+  REJECTED: '#b14444',
+  ON_HOLD: '#7c6e59',
 };
 
 const Badge: React.FC<{ color: string; children: React.ReactNode }> = ({ color, children }) => (
@@ -122,7 +122,7 @@ const MoneyStat: React.FC<{ label: string; value: string; color?: string }> = ({
 const TabButton: React.FC<{ active: boolean; onClick: () => void; children: React.ReactNode }> = ({ active, onClick, children }) => (
   <button onClick={onClick} style={{
     padding: '8px 14px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
-    background: active ? 'rgba(99,102,241,0.15)' : 'transparent', color: active ? '#fff' : 'var(--text-secondary)',
+    background: active ? 'var(--status-pending-bg)' : 'transparent', color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
     border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-color)'}`,
   }}>{children}</button>
 );
@@ -168,9 +168,9 @@ export const Billing: React.FC = () => {
   const history = useBillingHistory(scope);
 
   const levelColor: Record<BillingLevel, string> = {
-    CLIENT: '#a78bfa',
-    PROJECT: '#60a5fa',
-    ASSIGNMENT: '#f59e0b',
+    CLIENT: '#d8ae47',
+    PROJECT: '#d8ae47',
+    ASSIGNMENT: '#b8791f',
   };
   const pricingModel: Record<BillingPricingModel, string> = {
     FLAT_RATE: 'Flat', PER_ASSIGNMENT: 'Per Assignment', PER_BRANCH: 'Per Branch',
@@ -250,26 +250,26 @@ export const Billing: React.FC = () => {
           {dashboard.data && (
             <>
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Billed" value={`₹${fmt(dashboard.data.totals.billed)}`} color="#60a5fa" />
-                <MoneyStat label="Paid" value={`₹${fmt(dashboard.data.totals.paid)}`} color="#22c55e" />
-                <MoneyStat label="Outstanding" value={`₹${fmt(dashboard.data.totals.outstanding)}`} color="#f59e0b" />
-                <MoneyStat label="Unbilled Revenue" value={`₹${fmt(dashboard.data.totals.unbilledRevenue ?? dashboard.data.totals.pending)}`} color="#a78bfa" />
-                <MoneyStat label="Disputed" value={`₹${fmt(dashboard.data.totals.disputed)}`} color="#ef4444" />
+                <MoneyStat label="Billed" value={`₹${fmt(dashboard.data.totals.billed)}`} color="var(--accent)" />
+                <MoneyStat label="Paid" value={`₹${fmt(dashboard.data.totals.paid)}`} color="var(--success)" />
+                <MoneyStat label="Outstanding" value={`₹${fmt(dashboard.data.totals.outstanding)}`} color="var(--warning)" />
+                <MoneyStat label="Unbilled Revenue" value={`₹${fmt(dashboard.data.totals.unbilledRevenue ?? dashboard.data.totals.pending)}`} color="var(--accent)" />
+                <MoneyStat label="Disputed" value={`₹${fmt(dashboard.data.totals.disputed)}`} color="var(--danger)" />
               </div>
               {/* Revenue vs what we owe assayers — the cost-per-audit question this
                   platform exists to answer, which billing could not previously show. */}
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Net Revenue" value={`₹${fmt(dashboard.data.totals.revenue)}`} color="#60a5fa" />
-                <MoneyStat label="Assayer Cost" value={`₹${fmt(dashboard.data.totals.assayerCost)}`} color="#f59e0b" />
+                <MoneyStat label="Net Revenue" value={`₹${fmt(dashboard.data.totals.revenue)}`} color="var(--accent)" />
+                <MoneyStat label="Assayer Cost" value={`₹${fmt(dashboard.data.totals.assayerCost)}`} color="var(--warning)" />
                 <MoneyStat
                   label="Margin"
                   value={`₹${fmt(dashboard.data.totals.margin)}${dashboard.data.totals.marginPct != null ? ` (${dashboard.data.totals.marginPct}%)` : ''}`}
-                  color={(dashboard.data.totals.margin ?? 0) < 0 ? '#ef4444' : '#22c55e'}
+                  color={(dashboard.data.totals.margin ?? 0) < 0 ? 'var(--danger)' : 'var(--success)'}
                 />
               </div>
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Invoices Issued" value={String(dashboard.data.invoices.issued)} color="#a78bfa" />
-                <MoneyStat label="Open Conflicts" value={String(dashboard.data.openConflicts)} color={dashboard.data.openConflicts > 0 ? '#ef4444' : '#22c55e'} />
+                <MoneyStat label="Invoices Issued" value={String(dashboard.data.invoices.issued)} color="var(--accent)" />
+                <MoneyStat label="Open Conflicts" value={String(dashboard.data.openConflicts)} color={dashboard.data.openConflicts > 0 ? 'var(--danger)' : 'var(--success)'} />
               </div>
               <Card title="By Level">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -288,10 +288,10 @@ export const Billing: React.FC = () => {
               </Card>
               <Card title="Assayer Payables">
                 <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                  <MoneyStat label="Pending" value={`₹${fmt(dashboard.data.payable.pending)}`} color="#f59e0b" />
-                  <MoneyStat label="Approved" value={`₹${fmt(dashboard.data.payable.approved)}`} color="#60a5fa" />
-                  <MoneyStat label="Paid" value={`₹${fmt(dashboard.data.payable.paid)}`} color="#22c55e" />
-                  <MoneyStat label="Disputed" value={`₹${fmt(dashboard.data.payable.disputed)}`} color="#ef4444" />
+                  <MoneyStat label="Pending" value={`₹${fmt(dashboard.data.payable.pending)}`} color="var(--warning)" />
+                  <MoneyStat label="Approved" value={`₹${fmt(dashboard.data.payable.approved)}`} color="var(--accent)" />
+                  <MoneyStat label="Paid" value={`₹${fmt(dashboard.data.payable.paid)}`} color="var(--success)" />
+                  <MoneyStat label="Disputed" value={`₹${fmt(dashboard.data.payable.disputed)}`} color="var(--danger)" />
                 </div>
               </Card>
             </>
@@ -337,7 +337,7 @@ export const Billing: React.FC = () => {
               <span key={e.id} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>₹{fmt(e.taxAmount)}</span>,
               <span key={e.id} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>−₹{fmt(e.tdsAmount)}</span>,
               <span key={e.id} style={{ fontWeight: 600 }}>₹{fmt(e.totalAmount)}</span>,
-              <span key={e.id} style={{ color: '#f59e0b' }}>₹{fmt(e.outstandingAmount)}</span>,
+              <span key={e.id} style={{ color: 'var(--warning)' }}>₹{fmt(e.outstandingAmount)}</span>,
             ])}
             empty={entries.data && entries.data.length === 0}
             loading={entries.isLoading}
@@ -357,8 +357,8 @@ export const Billing: React.FC = () => {
             <span key={inv.id}>₹{fmt(inv.subtotal)}</span>,
             <span key={inv.id}>₹{fmt(inv.taxAmount)}</span>,
             <span key={inv.id} style={{ fontWeight: 600 }}>₹{fmt(inv.total)}</span>,
-            <span key={inv.id} style={{ color: '#22c55e' }}>₹{fmt(inv.paidAmount)}</span>,
-            <span key={inv.id} style={{ color: '#f59e0b' }}>₹{fmt(inv.outstandingAmount)}</span>,
+            <span key={inv.id} style={{ color: 'var(--success)' }}>₹{fmt(inv.paidAmount)}</span>,
+            <span key={inv.id} style={{ color: 'var(--warning)' }}>₹{fmt(inv.outstandingAmount)}</span>,
           ])}
           empty={invoices.data && invoices.data.length === 0}
           loading={invoices.isLoading}
@@ -386,7 +386,7 @@ export const Billing: React.FC = () => {
             <span key={p.id}>₹{fmt(p.travelAmount)}</span>,
             <span key={p.id} style={{ color: 'var(--text-secondary)' }}>−₹{fmt(p.tdsAmount)}</span>,
             <span key={p.id} style={{ fontWeight: 600 }}>₹{fmt(p.totalAmount)}</span>,
-            <span key={p.id} style={{ color: '#22c55e' }}>₹{fmt(p.paidAmount)}</span>,
+            <span key={p.id} style={{ color: 'var(--success)' }}>₹{fmt(p.paidAmount)}</span>,
           ])}
           empty={payables.data && payables.data.length === 0}
           loading={payables.isLoading}
@@ -441,7 +441,13 @@ const Table: React.FC<{
 }> = ({ columns, rows, rowIds, onRowClick, empty, loading }) => (
   <Card>
     {loading && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
-    {!loading && empty && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No records found.</div>}
+    {!loading && empty && (
+      <div style={{ padding: '28px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: 'var(--text-muted)' }}>
+        <FileText size={26} style={{ opacity: 0.4, marginBottom: 2 }} />
+        <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600 }}>No records found</div>
+        <div style={{ fontSize: 12 }}>Entries and invoices will appear here as they are recorded.</div>
+      </div>
+    )}
     {!loading && !empty && (
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
         <thead>

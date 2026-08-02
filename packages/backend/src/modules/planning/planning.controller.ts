@@ -403,7 +403,7 @@ export class PlanningController {
   }
 
   @Get('command-center')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
   async commandCenter(@Query('clientId') clientId?: string, @Query('state') state?: string) {
     return { success: true, data: await this.commandCenterService.overview({ clientId, state }) };

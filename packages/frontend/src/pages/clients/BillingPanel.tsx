@@ -13,16 +13,16 @@ import { BILLING_TRANSITIONS } from '@fapoms/shared';
 import type { ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
 
 const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
-  DRAFT: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  ACTIVE: { color: '#10b981', bg: 'rgba(16,185,129,0.1)' },
-  SUSPENDED: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
-  INACTIVE: { color: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
+  DRAFT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  ACTIVE: { color: 'var(--success)', bg: 'var(--status-active-bg)' },
+  SUSPENDED: { color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
+  INACTIVE: { color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' },
 };
 
 const EVENT_ICONS: Record<ClientBillingEventType, { icon: React.ReactNode; color: string }> = {
-  STATUS_CHANGE: { icon: <ArrowLeftRight size={13} />, color: '#3b82f6' },
-  REMARK: { icon: <MessageSquarePlus size={13} />, color: '#f59e0b' },
-  PROFILE_UPDATE: { icon: <CreditCard size={13} />, color: '#10b981' },
+  STATUS_CHANGE: { icon: <ArrowLeftRight size={13} />, color: 'var(--accent)' },
+  REMARK: { icon: <MessageSquarePlus size={13} />, color: 'var(--warning)' },
+  PROFILE_UPDATE: { icon: <CreditCard size={13} />, color: 'var(--success)' },
 };
 
 function formatDateTime(iso?: string): string {
@@ -119,19 +119,19 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   const currentStatus = billing?.status ?? 'DRAFT';
   const allowedTargets = BILLING_TRANSITIONS[currentStatus as ClientBillingStatus] ?? [];
 
-  const inputStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%' };
+  const inputStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' };
   const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' };
   const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Current status + transition */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
             <CreditCard size={14} /> Billing Status
           </h4>
-          <StatusBadge label={billingStatusLabel(currentStatus)} color={STATUS_COLORS[currentStatus]?.color ?? '#6b7280'} bg={STATUS_COLORS[currentStatus]?.bg ?? 'rgba(107,114,128,0.1)'} />
+          <StatusBadge label={billingStatusLabel(currentStatus)} color={STATUS_COLORS[currentStatus]?.color ?? 'var(--text-muted)'} bg={STATUS_COLORS[currentStatus]?.bg ?? 'var(--status-draft-bg)'} />
         </div>
         {allowedTargets.length > 0 ? (
           <form onSubmit={handleTransition} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -176,12 +176,12 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {history.map((h, idx) => {
-              const ev = EVENT_ICONS[h.eventType as ClientBillingEventType] ?? { icon: <Plus size={13} />, color: '#6b7280' };
+              const ev = EVENT_ICONS[h.eventType as ClientBillingEventType] ?? { icon: <Plus size={13} />, color: 'var(--text-muted)' };
               const isLast = idx === history.length - 1;
               return (
                 <div key={h.id} style={{ display: 'flex', gap: 12 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <span style={{ width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${ev.color}22`, color: ev.color, border: `1px solid ${ev.color}55`, flexShrink: 0 }}>
+                    <span style={{ width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in srgb, ${ev.color} 13%, transparent)`, color: ev.color, border: `1px solid color-mix(in srgb, ${ev.color} 33%, transparent)`, flexShrink: 0 }}>
                       {ev.icon}
                     </span>
                     {!isLast && <span style={{ width: 2, flex: 1, background: 'var(--border-color)', minHeight: 24 }} />}
@@ -218,7 +218,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       </section>
 
       {/* Profile edit */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
         <h4 style={sectionTitle}><Save size={14} /> Billing Details</h4>
         <form onSubmit={handleProfileSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

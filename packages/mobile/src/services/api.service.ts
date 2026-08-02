@@ -1,8 +1,24 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+import Constants from 'expo-constants';
 import { AssayerAssignment, AppNotification } from '../types/mobile-app';
 
-const API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000/api/v1' : 'http://localhost:3000/api/v1';
+const getHostAddress = () => {
+  const envUrl = process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiUrl;
+  if (envUrl) {
+    return envUrl.endsWith('/api/v1') ? envUrl : `${envUrl.replace(/\/$/, '')}/api/v1`;
+  }
+  if (__DEV__) {
+    const hostUri = Constants.expoConfig?.hostUri;
+    if (hostUri) {
+      const ip = hostUri.split(':')[0];
+      return `http://${ip}:3000/api/v1`;
+    }
+  }
+  return Platform.OS === 'android' ? 'http://10.0.2.2:3000/api/v1' : 'http://localhost:3000/api/v1';
+};
+
+const API_BASE_URL = getHostAddress();
 
 const BACKEND_TO_MOBILE_STATUS: Record<string, string> = {
   PENDING: 'PENDING',
@@ -316,6 +332,40 @@ export class MobileApiService {
     }
   }
 
+  static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/profile`, {
+        method: 'PUT',
+        body: JSON.stringify(profileData),
+      });
+      const data = await response.json().catch(() => ({}));
+      return { success: response.ok && data?.success !== false, error: data?.message };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error updating profile' };
+    }
+  }
+
+  static async rejectAssignment(assignmentId: string, reason: string): Promise<{ success: boolean; error?: string }> {
+    const ok = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
+    return { success: ok, error: ok ? undefined : 'Failed to reject assignment' };
+  }
+
+  static async submitExpense(
+    assignmentId: string,
+    expense: { category: string; amount: number; description?: string }
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/expenses`, {
+        method: 'POST',
+        body: JSON.stringify(expense),
+      });
+      const data = await response.json().catch(() => ({}));
+      return { success: response.ok && data?.success !== false, error: data?.message };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error submitting expense' };
+    }
+  }
+
   static async getAssayerBilling(assayerId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/billing/assayer/${assayerId}`);
@@ -378,18 +428,11 @@ export class MobileApiService {
 
   static async getAssayerAssignments(assayerId?: string): Promise<AssayerAssignment[]> {
     try {
-      const isUuid = assayerId && /^[0-9a-fA-F-]{36}$/.test(assayerId);
-      const primaryUrl = isUuid ? `${API_BASE_URL}/assignments/assayer/${assayerId}` : `${API_BASE_URL}/assignments`;
-
-      let response = await this.fetchWithAuth(primaryUrl);
-
-      if (!response.ok && isUuid) {
-        response = await this.fetchWithAuth(`${API_BASE_URL}/assignments`);
-      }
-
+      if (!assayerId) return [];
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/assayer/${assayerId}`);
       if (!response.ok) return [];
       const data = await response.json();
-      const rawItems = Array.isArray(data) ? data : (data.items || []);
+      const rawItems = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : (data?.items || []));
 
       return rawItems.map((item: any, idx: number) => {
         const branch = item.projectBranch?.branch;
@@ -687,14 +730,6 @@ export class MobileApiService {
     } catch {
       return null;
     }
-  }
-
-  static async submitExpense(assignmentId: string, category: string, amount: number, description: string): Promise<boolean> {
-    const response = await this.fetchWithAuth(`${API_BASE_URL}/ledger/expenses`, {
-      method: 'POST',
-      body: JSON.stringify({ assignmentId, category, amount, description }),
-    });
-    return response.ok;
   }
 
   static async getNotifications(): Promise<AppNotification[]> {

@@ -8,7 +8,12 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "prebuild": "expo prebuild --no-install",
+    "build:apk": "eas build --platform android --profile preview",
+    "build:aab": "eas build --platform android --profile production",
+    "build:ios": "eas build --platform ios --profile production",
+    "build:web": "expo export"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
@@ -22,15 +27,15 @@
     "expo-file-system": "~18.0.0",
     "expo-location": "~18.0.10",
     "expo-notifications": "^0.29.14",
-    "react": "19.2.7",
-    "react-dom": "19.2.7",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "react-native": "0.76.9",
     "react-native-maps": "1.18.0",
-    "react-native-web": "~0.20.0",
+    "react-native-web": "~0.19.13",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
-    "@types/react": "~19.0.0",
+    "@types/react": "~18.3.12",
     "typescript": "^5.7.2"
   }
 }

@@ -13,11 +13,10 @@ export const StyledInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> 
       {...props}
       style={{
         padding: '8px 12px',
-        background: 'var(--bg-primary)',
+        background: 'var(--bg-input)',
         border: '1px solid var(--border-color)',
         borderRadius: 'var(--radius-sm)',
-        color: '#fff',
-        outline: 'none',
+        color: 'var(--text-primary)',
         fontSize: '13px',
         ...props.style,
       }}
@@ -81,11 +80,10 @@ export const FilterSelect: React.FC<{
       style={{
         padding: compact ? '7px 10px' : '8px 12px',
         fontSize: compact ? '12px' : '13px',
-        background: 'var(--bg-primary)',
+        background: 'var(--bg-input)',
         border: '1px solid var(--border-color)',
         borderRadius: 'var(--radius-sm)',
-        color: '#fff',
-        outline: 'none',
+        color: 'var(--text-primary)',
         cursor: 'pointer',
         ...style,
       }}

@@ -213,8 +213,16 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       case 'notification:new': {
+        // An assayer's socket joins `user:${assayerId}` on connect (handleConnection
+        // keys the room off the JWT `sub`, which is the assayer's own id for an
+        // assayer login) — but this only ever read `payload.userId`, so a
+        // notification addressed to an assayer had a live room waiting for it and
+        // nothing was ever sent there. Real-time delivery to assayers never worked.
         if (payload.userId) {
           this.server.to(`user:${payload.userId}`).emit('notification:new', payload);
+        }
+        if (payload.assayerId) {
+          this.server.to(`user:${payload.assayerId}`).emit('notification:new', payload);
         }
         break;
       }

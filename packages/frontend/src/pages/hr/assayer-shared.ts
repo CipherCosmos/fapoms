@@ -52,15 +52,15 @@ export interface Assayer {
 }
 
 export const STATUS_COLORS: Record<string, string> = {
-  [AssayerLifecycleStatus.ACTIVE]: '#10b981',
-  [AssayerLifecycleStatus.ON_LEAVE]: '#f59e0b',
-  [AssayerLifecycleStatus.INVITED]: '#3b82f6',
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: '#8b5cf6',
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: '#8b5cf6',
-  [AssayerLifecycleStatus.TRAINING]: '#f59e0b',
-  [AssayerLifecycleStatus.SUSPENDED]: '#ef4444',
-  [AssayerLifecycleStatus.INACTIVE]: '#6b7280',
-  [AssayerLifecycleStatus.RESIGNED]: '#9ca3af',
-  [AssayerLifecycleStatus.TERMINATED]: '#dc2626',
-  [AssayerLifecycleStatus.ARCHIVED]: '#9ca3af',
+  [AssayerLifecycleStatus.ACTIVE]: 'var(--success)',
+  [AssayerLifecycleStatus.ON_LEAVE]: 'var(--warning)',
+  [AssayerLifecycleStatus.INVITED]: 'var(--accent)',
+  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'var(--accent)',
+  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'var(--accent)',
+  [AssayerLifecycleStatus.TRAINING]: 'var(--warning)',
+  [AssayerLifecycleStatus.SUSPENDED]: 'var(--danger)',
+  [AssayerLifecycleStatus.INACTIVE]: 'var(--text-muted)',
+  [AssayerLifecycleStatus.RESIGNED]: 'var(--text-muted)',
+  [AssayerLifecycleStatus.TERMINATED]: 'var(--danger)',
+  [AssayerLifecycleStatus.ARCHIVED]: 'var(--text-muted)',
 };

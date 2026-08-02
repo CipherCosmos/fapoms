@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map } from 'lucide-react';
-import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal } from '../components/ui';
+import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } from '../components/ui';
 import { api } from '../services/api';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches } from '../hooks/useCurrentRoles';
+import { userMessage } from '../services/errors';
 
 interface ClientOption {
   id: string;
@@ -111,6 +112,7 @@ const BRANCH_TYPES = ['MAIN', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
 
 
 export const Branches: React.FC = () => {
+  const { toast } = useToast();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
@@ -188,7 +190,7 @@ export const Branches: React.FC = () => {
       setMessage({ type: 'success', text: 'Branch deleted.' });
       if (selectedBranch?.id === id) { setSelectedBranch(null); setBranchDetail(null); }
       loadBranches(selectedClientId);
-    } catch (err) { alert(err instanceof Error ? err.message : 'Failed to delete'); }
+    } catch (err) { toast({ type: 'error', title: 'Could not delete branch', message: userMessage(err) }); }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -236,18 +238,18 @@ export const Branches: React.FC = () => {
         {[
           { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)' },
           { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)' },
-          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: '#ef4444' },
+          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)' },
           { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)' },
         ].map(card => {
           const Icon = card.icon;
           return (
             <div key={card.label} className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color }}>
+              <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color }}>
                 <Icon size={22} />
               </div>
               <div>
                 <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>{card.label}</span>
-                <h4 style={{ fontSize: '24px', fontWeight: 800, margin: '2px 0', color: '#fff' }}>{card.value}</h4>
+                <h4 style={{ fontSize: '24px', fontWeight: 800, margin: '2px 0', color: 'var(--text-primary)' }}>{card.value}</h4>
               </div>
             </div>
           );
@@ -291,6 +293,17 @@ export const Branches: React.FC = () => {
               <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>State:</span>} value={stateFilter} onChange={setStateFilter} options={[{ value: 'ALL', label: 'All' }, ...states.map(s => ({ value: s, label: s }))]} compact />
               <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Region:</span>} value={regionFilter} onChange={setRegionFilter} options={[{ value: 'ALL', label: 'All' }, ...regions.map(r => ({ value: r, label: r }))]} compact />
               <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: r }))]} compact />
+              {(() => {
+                const activeCount = [stateFilter !== 'ALL', regionFilter !== 'ALL', riskFilter !== 'ALL'].filter(Boolean).length;
+                if (activeCount === 0) return null;
+                return (
+                  <button type="button" onClick={() => { setStateFilter('ALL'); setRegionFilter('ALL'); setRiskFilter('ALL'); }}
+                    title="Clear all filters"
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: '11px', fontWeight: 600, color: 'var(--accent)', background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <X size={12} /> Clear {activeCount}
+                  </button>
+                );
+              })()}
             </div>
           )}
 
@@ -311,21 +324,21 @@ export const Branches: React.FC = () => {
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.branchCode}
                       onClick={() => { loadBranchDetail(b); navigate(`/branches?id=${b.id}`, { replace: true }); }}
-                      style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(99, 102, 241, 0.08)' : undefined }}>
+                      style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(216,174,71,0.08)' : undefined }}>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.branchCode}</td>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>
                       <td style={{ fontWeight: 600, fontSize: '14px' }}>{b.name}</td>
                       <td style={{ fontSize: '13px' }}>{b.city}, {b.state}</td>
                       <td style={{ fontSize: '13px' }}>{b.region || '-'}</td>
                       <td>
-                        <StatusBadge label={b.riskCategory || '-'} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'rgba(239,68,68,0.1)' : b.riskCategory === 'MEDIUM' ? 'rgba(245,158,11,0.1)' : 'rgba(16,185,129,0.1)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? '#ef4444' : b.riskCategory === 'MEDIUM' ? '#f59e0b' : 'var(--status-active)'} />
+                        <StatusBadge label={b.riskCategory || '-'} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
                       </td>
                       <td style={{ fontSize: '12px' }}>{b.branchType || '-'}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '4px' }}>
                           {canManage && <>
-                            <button onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                            <button onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: '#ef4444' }}><Trash2 size={11} /></button>
+                            <button aria-label="Edit branch" onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
+                            <button aria-label="Delete branch" onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--danger)' }}><Trash2 size={11} /></button>
                           </>}
                         </div>
                       </td>
@@ -357,7 +370,7 @@ export const Branches: React.FC = () => {
               </div>
 
               {/* Info Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', padding: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                 <InfoRow label="SOL ID" value={branchDetail.solId || '-'} />
                 <InfoRow label="Branch Type" value={branchDetail.branchType || '-'} />
                 <InfoRow label="Region" value={branchDetail.region || '-'} />
@@ -397,7 +410,7 @@ export const Branches: React.FC = () => {
                 {(!branchDetail.contacts || branchDetail.contacts.length === 0) ? (
                   <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No contacts added yet.</div>
                 ) : branchDetail.contacts.map(c => (
-                  <div key={c.id} style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
+                  <div key={c.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
                       <span>{c.name} {c.isPrimary && <span style={{ fontSize: '10px', color: 'var(--accent-secondary)' }}>(PRIMARY)</span>}</span>
                     </div>
@@ -415,7 +428,7 @@ export const Branches: React.FC = () => {
                 {(!branchDetail.documents || branchDetail.documents.length === 0) ? (
                   <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No documents.</div>
                 ) : branchDetail.documents.map(d => (
-                  <div key={d.id} style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
+                  <div key={d.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600 }}>{d.fileName}</div>
                     <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{d.category} • {(d.fileSize / 1024).toFixed(1)} KB{d.remarks && ` • ${d.remarks}`}</div>
                   </div>
@@ -496,6 +509,7 @@ const BranchFormModal: React.FC<{
   onClose: () => void;
   onSaved: () => void;
 }> = ({ title, initial, branchId, clientOptions, onClose, onSaved }) => {
+  const { toast } = useToast();
   const [form, setForm] = useState<BranchFormData>(initial);
   const [submitting, setSubmitting] = useState(false);
 
@@ -506,13 +520,13 @@ const BranchFormModal: React.FC<{
       <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>{label}{opts?.required && ' *'}</label>
       {opts?.options ? (
         <select value={form[key]} onChange={(e) => set(key)(e.target.value)} required={opts?.required}
-          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
+          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }}>
           <option value="">Select...</option>
           {opts.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       ) : (
         <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => set(key)(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
-          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
+          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
       )}
     </div>
   );
@@ -553,7 +567,7 @@ const BranchFormModal: React.FC<{
       onSaved();
       onClose();
     } catch (err: any) {
-      alert(err?.message || `Failed to ${branchId ? 'update' : 'create'} branch`);
+      toast({ type: 'error', title: `Could not ${branchId ? 'update' : 'create'} branch`, message: userMessage(err) });
     } finally { setSubmitting(false); }
   };
 
@@ -608,6 +622,7 @@ const InfoRow: React.FC<{ label: string; value: string; full?: boolean }> = ({ l
 );
 
 const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; onAdded: () => void }> = ({ branchId, onClose, onAdded }) => {
+  const { toast } = useToast();
   const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [phone, setPhone] = useState('');
   const [designation, setDesignation] = useState(''); const [department, setDepartment] = useState(''); const [isPrimary, setIsPrimary] = useState(false); const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -620,7 +635,7 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
         body: JSON.stringify({ name, email, phone, designation, department: department || undefined, isPrimary, notes: notes || undefined }),
       });
       onAdded();
-    } catch (err) { alert(err instanceof Error ? err.message : 'Failed to add contact'); }
+    } catch (err) { toast({ type: 'error', title: 'Could not add contact', message: userMessage(err) }); }
     finally { setSubmitting(false); }
   };
 
@@ -640,11 +655,11 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
           { placeholder: 'Department', val: department, set: setDepartment },
         ].map(f => (
           <input key={f.placeholder} placeholder={f.placeholder} type={f.type || 'text'} value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
-            style={{ padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
+            style={{ padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
         ))}
         <div style={{ gridColumn: '1 / -1' }}>
           <textarea placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', resize: 'vertical' }} />
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', resize: 'vertical' }} />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} /> Primary contact

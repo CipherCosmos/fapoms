@@ -858,6 +858,114 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
+  /**
+   * Writes a per-branch status change to the audit trail.
+   *
+   * A branch moves IMPORTED → PLANNING → … → CLOSED through six methods and a
+   * dozen call sites, and none of them recorded anything: `audit_events` held
+   * zero rows for PROJECT_BRANCH, so a branch could show as CLOSED in planning
+   * with no way to find out when, by whom, or through which steps it got there.
+   * Recorded here rather than in each method so a future transition cannot
+   * silently skip it.
+   */
+  /**
+   * Everything that has happened to one branch, newest first.
+   *
+   * Stitches together the four places a branch's story is actually written —
+   * its own status transitions, the assignments offered on it, the documents
+   * that moved, and its validation case — because none of them individually
+   * answers "what happened to this branch", which is the question planning
+   * actually asks when a branch shows up CLOSED.
+   */
+  async getBranchHistory(projectBranchId: string): Promise<any> {
+    const pb = await this.projectBranchRepository.findOne({
+      where: { id: projectBranchId },
+      relations: ['branch', 'project'],
+    });
+    if (!pb) throw new NotFoundException(`Project branch ${projectBranchId} not found.`);
+
+    const rows = await this.projectBranchRepository.manager.query(
+      `
+      -- Branch status transitions
+      SELECT 'STATUS' AS kind, ae.occurred_at AS at, ae.event_type AS title,
+             ae.previous_state AS "from", ae.new_state AS "to", ae.remarks AS detail,
+             COALESCE(ae.user_display_name,
+                      NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+                      u.username) AS actor
+      FROM audit_events ae
+      LEFT JOIN users u ON u.id = ae.user_id
+      WHERE ae.entity_type = 'PROJECT_BRANCH' AND ae.entity_id = $1
+
+      UNION ALL
+      -- Assignments offered / accepted / completed on this branch
+      SELECT 'ASSIGNMENT', a.updated_at, 'Assignment ' || a.status::text,
+             NULL, a.status::text, a.assignment_number,
+             COALESCE(asr.display_name, 'unassigned')
+      FROM assignments a
+      LEFT JOIN assayers asr ON asr.id = a.assayer_id
+      WHERE a.project_branch_id = $1 AND a.is_active = true
+
+      UNION ALL
+      -- Paperwork in and out
+      SELECT 'DOCUMENT', d.updated_at, d.type::text || ' ' || d.status::text,
+             NULL, d.status::text, d.file_name,
+             COALESCE(NULLIF(TRIM(CONCAT_WS(' ', du.first_name, du.last_name)), ''), du.username)
+      FROM documents d
+      LEFT JOIN users du ON du.id = d.assigned_to_user_id
+      WHERE d.project_branch_id = $1 AND d.is_active = true
+
+      UNION ALL
+      -- Validation / review outcome
+      SELECT 'VALIDATION', ae2.occurred_at, ae2.event_type,
+             ae2.previous_state, ae2.new_state, ae2.remarks,
+             COALESCE(ae2.user_display_name,
+                      NULLIF(TRIM(CONCAT_WS(' ', vu.first_name, vu.last_name)), ''),
+                      vu.username)
+      FROM audit_events ae2
+      LEFT JOIN users vu ON vu.id = ae2.user_id
+      WHERE ae2.entity_type = 'VALIDATION'
+        AND ae2.entity_id IN (SELECT id FROM validation_cases WHERE project_branch_id = $1)
+
+      ORDER BY at DESC
+      `,
+      [projectBranchId],
+    );
+
+    return {
+      projectBranchId,
+      branchName: pb.branch?.name ?? null,
+      branchCode: pb.branch?.branchCode ?? null,
+      projectName: pb.project?.name ?? null,
+      currentStatus: pb.status,
+      scheduledDate: pb.scheduledDate ?? null,
+      packetCount: pb.packetCount ?? null,
+      timeline: rows,
+    };
+  }
+
+  private async recordBranchTransition(
+    pb: ProjectBranchEntity,
+    previousStatus: string,
+    userId: string,
+  ): Promise<void> {
+    if (previousStatus === pb.status) return;
+    try {
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: `PROJECT_BRANCH_${pb.status}`,
+        entityType: 'PROJECT_BRANCH',
+        entityId: pb.id,
+        previousState: previousStatus,
+        newState: pb.status,
+        userId,
+        remarks: `Branch moved ${previousStatus} → ${pb.status}`,
+      });
+    } catch (err: any) {
+      // History is valuable but must never block the transition itself.
+      console.warn(`Could not record branch transition for ${pb.id}: ${err?.message}`);
+    }
+  }
+
   async initiateBranchPlanning(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
     const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
     const pb = await repo.findOne({
@@ -866,9 +974,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.initiatePlanning(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -881,9 +991,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.confirmAssignment(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -896,9 +1008,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.scheduleAudit(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -911,9 +1025,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.completeAudit(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -926,9 +1042,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.completeValidation(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -941,9 +1059,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.close(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }

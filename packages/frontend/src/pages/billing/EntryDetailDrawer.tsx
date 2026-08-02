@@ -9,10 +9,10 @@ const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
 const STATE_COLOR: Record<BillingState, string> = {
   NOT_BILLABLE: 'var(--text-muted)', PENDING_BILLING: 'var(--text-secondary)',
-  READY_FOR_BILLING: '#60a5fa', DRAFT: '#a78bfa', SUBMITTED: '#f59e0b',
-  UNDER_REVIEW: '#38bdf8', REJECTED: '#ef4444', APPROVED: '#22c55e',
-  INVOICED: '#10b981', PARTIALLY_PAID: '#f59e0b', PAID: '#22c55e',
-  ON_HOLD: '#64748b', DISPUTED: '#ef4444', CANCELLED: '#64748b', ADJUSTED: '#f43f5e',
+  READY_FOR_BILLING: 'var(--accent)', DRAFT: 'var(--accent)', SUBMITTED: 'var(--warning)',
+  UNDER_REVIEW: 'var(--accent)', REJECTED: 'var(--danger)', APPROVED: 'var(--success)',
+  INVOICED: 'var(--success)', PARTIALLY_PAID: 'var(--warning)', PAID: 'var(--success)',
+  ON_HOLD: 'var(--text-muted)', DISPUTED: 'var(--danger)', CANCELLED: 'var(--text-muted)', ADJUSTED: 'var(--danger)',
 };
 
 const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
@@ -45,6 +45,7 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
 
   const doTransition = async () => {
     if (!selectedNext) return;
+    if (['APPROVED', 'INVOICED', 'PAID'].includes(selectedNext) && !window.confirm(`Move this entry to ${selectedNext}? This locks the amount and cannot be undone.`)) return;
     try {
       await transition.mutateAsync({ id: entry.id, status: selectedNext, reason: reason || undefined });
       toast('success', `Moved to ${selectedNext}`);
@@ -89,11 +90,11 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
           {nextStates.length > 0 && (
             <>
-              <select value={selectedNext} onChange={(e) => setSelectedNext(e.target.value as BillingState)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff' }}>
+              <select value={selectedNext} onChange={(e) => setSelectedNext(e.target.value as BillingState)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
                 <option value="">Transition…</option>
                 {nextStates.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
-              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason (optional)" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', width: 140 }} />
+              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason (optional)" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', width: 140 }} />
               <button onClick={doTransition} disabled={!selectedNext || transition.isPending} className="btn btn-primary">Apply</button>
             </>
           )}
@@ -104,14 +105,14 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
     >
       {adjustOpen && (
         <div style={{ display: 'flex', gap: 8, background: 'var(--bg-tertiary)', padding: 10, borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
-          <input value={adjustDelta} onChange={(e) => setAdjustDelta(e.target.value)} placeholder="delta (+/-)" type="number" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', flex: 1 }} />
-          <input value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)} placeholder="reason *" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', flex: 1 }} />
+          <input value={adjustDelta} onChange={(e) => setAdjustDelta(e.target.value)} placeholder="delta (+/-)" type="number" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', flex: 1 }} />
+          <input value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)} placeholder="reason *" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', flex: 1 }} />
           <button onClick={doAdjust} disabled={adjust.isPending} className="btn btn-primary">Save</button>
         </div>
       )}
       {splitOpen && (
         <div style={{ display: 'flex', gap: 8, background: 'var(--bg-tertiary)', padding: 10, borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
-          <input value={splitAmounts} onChange={(e) => setSplitAmounts(e.target.value)} placeholder="e.g. 5000, 3000, 2000" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', flex: 1 }} />
+          <input value={splitAmounts} onChange={(e) => setSplitAmounts(e.target.value)} placeholder="e.g. 5000, 3000, 2000" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', flex: 1 }} />
           <button onClick={doSplit} disabled={split.isPending} className="btn btn-primary">Split</button>
         </div>
       )}
@@ -124,7 +125,7 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
         {entry.discountAmount ? <Row label="Discount" value={`-₹${fmt(entry.discountAmount)}`} /> : null}
         {entry.taxAmount ? <Row label={`Tax (${entry.taxRate ?? ''}%)`} value={`₹${fmt(entry.taxAmount)}`} /> : null}
         {entry.tdsAmount ? <Row label="TDS" value={`-₹${fmt(entry.tdsAmount)}`} /> : null}
-        <Row label="Total" value={<span style={{ color: '#fff', fontWeight: 700 }}>₹{fmt(entry.totalAmount)}</span>} />
+        <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>₹{fmt(entry.totalAmount)}</span>} />
         <Row label="Billed" value={`₹${fmt(entry.billedAmount)}`} />
         <Row label="Paid" value={`₹${fmt(entry.paidAmount)}`} />
         <Row label="Outstanding" value={`₹${fmt(entry.outstandingAmount)}`} />

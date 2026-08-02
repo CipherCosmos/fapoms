@@ -16,6 +16,7 @@ export const DataTable = <T,>({
   onRowClick,
   loading,
   emptyMessage = 'No records found.',
+  emptyState,
   sortKey,
   sortOrder,
   onSort,
@@ -26,6 +27,7 @@ export const DataTable = <T,>({
   onRowClick?: (row: T) => void;
   loading?: boolean;
   emptyMessage?: string;
+  emptyState?: React.ReactNode;
   sortKey?: string;
   sortOrder?: 'asc' | 'desc';
   onSort?: (key: string) => void;
@@ -67,8 +69,8 @@ export const DataTable = <T,>({
             </tr>
           ) : rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} style={{ textAlign: 'center', padding: '28px' }}>
-                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{emptyMessage}</span>
+              <td colSpan={columns.length} style={{ textAlign: 'center', padding: '32px' }}>
+                {emptyState ?? <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{emptyMessage}</span>}
               </td>
             </tr>
           ) : (

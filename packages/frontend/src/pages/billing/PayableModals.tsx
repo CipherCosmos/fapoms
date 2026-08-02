@@ -9,14 +9,14 @@ import type { PaymentMethod } from '@fapoms/shared';
 interface AssayerOption { id: string; name: string; displayName?: string; }
 
 const STATUS_COLOR: Record<AssayerPayableStatus, string> = {
-  PENDING: '#f59e0b', APPROVED: '#60a5fa', PAID: '#22c55e', DISPUTED: '#ef4444', ON_HOLD: '#64748b',
+  PENDING: 'var(--warning)', APPROVED: 'var(--accent)', PAID: 'var(--success)', DISPUTED: 'var(--danger)', ON_HOLD: 'var(--text-muted)',
 };
 
 const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
 const selStyle: React.CSSProperties = {
   padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%',
+  borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
 };
 
 export const CreatePayableModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
@@ -98,6 +98,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
 
   const doDisburse = async () => {
     if (!payRef.trim()) { toast('error', 'A payment reference is required.'); return; }
+    if (!window.confirm(`Disburse ${rec.assayerName ?? 'assayer'} payment? This moves money and cannot be undone.`)) return;
     try {
       await disburse.mutateAsync({
         payableId: rec.id,
@@ -112,6 +113,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
 
   const doTransition = async () => {
     if (!next) return;
+    if (next === 'APPROVED' && !window.confirm('Approve this payable? This authorizes disbursement and is not easily reversed.')) return;
     try {
       await transition.mutateAsync({ id: rec.id, status: next, reason: reason || undefined });
       toast('success', `Payable → ${next}`); setNext(''); setReason('');
@@ -133,19 +135,19 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
       footer={
         allowed.length > 0 && (
           <div style={{ display: 'flex', gap: 8, width: '100%', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            <select value={next} onChange={(e) => setNext(e.target.value as AssayerPayableStatus)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff' }}>
+            <select value={next} onChange={(e) => setNext(e.target.value as AssayerPayableStatus)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
               <option value="">Transition…</option>
               {allowed.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
-            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', width: 120 }} />
+            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', width: 120 }} />
             <button onClick={doTransition} disabled={!next || transition.isPending} className="btn btn-primary">Apply</button>
           </div>
         )
       }
     >
       {canDisburse && (
-        <div style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius-sm)', padding: 12, marginBottom: 14 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
+        <div style={{ background: 'var(--status-active-bg)', border: '1px solid var(--success)', borderRadius: 'var(--radius-sm)', padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
             Disburse — ₹{fmt(outstanding)} owed
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
@@ -170,9 +172,9 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
         {rec.travelAmount ? <Row label="Travel" value={`₹${fmt(rec.travelAmount)}`} /> : null}
         {rec.taxAmount ? <Row label="Tax" value={`₹${fmt(rec.taxAmount)}`} /> : null}
         {rec.tdsAmount ? <Row label="TDS" value={`-₹${fmt(rec.tdsAmount)}`} /> : null}
-        <Row label="Net payable" value={<span style={{ color: '#fff', fontWeight: 700 }}>₹{fmt(rec.totalAmount)}</span>} />
+        <Row label="Net payable" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>₹{fmt(rec.totalAmount)}</span>} />
         <Row label="Paid" value={`₹${fmt(rec.paidAmount)}`} />
-        <Row label="Still owed" value={<span style={{ color: outstanding > 0 ? '#f59e0b' : '#22c55e' }}>₹{fmt(outstanding)}</span>} />
+        <Row label="Still owed" value={<span style={{ color: outstanding > 0 ? 'var(--warning)' : 'var(--success)' }}>₹{fmt(outstanding)}</span>} />
         {rec.approvedAt && <Row label="Approved" value={new Date(rec.approvedAt).toLocaleDateString()} />}
         {rec.paidAt && <Row label="Paid" value={new Date(rec.paidAt).toLocaleDateString()} />}
       </div>

@@ -106,7 +106,7 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
   const inputProps = { style: { width: '100%' } };
   const selStyle: React.CSSProperties = {
     padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%',
+    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
   };
 
   return (

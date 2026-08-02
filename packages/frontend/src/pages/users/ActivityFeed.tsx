@@ -34,7 +34,7 @@ const EVENT_ICON: Record<string, React.ReactNode> = {
 };
 
 const CATEGORY_TONE: Record<string, string> = {
-  USER: '#818cf8', OPERATIONAL: '#60a5fa', WORKFLOW: '#facc15', SYSTEM: '#94a3b8',
+  USER: 'var(--accent)', OPERATIONAL: 'var(--accent)', WORKFLOW: 'var(--warning)', SYSTEM: 'var(--text-muted)',
 };
 
 const fmtWhen = (d: string) =>
@@ -42,7 +42,7 @@ const fmtWhen = (d: string) =>
 
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)',
+  letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
 /** A single user's activity — mounted inside the edit panel on the Directory tab. */
@@ -59,7 +59,7 @@ export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '220px', overflowY: 'auto' }}>
       {events.map((e: AuditEvent) => (
-        <div key={e.id} style={{ display: 'flex', gap: '8px', padding: '6px 0', borderBottom: '1px solid rgba(148,163,184,0.07)', fontSize: '11.5px' }}>
+        <div key={e.id} style={{ display: 'flex', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '11.5px' }}>
           <span style={{ color: CATEGORY_TONE[e.category] ?? 'var(--text-muted)', flexShrink: 0, marginTop: '1px' }}>
             {EVENT_ICON[e.eventType] ?? <Activity size={13} />}
           </span>
@@ -91,9 +91,9 @@ export const ActivityFeed: React.FC = () => {
             <button key={c} onClick={() => setCategory(c)}
               style={{
                 padding: '5px 11px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${category === c ? 'transparent' : 'var(--border-color,#232833)'}`,
-                background: category === c ? '#4f46e5' : 'transparent',
-                color: category === c ? '#fff' : 'var(--text-secondary,#9aa4b5)',
+                border: `1px solid ${category === c ? 'transparent' : 'var(--border-color)'}`,
+                background: category === c ? 'var(--accent)' : 'transparent',
+                color: category === c ? 'var(--on-accent)' : 'var(--text-secondary)',
               }}>
               {c === 'ALL' ? 'All' : c.charAt(0) + c.slice(1).toLowerCase()}
             </button>
@@ -101,7 +101,7 @@ export const ActivityFeed: React.FC = () => {
         </div>
       </div>
 
-      <div style={{ background: 'var(--bg-card,#12151c)', border: '1px solid var(--border-color,#232833)', borderRadius: '10px', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
         {isLoading ? (
           <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
         ) : events.length === 0 ? (
@@ -112,7 +112,7 @@ export const ActivityFeed: React.FC = () => {
         ) : (
           <div>
             {events.map((e: AuditEvent) => (
-              <div key={e.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '10px 16px', borderBottom: '1px solid rgba(148,163,184,0.07)' }}>
+              <div key={e.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '10px 16px', borderBottom: '1px solid var(--border-hair)' }}>
                 <span style={{ color: CATEGORY_TONE[e.category] ?? 'var(--text-muted)', marginTop: '2px' }}>
                   {EVENT_ICON[e.eventType] ?? (e.entityType === 'USER' ? <UserIcon size={14} /> : <FileText size={14} />)}
                 </span>

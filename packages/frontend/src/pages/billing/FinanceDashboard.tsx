@@ -29,7 +29,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
   const actions = [
     {
       show: receivable.unbilled > 0,
-      icon: <FileText size={15} />, tone: '#a78bfa',
+      icon: <FileText size={15} />, tone: 'var(--accent)',
       title: 'Ready to invoice',
       amount: receivable.unbilled,
       detail: 'Work delivered but not yet on an invoice — cash stuck in the pipeline.',
@@ -37,7 +37,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
     },
     {
       show: payable.awaitingApproval > 0,
-      icon: <Clock size={15} />, tone: '#f59e0b',
+      icon: <Clock size={15} />, tone: 'var(--warning)',
       title: 'Payables awaiting approval',
       amount: payable.awaitingApproval,
       detail: 'Assayers have completed this work. Approve before it can be paid.',
@@ -45,7 +45,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
     },
     {
       show: payable.approvedUnpaid > 0,
-      icon: <ArrowUpRight size={15} />, tone: '#60a5fa',
+      icon: <ArrowUpRight size={15} />, tone: 'var(--accent)',
       title: 'Approved, ready to pay',
       amount: payable.approvedUnpaid,
       detail: 'Cleared for disbursement to assayers.',
@@ -53,7 +53,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
     },
     {
       show: overdue > 0,
-      icon: <AlertTriangle size={15} />, tone: '#ef4444',
+      icon: <AlertTriangle size={15} />, tone: 'var(--danger)',
       title: 'Overdue from clients',
       amount: overdue,
       detail: 'Past the due date set by the client’s payment terms — chase collection.',
@@ -61,7 +61,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
     },
     {
       show: data.openConflicts > 0,
-      icon: <AlertTriangle size={15} />, tone: '#ef4444',
+      icon: <AlertTriangle size={15} />, tone: 'var(--danger)',
       title: `${data.openConflicts} unresolved conflict${data.openConflicts === 1 ? '' : 's'}`,
       amount: null,
       detail: 'Blocking conflicts stop their entries from being invoiced at all.',
@@ -75,13 +75,13 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
       <div>
         <SectionLabel>Needs attention</SectionLabel>
         {actions.length === 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius-md)', color: '#22c55e', fontSize: 13 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'var(--status-active-bg)', border: '1px solid var(--success)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 13 }}>
             <CheckCircle2 size={16} /> Nothing waiting — everything billed, approved and collected.
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: 12 }}>
             {actions.map((a) => (
-              <div key={a.title} style={{ background: 'var(--bg-secondary)', border: `1px solid ${a.tone}44`, borderLeft: `3px solid ${a.tone}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
+              <div key={a.title} style={{ background: 'var(--bg-secondary)', border: `1px solid color-mix(in srgb, ${a.tone} 25%, transparent)`, borderLeft: `3px solid ${a.tone}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: a.tone, fontSize: 12, fontWeight: 700 }}>
                   {a.icon}{a.title}
                 </div>
@@ -108,15 +108,15 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
             label="Working capital"
             value={money(data.workingCapital)}
             sub="Owed to us − owed by us"
-            color={data.workingCapital < 0 ? '#ef4444' : '#22c55e'}
+            color={data.workingCapital < 0 ? 'var(--danger)' : 'var(--success)'}
           />
-          <Big label="Owed to us" value={money(receivable.outstanding)} sub="Invoiced, uncollected" color="#60a5fa" />
-          <Big label="We owe assayers" value={money(payable.approvedUnpaid + payable.awaitingApproval)} sub="Approved + pending approval" color="#f59e0b" />
+          <Big label="Owed to us" value={money(receivable.outstanding)} sub="Invoiced, uncollected" color="var(--accent)" />
+          <Big label="We owe assayers" value={money(payable.approvedUnpaid + payable.awaitingApproval)} sub="Approved + pending approval" color="var(--warning)" />
           <Big
             label="Margin"
             value={profitability.marginPct != null ? `${profitability.marginPct}%` : '—'}
             sub={`${money(profitability.netRevenue)} revenue − ${money(profitability.assayerCost)} cost`}
-            color={profitability.margin < 0 ? '#ef4444' : '#22c55e'}
+            color={profitability.margin < 0 ? 'var(--danger)' : 'var(--success)'}
           />
         </div>
       </div>
@@ -125,54 +125,54 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
       <div>
         <SectionLabel>Where the money is</SectionLabel>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 14 }}>
-          <Card title="Receivable — money coming in" accent="#60a5fa">
+          <Card title="Receivable — money coming in" accent="var(--accent)">
             {/* The order is the actual lifecycle a rupee travels through. */}
             <Pipeline
               steps={[
-                { label: 'Unbilled', value: receivable.unbilled, color: '#a78bfa' },
-                { label: 'Invoiced', value: receivable.outstanding, color: '#60a5fa' },
-                { label: 'Collected', value: receivable.collected, color: '#22c55e' },
+                { label: 'Unbilled', value: receivable.unbilled, color: 'var(--accent)' },
+                { label: 'Invoiced', value: receivable.outstanding, color: 'var(--accent)' },
+                { label: 'Collected', value: receivable.collected, color: 'var(--success)' },
               ]}
             />
-            {receivable.disputed > 0 && <Line label="Disputed" value={moneyExact(receivable.disputed)} color="#ef4444" />}
+            {receivable.disputed > 0 && <Line label="Disputed" value={moneyExact(receivable.disputed)} color="var(--danger)" />}
             <SubLabel>Ageing of what is outstanding</SubLabel>
             <Ageing aging={receivable.aging} />
           </Card>
 
-          <Card title="Payable — money going out" accent="#f59e0b">
+          <Card title="Payable — money going out" accent="var(--warning)">
             <Pipeline
               steps={[
-                { label: 'Awaiting approval', value: payable.awaitingApproval, color: '#f59e0b' },
-                { label: 'Approved', value: payable.approvedUnpaid, color: '#60a5fa' },
-                { label: 'Paid', value: payable.paid, color: '#22c55e' },
+                { label: 'Awaiting approval', value: payable.awaitingApproval, color: 'var(--warning)' },
+                { label: 'Approved', value: payable.approvedUnpaid, color: 'var(--accent)' },
+                { label: 'Paid', value: payable.paid, color: 'var(--success)' },
               ]}
             />
             {payable.onHold > 0 && <Line label="On hold" value={moneyExact(payable.onHold)} />}
-            {payable.disputed > 0 && <Line label="Disputed" value={moneyExact(payable.disputed)} color="#ef4444" />}
+            {payable.disputed > 0 && <Line label="Disputed" value={moneyExact(payable.disputed)} color="var(--danger)" />}
           </Card>
 
-          <Card title="Cash movement" accent="#22c55e">
+          <Card title="Cash movement" accent="var(--success)">
             <Line
-              label={<><ArrowDownLeft size={12} color="#22c55e" /> Received from clients</>}
-              value={moneyExact(cashflow.in)} color="#22c55e" hint={`${cashflow.inboundCount} payment(s)`}
+              label={<><ArrowDownLeft size={12} color="var(--success)" /> Received from clients</>}
+              value={moneyExact(cashflow.in)} color="var(--success)" hint={`${cashflow.inboundCount} payment(s)`}
             />
             <Line
-              label={<><ArrowUpRight size={12} color="#ef4444" /> Paid to assayers</>}
-              value={moneyExact(cashflow.out)} color="#ef4444" hint={`${cashflow.outboundCount} disbursement(s)`}
+              label={<><ArrowUpRight size={12} color="var(--danger)" /> Paid to assayers</>}
+              value={moneyExact(cashflow.out)} color="var(--danger)" hint={`${cashflow.outboundCount} disbursement(s)`}
             />
-            <Line label="Net" value={moneyExact(cashflow.net)} color={cashflow.net < 0 ? '#ef4444' : '#22c55e'} strong />
+            <Line label="Net" value={moneyExact(cashflow.net)} color={cashflow.net < 0 ? 'var(--danger)' : 'var(--success)'} strong />
             {data.recentPayments.length > 0 && <SubLabel>Recent</SubLabel>}
             {data.recentPayments.slice(0, 6).map((p) => (
               <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0', fontSize: 11.5 }}>
                 <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.reference}</span>
-                <span style={{ color: p.direction === 'INBOUND' ? '#22c55e' : '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <span style={{ color: p.direction === 'INBOUND' ? 'var(--success)' : 'var(--danger)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                   {p.direction === 'INBOUND' ? '+' : '−'}{money(p.amount)}
                 </span>
               </div>
             ))}
           </Card>
 
-          <Card title="Statutory position" accent="#a78bfa">
+          <Card title="Statutory position" accent="var(--accent)">
             <Line label="GST collected on sales" value={moneyExact(taxPosition.gstCollected)} hint="Payable to government" />
             <Line label="TDS withheld by clients" value={moneyExact(taxPosition.tdsWithheldByClients)} hint="Creditable against our liability" />
             <Line label="TDS withheld from assayers" value={moneyExact(taxPosition.tdsWithheldFromAssayers)} hint="We remit on their behalf" />
@@ -211,11 +211,11 @@ const Pipeline: React.FC<{ steps: Array<{ label: string; value: number; color: s
 
 const Ageing: React.FC<{ aging: BillingAging }> = ({ aging }) => {
   const buckets: Array<{ k: keyof BillingAging; label: string; color: string }> = [
-    { k: 'current', label: 'Not yet due', color: '#22c55e' },
-    { k: 'd1_30', label: '1–30d late', color: '#a3e635' },
-    { k: 'd31_60', label: '31–60d late', color: '#f59e0b' },
-    { k: 'd61_90', label: '61–90d late', color: '#fb923c' },
-    { k: 'd90_plus', label: '90d+ late', color: '#ef4444' },
+    { k: 'current', label: 'Not yet due', color: 'var(--success)' },
+    { k: 'd1_30', label: '1–30d late', color: 'var(--warning)' },
+    { k: 'd31_60', label: '31–60d late', color: 'var(--warning)' },
+    { k: 'd61_90', label: '61–90d late', color: 'var(--warning)' },
+    { k: 'd90_plus', label: '90d+ late', color: 'var(--danger)' },
   ];
   const total = buckets.reduce((s, b) => s + (aging[b.k] ?? 0), 0);
   if (total === 0) return <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Nothing outstanding.</div>;
@@ -272,5 +272,5 @@ const Big: React.FC<{ label: string; value: string; sub?: string; color?: string
 );
 
 const Panel: React.FC<{ children: React.ReactNode; tone?: 'error' }> = ({ children, tone }) => (
-  <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 20, fontSize: 13, color: tone === 'error' ? '#ef4444' : 'var(--text-muted)' }}>{children}</div>
+  <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 20, fontSize: 13, color: tone === 'error' ? 'var(--danger)' : 'var(--text-muted)' }}>{children}</div>
 );

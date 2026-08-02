@@ -3,7 +3,8 @@ import { View, Text, TouchableOpacity, Modal, StyleSheet, Image, ScrollView, Ale
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
-import { Icon } from './ui/primitives';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Button, Icon, IconButton, Tappable } from './ui/primitives';
 
 export interface MLKitScannerModalProps {
   visible: boolean;
@@ -16,6 +17,7 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
   onClose,
   onPdfGenerated,
 }) => {
+  const t = useTheme();
   const [scannedPages, setScannedPages] = useState<Array<{ uri: string; base64: string; pageNumber: number; enhanced: boolean }>>([]);
   const [isLiveCameraActive, setIsLiveCameraActive] = useState(false);
   const [isProcessingPdf, setIsProcessingPdf] = useState(false);
@@ -188,40 +190,58 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <View style={styles.container}>
         {/* Header */}
-        <View style={styles.header}>
-          <View>
+        <View style={{
+          paddingTop: Platform.OS === 'ios' ? 50 : 20,
+          paddingHorizontal: t.space.lg,
+          paddingBottom: t.space.md,
+          backgroundColor: t.colors.surface,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottomWidth: 1,
+          borderColor: t.colors.border,
+        }}>
+          <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Icon name="camera" size={16} color="#38bdf8" />
-              <Text style={styles.title}>Google MLKit Live Document Viewfinder</Text>
+              <Icon name="camera" size={16} color={t.colors.primary} />
+              <AppText variant="h3">Document Viewfinder & Scanner</AppText>
             </View>
-            <Text style={styles.subtitle}>Real-Time Camera Stream, Auto Boundary & Perspective Correction</Text>
+            <AppText variant="caption" tone="muted">Real-Time Camera Stream, Auto Boundary & Perspective Correction</AppText>
           </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>✕ Close</Text>
-          </TouchableOpacity>
+          <IconButton icon="close" onPress={onClose} />
         </View>
 
         {/* Filter Controls */}
-        <View style={styles.filterRow}>
-          <Text style={styles.filterLabel}>ML Processing:</Text>
-          <TouchableOpacity
-            style={[styles.filterChip, contrastFilter === 'AUTO' && styles.filterChipActive]}
-            onPress={() => setContrastFilter('AUTO')}
-          >
-            <Text style={styles.filterChipText}>✨ ML Auto-Enhance</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterChip, contrastFilter === 'DOCUMENT_ENHANCE' && styles.filterChipActive]}
-            onPress={() => setContrastFilter('DOCUMENT_ENHANCE')}
-          >
-            <Text style={styles.filterChipText}>📄 High Contrast</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterChip, contrastFilter === 'GRAYSCALE' && styles.filterChipActive]}
-            onPress={() => setContrastFilter('GRAYSCALE')}
-          >
-            <Text style={styles.filterChipText}>🏁 B&W Sharp</Text>
-          </TouchableOpacity>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: t.space.xs,
+          paddingHorizontal: t.space.lg,
+          paddingVertical: t.space.md,
+          backgroundColor: t.colors.bg,
+          borderBottomWidth: 1,
+          borderColor: t.colors.border,
+        }}>
+          <AppText variant="overline" tone="faint">ML MODE:</AppText>
+          {(['AUTO', 'DOCUMENT_ENHANCE', 'GRAYSCALE'] as const).map((mode) => {
+            const active = contrastFilter === mode;
+            return (
+              <Tappable key={mode} onPress={() => setContrastFilter(mode)}>
+                <View style={{
+                  paddingHorizontal: t.space.md,
+                  paddingVertical: t.space.xs,
+                  borderRadius: t.radius.pill,
+                  backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
+                  borderWidth: 1,
+                  borderColor: active ? t.colors.primary : t.colors.border,
+                }}>
+                  <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
+                    {mode === 'AUTO' ? 'Auto Enhance' : mode === 'DOCUMENT_ENHANCE' ? 'High Contrast' : 'B&W Sharp'}
+                  </AppText>
+                </View>
+              </Tappable>
+            );
+          })}
         </View>
 
         {/* LIVE CAMERA VIEWFINDER MODAL OVERLAY */}
@@ -266,7 +286,7 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
               </div>
             ) : (
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyTitle}>Native Camera Stream</Text>
+                <AppText variant="h3">Native Camera Stream</AppText>
               </View>
             )}
           </View>
@@ -275,11 +295,11 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
           <ScrollView contentContainerStyle={styles.galleryContent}>
             {scannedPages.length === 0 ? (
               <View style={styles.emptyContainer}>
-                <Text style={{ fontSize: 52, marginBottom: 12 }}>📷</Text>
-                <Text style={styles.emptyTitle}>Live Document Viewfinder Ready</Text>
-                <Text style={styles.emptySub}>
+                <AppText style={{ fontSize: 52, marginBottom: 12 }}>📷</AppText>
+                <AppText variant="h2">Live Document Viewfinder Ready</AppText>
+                <AppText variant="body" tone="muted" style={{ textAlign: 'center', marginTop: 8 }}>
                   Tap "Open Live Camera Viewfinder" to start the real-time camera stream. Align audit document pages within the MLKit bounding box to scan & generate PDF.
-                </Text>
+                </AppText>
               </View>
             ) : (
               <View style={styles.grid}>
@@ -287,14 +307,15 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
                   <View key={idx} style={styles.pageCard}>
                     <Image source={{ uri: page.uri }} style={styles.pageImage} resizeMode="cover" />
                     <View style={styles.pageBadge}>
-                      <Text style={styles.pageBadgeText}>Page {page.pageNumber}</Text>
+                      <AppText variant="caption" tone="primary">Page {page.pageNumber}</AppText>
                     </View>
-                    <View style={styles.mlkitOverlay}>
-                      <Text style={styles.mlkitOverlayText}>✓ ML Edge Aligned ({contrastFilter})</Text>
-                    </View>
-                    <TouchableOpacity style={styles.deleteBtn} onPress={() => handleRemovePage(idx)}>
-                      <Text style={styles.deleteBtnText}>🗑 Remove Page</Text>
-                    </TouchableOpacity>
+                    <Button
+                      label="Remove"
+                      variant="danger"
+                      size="sm"
+                      icon="trash"
+                      onPress={() => handleRemovePage(idx)}
+                    />
                   </View>
                 ))}
               </View>
@@ -304,38 +325,33 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
 
         {/* Footer Actions */}
         {!isLiveCameraActive && (
-          <View style={styles.footer}>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.captureBtn, { flex: 2 }]}
+          <View style={{ padding: t.space.lg, gap: t.space.md, backgroundColor: t.colors.surface, borderTopWidth: 1, borderColor: t.colors.border }}>
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              <Button
+                label={`Open Camera (${scannedPages.length})`}
+                icon="camera"
                 onPress={() => setIsLiveCameraActive(true)}
                 disabled={isProcessingPdf}
-              >
-                <Text style={styles.actionBtnText}>📷 Open Live Camera Viewfinder ({scannedPages.length})</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionBtn, { flex: 1, backgroundColor: '#334155' }]}
+                style={{ flex: 2 }}
+              />
+              <Button
+                label="Pick File"
+                icon="document-attach"
+                variant="neutral"
                 onPress={handlePickFileFallback}
-              >
-                <Text style={styles.actionBtnText}>📁 Pick File</Text>
-              </TouchableOpacity>
+                style={{ flex: 1 }}
+              />
             </View>
 
-            <TouchableOpacity
-              style={[
-                styles.actionBtn,
-                styles.generateBtn,
-                scannedPages.length === 0 && { backgroundColor: '#475569' },
-              ]}
+            <Button
+              label={`Compile Scanned PDF (${scannedPages.length} Pages)`}
+              icon="document-text"
+              variant="accent"
               onPress={handleGeneratePdfFromRealPages}
+              loading={isProcessingPdf}
               disabled={scannedPages.length === 0 || isProcessingPdf}
-            >
-              {isProcessingPdf ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.actionBtnText}>📄 Compile Scanned PDF ({scannedPages.length} Pages)</Text>
-              )}
-            </TouchableOpacity>
+              full
+            />
           </View>
         )}
       </View>

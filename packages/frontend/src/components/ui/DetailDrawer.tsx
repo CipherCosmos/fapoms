@@ -10,24 +10,66 @@ export const DetailDrawer: React.FC<{
   width?: number;
   children: React.ReactNode;
 }> = ({ open, onClose, title, subtitle, footer, width = 560, children }) => {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus?.();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: Math.min(width, typeof window !== 'undefined' ? window.innerWidth : width),
-        background: 'var(--bg-secondary)',
-        borderLeft: '1px solid var(--border-color)',
-        boxShadow: 'var(--shadow-lg)',
-        zIndex: 90,
-        display: 'flex',
-        flexDirection: 'column',
-        animation: 'drawerIn 0.2s ease-out',
-      }}
-    >
+    <>
+      <div
+        onClick={onClose}
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.35)',
+          backdropFilter: 'blur(2px)',
+          zIndex: 89,
+        }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: Math.min(width, typeof window !== 'undefined' ? window.innerWidth : width),
+          background: 'var(--bg-secondary)',
+          borderLeft: '1px solid var(--border-color)',
+          boxShadow: 'var(--shadow-lg)',
+          zIndex: 90,
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'drawerIn 0.2s ease-out',
+        }}
+      >
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        style={{ outline: 'none' }}
+      />
       <style>{`@keyframes drawerIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
       {title !== undefined && (
         <div
@@ -74,6 +116,7 @@ export const DetailDrawer: React.FC<{
           {footer}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 };

@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Crop, X, Loader2 } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
-import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+// Dynamic worker URL matching pdfjs version for reliable Vite build & HMR resolution
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version || '4.10.38'}/build/pdf.worker.min.mjs`;
 
 /**
  * The returned audit packet, with a marking tool.
@@ -191,7 +191,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
         top: Math.min(drag.y0, drag.y1),
         width: Math.abs(drag.x1 - drag.x0),
         height: Math.abs(drag.y1 - drag.y0),
-        tone: '#60a5fa',
+        tone: 'var(--accent)',
       };
     }
     if (highlight && canvasRef.current) {
@@ -201,7 +201,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
         top: highlight.y * r.height,
         width: highlight.w * r.width,
         height: highlight.h * r.height,
-        tone: '#facc15',
+        tone: 'var(--warning)',
       };
     }
     return null;
@@ -211,7 +211,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', flexWrap: 'wrap',
-        borderBottom: '1px solid var(--border-color,#232833)',
+        borderBottom: '1px solid var(--border-color)',
       }}>
         <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
           className="btn btn-secondary" style={btn}><ChevronLeft size={14} /></button>
@@ -224,15 +224,15 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
             }}
             style={{
               width: '46px', padding: '3px 5px', fontSize: '12px', textAlign: 'center',
-              background: 'var(--bg-page,#0d1016)', color: 'inherit',
-              border: '1px solid var(--border-color,#232833)', borderRadius: '5px',
+              background: 'var(--bg-input)', color: 'inherit',
+              border: '1px solid var(--border-color)', borderRadius: '5px',
             }}
           /> / {pages || '—'}
         </span>
         <button onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page >= pages}
           className="btn btn-secondary" style={btn}><ChevronRight size={14} /></button>
 
-        <span style={{ width: '1px', height: '18px', background: 'var(--border-color,#232833)' }} />
+        <span style={{ width: '1px', height: '18px', background: 'var(--border-color)' }} />
 
         <button onClick={() => setScale((s) => Math.max(0.5, +(s - 0.2).toFixed(2)))} className="btn btn-secondary" style={btn}><ZoomOut size={14} /></button>
         <span style={{ fontSize: '11.5px', minWidth: '38px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
@@ -248,18 +248,18 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
       </div>
 
       {marking && (
-        <div style={{ padding: '6px 10px', fontSize: '11.5px', background: 'rgba(96,165,250,0.1)', color: '#93c5fd' }}>
+        <div style={{ padding: '6px 10px', fontSize: '11.5px', background: 'var(--status-active-bg)', color: 'var(--accent)' }}>
           Drag a box around the detail you want to ask about — it is captured and attached to your message.
         </div>
       )}
 
-      <div ref={wrapRef} style={{ flex: 1, overflow: 'auto', background: '#0b0d12', padding: '14px', minHeight: 0 }}>
+      <div ref={wrapRef} style={{ flex: 1, overflow: 'auto', background: 'var(--bg-page)', padding: '14px', minHeight: 0 }}>
         {loading && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted,#7c8595)', fontSize: '13px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
             <Loader2 size={15} className="spin" /> Loading document…
           </div>
         )}
-        {error && <div style={{ color: '#f87171', fontSize: '13px' }}>{error}</div>}
+        {error && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{error}</div>}
         <div
           style={{ position: 'relative', display: 'inline-block', cursor: marking ? 'crosshair' : 'default' }}
           onMouseDown={onMouseDown}
@@ -272,7 +272,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
             <div style={{
               position: 'absolute', pointerEvents: 'none',
               left: overlay.left, top: overlay.top, width: overlay.width, height: overlay.height,
-              border: `2px solid ${overlay.tone}`, background: `${overlay.tone}22`, borderRadius: '2px',
+              border: `2px solid ${overlay.tone}`, background: 'var(--status-pending-bg)', borderRadius: '2px',
             }} />
           )}
         </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass } from 'lucide-react';
+import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 import { connectSocket } from '../services/socket';
@@ -106,15 +106,15 @@ const PIPELINE: ProjectStatus[] = [
 const OFF_PIPELINE: ProjectStatus[] = [ProjectStatus.ON_HOLD, ProjectStatus.ARCHIVED, ProjectStatus.CANCELLED];
 
 const STAGE_TONE: Record<string, string> = {
-  [ProjectStatus.DRAFT]: '#94a3b8',
-  [ProjectStatus.PLANNING]: '#60a5fa',
-  [ProjectStatus.SCHEDULING]: '#a78bfa',
-  [ProjectStatus.EXECUTION]: '#34d399',
-  [ProjectStatus.VALIDATION]: '#facc15',
-  [ProjectStatus.COMPLETED]: '#22c55e',
-  [ProjectStatus.ON_HOLD]: '#fb923c',
-  [ProjectStatus.ARCHIVED]: '#64748b',
-  [ProjectStatus.CANCELLED]: '#f87171',
+  [ProjectStatus.DRAFT]: 'var(--text-muted)',
+  [ProjectStatus.PLANNING]: 'var(--accent)',
+  [ProjectStatus.SCHEDULING]: 'var(--accent)',
+  [ProjectStatus.EXECUTION]: 'var(--success)',
+  [ProjectStatus.VALIDATION]: 'var(--warning)',
+  [ProjectStatus.COMPLETED]: 'var(--success)',
+  [ProjectStatus.ON_HOLD]: 'var(--warning)',
+  [ProjectStatus.ARCHIVED]: 'var(--text-muted)',
+  [ProjectStatus.CANCELLED]: 'var(--danger)',
 };
 
 /** Live states where a deadline still means something. */
@@ -127,9 +127,9 @@ const LIVE_STATES: string[] = [
 function scheduleHealth(p: { endDate: string | null; status: ProjectStatus }) {
   if (!p.endDate || !LIVE_STATES.includes(p.status)) return null;
   const days = Math.ceil((new Date(p.endDate).getTime() - Date.now()) / 86400000);
-  if (days < 0) return { days, label: `${Math.abs(days)}d overdue`, tone: '#f87171' };
-  if (days <= 7) return { days, label: `${days}d left`, tone: '#fb923c' };
-  if (days <= 30) return { days, label: `${days}d left`, tone: '#facc15' };
+  if (days < 0) return { days, label: `${Math.abs(days)}d overdue`, tone: 'var(--danger)' };
+  if (days <= 7) return { days, label: `${days}d left`, tone: 'var(--warning)' };
+  if (days <= 30) return { days, label: `${days}d left`, tone: 'var(--warning)' };
   return { days, label: `${days}d left`, tone: 'var(--text-muted)' };
 }
 
@@ -159,14 +159,14 @@ const getInitialProjectForm = (clientId = ''): FormData => {
 const statusBadge = (status: ProjectStatus) => {
   const map: Record<string, { bg: string; color: string }> = {
     [ProjectStatus.DRAFT]: { bg: 'var(--status-draft-bg)', color: 'var(--status-draft)' },
-    [ProjectStatus.PLANNING]: { bg: 'rgba(99,102,241,0.1)', color: 'var(--accent-primary)' },
+    [ProjectStatus.PLANNING]: { bg: 'rgba(216,174,71,0.1)', color: 'var(--accent-primary)' },
     [ProjectStatus.SCHEDULING]: { bg: 'var(--status-pending-bg)', color: 'var(--status-pending)' },
     [ProjectStatus.EXECUTION]: { bg: 'var(--status-active-bg)', color: 'var(--status-active)' },
-    [ProjectStatus.VALIDATION]: { bg: 'rgba(139,92,246,0.1)', color: '#8b5cf6' },
-    [ProjectStatus.COMPLETED]: { bg: 'rgba(16,185,129,0.1)', color: 'var(--accent-secondary)' },
-    [ProjectStatus.ARCHIVED]: { bg: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)' },
-    [ProjectStatus.ON_HOLD]: { bg: 'rgba(245,158,11,0.1)', color: '#f59e0b' },
-    [ProjectStatus.CANCELLED]: { bg: 'rgba(239,68,68,0.1)', color: '#ef4444' },
+    [ProjectStatus.VALIDATION]: { bg: 'rgba(216,174,71,0.1)', color: 'var(--accent)' },
+    [ProjectStatus.COMPLETED]: { bg: 'var(--status-active-bg)', color: 'var(--accent-secondary)' },
+    [ProjectStatus.ARCHIVED]: { bg: 'var(--border-hair)', color: 'var(--text-muted)' },
+    [ProjectStatus.ON_HOLD]: { bg: 'var(--status-pending-bg)', color: 'var(--warning)' },
+    [ProjectStatus.CANCELLED]: { bg: 'var(--status-cancelled-bg)', color: 'var(--danger)' },
   };
   const s = map[status] || { bg: 'var(--status-pending-bg)', color: 'var(--status-pending)' };
   return { background: s.bg, color: s.color };
@@ -184,6 +184,12 @@ export const Projects: React.FC = () => {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [totalProjects, setTotalProjects] = useState(0);
+  const [loadedPage, setLoadedPage] = useState(1);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const PAGE_SIZE = 50;
+  const hasMore = loadedPage * PAGE_SIZE < totalProjects;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -239,13 +245,36 @@ export const Projects: React.FC = () => {
 
   const loadProjects = async () => {
     setIsLoading(true);
+    setProjectsError(null);
     try {
-      const response = await api.request<ProjectItem[]>('/projects', { method: 'GET' });
-      setProjects(response);
-    } catch (err) {
-      console.error('Failed to load projects');
+      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>('/projects?page=1&limit=' + PAGE_SIZE, { method: 'GET', withMeta: true });
+      setProjects(response.data);
+      setTotalProjects(response.meta?.pagination?.total ?? response.data.length);
+      setLoadedPage(1);
+    } catch (err: any) {
+      setProjectsError(err?.message || 'Failed to load projects.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadMoreProjects = async () => {
+    if (isLoadingMore || !hasMore) return;
+    setIsLoadingMore(true);
+    try {
+      const next = loadedPage + 1;
+      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>('/projects?page=' + next + '&limit=' + PAGE_SIZE, { method: 'GET', withMeta: true });
+      const incoming = response.data || [];
+      setProjects(prev => {
+        const seen = new Set(prev.map(p => p.id));
+        return [...prev, ...incoming.filter(p => !seen.has(p.id))];
+      });
+      setTotalProjects(response.meta?.pagination?.total ?? totalProjects);
+      setLoadedPage(next);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to load more projects.' });
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -310,6 +339,7 @@ export const Projects: React.FC = () => {
 
   const handleRemoveBranch = async (projectBranchId: string) => {
     if (!detail) return;
+    if (!window.confirm('Remove this branch from the project?')) return;
     setIsSaving(true);
     setMessage(null);
     try {
@@ -428,6 +458,8 @@ export const Projects: React.FC = () => {
 
   const handleTransition = async (targetStatus: ProjectStatus) => {
     if (!detail) return;
+    const terminal = [ProjectStatus.CANCELLED, ProjectStatus.COMPLETED, ProjectStatus.ARCHIVED].includes(targetStatus);
+    if (terminal && !window.confirm(`Move project to ${targetStatus}? This is a terminal state and cannot be reversed.`)) return;
     setMessage(null);
     try {
       // Sends the intent only. This used to PUT the entire project just to change
@@ -505,17 +537,17 @@ export const Projects: React.FC = () => {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Name *</label>
-            <input type="text" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. SBI Quarter 3 Audit" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+            <input type="text" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. SBI Quarter 3 Audit" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Number *</label>
-            <input type="text" value={form.projectNumber} onChange={(e) => setForm(f => ({ ...f, projectNumber: e.target.value }))} placeholder="e.g. PRJ-2026-002" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+            <input type="text" value={form.projectNumber} onChange={(e) => setForm(f => ({ ...f, projectNumber: e.target.value }))} placeholder="e.g. PRJ-2026-002" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Client *</label>
-            <select value={form.clientId} onChange={(e) => setForm(f => ({ ...f, clientId: e.target.value }))} required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+            <select value={form.clientId} onChange={(e) => setForm(f => ({ ...f, clientId: e.target.value }))} required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}>
               <option value="">Select client...</option>
               {clients.map(c => (<option key={c.id} value={c.id}>{c.name} ({c.clientCode})</option>))}
             </select>
@@ -523,7 +555,7 @@ export const Projects: React.FC = () => {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Priority *</label>
-            <select value={form.priority} onChange={(e) => setForm(f => ({ ...f, priority: e.target.value as Priority }))} required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }}>
+            <select value={form.priority} onChange={(e) => setForm(f => ({ ...f, priority: e.target.value as Priority }))} required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}>
               {Object.values(Priority).map(p => (<option key={p} value={p}>{p}</option>))}
             </select>
           </div>
@@ -531,37 +563,37 @@ export const Projects: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Start Date</label>
-              <input type="date" value={form.startDate} onChange={(e) => setForm(f => ({ ...f, startDate: e.target.value }))} style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+              <input type="date" value={form.startDate} onChange={(e) => setForm(f => ({ ...f, startDate: e.target.value }))} style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>End Date</label>
-              <input type="date" value={form.endDate} onChange={(e) => setForm(f => ({ ...f, endDate: e.target.value }))} style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+              <input type="date" value={form.endDate} onChange={(e) => setForm(f => ({ ...f, endDate: e.target.value }))} style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Budget (INR)</label>
-            <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+            <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Description</label>
-            <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+            <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scope</label>
-            <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+            <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Skills (comma-separated)</label>
-            <input type="text" value={form.requiredSkills} onChange={(e) => setForm(f => ({ ...f, requiredSkills: e.target.value }))} placeholder="e.g. Gold Valuer, Auditing" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+            <input type="text" value={form.requiredSkills} onChange={(e) => setForm(f => ({ ...f, requiredSkills: e.target.value }))} placeholder="e.g. Gold Valuer, Auditing" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Certifications (comma-separated)</label>
-            <input type="text" value={form.requiredCertifications} onChange={(e) => setForm(f => ({ ...f, requiredCertifications: e.target.value }))} placeholder="e.g. Gold Valuer License" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none' }} />
+            <input type="text" value={form.requiredCertifications} onChange={(e) => setForm(f => ({ ...f, requiredCertifications: e.target.value }))} placeholder="e.g. Gold Valuer License" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
         </div>
       </div>
     </Modal>
@@ -693,6 +725,15 @@ export const Projects: React.FC = () => {
               <tbody>
                 {isLoading ? (
                   <tr><td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>Loading projects...</td></tr>
+                ) : projectsError ? (
+                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--text-muted)' }}>
+                    <AlertTriangle size={36} style={{ margin: '0 auto 10px', color: 'var(--danger)', opacity: 0.6 }} />
+                    <p style={{ fontSize: '14px', color: 'var(--danger)' }}>Couldn't load projects</p>
+                    <p style={{ fontSize: '12px' }}>{projectsError}</p>
+                    <button onClick={loadProjects} className="btn btn-secondary" style={{ marginTop: '12px', padding: '8px 16px', fontSize: '12px' }}>
+                      <RefreshCw size={14} /> Retry
+                    </button>
+                  </td></tr>
                 ) : filteredProjects.length === 0 ? (
                   <tr><td colSpan={7} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
                     <FolderKanban size={36} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
@@ -701,7 +742,7 @@ export const Projects: React.FC = () => {
                 ) : (
                   filteredProjects.map((p) => (
                     <tr key={p.id} onClick={() => { setSelectedId(selectedId === p.id ? null : p.id); navigate(`/projects?id=${p.id}`, { replace: true }); }}
-                      style={{ cursor: 'pointer', background: selectedId === p.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedId === p.id ? '3px solid var(--accent-primary)' : '3px solid transparent', transition: 'background 0.15s' }}>
+                      style={{ cursor: 'pointer', background: selectedId === p.id ? 'rgba(216,174,71,0.08)' : 'transparent', borderLeft: selectedId === p.id ? '3px solid var(--accent-primary)' : '3px solid transparent', transition: 'background 0.15s' }}>
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}>
                         <ChevronRight size={14} style={{ color: selectedId === p.id ? 'var(--accent-primary)' : 'var(--text-muted)', opacity: selectedId === p.id ? 1 : 0.3 }} />
                       </td>
@@ -730,7 +771,7 @@ export const Projects: React.FC = () => {
                         {(() => {
                           const bp = p.branchProgress;
                           if (!bp || bp.total === 0) {
-                            return <span style={{ color: '#fb923c', fontSize: '11.5px' }}>No branches</span>;
+                            return <span style={{ color: 'var(--warning)', fontSize: '11.5px' }}>No branches</span>;
                           }
                           const pct = Math.round((bp.assigned / bp.total) * 100);
                           return (
@@ -739,11 +780,11 @@ export const Projects: React.FC = () => {
                                 <span>{bp.assigned}/{bp.total}</span>
                                 <span style={{ color: 'var(--text-muted)' }}>{pct}%</span>
                               </div>
-                              <div style={{ height: '4px', borderRadius: '2px', background: 'rgba(148,163,184,0.18)', overflow: 'hidden' }}>
-                                <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? '#22c55e' : '#60a5fa' }} />
+                              <div style={{ height: '4px', borderRadius: '2px', background: 'var(--border-hair)', overflow: 'hidden' }}>
+                                <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? 'var(--success)' : 'var(--accent)' }} />
                               </div>
                               {bp.uncovered > 0 && (
-                                <div style={{ fontSize: '10px', color: '#f87171', marginTop: '2px' }}>{bp.uncovered} uncovered</div>
+                                <div style={{ fontSize: '10px', color: 'var(--danger)', marginTop: '2px' }}>{bp.uncovered} uncovered</div>
                               )}
                             </div>
                           );
@@ -789,6 +830,14 @@ export const Projects: React.FC = () => {
               </tbody>
             </table>
           </div>
+          {!isLoading && !projectsError && filteredProjects.length > 0 && hasMore && (
+            <div style={{ padding: '10px', textAlign: 'center', borderTop: '1px solid var(--border-hair)' }}>
+              <button onClick={loadMoreProjects} disabled={isLoadingMore} className="btn btn-secondary" style={{ padding: '7px 16px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                {isLoadingMore ? <RefreshCw size={13} className="spinner" /> : <ChevronDown size={13} />}
+                {isLoadingMore ? 'Loading…' : `Load more (${projects.length} of ${totalProjects})`}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Detail Panel */}
@@ -811,14 +860,14 @@ export const Projects: React.FC = () => {
                     <StatusBadge className="badge" label={detail.status} bg={statusBadge(detail.status).background} color={statusBadge(detail.status).color} />
                   </div>
                 </div>
-                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.01)' }}>
-                  <button type="button" onClick={() => setActiveTab('overview')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'overview' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'overview' ? '#fff' : 'var(--text-muted)', fontWeight: activeTab === 'overview' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)' }}>
+                  <button type="button" onClick={() => setActiveTab('overview')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'overview' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'overview' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'overview' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
                     📁 Overview
                   </button>
-                  <button type="button" onClick={() => setActiveTab('branches')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'branches' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'branches' ? '#fff' : 'var(--text-muted)', fontWeight: activeTab === 'branches' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                  <button type="button" onClick={() => setActiveTab('branches')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'branches' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'branches' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'branches' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
                     🏢 Branches ({projectBranches.length})
                   </button>
-                  <button type="button" onClick={() => setActiveTab('settings')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'settings' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'settings' ? '#fff' : 'var(--text-muted)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                  <button type="button" onClick={() => setActiveTab('settings')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'settings' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'settings' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
                     ⚙️ Settings & Workflow
                   </button>
                 </div>
@@ -879,7 +928,7 @@ export const Projects: React.FC = () => {
                                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Skills: </span>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
                                   {skills.map((s, i) => (
-                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(99,102,241,0.08)', borderRadius: '4px', color: 'var(--accent-primary)', fontWeight: 500 }}>{s}</span>
+                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(216,174,71,0.08)', borderRadius: '4px', color: 'var(--accent-primary)', fontWeight: 500 }}>{s}</span>
                                   ))}
                                 </div>
                               </div>
@@ -889,7 +938,7 @@ export const Projects: React.FC = () => {
                                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Certifications: </span>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
                                   {certs.map((c, i) => (
-                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(16,185,129,0.08)', borderRadius: '4px', color: 'var(--accent-secondary)', fontWeight: 500 }}>{c}</span>
+                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'var(--status-active-bg)', borderRadius: '4px', color: 'var(--accent-secondary)', fontWeight: 500 }}>{c}</span>
                                   ))}
                                 </div>
                               </div>
@@ -928,10 +977,10 @@ export const Projects: React.FC = () => {
 
                       {/* Dynamic Branch Search Adder Widget */}
                       {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
                           <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>ADD BRANCH MANUALLY</span>
                           <input type="text" value={branchSearch} onChange={e => setBranchSearch(e.target.value)} placeholder="Type branch name or code to search..."
-                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '12px' }} />
+                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
                           {branchSearch.trim() && (
                             <div style={{ maxHeight: '120px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', padding: '4px' }}>
                               {suggestions.length === 0 ? (
@@ -940,11 +989,11 @@ export const Projects: React.FC = () => {
                                 suggestions.slice(0, 10).map((b: any) => (
                                   <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', fontSize: '11px' }}>
                                     <div>
-                                      <span style={{ fontWeight: 600, color: '#fff' }}>{b.name}</span>
+                                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{b.name}</span>
                                       <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.branchCode})</span>
                                     </div>
                                     {canManage && <button type="button" onClick={() => { handleAddBranch(b.id); setBranchSearch(''); }}
-                                      style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                                      style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
                                       + Add
                                     </button>}
                                   </div>
@@ -964,16 +1013,16 @@ export const Projects: React.FC = () => {
                       ) : (
                         <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           {projectBranches.map((pb: any) => (
-                            <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '8px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
+                            <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '8px 10px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
                               <div>
                                 <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{pb.status}</span>
+                                <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{pb.status}</span>
                                 {canManage && (detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
-                                  <button type="button" onClick={() => handleRemoveBranch(pb.id)}
-                                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <button type="button" aria-label="Remove branch" onClick={() => handleRemoveBranch(pb.id)}
+                                    style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                                     <X size={14} />
                                   </button>
                                 )}
@@ -1030,9 +1079,9 @@ export const Projects: React.FC = () => {
                             <button key={target} onClick={() => handleTransition(target)}
                               style={{
                                 padding: '6px 12px', fontSize: '11px', borderRadius: 'var(--radius-sm)',
-                                background: target === ProjectStatus.CANCELLED ? 'rgba(239,68,68,0.08)' : 'rgba(99,102,241,0.08)',
-                                border: `1px solid ${target === ProjectStatus.CANCELLED ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.3)'}`,
-                                color: target === ProjectStatus.CANCELLED ? '#ef4444' : 'var(--accent-primary)',
+                                background: target === ProjectStatus.CANCELLED ? 'var(--status-cancelled-bg)' : 'rgba(216,174,71,0.08)',
+                                border: `1px solid ${target === ProjectStatus.CANCELLED ? 'var(--status-cancelled-bg)' : 'rgba(216,174,71,0.3)'}`,
+                                color: target === ProjectStatus.CANCELLED ? 'var(--danger)' : 'var(--accent-primary)',
                                 cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s'
                               }}>
                               {target === ProjectStatus.CANCELLED ? 'Cancel' : `→ ${target}`}
@@ -1055,7 +1104,7 @@ export const Projects: React.FC = () => {
                         </button>
                       )}
                       {canDelete && (
-                        <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}>
+                        <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                           <Trash2 size={13} /> Delete
                         </button>
                       )}
@@ -1064,7 +1113,7 @@ export const Projects: React.FC = () => {
                 )}
 
                 {/* Metadata */}
-                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '16px', fontSize: '10px', color: 'var(--text-muted)', marginTop: 'auto', background: 'rgba(255,255,255,0.01)' }}>
+                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '16px', fontSize: '10px', color: 'var(--text-muted)', marginTop: 'auto', background: 'var(--bg-surface-2)' }}>
                   <span>Created: {new Date(detail.createdAt).toLocaleDateString()}</span>
                   <span>Updated: {new Date(detail.updatedAt).toLocaleDateString()}</span>
                 </div>
@@ -1090,7 +1139,7 @@ export const Projects: React.FC = () => {
         footer={
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
-            <button onClick={handleDelete} className="btn btn-primary" style={{ background: '#ef4444', border: 'none' }}>Delete</button>
+            <button onClick={handleDelete} className="btn btn-primary" style={{ background: 'var(--danger)', border: 'none' }}>Delete</button>
           </div>
         }
       >

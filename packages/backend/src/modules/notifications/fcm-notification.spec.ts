@@ -7,6 +7,7 @@ import { NotificationEntity } from './notification.entity';
 import { UserEntity } from '../user/user.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { DeviceTokenEntity } from './device-token.entity';
+import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('FCM Notification & Routing E2E Test Suite', () => {
@@ -102,6 +103,7 @@ describe('FCM Notification & Routing E2E Test Suite', () => {
         // required for DI even though these tests exercise only the push path.
         { provide: getRepositoryToken(UserEntity), useValue: { findOne: jest.fn() } },
         { provide: getRepositoryToken(AssayerEntity), useValue: { findOne: jest.fn() } },
+        { provide: getRepositoryToken(NotificationPreferenceEntity), useValue: { find: jest.fn(), findOne: jest.fn(), create: jest.fn(), save: jest.fn() } },
       ],
     }).compile();
 

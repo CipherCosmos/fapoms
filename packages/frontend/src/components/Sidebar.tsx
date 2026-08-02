@@ -92,8 +92,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
           gap: collapsed ? 0 : '12px',
           padding: collapsed ? '10px' : '10px 16px',
           borderRadius: 'var(--radius-md)',
-          color: isActive ? '#fff' : 'var(--text-secondary)',
-          background: isActive ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+          color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+          background: isActive ? 'var(--status-pending-bg)' : 'transparent',
           borderLeft: !collapsed && isActive ? '3px solid var(--accent-primary)' : collapsed ? 'none' : '3px solid transparent',
           textDecoration: 'none',
           fontSize: '13px',
@@ -128,23 +128,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', overflow: 'hidden' }}>
             <div style={{
               background: 'var(--gradient-neon)',
-              width: '36px',
-              height: '36px',
-              borderRadius: 'var(--radius-sm)',
+              width: '38px',
+              height: '38px',
+              borderRadius: '11px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#fff',
+              color: 'var(--on-gradient)',
               fontWeight: 800,
               fontSize: '18px',
               fontFamily: 'var(--font-display)',
-              boxShadow: 'var(--shadow-neon)',
-              flexShrink: 0
+              boxShadow: 'var(--shadow-neon), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
+              flexShrink: 0,
+              position: 'relative'
             }}>
-              F
+              <span style={{ position: 'relative', zIndex: 1 }}>S</span>
+              <span style={{ position: 'absolute', inset: '4px', borderRadius: '7px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
             </div>
             <div>
-              <h1 style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'var(--font-display)', lineHeight: 1 }}>FAPOMS</h1>
+              <h1 style={{ fontSize: '17px', fontWeight: 700, fontFamily: 'var(--font-display)', lineHeight: 1, color: 'var(--accent)' }}>Sumeru Audit Suite</h1>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>Audit Ops Suite</span>
             </div>
           </div>
@@ -152,20 +154,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
         {collapsed && (
           <div style={{
             background: 'var(--gradient-neon)',
-            width: '36px',
-            height: '36px',
-            borderRadius: 'var(--radius-sm)',
+            width: '38px',
+            height: '38px',
+            borderRadius: '11px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#fff',
+            color: 'var(--on-gradient)',
             fontWeight: 800,
             fontSize: '18px',
             fontFamily: 'var(--font-display)',
-            boxShadow: 'var(--shadow-neon)',
-            flexShrink: 0
+            boxShadow: 'var(--shadow-neon), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
+            flexShrink: 0,
+            position: 'relative'
           }}>
-            F
+            <span style={{ position: 'relative', zIndex: 1 }}>S</span>
+            <span style={{ position: 'absolute', inset: '4px', borderRadius: '7px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
           </div>
         )}
         <button
@@ -176,7 +180,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
             right: collapsed ? '-12px' : 'auto',
             top: collapsed ? '50%' : 'auto',
             transform: collapsed ? 'translateY(-50%)' : 'none',
-            background: 'var(--bg-tertiary)',
+            background: 'var(--bg-surface-2)',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-full)',
             width: '24px',
@@ -217,13 +221,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
 
       {/* User Status */}
       <div style={{ 
-        padding: collapsed ? '16px 14px' : '20px', 
+        padding: collapsed ? '14px 10px' : '20px', 
         borderTop: '1px solid var(--border-color)',
         background: 'rgba(0,0,0,0.1)',
         display: 'flex',
+        flexDirection: collapsed ? 'column' : 'row',
         alignItems: 'center',
         justifyContent: collapsed ? 'center' : 'flex-start',
-        gap: collapsed ? 0 : '12px',
+        gap: collapsed ? '8px' : '12px',
         position: 'relative',
       }}>
         <div style={{ 
@@ -241,7 +246,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
           {(user?.displayName || 'SA').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
         </div>
         {!collapsed && (
-          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: '1 1 auto', minWidth: 0 }}>
             <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {user?.displayName || 'System Admin'}
             </span>
@@ -252,7 +257,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
         )}
         {onLogout && (
           <button onClick={onLogout} title="Logout"
-            style={{ position: collapsed ? 'absolute' : 'static', right: collapsed ? '-12px' : 'auto', top: collapsed ? '50%' : 'auto', transform: collapsed ? 'translateY(-50%)' : 'none', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-sm)', color: '#ef4444', cursor: 'pointer', padding: collapsed ? '6px' : '6px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 500, marginLeft: collapsed ? 0 : 'auto', flexShrink: 0 }}>
+            style={{ position: collapsed ? 'static' : 'static', right: collapsed ? 'auto' : 'auto', top: collapsed ? 'auto' : 'auto', transform: 'none', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled)', borderRadius: 'var(--radius-sm)', color: 'var(--danger)', cursor: 'pointer', padding: collapsed ? '6px' : '6px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 500, marginLeft: collapsed ? 0 : 'auto', flexShrink: 0 }}>
             <LogOut size={collapsed ? 14 : 12} />
             {!collapsed && <span>Logout</span>}
           </button>

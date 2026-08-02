@@ -135,7 +135,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
 
   if (isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
 
-  const inputStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%' };
+  const inputStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' };
   const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' };
   const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
 
@@ -182,7 +182,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
                   key={d.value}
                   type="button"
                   onClick={() => setWorkingDays((wd) => on ? wd.filter((x) => x !== d.value) : [...wd, d.value].sort())}
-                  style={{ padding: '6px 10px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: on ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)', background: on ? 'rgba(59,130,246,0.15)' : 'var(--bg-primary)', color: on ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer' }}
+                  style={{ padding: '6px 10px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: on ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)', background: on ? 'var(--status-pending-bg)' : 'var(--bg-primary)', color: on ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer' }}
                 >
                   {d.label}
                 </button>

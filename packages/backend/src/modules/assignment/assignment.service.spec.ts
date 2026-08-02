@@ -7,6 +7,7 @@ import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
@@ -65,7 +66,13 @@ describe('AssignmentService', () => {
     isHoliday: jest.fn(),
   };
 
-  const mockNotificationService = {
+  const mockNotificationDispatch = {
+  emit: jest.fn().mockResolvedValue({ groupKey: 'g', created: 1, suppressed: 0, recipients: { userIds: [], assayerIds: [] } }),
+  emitSafe: jest.fn(),
+  markRead: jest.fn(),
+};
+
+const mockNotificationService = {
     create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
   };
 
@@ -114,6 +121,7 @@ describe('AssignmentService', () => {
         { provide: AssayerService, useValue: mockAssayerService },
         { provide: HolidayService, useValue: mockHolidayService },
         { provide: NotificationService, useValue: mockNotificationService },
+        { provide: NotificationDispatchService, useValue: mockNotificationDispatch },
         { provide: PushNotificationService, useValue: mockPushNotificationService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
@@ -333,7 +341,11 @@ describe('AssignmentService', () => {
       );
     });
 
-    it('notifies the assigning user the first time an assignment is escalated', async () => {
+    it('escalation notifies the operations roles, not just the raiser', async () => {
+      // Escalation previously notified `createdBy` alone, so an escalation
+      // raised while that one person was away reached nobody. It now goes
+      // through the catalog, which resolves the operations and administrator
+      // roles at send time.
       const assignment = {
         id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
         priority: Priority.MEDIUM, createdBy: 'ops-user-1',
@@ -342,12 +354,28 @@ describe('AssignmentService', () => {
       mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
       mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-user-1' });
 
+      await service.escalate('asn-1', 'ops-user-2', 'Client escalated.');
+
+      expect(mockNotificationDispatch.emitSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'ASSIGNMENT_ESCALATED',
+          entityId: 'asn-1',
+          actorUserId: 'ops-user-2',
+          ownerUserId: 'ops-user-1',
+        }),
+      );
+    });
+
+    it('does not re-notify an assignment that is already CRITICAL', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        priority: Priority.CRITICAL, createdBy: 'ops-user-1',
+      });
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
       await service.escalate('asn-1', 'ops-user-2');
 
-      expect(mockNotificationService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'ops-user-1', title: 'Assignment Escalated' }),
-        'ops-user-2',
-      );
+      expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalled();
     });
 
     it('rejects escalating an assignment that is already COMPLETED', async () => {

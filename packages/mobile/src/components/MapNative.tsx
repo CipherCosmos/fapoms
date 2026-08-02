@@ -9,6 +9,9 @@ import { MapRenderProps } from './MapWeb';
 // Android: Google Maps provider with live traffic layer.
 // iOS: Apple Maps provider (free) with live traffic layer.
 const IS_ANDROID = Platform.OS === 'android';
+const MapViewComponent = MapView as any;
+const MarkerComponent = Marker as any;
+const PolylineComponent = Polyline as any;
 
 export const InteractiveMapNative: React.FC<MapRenderProps> = ({ origin, destination, routeCoords, showTraffic = true, fitKey }) => {
   const mapRef = useRef<MapView>(null);
@@ -28,7 +31,7 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({ origin, destina
 
   return (
     <View style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-      <MapView
+      <MapViewComponent
         ref={mapRef}
         style={{ flex: 1 }}
         provider={IS_ANDROID ? PROVIDER_GOOGLE : undefined}
@@ -46,12 +49,12 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({ origin, destina
           longitudeDelta: 0.08,
         }}
       >
-        {origin && <Marker coordinate={origin} title="You" pinColor="#3b82f6" />}
-        <Marker coordinate={destination} title="Destination" pinColor="#ef4444" />
+        {origin && <MarkerComponent coordinate={origin} title="You" pinColor="#3b82f6" />}
+        <MarkerComponent coordinate={destination} title="Destination" pinColor="#ef4444" />
         {routeCoords.length >= 2 && (
-          <Polyline coordinates={routeCoords} strokeColor="#2563eb" strokeWidth={5} />
+          <PolylineComponent coordinates={routeCoords} strokeColor="#2563eb" strokeWidth={5} />
         )}
-      </MapView>
+      </MapViewComponent>
       <View
         style={{
           position: 'absolute',

@@ -70,8 +70,8 @@ function getStatusBadgeProps(status: string): { bg: string; color: string; icon:
   const isCancelled = status === 'CANCELLED';
   const isDone = status === 'AUDIT_COMPLETED' || status === 'VALIDATION_COMPLETED';
 
-  const bg = isCheckedIn ? 'rgba(6, 182, 212, 0.15)' : isAccepted ? 'rgba(16, 185, 129, 0.15)' : isClosed ? 'rgba(16, 185, 129, 0.2)' : isDone ? 'rgba(168, 85, 247, 0.15)' : isCancelled ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)';
-  const color = isCheckedIn ? '#06b6d4' : isAccepted ? '#10b981' : isClosed ? '#10b981' : isDone ? '#a855f7' : isCancelled ? '#ef4444' : '#f59e0b';
+  const bg = isCheckedIn ? 'rgba(216,174,71,0.15)' : isAccepted ? 'var(--status-active-bg)' : isClosed ? 'var(--status-active-bg)' : isDone ? 'rgba(216,174,71,0.15)' : isCancelled ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)';
+  const color = isCheckedIn ? 'var(--accent)' : isAccepted ? 'var(--success)' : isClosed ? 'var(--success)' : isDone ? 'var(--accent)' : isCancelled ? 'var(--danger)' : 'var(--warning)';
   const icon = isCheckedIn ? <MapPin size={13} /> : isDone ? <FileText size={13} /> : isClosed ? <Lock size={13} /> : null;
   return { bg, color, icon };
 }
@@ -82,7 +82,7 @@ function AssignmentStatusBadge({ status, size = 'md' }: { status: string; size?:
 }
 
 function AutoDeclinedChip() {
-  return <StatusBadge label="Auto-declined" bg="rgba(245, 158, 11, 0.15)" color="#f59e0b" icon={<Hourglass size={11} />} variant="tag" />;
+  return <StatusBadge label="Auto-declined" bg="var(--status-pending-bg)" color="var(--warning)" icon={<Hourglass size={11} />} variant="tag" />;
 }
 
 // Only rendered for HIGH/CRITICAL — the default MEDIUM/LOW stay invisible so
@@ -90,7 +90,7 @@ function AutoDeclinedChip() {
 function PriorityBadge({ priority }: { priority?: string }) {
   if (priority !== 'CRITICAL' && priority !== 'HIGH') return null;
   const isCritical = priority === 'CRITICAL';
-  return <StatusBadge label={priority} bg={isCritical ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)'} color={isCritical ? '#ef4444' : '#f97316'} icon={<Flame size={11} />} variant="tag" />;
+  return <StatusBadge label={priority} bg={isCritical ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)'} color={isCritical ? 'var(--danger)' : 'var(--warning)'} icon={<Flame size={11} />} variant="tag" />;
 }
 
 // ── Compact workflow breadcrumb — replaces the old pipeline-bar + gradient
@@ -113,9 +113,9 @@ function WorkflowBreadcrumb({ onNavigate }: { onNavigate: (path: string) => void
               className="btn"
               style={{
                 display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px',
-                background: active ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.03)',
-                border: `1px solid ${active ? '#10b981' : 'var(--border-color)'}`,
-                borderRadius: '20px', color: active ? '#fff' : 'var(--text-secondary)',
+                background: active ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
+                border: `1px solid ${active ? 'var(--success)' : 'var(--border-color)'}`,
+                borderRadius: '20px', color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
                 fontSize: '11px', fontWeight: active ? 700 : 600, cursor: 'pointer',
               }}
             >
@@ -322,19 +322,19 @@ export const Assignments: React.FC = () => {
   };
 
   const getEventAccent = (type: string) => {
-    if (type === 'COMMENT') return { color: 'var(--accent-primary)', bg: 'rgba(99, 102, 241, 0.08)', border: 'rgba(99, 102, 241, 0.2)', iconBg: 'rgba(99, 102, 241, 0.15)' };
-    if (type === 'STATUS_CHANGE' || type === 'TRANSITION') return { color: '#10b981', bg: 'rgba(16, 185, 129, 0.08)', border: 'rgba(16, 185, 129, 0.2)', iconBg: 'rgba(16, 185, 129, 0.15)' };
-    return { color: 'var(--accent-secondary)', bg: 'rgba(6, 182, 212, 0.08)', border: 'rgba(6, 182, 212, 0.2)', iconBg: 'rgba(6, 182, 212, 0.15)' };
+    if (type === 'COMMENT') return { color: 'var(--accent-primary)', bg: 'rgba(216,174,71,0.08)', border: 'rgba(216,174,71,0.2)', iconBg: 'rgba(216,174,71,0.15)' };
+    if (type === 'STATUS_CHANGE' || type === 'TRANSITION') return { color: 'var(--success)', bg: 'var(--status-active-bg)', border: 'var(--status-active-bg)', iconBg: 'var(--status-active-bg)' };
+    return { color: 'var(--accent-secondary)', bg: 'rgba(216,174,71,0.08)', border: 'rgba(216,174,71,0.2)', iconBg: 'rgba(216,174,71,0.15)' };
   };
 
   const highlightKeywords = (text: string): React.ReactNode => {
     const keywordMap: Record<string, string> = {
-      'CREATED': '#f59e0b', 'ACCEPTED': '#10b981', 'REJECTED': '#ef4444',
-      'SCHEDULED': '#06b6d4', 'COMPLETED': '#a855f7', 'CANCELLED': '#ef4444',
-      'CLOSED': '#10b981', 'PENDING': '#f59e0b', 'CONFIRMED': '#10b981',
-      'NEGOTIATION': '#f59e0b', 'CHECKED_IN': '#06b6d4',
-      'CANDIDATE_SELECTED': '#f59e0b', 'CONTACT_INITIATED': '#3b82f6',
-      'AUDIT_COMPLETED': '#a855f7',
+      'CREATED': 'var(--warning)', 'ACCEPTED': 'var(--success)', 'REJECTED': 'var(--danger)',
+      'SCHEDULED': 'var(--accent)', 'COMPLETED': 'var(--accent)', 'CANCELLED': 'var(--danger)',
+      'CLOSED': 'var(--success)', 'PENDING': 'var(--warning)', 'CONFIRMED': 'var(--success)',
+      'NEGOTIATION': 'var(--warning)', 'CHECKED_IN': 'var(--accent)',
+      'CANDIDATE_SELECTED': 'var(--warning)', 'CONTACT_INITIATED': 'var(--accent)',
+      'AUDIT_COMPLETED': 'var(--accent)',
     };
     const pattern = new RegExp(`(${Object.keys(keywordMap).join('|')}|₹[\\d,]+(?:\\.\\d+)?)`, 'gi');
     const parts = text.split(pattern);
@@ -345,7 +345,7 @@ export const Assignments: React.FC = () => {
         return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: '11px', fontWeight: 700, background: color + '20', color, letterSpacing: '0.2px' }}>{part}</span>;
       }
       if (/^₹[\d,]+(\.\d+)?$/.test(part)) {
-        return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: '11px', fontWeight: 700, background: '#fbbf24' + '20', color: '#fbbf24' }}>{part}</span>;
+        return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: '11px', fontWeight: 700, background: 'var(--warning)' + '20', color: 'var(--warning)' }}>{part}</span>;
       }
       return part;
     });
@@ -420,9 +420,9 @@ export const Assignments: React.FC = () => {
           { label: 'Total Assignments', value: totalCount, icon: ClipboardList, color: 'var(--accent-primary)', filter: 'ALL' },
           { label: 'Active / In Progress', value: activeCount, icon: RefreshCw, color: 'var(--accent-secondary)', filter: ACTIVE_STATUSES },
           { label: 'Closed', value: closedCount, icon: CheckCircle, color: 'var(--status-active)', filter: 'CLOSED' },
-          { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: '#ef4444', filter: TERMINAL_FILTER },
-          { label: 'Needs Attention', value: needsAttentionCount, icon: AlertTriangle, color: '#f59e0b', filter: NEEDS_ATTENTION_FILTER },
-          { label: 'Escalated', value: escalatedCount, icon: Flame, color: '#ef4444', filter: ESCALATED_FILTER },
+          { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: 'var(--danger)', filter: TERMINAL_FILTER },
+          { label: 'Needs Attention', value: needsAttentionCount, icon: AlertTriangle, color: 'var(--warning)', filter: NEEDS_ATTENTION_FILTER },
+          { label: 'Escalated', value: escalatedCount, icon: Flame, color: 'var(--danger)', filter: ESCALATED_FILTER },
         ].map(card => {
           const Icon = card.icon;
           const isActive = statusFilter === card.filter;
@@ -431,11 +431,11 @@ export const Assignments: React.FC = () => {
               key={card.label}
               layout="label-first"
               icon={<Icon />}
-              iconBg="rgba(255,255,255,0.03)"
+              iconBg="var(--bg-surface-2)"
               iconColor={card.color}
               label={card.label}
               value={card.value}
-              valueColor="#fff"
+              valueColor="var(--text-primary)"
               onClick={() => applyFilter(card.filter)}
               style={{
                 border: isActive ? `1px solid ${card.color}` : '1px solid var(--border-color)',
@@ -486,7 +486,7 @@ export const Assignments: React.FC = () => {
               </thead>
               <tbody>
                 {filteredAssignments.map((asn) => (
-                  <tr key={asn.id} onClick={() => selectAndShow(asn.id)} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(99, 102, 241, 0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
+                  <tr key={asn.id} onClick={() => selectAndShow(asn.id)} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(216,174,71,0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
                     <td style={{ padding: '16px 24px', fontWeight: 600 }}>{asn.assignmentNumber}</td>
                     <td style={{ padding: '16px 24px' }}>
                       <div><b>{asn.projectBranch?.branch?.name}</b></div>
@@ -504,7 +504,7 @@ export const Assignments: React.FC = () => {
                       {isAttentionView
                         ? formatRelativeTime(asn.createdAt)
                         : (asn.assessment?.status ? (
-                          <span className="badge" style={{ background: 'rgba(99, 102, 241, 0.12)', color: '#818cf8', padding: '2px 8px', fontWeight: 600, borderRadius: '4px', fontSize: '11px' }}>
+                          <span className="badge" style={{ background: 'rgba(216,174,71,0.12)', color: 'var(--accent)', padding: '2px 8px', fontWeight: 600, borderRadius: '4px', fontSize: '11px' }}>
                             {assessmentStatusLabel(asn.assessment.status)}
                           </span>
                         ) : '-')}
@@ -553,7 +553,7 @@ export const Assignments: React.FC = () => {
             <>
               {/* Header */}
               <div style={{
-                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(6, 182, 212, 0.06) 100%)',
+                background: 'linear-gradient(135deg, rgba(216,174,71,0.12) 0%, rgba(216,174,71,0.06) 100%)',
                 borderBottom: '1px solid var(--border-color)',
                 padding: '14px 16px 12px',
               }}>
@@ -577,16 +577,16 @@ export const Assignments: React.FC = () => {
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
                     {selectedAsn.status === 'PENDING' && (
                       <>
-                        <button onClick={() => runTransition('ACCEPTED')} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: '#10b981', borderColor: '#10b981' }}>
+                        <button onClick={() => { if (window.confirm('Accept this offer? This commits the assayer to the assignment.')) runTransition('ACCEPTED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                           ✓ Accept
                         </button>
-                        <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)' }}>
+                        <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
                           ✕ Reject
                         </button>
                       </>
                     )}
                     {['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
-                      <button onClick={() => runTransition('COMPLETED')} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: '#10b981', borderColor: '#10b981' }}>
+                      <button onClick={() => { if (window.confirm('Mark this assignment complete? This is not reversible.')) runTransition('COMPLETED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                         ✓ Mark Complete
                       </button>
                     )}
@@ -601,7 +601,7 @@ export const Assignments: React.FC = () => {
                       </button>
                     )}
                     {selectedAsn.priority !== 'CRITICAL' && (
-                      <button onClick={runEscalate} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)', marginLeft: 'auto' }}>
+                      <button onClick={() => { if (window.confirm('Escalate this assignment? It will be flagged as critical priority.')) runEscalate(); }} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)', marginLeft: 'auto' }}>
                         ⚠ Escalate
                       </button>
                     )}
@@ -614,13 +614,13 @@ export const Assignments: React.FC = () => {
                         value={actionReason}
                         onChange={(e) => setActionReason(e.target.value)}
                         placeholder={actionMode === 'REJECT' ? 'Reason for rejecting...' : 'Reason for cancelling...'}
-                        style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '11.5px' }}
+                        style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '11.5px' }}
                       />
                       <button
                         onClick={() => runTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
                         disabled={actionBusy}
                         className="btn btn-primary"
-                        style={{ padding: '5px 10px', fontSize: '11px', background: '#ef4444', borderColor: '#ef4444' }}
+                        style={{ padding: '5px 10px', fontSize: '11px', background: 'var(--danger)', borderColor: 'var(--danger)' }}
                       >
                         Confirm
                       </button>
@@ -631,26 +631,26 @@ export const Assignments: React.FC = () => {
                   )}
 
                   {actionError && (
-                    <div style={{ fontSize: '11px', color: '#ef4444' }}>{actionError}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--danger)' }}>{actionError}</div>
                   )}
                 </div>
               )}
 
               {/* Details Grid */}
               <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', borderBottom: '1px solid var(--border-color)' }}>
-                <div style={{ background: 'rgba(99, 102, 241, 0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(99, 102, 241, 0.15)' }}>
+                <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)' }}>
                   <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Assayer</span>
-                  <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: '#fff' }}>{selectedAsn.assayer?.displayName || '—'}</p>
+                  <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{selectedAsn.assayer?.displayName || '—'}</p>
                 </div>
-                <div style={{ background: 'rgba(6, 182, 212, 0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(6, 182, 212, 0.15)' }}>
+                <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)' }}>
                   <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Fee</span>
-                  <p style={{ fontSize: '14px', fontWeight: 800, margin: '1px 0', background: 'linear-gradient(135deg, #fbbf24, #f59e0b)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                  <p style={{ fontSize: '14px', fontWeight: 800, margin: '1px 0', background: 'linear-gradient(135deg, var(--warning), var(--warning))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                     ₹{selectedAsn.agreedFee ?? selectedAsn.proposedFee}
                   </p>
                 </div>
-                <div style={{ background: 'rgba(16, 185, 129, 0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(16, 185, 129, 0.15)', gridColumn: 'span 2' }}>
+                <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>
                   <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Branch / Project</span>
-                  <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: '#fff' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
                     {selectedAsn.projectBranch?.branch?.name}
                     {selectedAsn.projectBranch?.branch?.state && (
                       <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> — {selectedAsn.projectBranch.branch.state}</span>
@@ -658,20 +658,20 @@ export const Assignments: React.FC = () => {
                   </p>
                   <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: '1px 0 0' }}>{selectedAsn.project?.name}</p>
                 </div>
-                <div style={{ background: 'rgba(168, 85, 247, 0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(168, 85, 247, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Calendar size={13} style={{ color: '#a855f7' }} />
+                <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Calendar size={13} style={{ color: 'var(--accent)' }} />
                   <div>
                     <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Scheduled</span>
-                    <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: '#fff' }}>{selectedAsn.scheduledDate ? new Date(selectedAsn.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
+                    <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{selectedAsn.scheduledDate ? new Date(selectedAsn.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
                   </div>
                 </div>
-                <div style={{ background: 'rgba(245, 158, 11, 0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <ExternalLink size={13} style={{ color: '#f59e0b' }} />
+                <div style={{ background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-pending-bg)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <ExternalLink size={13} style={{ color: 'var(--warning)' }} />
                   <div>
                     <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Quick Links</span>
                     <div style={{ display: 'flex', gap: '4px', marginTop: '1px' }}>
-                      <button onClick={() => navigate(`/planning`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'rgba(255,255,255,0.05)' }}>Planning</button>
-                      <button onClick={() => navigate(`/scheduling`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'rgba(255,255,255,0.05)' }}>Schedule</button>
+                      <button onClick={() => navigate(`/planning`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Planning</button>
+                      <button onClick={() => navigate(`/scheduling`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Schedule</button>
                     </div>
                   </div>
                 </div>
@@ -797,7 +797,7 @@ export const Assignments: React.FC = () => {
                 gap: '6px',
                 padding: '10px 16px',
                 borderTop: '1px solid var(--border-color)',
-                background: 'rgba(99, 102, 241, 0.04)',
+                background: 'rgba(216,174,71,0.04)',
               }}>
                 <input
                   type="text"
@@ -811,7 +811,7 @@ export const Assignments: React.FC = () => {
                     background: 'var(--bg-primary)',
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-sm)',
-                    color: '#fff',
+                    color: 'var(--text-primary)',
                     outline: 'none',
                     fontSize: '12px',
                   }}
@@ -836,8 +836,8 @@ export const Assignments: React.FC = () => {
               <div style={{
                 width: '56px', height: '56px',
                 borderRadius: 'var(--radius-md)',
-                background: 'rgba(99, 102, 241, 0.1)',
-                border: '1px solid rgba(99, 102, 241, 0.2)',
+                background: 'rgba(216,174,71,0.1)',
+                border: '1px solid rgba(216,174,71,0.2)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 marginBottom: '16px',
               }}>

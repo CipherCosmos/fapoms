@@ -22,16 +22,16 @@ interface RoleRow { id: string; name: string; displayName: string; description: 
 interface UserRow { id: string; roles: { id: string }[] }
 
 const SCOPE_TONE: Record<string, string> = {
-  PLATFORM: '#f87171', ORGANIZATION: '#60a5fa', CLIENT: '#a78bfa',
-  SELF: '#34d399', ASSIGNED_RECORDS: '#facc15', DEPARTMENT: '#818cf8', TEAM: '#818cf8', STATE: '#818cf8', REGION: '#818cf8',
+  PLATFORM: 'var(--danger)', ORGANIZATION: 'var(--accent)', CLIENT: 'var(--accent)',
+  SELF: 'var(--success)', ASSIGNED_RECORDS: 'var(--warning)', DEPARTMENT: 'var(--accent)', TEAM: 'var(--accent)', STATE: 'var(--accent)', REGION: 'var(--accent)',
 };
 
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)',
+  letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 const card: React.CSSProperties = {
-  background: 'var(--bg-card,#12151c)', border: '1px solid var(--border-color,#232833)',
+  background: 'var(--bg-card)', border: '1px solid var(--border-color)',
   borderRadius: '10px', overflow: 'hidden',
 };
 
@@ -102,13 +102,13 @@ export const RolesPermissionsPanel: React.FC = () => {
             </button>
 
             {isOpen && (
-              <div style={{ padding: '4px 16px 14px', borderTop: '1px solid var(--border-color,#232833)' }}>
+              <div style={{ padding: '4px 16px 14px', borderTop: '1px solid var(--border-color)' }}>
                 {resources.length === 0 ? (
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>No permissions granted.</div>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px', marginTop: '8px' }}>
                     {resources.map((res) => (
-                      <div key={res} style={{ padding: '9px 10px', borderRadius: '8px', background: 'rgba(148,163,184,0.05)' }}>
+                      <div key={res} style={{ padding: '9px 10px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
                         <div style={{ ...label, marginBottom: '6px' }}>{res.replace(/_/g, ' ')}</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                           {grouped.get(res)!.map((p) => (

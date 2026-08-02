@@ -4,6 +4,24 @@ const WS_URL = import.meta.env.VITE_WS_URL || '/events';
 
 let socket: Socket | null = null;
 
+type ConnectionListener = (connected: boolean) => void;
+const connectionListeners = new Set<ConnectionListener>();
+
+function emitConnection(connected: boolean) {
+  connectionListeners.forEach((cb) => cb(connected));
+}
+
+/** Subscribe to live-socket connection state. Returns an unsubscribe function. */
+export function subscribeToConnection(cb: ConnectionListener): () => void {
+  connectionListeners.add(cb);
+  cb(isSocketConnected());
+  return () => { connectionListeners.delete(cb); };
+}
+
+export function isSocketConnected(): boolean {
+  return !!socket?.connected;
+}
+
 export function getSocketToken(): string | null {
   return localStorage.getItem('fapoms_token');
 }
@@ -25,18 +43,22 @@ export function connectSocket(): Socket | null {
 
   socket.on('connect', () => {
     console.log('[Socket] Connected:', socket?.id);
+    emitConnection(true);
   });
 
   socket.on('disconnect', (reason: string) => {
     console.log('[Socket] Disconnected:', reason);
+    emitConnection(false);
   });
 
   socket.on('error', (err: any) => {
     console.error('[Socket] Error:', err);
+    emitConnection(false);
   });
 
   socket.on('connected', (data: { userId: string }) => {
     console.log('[Socket] Authenticated:', data.userId);
+    emitConnection(true);
   });
 
   return socket;

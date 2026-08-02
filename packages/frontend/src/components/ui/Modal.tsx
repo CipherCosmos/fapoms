@@ -40,17 +40,55 @@ export const Modal: React.FC<{
   bodyClassName,
   bodyStyle,
 }) => {
+  const panelRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus?.();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab' && panelRef.current) {
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const container = (
     <div
+      role="dialog"
+      aria-modal="true"
       style={{
         position: 'fixed',
         top: 0,
         left: 0,
         width: '100vw',
         height: '100vh',
-        background: 'rgba(0,0,0,0.6)',
+        background: 'rgba(0,0,0,0.55)',
         backdropFilter: backdropBlur ? 'blur(4px)' : undefined,
         display: 'flex',
         alignItems: 'center',
@@ -60,9 +98,11 @@ export const Modal: React.FC<{
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className="glass-card"
         onClick={(e) => e.stopPropagation()}
-        style={{ width, maxHeight, display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
+        style={{ width, maxHeight, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
       >
         {title !== undefined && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>

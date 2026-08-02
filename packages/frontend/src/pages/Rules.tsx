@@ -205,11 +205,11 @@ export const Rules: React.FC = () => {
       </div>
 
       {err && (
-        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: '13px' }}>{err}</div>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '13px' }}>{err}</div>
       )}
 
       {misconfiguredCount > 0 && (
-        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.3)', color: '#fb923c', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--warning)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <AlertTriangle size={15} /> {misconfiguredCount} rule(s) are missing the field their type actually needs — they are silently doing nothing. Flagged below with ⚠.
         </div>
       )}
@@ -218,7 +218,7 @@ export const Rules: React.FC = () => {
         <Kpi icon={<Sliders size={20} />} tone="var(--accent-primary)" value={rules.length} label="Total Rules" />
         <Kpi icon={<Shield size={20} />} tone="var(--accent-primary)" value={rules.filter((r) => r.scope === 'GLOBAL').length} label="Global" />
         <Kpi icon={<Shield size={20} />} tone="var(--status-active)" value={rules.filter((r) => r.ruleType === 'SKILL' || r.ruleType === 'CERTIFICATION').length} label="Skill / Cert Rules" />
-        <Kpi icon={<Shield size={20} />} tone="#8b5cf6" value={rules.filter((r) => r.ruleType === 'TERRITORY' || r.ruleType === 'CAPACITY').length} label="Territory / Capacity Rules" />
+        <Kpi icon={<Shield size={20} />} tone="var(--accent)" value={rules.filter((r) => r.ruleType === 'TERRITORY' || r.ruleType === 'CAPACITY').length} label="Territory / Capacity Rules" />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -240,7 +240,7 @@ export const Rules: React.FC = () => {
             const misconfigured = isMisconfigured(rule);
             const tn = targetName(rule);
             return (
-              <div key={rule.id} className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px', border: misconfigured ? '1px solid rgba(251,146,60,0.4)' : undefined }}>
+              <div key={rule.id} className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px', border: misconfigured ? '1px solid var(--status-pending-bg)' : undefined }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {misconfigured && <span title="Missing the field this rule type needs — currently doing nothing">⚠️</span>}
@@ -249,19 +249,19 @@ export const Rules: React.FC = () => {
                   </div>
                   {canManage && (
                     <div style={{ display: 'flex', gap: '6px' }}>
-                      <button onClick={() => openEdit(rule)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}><Edit2 size={14} /></button>
-                      <button onClick={() => handleDelete(rule.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}><Trash2 size={14} /></button>
+                      <button aria-label="Edit rule" onClick={() => openEdit(rule)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}><Edit2 size={14} /></button>
+                      <button aria-label="Delete rule" onClick={() => handleDelete(rule.id)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px' }}><Trash2 size={14} /></button>
                     </div>
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <StatusBadge label={tn ? `${rule.scope}: ${tn}` : rule.scope} bg="rgba(255,255,255,0.05)" color="var(--text-secondary)" />
-                  <StatusBadge label={ruleTypeMeta(rule.ruleType)?.label ?? rule.ruleType} bg="rgba(99,102,241,0.1)" color="var(--accent-primary)" />
+                  <StatusBadge label={tn ? `${rule.scope}: ${tn}` : rule.scope} bg="var(--border-hair)" color="var(--text-secondary)" />
+                  <StatusBadge label={ruleTypeMeta(rule.ruleType)?.label ?? rule.ruleType} bg="rgba(216,174,71,0.1)" color="var(--accent-primary)" />
                   {rule.actions?.type && rule.actions.type !== 'BLOCK' && (
-                    <StatusBadge label={rule.actions.type.replace(/_/g, ' ')} bg="rgba(250,204,21,0.1)" color="#facc15" />
+                    <StatusBadge label={rule.actions.type.replace(/_/g, ' ')} bg="var(--status-pending-bg)" color="var(--warning)" />
                   )}
                 </div>
-                <div style={{ padding: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: 'var(--radius-md)', fontSize: '12.5px', color: misconfigured ? '#fb923c' : 'var(--text-secondary)' }}>
+                <div style={{ padding: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: 'var(--radius-md)', fontSize: '12.5px', color: misconfigured ? 'var(--warning)' : 'var(--text-secondary)' }}>
                   {conditionSummary(rule)}
                 </div>
               </div>
@@ -339,8 +339,8 @@ export const Rules: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                   {form.restrictedStates.map((s, i) => (
-                    <span key={i} style={{ padding: '3px 8px', background: '#334155', borderRadius: '4px', fontSize: '11px', display: 'flex', gap: '5px', alignItems: 'center' }}>
-                      {s} <button type="button" onClick={() => setForm({ ...form, restrictedStates: form.restrictedStates.filter((_, j) => j !== i) })} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: 0 }}>×</button>
+                    <span key={i} style={{ padding: '3px 8px', background: 'var(--text-secondary)', borderRadius: '4px', fontSize: '11px', display: 'flex', gap: '5px', alignItems: 'center' }}>
+                      {s} <button type="button" onClick={() => setForm({ ...form, restrictedStates: form.restrictedStates.filter((_, j) => j !== i) })} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 0 }}>×</button>
                     </span>
                   ))}
                   {form.restrictedStates.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>None added yet.</span>}
@@ -368,7 +368,7 @@ export const Rules: React.FC = () => {
   );
 };
 
-const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px', boxSizing: 'border-box' };
+const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' };
 
 const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div>
@@ -379,7 +379,7 @@ const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
 
 const Kpi: React.FC<{ icon: React.ReactNode; tone: string; value: React.ReactNode; label: string }> = ({ icon, tone, value, label }) => (
   <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-    <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
+    <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(216,174,71,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
     <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{value}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{label}</div></div>
   </div>
 );

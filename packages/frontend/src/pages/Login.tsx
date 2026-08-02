@@ -43,7 +43,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       justifyContent: 'center',
       minHeight: '100vh',
       width: '100vw',
-      background: 'radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, rgba(9, 13, 22, 1) 90.2%)',
+      background: 'radial-gradient(circle at 10% 20%, rgba(216,174,71,0.15) 0%, var(--bg-page) 90.2%)',
       padding: '24px'
     }}>
       <div className="glass-card" style={{
@@ -51,7 +51,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         maxWidth: '440px',
         padding: '40px',
         boxShadow: 'var(--shadow-lg), var(--shadow-neon)',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
+        border: '1px solid var(--border-hair)',
         borderRadius: 'var(--radius-lg)',
         position: 'relative',
         overflow: 'hidden'
@@ -64,7 +64,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           width: '300px',
           height: '300px',
           borderRadius: '50%',
-          background: 'rgba(9, 182, 212, 0.15)',
+          background: 'rgba(216,174,71,0.15)',
           filter: 'blur(60px)',
           zIndex: 0
         }} />
@@ -81,17 +81,19 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#fff',
+              color: 'var(--on-gradient)',
               fontWeight: 800,
               fontSize: '24px',
               fontFamily: 'var(--font-display)',
               margin: '0 auto 16px auto',
-              boxShadow: '0 0 20px rgba(99, 102, 241, 0.4)'
+              boxShadow: '0 0 20px rgba(216,174,71,0.4), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
+              position: 'relative'
             }}>
-              F
+              <span style={{ position: 'relative', zIndex: 1 }}>S</span>
+              <span style={{ position: 'absolute', inset: '5px', borderRadius: '8px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
             </div>
-            <h1 style={{ fontSize: '24px', fontWeight: 800, fontFamily: 'var(--font-display)', marginBottom: '6px' }}>FAPOMS</h1>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Field Audit Planning & Operations Management</p>
+            <h1 style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)', marginBottom: '6px' }}>Sumeru Audit Suite</h1>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Field Audit Planning & Operations</p>
           </div>
 
           {/* Form */}
@@ -100,7 +102,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             {error && (
               <div style={{
                 background: 'var(--status-cancelled-bg)',
-                border: '1px solid rgba(239, 68, 68, 0.2)',
+                border: '1px solid var(--status-cancelled-bg)',
                 color: 'var(--status-cancelled)',
                 padding: '12px 16px',
                 borderRadius: 'var(--radius-md)',

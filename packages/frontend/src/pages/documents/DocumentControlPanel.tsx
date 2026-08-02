@@ -3,15 +3,15 @@ import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
 
-const STAGE_META: Record<string, { label: string; color: string }> = {
-  UPLOADED: { label: 'Prepared', color: '#a78bfa' },
-  DISPATCHED: { label: 'With assayer', color: '#60a5fa' },
-  RECEIVED: { label: 'Returned', color: '#22c55e' },
-  SENT_TO_DATA_ENTRY: { label: 'Data entry', color: '#38bdf8' },
-  SENT_TO_EXTERNAL_OCR: { label: 'External OCR', color: '#f59e0b' },
-  EXCEL_GENERATED: { label: 'Excel ready', color: '#10b981' },
-  PROCESSED: { label: 'Processed', color: '#34d399' },
-  COMPLETED: { label: 'Completed', color: '#22c55e' },
+const STAGE_META: Record<string, { label: string; color: string; bg: string }> = {
+  UPLOADED: { label: 'Prepared', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  DISPATCHED: { label: 'With assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  RECEIVED: { label: 'Returned', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
+  SENT_TO_DATA_ENTRY: { label: 'Data entry', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
+  SENT_TO_EXTERNAL_OCR: { label: 'External OCR', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+  EXCEL_GENERATED: { label: 'Excel ready', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
+  PROCESSED: { label: 'Processed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
+  COMPLETED: { label: 'Completed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
 };
 
 export interface DocRow {
@@ -117,8 +117,8 @@ export const DocumentControlPanel: React.FC<{
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Overdue paperwork blocks field work outright, so it leads. */}
       {data.blockingFieldWork.length > 0 && (
-        <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 'var(--radius-md)', padding: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#ef4444', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+        <div style={{ background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
             <AlertTriangle size={15} />
             {data.blockingFieldWork.length} audit{data.blockingFieldWork.length === 1 ? '' : 's'} blocked — paperwork never sent
           </div>
@@ -129,7 +129,7 @@ export const DocumentControlPanel: React.FC<{
                 <span style={{ color: 'var(--text-muted)' }}> · {d.fileName}</span>
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>
+                <span style={{ fontSize: 11.5, color: 'var(--danger)', fontWeight: 600 }}>
                   {d.daysUntilAudit != null && d.daysUntilAudit < 0
                     ? `audit was ${Math.abs(d.daysUntilAudit)} day(s) ago`
                     : 'audit due today'}
@@ -147,7 +147,7 @@ export const DocumentControlPanel: React.FC<{
       <div>
         <Label>Pipeline</Label>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Stage active={stage === 'ALL'} onClick={() => setStage('ALL')} label="All" count={data.totals.total} color="var(--text-secondary)" />
+          <Stage active={stage === 'ALL'} onClick={() => setStage('ALL')} label="All" count={data.totals.total} color="var(--text-secondary)" bg="var(--bg-surface-2)" />
           {data.pipeline.filter((s) => s.count > 0).map((s) => (
             <Stage
               key={s.stage}
@@ -155,7 +155,8 @@ export const DocumentControlPanel: React.FC<{
               onClick={() => setStage(stage === s.stage ? 'ALL' : s.stage)}
               label={STAGE_META[s.stage]?.label ?? s.stage}
               count={s.count}
-              color={STAGE_META[s.stage]?.color ?? '#94a3b8'}
+              color={STAGE_META[s.stage]?.color ?? 'var(--text-muted)'}
+              bg={STAGE_META[s.stage]?.bg ?? 'var(--status-draft-bg)'}
             />
           ))}
         </div>
@@ -194,7 +195,7 @@ export const DocumentControlPanel: React.FC<{
           </div>
         )}
         {rows.map((d) => {
-          const meta = STAGE_META[d.status] ?? { label: d.status, color: '#94a3b8' };
+          const meta = STAGE_META[d.status] ?? { label: d.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
           const open = expanded === d.id;
           return (
             <div key={d.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
@@ -213,7 +214,7 @@ export const DocumentControlPanel: React.FC<{
                   </div>
                 </div>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 110 }}>{d.clientName ?? '—'}</span>
-                <span style={{ padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: `${meta.color}22`, color: meta.color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                <span style={{ padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {meta.label}
                 </span>
                 {d.status === 'UPLOADED' && (
@@ -268,7 +269,7 @@ const Trail: React.FC<{ trail: DocRow['trail'] }> = ({ trail }) => {
         return (
           <div key={s.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
             {done
-              ? <CheckCircle2 size={13} color="#22c55e" style={{ marginTop: 1, flexShrink: 0 }} />
+              ? <CheckCircle2 size={13} color="var(--success)" style={{ marginTop: 1, flexShrink: 0 }} />
               : <Clock size={13} color="var(--text-muted)" style={{ marginTop: 1, flexShrink: 0 }} />}
             <div style={{ minWidth: 0 }}>
               <span style={{ fontSize: 12, color: done ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: done ? 600 : 400 }}>
@@ -278,7 +279,7 @@ const Trail: React.FC<{ trail: DocRow['trail'] }> = ({ trail }) => {
                 {done ? fmtDate(s.at) : '—'}
               </span>
               {s.note && (
-                <div style={{ fontSize: 10.5, color: done ? 'var(--text-muted)' : '#f59e0b', marginTop: 1 }}>{s.note}</div>
+                <div style={{ fontSize: 10.5, color: done ? 'var(--text-muted)' : 'var(--warning)', marginTop: 1 }}>{s.note}</div>
               )}
             </div>
           </div>
@@ -288,14 +289,14 @@ const Trail: React.FC<{ trail: DocRow['trail'] }> = ({ trail }) => {
   );
 };
 
-const Stage: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string }> = ({ active, onClick, label, count, color }) => (
+const Stage: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string; bg: string }> = ({ active, onClick, label, count, color, bg }) => (
   <button onClick={onClick} style={{
     padding: '7px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-    background: active ? `${color}22` : 'transparent', color: active ? color : 'var(--text-secondary)',
+    background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
   }}>
     {label}
-    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? '#0b1120' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>{count}</span>
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>{count}</span>
   </button>
 );
 

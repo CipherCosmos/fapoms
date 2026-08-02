@@ -27,22 +27,10 @@ export const TopBar: React.FC<{
   subtitle?: string;
   unreadCount: number;
   onNotifications: () => void;
-  onToggleTheme: () => void;
-  themeIcon: IconName;
   onRefresh?: () => void;
   refreshing?: boolean;
-}> = ({ name, subtitle, unreadCount, onNotifications, onToggleTheme, themeIcon, onRefresh, refreshing }) => {
+}> = ({ name, subtitle, unreadCount, onNotifications, onRefresh, refreshing }) => {
   const t = useTheme();
-  const spin = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (!refreshing) { spin.setValue(0); return; }
-    const loop = Animated.loop(
-      Animated.timing(spin, { toValue: 1, duration: 900, useNativeDriver: true }),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [refreshing, spin]);
 
   return (
     <View style={{
@@ -57,18 +45,11 @@ export const TopBar: React.FC<{
       </View>
 
       {onRefresh && (
-        <Tappable onPress={onRefresh} scaleTo={0.9}>
-          <Animated.View style={{
-            width: 42, height: 42, borderRadius: t.radius.md,
-            backgroundColor: t.colors.surfaceAlt, borderWidth: 1, borderColor: t.colors.border,
-            alignItems: 'center', justifyContent: 'center',
-            transform: [{ rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
-          }}>
-            <Icon name="sync" size={18} color={t.colors.textMuted} />
-          </Animated.View>
-        </Tappable>
+        <IconButton
+          icon="refresh-outline"
+          onPress={onRefresh}
+        />
       )}
-      <IconButton icon={themeIcon} onPress={onToggleTheme} />
       <IconButton icon="notifications-outline" onPress={onNotifications} badge={unreadCount} />
     </View>
   );

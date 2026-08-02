@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2 } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../../services/api';
-import { Modal } from '../../components/ui';
+import { Modal, useToast } from '../../components/ui';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
+import { userMessage } from '../../services/errors';
 
 /**
  * Assayer create/edit forms.
@@ -15,8 +16,8 @@ import { STATUS_COLORS } from './assayer-shared';
  */
 
 const labelStyle = { display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
-const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
-const formSelectStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: '#fff', width: '100%', boxSizing: 'border-box' as const, outline: 'none', cursor: 'pointer', fontSize: '13px' };
+const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
+const formSelectStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', cursor: 'pointer', fontSize: '13px' };
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
 const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'bankAccountNumber', 'ifscCode']);
@@ -144,7 +145,7 @@ const renderFormField = (field: FieldDef, form: Record<string, string>, setForm:
   return (
     <div key={field.key} style={field.full ? { gridColumn: '1 / -1' } : {}}>
       <label style={labelStyle}>
-        {field.label}{field.required && <span style={{ color: '#ef4444', marginLeft: '2px' }}>*</span>}
+        {field.label}{field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
       </label>
       {field.options ? (
         <select value={val} onChange={(e) => setForm({ ...form, [field.key]: e.target.value })} required={field.required} style={formSelectStyle}>
@@ -185,6 +186,7 @@ const renderFormField = (field: FieldDef, form: Record<string, string>, setForm:
 };
 
 export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void; existingAssayersCount?: number }> = ({ onClose, onCreated, existingAssayersCount = 10 }) => {
+  const { toast } = useToast();
   const [mode, setMode] = useState<'express' | 'advanced'>('express');
   const [form, setForm] = useState<Record<string, string>>(() => {
     const autoCode = `AS-${String(existingAssayersCount + 1).padStart(2, '0')}`;
@@ -259,7 +261,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
       await api.request('/assayers', { method: 'POST', body: JSON.stringify(body) });
       onCreated();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create assayer');
+      toast({ type: 'error', title: 'Could not create assayer', message: userMessage(err) });
     } finally {
       setSubmitting(false);
     }
@@ -282,7 +284,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
         mode === 'express' ? (
           <>
             <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '9px 18px', fontSize: '13px' }}>Cancel</button>
-            <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '9px 22px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)' }}>
+            <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '9px 22px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)', color: 'var(--on-gradient)' }}>
               {submitting ? 'Enrolling...' : <><CheckCircle size={16} /> Enroll Assayer Instantly ⚡</>}
             </button>
           </>
@@ -327,7 +329,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
               border: 'none',
               cursor: 'pointer',
               background: mode === 'express' ? 'var(--accent-primary)' : 'transparent',
-              color: mode === 'express' ? '#fff' : 'var(--text-muted)',
+              color: mode === 'express' ? 'var(--on-accent)' : 'var(--text-muted)',
             }}
           >
             ⚡ Express Mode
@@ -343,7 +345,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
               border: 'none',
               cursor: 'pointer',
               background: mode === 'advanced' ? 'var(--accent-primary)' : 'transparent',
-              color: mode === 'advanced' ? '#fff' : 'var(--text-muted)',
+              color: mode === 'advanced' ? 'var(--on-accent)' : 'var(--text-muted)',
             }}
           >
             📋 Advanced (6 Tabs)
@@ -353,20 +355,20 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
 
       {mode === 'express' ? (
         <>
-          <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Auto-Generated Assayer Code</span>
               <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{form.assayerCode}</span>
             </div>
             <div style={{ textAlign: 'right' }}>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Default Department</span>
-              <span style={{ fontSize: '12px', fontWeight: 700, color: '#34d399' }}>Gold Testing & Assay</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }}>Gold Testing & Assay</span>
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <div>
-              <label style={labelStyle}>First Name <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>First Name <span style={{ color: 'var(--danger)' }}>*</span></label>
               <input
                 type="text"
                 required
@@ -379,7 +381,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
 
             <div>
-              <label style={labelStyle}>Last Name <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>Last Name <span style={{ color: 'var(--danger)' }}>*</span></label>
               <input
                 type="text"
                 required
@@ -392,7 +394,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
 
             <div>
-              <label style={labelStyle}>Mobile Phone Number <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>Mobile Phone Number <span style={{ color: 'var(--danger)' }}>*</span></label>
               <div style={{ position: 'relative' }}>
                 <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>
                 <input
@@ -420,7 +422,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
-              <label style={labelStyle}>Base Street Address <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>Base Street Address <span style={{ color: 'var(--danger)' }}>*</span></label>
               <input
                 type="text"
                 required
@@ -433,7 +435,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
 
             <div>
-              <label style={labelStyle}>Pincode (Auto-Fills City & State) <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>Pincode (Auto-Fills City & State) <span style={{ color: 'var(--danger)' }}>*</span></label>
               <input
                 type="text"
                 required
@@ -451,7 +453,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
 
             <div>
-              <label style={labelStyle}>City / Base District <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>City / Base District <span style={{ color: 'var(--danger)' }}>*</span></label>
               <input
                 type="text"
                 required
@@ -464,7 +466,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
 
             <div>
-              <label style={labelStyle}>State <span style={{ color: '#ef4444' }}>*</span></label>
+              <label style={labelStyle}>State <span style={{ color: 'var(--danger)' }}>*</span></label>
               <select
                 value={form.state || 'Delhi'}
                 onChange={(e) => setForm({ ...form, state: e.target.value })}
@@ -535,6 +537,7 @@ const EDIT_FIELD_GROUPS: FieldGroup[] = [
 ];
 
 export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void; onUpdated: () => void }> = ({ assayer, onClose, onUpdated }) => {
+  const { toast } = useToast();
   const [form, setForm] = useState<Record<string, string>>(() => {
     const f: Record<string, string> = {};
     EDIT_FIELDS.forEach(field => {
@@ -567,11 +570,11 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
       });
       await api.request(`/assayers/${assayer.id}`, { method: 'PUT', body: JSON.stringify(body) });
       onUpdated();
-    } catch (err) { alert(err instanceof Error ? err.message : 'Failed to update assayer'); }
+    } catch (err) { toast({ type: 'error', title: 'Could not save changes', message: userMessage(err) }); }
     finally { setSubmitting(false); }
   };
 
-  const statusColor = STATUS_COLORS[assayer.lifecycleStatus || assayer.status] || '#6b7280';
+  const statusColor = STATUS_COLORS[assayer.lifecycleStatus || assayer.status] || 'var(--text-muted)';
 
   const fieldsMap = new Map(EDIT_FIELDS.map(f => [f.key, f]));
   const currentGroup = EDIT_FIELD_GROUPS[activeEditTab];

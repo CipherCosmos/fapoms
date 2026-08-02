@@ -82,10 +82,10 @@ const fmtWhen = (d?: string | null) =>
 
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)',
+  letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 const card: React.CSSProperties = {
-  background: 'var(--bg-card,#12151c)', border: '1px solid var(--border-color,#232833)',
+  background: 'var(--bg-card)', border: '1px solid var(--border-color)',
   borderRadius: '10px', padding: '16px',
 };
 
@@ -190,9 +190,9 @@ export const AssayerProfile: React.FC = () => {
   };
 
   if (loading) return <div style={{ padding: '28px' }}>Loading profile…</div>;
-  if (!p) return <div style={{ padding: '28px', color: '#f87171' }}>{err ?? 'Profile not found.'}</div>;
+  if (!p) return <div style={{ padding: '28px', color: 'var(--danger)' }}>{err ?? 'Profile not found.'}</div>;
 
-  const tone = STATUS_COLORS[p.lifecycleStatus] ?? '#6b7280';
+  const tone = STATUS_COLORS[p.lifecycleStatus] ?? 'var(--text-muted)';
   const completionRate = p.totalAssignments > 0 ? Math.round((p.completedAssignments / p.totalAssignments) * 100) : null;
 
   return (
@@ -203,7 +203,7 @@ export const AssayerProfile: React.FC = () => {
       </button>
 
       {err && (
-        <div style={{ padding: '9px 13px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: '12.5px', marginBottom: '12px' }}>
+        <div style={{ padding: '9px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12.5px', marginBottom: '12px' }}>
           {err}
         </div>
       )}
@@ -213,13 +213,13 @@ export const AssayerProfile: React.FC = () => {
           <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
             <div style={{
               width: '52px', height: '52px', borderRadius: '50%', flexShrink: 0,
-              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              background: 'var(--accent)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontSize: '21px', fontWeight: 700,
+              color: 'var(--on-accent)', fontSize: '21px', fontWeight: 700,
             }}>{p.displayName?.charAt(0).toUpperCase()}</div>
             <div>
               <h1 style={{ fontSize: '21px', fontWeight: 700, margin: 0 }}>{p.displayName}</h1>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '5px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--text-muted,#7c8595)' }}>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '5px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--text-muted)' }}>
                 <span style={{ fontFamily: 'monospace' }}>{p.assayerCode}</span>
                 <span style={{ color: tone, fontWeight: 700 }}>{(p.lifecycleStatus ?? '').replace(/_/g, ' ')}</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Briefcase size={11} /> {p.employmentType ?? '—'}</span>
@@ -237,10 +237,10 @@ export const AssayerProfile: React.FC = () => {
         </div>
 
         {canManage && transitions.length > 0 && (
-          <div style={{ display: 'flex', gap: '7px', alignItems: 'center', marginTop: '14px', paddingTop: '13px', borderTop: '1px solid var(--border-color,#232833)', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '7px', alignItems: 'center', marginTop: '14px', paddingTop: '13px', borderTop: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
             <span style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: '5px' }}><ArrowRightLeft size={11} /> Lifecycle</span>
             <select value={target} onChange={(e) => setTarget(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }}>
+              style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
               <option value="">Move to…</option>
               {transitions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
             </select>
@@ -252,11 +252,11 @@ export const AssayerProfile: React.FC = () => {
       </div>
 
       {missing.length > 0 ? (
-        <div style={{ ...card, marginBottom: '14px', borderLeft: '3px solid #fb923c' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fb923c', fontWeight: 700, fontSize: '13px' }}>
+        <div style={{ ...card, marginBottom: '14px', borderLeft: '3px solid var(--warning)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--warning)', fontWeight: 700, fontSize: '13px' }}>
             <AlertTriangle size={15} /> {missing.length} required field(s) missing
           </div>
-          <div style={{ fontSize: '12.5px', color: 'var(--text-secondary,#9aa4b5)', marginTop: '6px' }}>
+          <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginTop: '6px' }}>
             {missing.map((f) => `${f.label} (blocks ${f.why})`).join(' · ')}
           </div>
           {canManage && (
@@ -266,24 +266,24 @@ export const AssayerProfile: React.FC = () => {
           )}
         </div>
       ) : (
-        <div style={{ ...card, marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399', fontSize: '12.5px' }}>
+        <div style={{ ...card, marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)', fontSize: '12.5px' }}>
           <CheckCircle2 size={15} /> Record complete — payroll and duty-of-care fields are all present.
         </div>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px', marginBottom: '16px' }}>
         <Kpi value={p.totalAssignments ?? 0} caption="Assignments" />
-        <Kpi value={p.completedAssignments ?? 0} caption={completionRate === null ? 'Completed' : `Completed · ${completionRate}%`} tone="#34d399" />
-        <Kpi value={`${p.acceptanceRate ?? 100}%`} caption="Acceptance" tone="#38bdf8" />
-        <Kpi value={`${p.rejectionRate ?? 0}%`} caption="Rejection" tone={(p.rejectionRate ?? 0) > 15 ? '#f87171' : undefined} />
-        <Kpi value={p.queryCount ?? 0} caption="Queries raised" tone={(p.queryCount ?? 0) > 0 ? '#facc15' : undefined} />
+        <Kpi value={p.completedAssignments ?? 0} caption={completionRate === null ? 'Completed' : `Completed · ${completionRate}%`} tone="var(--success)" />
+        <Kpi value={`${p.acceptanceRate ?? 100}%`} caption="Acceptance" tone="var(--accent)" />
+        <Kpi value={`${p.rejectionRate ?? 0}%`} caption="Rejection" tone={(p.rejectionRate ?? 0) > 15 ? 'var(--danger)' : undefined} />
+        <Kpi value={p.queryCount ?? 0} caption="Queries raised" tone={(p.queryCount ?? 0) > 0 ? 'var(--warning)' : undefined} />
         <Kpi value={Number(p.averageRating) > 0 ? Number(p.averageRating).toFixed(1) : '—'} caption="Avg rating" />
-        <Kpi value={money(p.earningsPaid)} caption="Paid" tone="#34d399" />
-        <Kpi value={money(p.earningsAwaitingApproval)} caption="Awaiting approval" tone={(p.earningsAwaitingApproval ?? 0) > 0 ? '#facc15' : undefined} />
-        <Kpi value={money(p.runningBalance)} caption="Balance owed" tone={(p.runningBalance ?? 0) > 0 ? '#fb923c' : undefined} />
+        <Kpi value={money(p.earningsPaid)} caption="Paid" tone="var(--success)" />
+        <Kpi value={money(p.earningsAwaitingApproval)} caption="Awaiting approval" tone={(p.earningsAwaitingApproval ?? 0) > 0 ? 'var(--warning)' : undefined} />
+        <Kpi value={money(p.runningBalance)} caption="Balance owed" tone={(p.runningBalance ?? 0) > 0 ? 'var(--warning)' : undefined} />
       </div>
 
-      <nav style={{ display: 'flex', gap: '2px', borderBottom: '1px solid var(--border-color,#232833)', marginBottom: '14px', flexWrap: 'wrap' }}>
+      <nav style={{ display: 'flex', gap: '2px', borderBottom: '1px solid var(--border-color)', marginBottom: '14px', flexWrap: 'wrap' }}>
         {TABS.map((t) => {
           const Icon = t.icon;
           const on = tab === t.key;
@@ -292,8 +292,8 @@ export const AssayerProfile: React.FC = () => {
               style={{
                 display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 13px',
                 fontSize: '12.5px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
-                color: on ? '#818cf8' : 'var(--text-muted,#7c8595)',
-                borderBottom: `2px solid ${on ? '#818cf8' : 'transparent'}`,
+                color: on ? 'var(--accent)' : 'var(--text-muted)',
+                borderBottom: `2px solid ${on ? 'var(--accent)' : 'transparent'}`,
               }}>
               <Icon size={13} /> {t.label}
             </button>
@@ -330,7 +330,7 @@ export const AssayerProfile: React.FC = () => {
                 <span>{money(p.activeCommercialProfile.travelReimbursement)} travel</span>
               </div>
             ) : (
-              <div style={{ fontSize: '12.5px', color: '#fb923c' }}>
+              <div style={{ fontSize: '12.5px', color: 'var(--warning)' }}>
                 No active rate — this assayer cannot be billed or paid until one is set.
               </div>
             )}
@@ -362,7 +362,7 @@ export const AssayerProfile: React.FC = () => {
                   <span style={label}>{w.type}</span>,
                   w.level ?? '—',
                   days === null ? '—' : (
-                    <span style={{ color: days < 0 ? '#f87171' : days <= 30 ? '#fb923c' : days <= 90 ? '#facc15' : undefined }}>
+                    <span style={{ color: days < 0 ? 'var(--danger)' : days <= 30 ? 'var(--warning)' : days <= 90 ? 'var(--warning)' : undefined }}>
                       {fmtDate(w.expiryDate)}{days < 0 ? ` · ${Math.abs(days)}d overdue` : ` · ${days}d`}
                     </span>
                   ),
@@ -418,7 +418,7 @@ export const AssayerProfile: React.FC = () => {
               <input value={remarkText} onChange={(e) => setRemarkText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') addRemark(); }}
                 placeholder="Add a remark…"
-                style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }} />
+                style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }} />
               <button onClick={addRemark} disabled={!remarkText.trim() || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 13px' }}>
                 <Send size={12} />
               </button>
@@ -427,7 +427,7 @@ export const AssayerProfile: React.FC = () => {
           {side.remarks === undefined ? <Muted>Loading…</Muted>
             : side.remarks.length === 0 ? <Muted>No remarks yet.</Muted>
               : side.remarks.map((r: any) => (
-                <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid rgba(148,163,184,0.08)' }}>
+                <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
                   <div style={{ fontSize: '12.5px' }}>{r.content}</div>
                   <div style={{ ...label, marginTop: '4px' }}>
                     {r.authorName ?? 'system'} · {fmtWhen(r.createdAt)}{r.category ? ` · ${r.category}` : ''}
@@ -444,7 +444,7 @@ export const AssayerProfile: React.FC = () => {
             <Table
               head={['When', 'Event', 'Change', 'By']}
               rows={rows.map((h: any) => [
-                <span style={{ whiteSpace: 'nowrap', fontSize: '11.5px', color: 'var(--text-muted,#7c8595)' }}>{fmtWhen(h.occurredAt)}</span>,
+                <span style={{ whiteSpace: 'nowrap', fontSize: '11.5px', color: 'var(--text-muted)' }}>{fmtWhen(h.occurredAt)}</span>,
                 <span style={{ fontSize: '12px' }}>{(h.eventType ?? '').replace(/_/g, ' ').toLowerCase()}</span>,
                 h.previousState || h.newState
                   ? <span style={{ fontSize: '12px' }}>{h.previousState ?? '—'} → <strong>{h.newState ?? '—'}</strong></span>
@@ -468,19 +468,19 @@ export const AssayerProfile: React.FC = () => {
 };
 
 const linkBtn: React.CSSProperties = {
-  background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer',
+  background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer',
   fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px', padding: 0,
 };
 
 const Kpi: React.FC<{ value: React.ReactNode; caption: string; tone?: string }> = ({ value, caption, tone }) => (
   <div style={card}>
-    <div style={{ fontSize: '21px', fontWeight: 700, color: tone ?? 'var(--text-primary,#e6e9ef)', lineHeight: 1.1 }}>{value}</div>
+    <div style={{ fontSize: '21px', fontWeight: 700, color: tone ?? 'var(--text-primary)', lineHeight: 1.1 }}>{value}</div>
     <div style={{ ...label, marginTop: '5px' }}>{caption}</div>
   </div>
 );
 
 const Muted: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: '12.5px', color: 'var(--text-muted,#7c8595)', padding: '14px 0' }}>{children}</div>
+  <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '14px 0' }}>{children}</div>
 );
 
 /** Shared loading/empty handling so every tab behaves identically. */
@@ -495,12 +495,12 @@ const Table: React.FC<{ head: string[]; rows: React.ReactNode[][] }> = ({ head, 
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
       <thead>
         <tr>{head.map((h, i) => (
-          <th key={i} style={{ ...label, textAlign: 'left', padding: '6px 10px 8px', borderBottom: '1px solid var(--border-color,#232833)', whiteSpace: 'nowrap' }}>{h}</th>
+          <th key={i} style={{ ...label, textAlign: 'left', padding: '6px 10px 8px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>
         ))}</tr>
       </thead>
       <tbody>
         {rows.map((r, i) => (
-          <tr key={i} style={{ borderBottom: '1px solid rgba(148,163,184,0.07)' }}>
+          <tr key={i} style={{ borderBottom: '1px solid var(--border-hair)' }}>
             {r.map((c, j) => <td key={j} style={{ padding: '8px 10px', verticalAlign: 'middle' }}>{c}</td>)}
           </tr>
         ))}

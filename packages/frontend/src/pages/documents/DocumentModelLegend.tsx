@@ -57,7 +57,7 @@ export const DocumentModelLegend: React.FC = () => {
                 <div style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 2 }}>{s.meaning}</div>
               </div>
             ))}
-            <div style={{ marginTop: 12, padding: '9px 11px', background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+            <div style={{ marginTop: 12, padding: '9px 11px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
               <strong>Scope:</strong> every file belongs to one branch within one project cycle — not to whichever
               assayer is currently assigned. If the assayer changes, these files and their state stay exactly as they are.
             </div>

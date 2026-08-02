@@ -42,7 +42,7 @@ const fmtWhen = (d: string) =>
 
 const label: React.CSSProperties = {
   fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)',
+  letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
 export const ThreadPanel: React.FC<Props> = ({
@@ -109,7 +109,7 @@ export const ThreadPanel: React.FC<Props> = ({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {!resolved && (
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color,#232833)', display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end' }}>
           <button onClick={resolve} disabled={busy} className="btn btn-secondary"
             style={{ fontSize: '11px', padding: '5px 9px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <CheckCircle2 size={12} /> Resolve
@@ -128,8 +128,8 @@ export const ThreadPanel: React.FC<Props> = ({
             <div key={m.id} style={{ display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start', marginBottom: '10px' }}>
               <div style={{
                 maxWidth: '86%', padding: '8px 10px', borderRadius: '10px', fontSize: '12.5px',
-                background: mine ? 'rgba(79,70,229,0.16)' : 'rgba(148,163,184,0.1)',
-                border: `1px solid ${mine ? 'rgba(79,70,229,0.3)' : 'var(--border-color,#232833)'}`,
+                background: mine ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
+                border: `1px solid ${mine ? 'var(--status-pending-bg)' : 'var(--border-color)'}`,
               }}>
                 <div style={{ ...label, marginBottom: '4px' }}>
                   {m.authorName ?? (mine ? 'Data entry' : 'Assayer')} · {fmtWhen(m.createdAt)}
@@ -142,7 +142,7 @@ export const ThreadPanel: React.FC<Props> = ({
                     style={{
                       display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px',
                       background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                      color: '#facc15', fontSize: '11px', fontWeight: 600,
+                      color: 'var(--warning)', fontSize: '11px', fontWeight: 600,
                     }}>
                     <CornerUpLeft size={11} /> page {m.pageNumber}
                   </button>
@@ -153,7 +153,7 @@ export const ThreadPanel: React.FC<Props> = ({
                     src={m.snapshotPath}
                     alt={`Marked area on page ${m.pageNumber}`}
                     onClick={() => m.pageNumber && onFocusRegion({ pageNumber: m.pageNumber, region: m.region })}
-                    style={{ maxWidth: '100%', borderRadius: '6px', marginBottom: '6px', cursor: 'pointer', border: '1px solid var(--border-color,#232833)' }}
+                    style={{ maxWidth: '100%', borderRadius: '6px', marginBottom: '6px', cursor: 'pointer', border: '1px solid var(--border-color)' }}
                   />
                 )}
 
@@ -161,7 +161,7 @@ export const ThreadPanel: React.FC<Props> = ({
 
                 {(m.attachments ?? []).map((a) => (
                   <a key={a.url} href={a.url} target="_blank" rel="noreferrer"
-                    style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#818cf8', marginTop: '5px' }}>
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--accent)', marginTop: '5px' }}>
                     <ImageIcon size={11} /> {a.fileName}
                   </a>
                 ))}
@@ -173,28 +173,28 @@ export const ThreadPanel: React.FC<Props> = ({
       </div>
 
       {err && (
-        <div style={{ padding: '7px 13px', fontSize: '11.5px', color: '#f87171', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ padding: '7px 13px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
           <AlertTriangle size={12} /> {err}
         </div>
       )}
 
       {resolved ? (
-        <div style={{ padding: '11px 13px', borderTop: '1px solid var(--border-color,#232833)', fontSize: '12px', color: '#34d399', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ padding: '11px 13px', borderTop: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--success)', display: 'flex', gap: '6px', alignItems: 'center' }}>
           <CheckCircle2 size={14} /> Resolved.
         </div>
       ) : (
-        <div style={{ borderTop: '1px solid var(--border-color,#232833)', padding: '10px 13px' }}>
+        <div style={{ borderTop: '1px solid var(--border-color)', padding: '10px 13px' }}>
           {pending && (
             <div style={{
               display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', padding: '7px',
-              borderRadius: '8px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+              borderRadius: '8px', background: 'var(--status-active-bg)', border: '1px solid var(--status-active-bg)',
             }}>
               <img src={pending.dataUrl} alt="Marked area" style={{ height: '42px', borderRadius: '4px' }} />
               <div style={{ fontSize: '11px', flex: 1 }}>
                 Marked area on page {pending.pageNumber}
-                <div style={{ color: 'var(--text-muted,#7c8595)' }}>attached to this message</div>
+                <div style={{ color: 'var(--text-muted)' }}>attached to this message</div>
               </div>
-              <button onClick={onClearPending} style={{ background: 'none', border: 'none', color: 'var(--text-muted,#7c8595)', cursor: 'pointer' }}>
+              <button onClick={onClearPending} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
                 <X size={14} />
               </button>
             </div>
@@ -208,8 +208,8 @@ export const ThreadPanel: React.FC<Props> = ({
               rows={2}
               style={{
                 flex: 1, resize: 'none', padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
-                background: 'var(--bg-page,#0d1016)', color: 'inherit',
-                border: '1px solid var(--border-color,#232833)', outline: 'none',
+                background: 'var(--bg-input)', color: 'inherit',
+                border: '1px solid var(--border-color)', outline: 'none',
               }}
             />
             <button onClick={send} disabled={busy || (!draft.trim() && !pending)} className="btn btn-primary"
@@ -224,7 +224,7 @@ export const ThreadPanel: React.FC<Props> = ({
 };
 
 const Muted: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: '12.5px', color: 'var(--text-muted,#7c8595)', padding: '16px 0' }}>{children}</div>
+  <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '16px 0' }}>{children}</div>
 );
 
 export default ThreadPanel;

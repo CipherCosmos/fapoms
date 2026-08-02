@@ -36,9 +36,9 @@ const HOLIDAY_TYPES: { value: Holiday['type']; label: string }[] = [
 ];
 
 const TYPE_TONE: Record<string, { bg: string; color: string }> = {
-  NATIONAL: { bg: 'rgba(239,68,68,0.15)', color: '#ef4444' },
-  BANK: { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' },
-  STATE: { bg: 'rgba(99,102,241,0.15)', color: '#818cf8' },
+  NATIONAL: { bg: 'var(--status-cancelled-bg)', color: 'var(--danger)' },
+  BANK: { bg: 'var(--status-pending-bg)', color: 'var(--warning)' },
+  STATE: { bg: 'rgba(216,174,71,0.15)', color: 'var(--accent)' },
 };
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -67,6 +67,7 @@ export const Holidays: React.FC = () => {
   const yearFilter = monthCursor.getFullYear();
   const [clientFilter, setClientFilter] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
@@ -127,6 +128,7 @@ export const Holidays: React.FC = () => {
     e.preventDefault();
     setError(null);
     const body = { name, date, type, applicableStates: type === 'STATE' ? selectedStates : [], clientId: clientId || null };
+    setSubmitting(true);
     try {
       if (editingId) {
         await api.request(`/holidays/${editingId}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -139,6 +141,8 @@ export const Holidays: React.FC = () => {
       refetch();
     } catch (err: any) {
       setError(err?.message || 'Operation failed');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -176,8 +180,8 @@ export const Holidays: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
         <div>
-          <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar style={{ color: '#8b5cf6' }} /> Holiday Calendar
+          <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Calendar style={{ color: 'var(--accent)' }} /> Holiday Calendar
           </h2>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             National, bank and state holidays used to keep audits off dates nobody can work.
@@ -186,18 +190,18 @@ export const Holidays: React.FC = () => {
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
             <button onClick={() => setView('calendar')} title="Calendar view"
-              style={{ padding: '7px 10px', background: view === 'calendar' ? 'var(--accent-primary)' : 'transparent', border: 'none', color: view === 'calendar' ? '#fff' : 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+              style={{ padding: '7px 10px', background: view === 'calendar' ? 'var(--accent-primary)' : 'transparent', border: 'none', color: view === 'calendar' ? 'var(--on-accent)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
               <Grid3x3 size={14} />
             </button>
             <button onClick={() => setView('list')} title="List view"
-              style={{ padding: '7px 10px', background: view === 'list' ? 'var(--accent-primary)' : 'transparent', border: 'none', color: view === 'list' ? '#fff' : 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+              style={{ padding: '7px 10px', background: view === 'list' ? 'var(--accent-primary)' : 'transparent', border: 'none', color: view === 'list' ? 'var(--on-accent)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
               <List size={14} />
             </button>
           </div>
           <select
             value={clientFilter}
             onChange={(e) => setClientFilter(e.target.value)}
-            style={{ padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: '#fff', fontSize: '13px' }}
+            style={{ padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}
           >
             <option value="ALL">🏦 All Clients (Global Scope)</option>
             {clients.map((c: any) => (
@@ -247,7 +251,7 @@ export const Holidays: React.FC = () => {
                       onClick={() => (canManage ? (regs.length ? handleOpenEdit(regs[0]) : handleOpenCreate(key)) : undefined)}
                       style={{
                         minHeight: '76px', padding: '6px', borderRadius: '8px', cursor: canManage ? 'pointer' : 'default',
-                        background: regs.length ? 'rgba(99,102,241,0.08)' : auto ? 'rgba(148,163,184,0.05)' : 'transparent',
+                        background: regs.length ? 'rgba(216,174,71,0.08)' : auto ? 'var(--border-hair)' : 'transparent',
                         border: isToday ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
                         display: 'flex', flexDirection: 'column', gap: '3px',
                       }}
@@ -257,7 +261,7 @@ export const Holidays: React.FC = () => {
                         <div key={h.id} title={h.name} style={{
                           fontSize: '9.5px', padding: '1px 4px', borderRadius: '3px', overflow: 'hidden',
                           whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                          background: TYPE_TONE[h.type]?.bg ?? 'rgba(255,255,255,0.06)', color: TYPE_TONE[h.type]?.color ?? '#fff',
+                          background: TYPE_TONE[h.type]?.bg ?? 'var(--border-hair)', color: TYPE_TONE[h.type]?.color ?? 'var(--text-primary)',
                         }}>
                           {h.name}
                         </div>
@@ -303,25 +307,25 @@ export const Holidays: React.FC = () => {
                 {[...holidays].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map((h: Holiday) => {
                   const matchedClient = clients.find((c: any) => c.id === h.clientId);
                   return (
-                    <tr key={h.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '13px' }}>
-                      <td style={{ padding: '12px 10px', fontWeight: 600, color: '#a5b4fc' }}>
+                    <tr key={h.id} style={{ borderBottom: '1px solid var(--border-hair)', fontSize: '13px' }}>
+                      <td style={{ padding: '12px 10px', fontWeight: 600, color: 'var(--accent)' }}>
                         {new Date(h.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                       </td>
-                      <td style={{ padding: '12px 10px', fontWeight: 600, color: '#fff' }}>{h.name}</td>
+                      <td style={{ padding: '12px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>{h.name}</td>
                       <td style={{ padding: '12px 10px' }}>
                         <StatusBadge label={h.type} bg={(TYPE_TONE[h.type] ?? TYPE_TONE.STATE).bg} color={(TYPE_TONE[h.type] ?? TYPE_TONE.STATE).color} />
                       </td>
                       <td style={{ padding: '12px 10px', fontSize: '12px' }}>
-                        {!h.clientId ? <span style={{ color: '#94a3b8', fontWeight: 500 }}>🌐 All Clients</span> : <span style={{ color: '#f59e0b', fontWeight: 600 }}>🏦 {matchedClient?.name || 'Specific Client'}</span>}
+                        {!h.clientId ? <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>🌐 All Clients</span> : <span style={{ color: 'var(--warning)', fontWeight: 600 }}>🏦 {matchedClient?.name || 'Specific Client'}</span>}
                       </td>
                       <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>
-                        {!h.applicableStates || h.applicableStates.length === 0 ? <span style={{ color: '#10b981', fontWeight: 600 }}>🇮🇳 All India</span> : <span>🗺️ {h.applicableStates.join(', ')}</span>}
+                        {!h.applicableStates || h.applicableStates.length === 0 ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>🇮🇳 All India</span> : <span>🗺️ {h.applicableStates.join(', ')}</span>}
                       </td>
                       {canManage && (
                         <td style={{ padding: '12px 10px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                            <button onClick={() => handleOpenEdit(h)} style={{ padding: '4px 8px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '4px', color: '#a5b4fc', cursor: 'pointer' }}><Edit2 size={12} /></button>
-                            <button onClick={() => handleDelete(h.id)} style={{ padding: '4px 8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '4px', color: '#fca5a5', cursor: 'pointer' }}><Trash2 size={12} /></button>
+                            <button aria-label="Edit holiday" onClick={() => handleOpenEdit(h)} style={{ padding: '4px 8px', background: 'rgba(216,174,71,0.1)', border: '1px solid rgba(216,174,71,0.3)', borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer' }}><Edit2 size={12} /></button>
+                            <button aria-label="Delete holiday" onClick={() => handleDelete(h.id)} style={{ padding: '4px 8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: '4px', color: 'var(--danger)', cursor: 'pointer' }}><Trash2 size={12} /></button>
                           </div>
                         </td>
                       )}
@@ -338,8 +342,8 @@ export const Holidays: React.FC = () => {
         <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Holiday Record' : 'Add New Holiday'} width="500px" closeIcon={<X size={18} />} asForm onSubmit={handleSubmit}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Holiday</button>
+              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" disabled={submitting}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? 'Saving…' : 'Save Holiday'}</button>
             </div>
           }
         >
@@ -347,7 +351,7 @@ export const Holidays: React.FC = () => {
             <div>
               <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Client Scope (Optional)</label>
               <select value={clientId} onChange={(e) => setClientId(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: '#fff', fontSize: '13px' }}>
+                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
                 <option value="">🌐 All Clients (Global Holiday Calendar)</option>
                 {clients.map((c: any) => <option key={c.id} value={c.id}>🏦 Specific Client: {c.name || c.code}</option>)}
               </select>
@@ -356,19 +360,19 @@ export const Holidays: React.FC = () => {
             <div>
               <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Title</label>
               <input type="text" required placeholder="e.g. Maharashtra Day" value={name} onChange={(e) => setName(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: '#fff', fontSize: '13px' }} />
+                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Date</label>
                 <input type="date" required value={date} onChange={(e) => setDate(e.target.value)}
-                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: '#fff', fontSize: '13px' }} />
+                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
               </div>
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Category Type</label>
                 <select value={type} onChange={(e) => setType(e.target.value as Holiday['type'])}
-                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: '#fff', fontSize: '13px' }}>
+                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
                   {HOLIDAY_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
@@ -381,14 +385,14 @@ export const Holidays: React.FC = () => {
                 </label>
                 <input
                   type="text" placeholder="Search states…" value={stateSearch} onChange={(e) => setStateSearch(e.target.value)}
-                  style={{ width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: '#fff', fontSize: '12px' }}
+                  style={{ width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '12px' }}
                 />
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '150px', overflowY: 'auto', padding: '8px', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                   {filteredStateOptions.map((st) => {
                     const isSelected = selectedStates.includes(st.value);
                     return (
                       <button type="button" key={st.value} onClick={() => toggleState(st.value)}
-                        style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '11px', border: 'none', cursor: 'pointer', backgroundColor: isSelected ? '#6366f1' : '#334155', color: '#fff' }}>
+                        style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '11px', border: 'none', cursor: 'pointer', backgroundColor: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)', color: isSelected ? 'var(--on-accent)' : 'var(--text-primary)' }}>
                         {isSelected ? `✓ ${st.label}` : st.label}
                       </button>
                     );

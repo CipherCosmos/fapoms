@@ -11,11 +11,11 @@ const SEVERITIES = Object.values(BillingConflictSeverity);
 const ENTITY_TYPES = Object.values(BillingEntityType);
 
 const SEV_COLOR: Record<BillingConflictSeverity, string> = {
-  INFO: '#60a5fa', WARNING: '#f59e0b', CRITICAL: '#ef4444',
+  INFO: 'var(--accent)', WARNING: 'var(--warning)', CRITICAL: 'var(--danger)',
 };
 const STATUS_COLOR: Record<BillingConflictStatus, string> = {
-  OPEN: '#f59e0b', RESOLVED: '#22c55e', MERGED: '#10b981', SEPARATED: '#38bdf8',
-  REASSIGNED: '#60a5fa', OVERRIDDEN: '#a78bfa', REJECTED: '#ef4444', ON_HOLD: '#64748b',
+  OPEN: 'var(--warning)', RESOLVED: 'var(--success)', MERGED: 'var(--success)', SEPARATED: 'var(--accent)',
+  REASSIGNED: 'var(--accent)', OVERRIDDEN: 'var(--accent)', REJECTED: 'var(--danger)', ON_HOLD: 'var(--text-muted)',
 };
 const ACTIONS = Object.values(BillingConflictAction);
 const RESOLVE_STATUSES: BillingConflictStatus[] = [
@@ -49,7 +49,7 @@ export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose 
 
   const selStyle: React.CSSProperties = {
     padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%',
+    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
   };
 
   return (
@@ -118,7 +118,7 @@ export const ConflictDetailDrawer: React.FC<{ conflictId: string; onClose: () =>
 
   const selStyle: React.CSSProperties = {
     padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', width: '100%',
+    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
   };
 
   return (

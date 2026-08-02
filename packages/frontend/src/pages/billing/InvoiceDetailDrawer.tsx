@@ -8,8 +8,8 @@ const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 const METHODS = Object.values(PaymentMethod);
 
 const STATUS_COLOR: Record<InvoiceStatus, string> = {
-  DRAFT: '#a78bfa', ISSUED: '#60a5fa', PARTIALLY_PAID: '#f59e0b', PAID: '#22c55e',
-  DISPUTED: '#ef4444', CANCELLED: '#64748b', VOID: '#64748b',
+  DRAFT: 'var(--accent)', ISSUED: 'var(--accent)', PARTIALLY_PAID: 'var(--warning)', PAID: 'var(--success)',
+  DISPUTED: 'var(--danger)', CANCELLED: 'var(--text-muted)', VOID: 'var(--text-muted)',
 };
 
 const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
@@ -40,6 +40,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
 
   const doTransition = async () => {
     if (!nextStatus) return;
+    if (['ISSUED', 'PAID'].includes(nextStatus) && !window.confirm(`Move invoice to ${nextStatus}? This cannot be undone.`)) return;
     try {
       await transition.mutateAsync({ id: invoice.id, status: nextStatus, reason: reason || undefined });
       toast('success', `Invoice → ${nextStatus}`); setNextStatus(''); setReason('');
@@ -67,11 +68,11 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
           {next.length > 0 && (
             <>
-              <select value={nextStatus} onChange={(e) => setNextStatus(e.target.value as InvoiceStatus)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff' }}>
+              <select value={nextStatus} onChange={(e) => setNextStatus(e.target.value as InvoiceStatus)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
                 <option value="">Transition…</option>
                 {next.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
-              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', width: 120 }} />
+              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', width: 120 }} />
               <button onClick={doTransition} disabled={!nextStatus || transition.isPending} className="btn btn-primary">Apply</button>
             </>
           )}
@@ -84,7 +85,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       {payOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff' }}>
+            <select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
               {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
             <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
@@ -103,7 +104,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         <Row label="Subtotal" value={`₹${fmt(invoice.subtotal)}`} />
         {invoice.taxAmount ? <Row label="Tax" value={`₹${fmt(invoice.taxAmount)}`} /> : null}
         {invoice.discountAmount ? <Row label="Discount" value={`-₹${fmt(invoice.discountAmount)}`} /> : null}
-        <Row label="Total" value={<span style={{ color: '#fff', fontWeight: 700 }}>₹{fmt(invoice.total)}</span>} />
+        <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>₹{fmt(invoice.total)}</span>} />
         <Row label="Paid" value={`₹${fmt(invoice.paidAmount)}`} />
         <Row label="Outstanding" value={`₹${fmt(invoice.outstandingAmount)}`} />
       </div>

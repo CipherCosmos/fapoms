@@ -1,71 +1,71 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Platform, Modal, TouchableOpacity, StatusBar } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text } from 'react-native';
 import { registerRootComponent } from 'expo';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
-import { AssayerAssignment, ValidationQuery, AssayerExpense, AppNotification } from './src/types/mobile-app';
+import { AssayerAssignment, AppNotification } from './src/types/mobile-app';
 import { MobileApiService } from './src/services/api.service';
+import { registerForPushNotificationsAsync } from './src/services/notification.service';
 import { getAssignmentTotalFee } from './src/utils/fees';
-import { registerForPushNotificationsAsync, setupNotificationListeners } from './src/services/notification.service';
-import { connectMobileSocket, disconnectMobileSocket, getMobileSocket } from './src/services/socket';
 
-// Modular Theme & Layout Components
-import { styles } from './src/theme/styles';
+// Context Providers
 import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
-import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
-import { Skeleton, Card } from './src/components/ui/primitives';
-import { RejectionModal } from './src/components/RejectionModal';
-import { ExpenseModal } from './src/components/ExpenseModal';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { LocationProvider, useLocation } from './src/context/LocationContext';
+import { AssignmentProvider, useAssignments } from './src/context/AssignmentContext';
 
-// Modular Screen Components
+// UI Shell
+import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
+import { AppText, Button } from './src/components/ui/primitives';
+
+// Screens
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ScheduleScreen } from './src/screens/ScheduleScreen';
-import { PdfDocsScreen } from './src/screens/PdfDocsScreen';
 import { QueriesScreen } from './src/screens/QueriesScreen';
 import { EarningsScreen } from './src/screens/EarningsScreen';
-import { StatsScreen } from './src/screens/StatsScreen';
 import { ProfileScreen, ProfileDataState } from './src/screens/ProfileScreen';
-import { NotificationsScreen } from './src/screens/NotificationsScreen';
 
+// Modals
 import { NotificationDetailModal } from './src/components/NotificationDetailModal';
 import { MLKitScannerModal } from './src/components/MLKitScannerModal';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
 import { InAppNavigationModal } from './src/components/InAppNavigationModal';
+import { RejectionModal } from './src/components/RejectionModal';
+import { ExpenseModal } from './src/components/ExpenseModal';
 
-function AppInner() {
+function AppMain() {
   const theme = useTheme();
-  // Authentication State (Read saved session synchronously to prevent flash on refresh)
-  const initialSession = MobileApiService.restoreSession();
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(Boolean(initialSession));
-  const [loginUsername, setLoginUsername] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [authenticating, setAuthenticating] = useState(false);
+  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout } = useAuth();
+  const { location, refreshLocation } = useLocation();
+  const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense } = useAssignments();
 
-  const [assayerName, setAssayerName] = useState<string>(
-    initialSession ? (initialSession.userName || `Assayer Session (${(initialSession.userId || 'active').slice(0, 8)})`) : ''
-  );
-  const [assignments, setAssignments] = useState<AssayerAssignment[]>([]);
-  const [billingEntries, setBillingEntries] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
   const [selectedTab, setSelectedTab] = useState<TabType>('SCHEDULE');
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [activeAssignment, setActiveAssignment] = useState<AssayerAssignment | null>(null);
-  const [uploadingPdf, setUploadingPdf] = useState(false);
-  const [uploadedPdfName, setUploadedPdfName] = useState<string | null>(null);
-  const [selectedPdfData, setSelectedPdfData] = useState<{ uri?: string; blob?: any; base64?: string } | undefined>(undefined);
+  // Scanner modal state
   const [scannerModalVisible, setScannerModalVisible] = useState(false);
+  const [activeScannerAssignment, setActiveScannerAssignment] = useState<AssayerAssignment | null>(null);
+
+  // Query chat modal state
   const [queryChatModalVisible, setQueryChatModalVisible] = useState(false);
   const [queryChatAssignment, setQueryChatAssignment] = useState<AssayerAssignment | null>(null);
-  const [notifModalVisible, setNotifModalVisible] = useState(false);
 
-  // Notification Detail Modal State
-  const [notifDetailAssignment, setNotifDetailAssignment] = useState<AssayerAssignment | null>(null);
-
-  // In-App Navigation Modal State
+  // Navigation modal state
   const [navAssignment, setNavAssignment] = useState<AssayerAssignment | null>(null);
 
-  // Public Profile Updatable State (Synchronous Cache & Backend Restoration)
-  const defaults: ProfileDataState = {
+  // Rejection modal state
+  const [rejectModalVisible, setRejectModalVisible] = useState(false);
+  const [rejectAssignmentId, setRejectAssignmentId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  // Expense modal state
+  const [expenseModalVisible, setExpenseModalVisible] = useState(false);
+
+  // Notification modal state
+  const [notifModalVisible, setNotifModalVisible] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+
+  // Profile data state
+  const [profile, setProfile] = useState<ProfileDataState>({
     phone: '',
     alternatePhone: '',
     address: '',
@@ -73,8 +73,8 @@ function AppInner() {
     state: '',
     district: '',
     pincode: '',
-    latitude: 28.6315000,
-    longitude: 77.2167000,
+    latitude: location?.latitude || 28.6315,
+    longitude: location?.longitude || 77.2167,
     preferredRegions: '',
     preferredRadius: 10,
     languages: '',
@@ -99,919 +99,389 @@ function AppInner() {
     runningBalance: 0,
     earningsPaid: 0,
     earningsAwaitingApproval: 0,
-    assayerCode: '',
-  };
-
-  const getInitialProfileState = (): ProfileDataState => {
-    try {
-      const cached = typeof localStorage !== 'undefined' ? localStorage.getItem('fapoms_assayer_profile_cache') : null;
-      if (cached) return { ...defaults, ...JSON.parse(cached) };
-    } catch (e) {}
-    return { ...defaults };
-  };
-
-  const [profile, setProfile] = useState<ProfileDataState>(getInitialProfileState);
+    assayerCode: user?.assayerCode || '',
+  });
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const updateProfileField = (field: keyof ProfileDataState, value: any) => {
-    setProfile((prev: ProfileDataState) => {
-      const next = { ...prev, [field]: value };
-      try {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('fapoms_assayer_profile_cache', JSON.stringify(next));
-        }
-      } catch (e) {}
-      return next;
-    });
-  };
-
-  // Query Response State
-  const [activeQuery, setActiveQuery] = useState<ValidationQuery | null>(null);
-  const [queryResponseText, setQueryResponseText] = useState('');
-
-  // Rejection Modal State
-  const [rejectModalVisible, setRejectModalVisible] = useState(false);
-  const [rejectAssignmentId, setRejectAssignmentId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
-
-  // Expense Modal State
-  const [expenseModalVisible, setExpenseModalVisible] = useState(false);
-  const [expenseCategory, setExpenseCategory] = useState<'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'>('TRAVEL_KM');
-  const [expenseAmount, setExpenseAmount] = useState('');
-  const [expenseDescription, setExpenseDescription] = useState('');
-
-  // Notification State
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [notifLoading, setNotifLoading] = useState(false);
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
-  const [selectedNotification, setSelectedNotification] = useState<AppNotification | null>(null);
-
   const loadNotifications = useCallback(async () => {
-    setNotifLoading(true);
-    const items = await MobileApiService.getNotifications();
-    setNotifications(items);
-    setUnreadNotifCount(items.filter((n) => !n.isRead).length);
-    setNotifLoading(false);
+    try {
+      const items = await MobileApiService.getNotifications();
+      setNotifications(items);
+      setUnreadNotifCount(items.filter((n) => !n.isRead).length);
+    } catch (e) {
+      console.error('Error loading notifications:', e);
+    }
   }, []);
 
-  const notifDetailRef = useRef(notifDetailAssignment);
-  notifDetailRef.current = notifDetailAssignment;
+  const loadAssayerProfile = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const res = await MobileApiService.getAssayerProfile(user.id);
+      if (res.success && res.data) {
+        const p = res.data;
+        setProfile((prev) => ({
+          ...prev,
+          phone: p.phone || prev.phone,
+          alternatePhone: p.alternatePhone || prev.alternatePhone,
+          address: p.address || prev.address,
+          city: p.city || prev.city,
+          state: p.state || prev.state,
+          district: p.district || prev.district,
+          pincode: p.pincode || prev.pincode,
+          skills: p.skills || prev.skills,
+          languages: p.languages || prev.languages,
+          experienceYears: p.experienceYears ?? prev.experienceYears,
+          licenseNo: p.licenseNo || prev.licenseNo,
+          panNumber: p.panNumber || prev.panNumber,
+          bankAccountNumber: p.bankAccountNumber || prev.bankAccountNumber,
+          ifscCode: p.ifscCode || prev.ifscCode,
+          assayerCode: p.assayerCode || prev.assayerCode,
+          totalEarnings: p.totalEarnings ?? 0,
+          runningBalance: p.runningBalance ?? 0,
+          earningsPaid: p.earningsPaid ?? 0,
+          earningsAwaitingApproval: p.earningsAwaitingApproval ?? 0,
+          completedAssignments: p.completedAssignments ?? 0,
+          totalAssignments: p.totalAssignments ?? 0,
+          averageRating: p.averageRating ?? prev.averageRating,
+        }));
+      }
+    } catch (e) {
+      console.error('Error fetching assayer profile:', e);
+    }
+  }, [user?.id]);
 
   useEffect(() => {
     if (isAuthenticated) {
-      loadAssignments().then(() => {
-        loadAssayerProfile();
-        loadBillingEntries();
-        registerForPushNotificationsAsync();
+      registerForPushNotificationsAsync();
+      loadNotifications();
+      loadAssayerProfile();
+
+      // Silent background auto-refresh every 30 seconds
+      const timer = setInterval(() => {
+        loadAssignments();
         loadNotifications();
-      });
+      }, 30000);
 
-      const socket = connectMobileSocket();
-
-      const playNewAssignmentRingtone = () => {
-        try {
-          const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-          if (g.window && (g.AudioContext || g.webkitAudioContext)) {
-            const AudioCtx = g.AudioContext || g.webkitAudioContext;
-            const ctx = new AudioCtx();
-            const playChime = (freq: number, startTime: number, duration: number) => {
-              const osc = ctx.createOscillator();
-              const gain = ctx.createGain();
-              osc.type = 'sine';
-              osc.frequency.setValueAtTime(freq, ctx.currentTime + startTime);
-              gain.gain.setValueAtTime(0.3, ctx.currentTime + startTime);
-              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startTime + duration);
-              osc.connect(gain);
-              gain.connect(ctx.destination);
-              osc.start(ctx.currentTime + startTime);
-              osc.stop(ctx.currentTime + startTime + duration);
-            };
-            playChime(587.33, 0, 0.2);   // D5
-            playChime(880, 0.15, 0.25);   // A5
-            playChime(1174.66, 0.35, 0.5); // D6
-          }
-        } catch (e) {}
-      };
-
-      const handlers: Record<string, (data?: any) => void> = {
-        'assignment:status-changed': () => { loadAssignments(); loadNotifications(); },
-        'assignment:counter-offered': (data: any) => {
-          playNewAssignmentRingtone();
-          loadAssignments();
-          loadNotifications();
-          Alert.alert(
-            '💬 COUNTER OFFER UPDATE!',
-            `Counter rate proposal update received (₹${data?.proposedFee || ''}).`,
-            [{ text: 'View Update', onPress: () => setSelectedTab('SCHEDULE') }]
-          );
-        },
-        'assignment:created': (data: any) => {
-          playNewAssignmentRingtone();
-          loadAssignments();
-          loadNotifications();
-          const branchName = data?.branchName || 'Bank Branch';
-          Alert.alert(
-            '🔔 NEW ASSIGNMENT INVITE!',
-            `You have received a direct app invitation for ${branchName}. Check your schedule to Accept or Reject.`,
-            [{ text: 'View Invitation', onPress: () => setSelectedTab('SCHEDULE') }]
-          );
-        },
-        'assignment:fee-updated': () => { loadAssignments(); },
-        'notification:new': () => {
-          playNewAssignmentRingtone();
-          loadNotifications();
-        },
-        'query:raised': (data: any) => {
-          playNewAssignmentRingtone();
-          loadAssignments();
-          loadNotifications();
-          Alert.alert(
-            '❓ NEW VALIDATION QUERY RAISED!',
-            `Data entry team raised a query: "${data?.queryText || 'Clarification required for audit'}". Tap to respond.`,
-            [{ text: 'Open Query Chat', onPress: () => setSelectedTab('SCHEDULE') }]
-          );
-        },
-        'query:responded': () => { loadAssignments(); loadNotifications(); },
-        'schedule:created': () => { loadAssignments(); },
-        'schedule:updated': () => { loadAssignments(); },
-        'document:uploaded': () => { loadAssignments(); loadNotifications(); },
-        'document:status-changed': () => { loadAssignments(); },
-        'communication:created': () => { loadAssignments(); },
-        'billing:created': () => { loadAssignments(); },
-        'billing:entry-created': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
-        'billing:entry-state-changed': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
-        'billing:duplicate-detected': () => { loadAssignments(); },
-        'billing:invoice-created': () => { loadAssignments(); },
-        'billing:invoice-status-changed': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
-        'billing:payment-received': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
-        'billing:payable-status-changed': () => { loadAssignments(); loadAssayerProfile(); loadBillingEntries(); },
-      };
-
-      if (socket) {
-        for (const [event, handler] of Object.entries(handlers)) {
-          socket.on(event, handler);
-        }
-        socket.on('comment:added', (data: any) => {
-          if (notifDetailRef.current?.id === data.assignmentId) {
-            loadAssignments();
-          }
-        });
-      }
-
-      return () => {
-        if (socket) {
-          for (const [event, handler] of Object.entries(handlers)) {
-            socket.off(event, handler);
-          }
-          socket.off('comment:added');
-        }
-      };
-    } else {
-      disconnectMobileSocket();
+      return () => clearInterval(timer);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, loadNotifications, loadAssayerProfile, loadAssignments]);
 
-  const handleMarkNotificationRead = async (id: string) => {
-    await MobileApiService.markNotificationRead(id);
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
-    );
-    setUnreadNotifCount((prev) => Math.max(0, prev - 1));
-  };
-
-  const handleTapNotification = (notification: AppNotification) => {
-    setSelectedNotification(notification);
-    if (notification.assignmentId) {
-      const matched = assignments.find((a) => a.id === notification.assignmentId);
-      if (matched) {
-        setSelectedTab('SCHEDULE');
-        setNotifDetailAssignment(matched);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const cleanup = setupNotificationListeners(
-      (notification) => {
-        loadNotifications();
-        const data = notification.request.content.data;
-        if (data?.assignmentId) {
-          const matched = assignments.find((a) => a.id === data.assignmentId);
-          if (matched) {
-            setNotifDetailAssignment(matched);
-          }
-        }
-      },
-      (response) => {
-        loadNotifications();
-        const data = response.notification.request.content.data;
-        if (data?.assignmentId) {
-          setSelectedTab('SCHEDULE');
-          const matched = assignments.find((a) => a.id === data.assignmentId);
-          if (matched) {
-            setNotifDetailAssignment(matched);
-          }
-        }
-      },
-    );
-    return cleanup;
-  }, [isAuthenticated, assignments]);
-
-  const loadAssayerProfile = async () => {
-    const userId = MobileApiService.getCurrentUserId();
-    if (!userId) return;
-    try {
-      const res = await MobileApiService.getAssayerProfile(userId);
-      if (res.success && res.data) {
-        const d = res.data;
-        const fetchedProfile: ProfileDataState = {
-          phone: d.phone ?? profile.phone,
-          alternatePhone: d.alternatePhone ?? profile.alternatePhone,
-          address: d.address ?? profile.address,
-          city: d.city ?? profile.city,
-          state: d.state ?? profile.state,
-          district: d.district ?? profile.district,
-          pincode: d.pincode ?? profile.pincode,
-          latitude: d.latitude != null ? Number(d.latitude) : profile.latitude,
-          longitude: d.longitude != null ? Number(d.longitude) : profile.longitude,
-          preferredRegions: Array.isArray(d.preferredRegions) ? d.preferredRegions.join(', ') : (d.preferredRegions ?? profile.preferredRegions),
-          preferredRadius: d.preferredRadius ?? profile.preferredRadius ?? 10,
-          languages: Array.isArray(d.languages) ? d.languages.join(', ') : (d.languages ?? profile.languages),
-          licenseNo: d.certifications?.[0]?.name ?? profile.licenseNo,
-          emergencyName: d.emergencyContactName ?? profile.emergencyName,
-          emergencyPhone: d.emergencyContactPhone ?? profile.emergencyPhone,
-          emergencyRelation: d.emergencyContactRelation ?? profile.emergencyRelation,
-          skills: Array.isArray(d.skills) ? d.skills.join(', ') : (d.skills ?? profile.skills),
-          experienceYears: d.experienceYears ?? profile.experienceYears,
-          panNumber: d.panNumber ?? profile.panNumber,
-          bankAccountNumber: d.bankAccountNumber ?? profile.bankAccountNumber,
-          ifscCode: d.ifscCode ?? profile.ifscCode,
-          maxDailyWorkload: d.maxDailyWorkload ?? profile.maxDailyWorkload,
-          maxWeeklyWorkload: d.maxWeeklyWorkload ?? profile.maxWeeklyWorkload,
-          employmentType: d.employmentType ?? profile.employmentType,
-          performanceRating: d.performanceRating ?? profile.performanceRating,
-          averageRating: d.averageRating ?? profile.averageRating,
-          totalAssignments: d.totalAssignments ?? profile.totalAssignments,
-          completedAssignments: d.completedAssignments ?? profile.completedAssignments,
-          onTimeCompletions: d.onTimeCompletions ?? profile.onTimeCompletions,
-          totalEarnings: d.totalEarnings ?? profile.totalEarnings,
-          runningBalance: d.runningBalance ?? profile.runningBalance,
-          earningsPaid: d.earningsPaid ?? (profile as any).earningsPaid,
-          earningsAwaitingApproval: d.earningsAwaitingApproval ?? (profile as any).earningsAwaitingApproval,
-          assayerCode: d.assayerCode ?? profile.assayerCode,
-        };
-        setProfile(fetchedProfile);
-        setAssayerName(d.displayName || d.firstName && `${d.firstName} ${d.lastName}` || profile.assayerCode || assayerName);
-        try {
-          if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('fapoms_assayer_profile_cache', JSON.stringify(fetchedProfile));
-          }
-        } catch (e) {}
-      }
-    } catch (e) {}
-  };
-
-  const loadBillingEntries = async () => {
-    const userId = MobileApiService.getCurrentUserId();
-    if (!userId) return;
-    const res = await MobileApiService.getAssayerBillingEngineEntries(userId);
-    if (res.success) setBillingEntries(res.data || []);
-  };
-
-  const loadAssignments = async () => {
-    setLoading(true);
-    const userId = MobileApiService.getCurrentUserId();
-    if (userId) {
-      setAssayerName(MobileApiService.getCurrentUserName() || `Assayer Session (${userId.slice(0, 8)})`);
-    }
-    const data = await MobileApiService.getAssayerAssignments(userId || undefined);
-    setAssignments(data || []);
-    if (data && data.length > 0) {
-      setActiveAssignment(data[0]);
-    } else {
-      setActiveAssignment(null);
-    }
-    setLoading(false);
-  };
-
-  const handleLogin = async () => {
-    if (!loginUsername || !loginPassword) {
-      Alert.alert('Required Fields', 'Please enter username and password.');
-      return;
-    }
-    setAuthenticating(true);
-    const res = await MobileApiService.login(loginUsername, loginPassword);
-    setAuthenticating(false);
-
-    if (res.success && res.token) {
-      const verification = await MobileApiService.verifyAssayerIdentity(loginUsername);
-      const assayerId = verification.assayer?.id || res.user?.id;
-      const name = verification.assayer?.name || res.user?.name || res.user?.username || loginUsername;
-      MobileApiService.setAuthToken(res.token, assayerId, name);
-      setAssayerName(name);
-      setIsAuthenticated(true);
-    } else {
-      Alert.alert('Authentication Failed', res.error || 'Invalid credentials.');
-    }
-  };
-
-  const handleBiometricLogin = async () => {
-    if (!loginUsername) {
-      Alert.alert('Required Field', 'Please enter your assayer code / phone number first.');
-      return;
-    }
-
-    try {
-      const LocalAuthentication = require('expo-local-authentication');
-      
-      // 1. Check if hardware supports biometrics
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
-
-      if (!hasHardware || !isEnrolled) {
-        Alert.alert(
-          'Biometrics Unavailable',
-          'Biometric hardware (FaceID / Fingerprint) is not configured or registered on this device. Using secure fallback authentication...'
-        );
-      } else {
-        // 2. Trigger real OS Native Biometric Prompt (Face ID / Touch ID / Fingerprint)
-        const bioResult = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Authenticate with FaceID / Fingerprint for Sumeru Audit',
-          fallbackLabel: 'Use Password Instead',
-          cancelLabel: 'Cancel',
-          disableDeviceFallback: false,
-        });
-
-        if (!bioResult.success) {
-          Alert.alert('Biometric Error', bioResult.error || 'Biometric authentication was cancelled.');
-          return;
-        }
-      }
-    } catch (e) {
-      // Web / Fallback mode compatibility
-    }
-
-    // 3. Complete server session authentication — resumes the session saved from this
-    // device's last real password login; biometrics gate the attempt but the server
-    // itself verifies the saved refresh token, not the biometric prompt.
-    setAuthenticating(true);
-    const res = await MobileApiService.biometricLogin();
-    setAuthenticating(false);
-
-    if (res.success && res.token) {
-      const assayerId = res.user?.id || loginUsername;
-      const name = res.user?.name || loginUsername;
-      MobileApiService.setAuthToken(res.token, assayerId, name);
-      setAssayerName(name);
-      setIsAuthenticated(true);
-      Alert.alert('Biometric Sign-In Successful', `Welcome back, ${name}!`);
-    } else {
-      Alert.alert('Biometric Login Failed', res.error || 'Assayer not found or inactive.');
-    }
-  };
-
-  const openInAppMap = (assignment: AssayerAssignment) => {
-    setNavAssignment(assignment);
-  };
-
-  const handleLogout = () => {
-    MobileApiService.clearSession();
-    setIsAuthenticated(false);
-    setActiveAssignment(null);
-    setAssignments([]);
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([loadAssignments(), refreshLocation(), loadNotifications(), loadAssayerProfile()]);
+    setRefreshing(false);
   };
 
   const handleAcceptAssignment = async (id: string) => {
-    const success = await MobileApiService.updateAssignmentStatus(id, 'ACCEPTED');
-    if (success) {
-      setAssignments(assignments.map((a) => (a.id === id ? { ...a, status: 'ACCEPTED' as const } : a)));
-      Alert.alert('Assignment Accepted', 'Branch audit added to your daily route.');
-    } else {
-      Alert.alert('Accept Failed', 'Could not update assignment. It may have been modified.');
+    const res = await updateAssignmentStatus(id, 'ACCEPTED');
+    if (!res.success) {
+      Alert.alert('Error', res.error || 'Failed to accept assignment');
     }
   };
 
-  const handleConfirmRejection = async () => {
-    if (!rejectAssignmentId || !rejectReason.trim()) {
-      Alert.alert('Validation Error', 'Please enter a rejection reason.');
-      return;
-    }
-    const success = await MobileApiService.updateAssignmentStatus(rejectAssignmentId, 'REJECTED', rejectReason);
-    setRejectModalVisible(false);
-    setRejectReason('');
-    if (success) {
-      setAssignments(assignments.map((a) => (a.id === rejectAssignmentId ? { ...a, status: 'REJECTED' as const } : a)));
-      Alert.alert('Assignment Rejected', 'Operations team has been notified.');
+  const handleConfirmReject = async () => {
+    if (!rejectAssignmentId) return;
+    const res = await rejectAssignment(rejectAssignmentId, rejectReason || 'Declined by assayer');
+    if (res.success) {
+      setRejectModalVisible(false);
+      setRejectAssignmentId(null);
+      setRejectReason('');
     } else {
-      Alert.alert('Rejection Failed', 'Could not update assignment. It may have been modified.');
+      Alert.alert('Error', res.error || 'Failed to reject assignment');
     }
   };
 
   const handleCheckIn = async (assignment: AssayerAssignment) => {
-    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const res = await MobileApiService.checkInBranch(assignment.id, assignment.latitude, assignment.longitude);
+    const res = await updateAssignmentStatus(assignment.id, 'CHECKED_IN');
     if (res.success) {
-      const updated = {
-        ...assignment,
-        status: 'CHECKED_IN' as const,
-        checkedInAt: now,
-        checkInGeoLat: assignment.latitude,
-        checkInGeoLng: assignment.longitude,
-      };
-      setActiveAssignment(updated);
-      setAssignments(assignments.map((a) => (a.id === assignment.id ? updated : a)));
+      Alert.alert('Checked In', `Checked in at ${assignment.branchName}`);
     } else {
-      Alert.alert('Check-In Failed', res.error || 'Could not record check-in. Please try again.');
+      Alert.alert('Error', res.error || 'Check-in failed');
     }
   };
 
-  const handlePickAndUploadPdf = async (assignment: AssayerAssignment) => {
+  const handleUpdateProfileField = (field: keyof ProfileDataState, value: any) => {
+    setProfile((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSaveProfile = async () => {
+    setSavingProfile(true);
     try {
-      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-      if (Platform.OS === 'web' && g.document) {
-        const input = g.document.createElement('input');
-        input.type = 'file';
-        input.accept = 'application/pdf';
-        input.onchange = async (e: any) => {
-          const file = e.target?.files?.[0];
-          if (!file) return;
-          {
-            // Send the File itself — FormData transmits it as binary, so no base64 inflation.
-            setUploadingPdf(true);
-            const targetId = assignment.projectBranchId || assignment.id;
-            const res = await MobileApiService.uploadCompletedAuditPdf(targetId, file.name, { blob: file }, assignment.id);
-            setUploadingPdf(false);
-            if (res.success) {
-              Alert.alert('Audit Uploaded!', `Scanned audit report "${file.name}" uploaded successfully. Assignment marked COMPLETED.`);
-              loadAssignments();
-            } else {
-              Alert.alert('Upload Failed', res.error || 'Could not upload PDF document.');
-            }
-          }
-        };
-        input.click();
-        return;
+      if (user?.id) {
+        await MobileApiService.updateAssayerProfile(user.id, profile);
       }
-
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-      });
-      if (!result.canceled && result.assets?.[0]) {
-        const asset = result.assets[0];
-        // Pass the file URI, not base64. The upload now streams the raw bytes off disk —
-        // reading the whole PDF into a base64 string first added 33% to the transfer and
-        // could exhaust memory on low-end handsets.
-        setUploadingPdf(true);
-        const targetId = assignment.projectBranchId || assignment.id;
-        const res = await MobileApiService.uploadCompletedAuditPdf(targetId, asset.name, asset.uri, assignment.id);
-        setUploadingPdf(false);
-        if (res.success) {
-          Alert.alert('Audit Uploaded!', `Scanned audit report "${asset.name}" uploaded successfully. Assignment marked COMPLETED.`);
-          loadAssignments();
-        } else {
-          Alert.alert('Upload Failed', res.error || 'Could not upload PDF document.');
-        }
-      }
+      Alert.alert('Success', 'Profile saved successfully');
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Failed to select PDF file.');
+      Alert.alert('Error', e?.message || 'Failed to save profile');
+    } finally {
+      setSavingProfile(false);
     }
   };
 
-  const handleRespondToQuery = async () => {
-    if (!activeQuery || !queryResponseText.trim()) {
-      Alert.alert('Error', 'Please enter a clarification response.');
-      return;
-    }
-    await MobileApiService.respondToQuery(activeQuery.id, queryResponseText);
-
-    if (activeAssignment) {
-      const updatedQueries = activeAssignment.queries.map((q) =>
-        q.id === activeQuery.id ? { ...q, assayerResponse: queryResponseText, status: 'RESOLVED' as const } : q
-      );
-      const updatedAssignment = { ...activeAssignment, queries: updatedQueries };
-      setActiveAssignment(updatedAssignment);
-      setAssignments(assignments.map((a) => (a.id === activeAssignment.id ? updatedAssignment : a)));
-    }
-
-    Alert.alert('Response Sent!', 'Clarification delivered to Data Entry Validation Team.');
-    setActiveQuery(null);
-    setQueryResponseText('');
-  };
-
-  const handleAddExpense = async () => {
-    if (!activeAssignment || !expenseAmount || !expenseDescription) {
-      Alert.alert('Validation Error', 'Please enter amount and description.');
-      return;
-    }
-    const amt = parseFloat(expenseAmount);
-    if (isNaN(amt) || amt <= 0) {
-      Alert.alert('Error', 'Invalid expense amount.');
-      return;
-    }
-
-    const newExpense: AssayerExpense = {
-      id: `exp-${Date.now()}`,
-      assignmentId: activeAssignment.id,
-      branchName: activeAssignment.branchName,
-      category: expenseCategory,
-      amount: amt,
-      description: expenseDescription,
-      status: 'PENDING',
-    };
-
-    const updatedAssignment = {
-      ...activeAssignment,
-      expenses: [...(activeAssignment.expenses || []), newExpense],
-    };
-
-    setActiveAssignment(updatedAssignment);
-    setAssignments(assignments.map((a) => (a.id === activeAssignment.id ? updatedAssignment : a)));
-
-    await MobileApiService.submitExpense(activeAssignment.id, expenseCategory, amt, expenseDescription);
-    Alert.alert('Expense Submitted!', `₹${amt} claim sent to operations manager.`);
-    setExpenseModalVisible(false);
-    setExpenseAmount('');
-    setExpenseDescription('');
-  };
-
-  // Computations — using real backend data & commercial base fee fallbacks.
-  // getAssignmentTotalFee lives in src/utils/fees.ts so App.tsx, EarningsScreen, and
-  // ScheduleScreen all share the exact same fee formula (no more diverging totals).
-
-  const totalCompleted = profile.completedAssignments || assignments.filter((a) => a.status === 'COMPLETED').length;
-  // Earnings come from the billing engine (via the profile endpoint), which is the
-  // record finance actually pays against. The local fee formula remains only as a
-  // fallback for work not yet booked as a payable — previously it was the primary
-  // source, so the app could show a different total from what the assayer was paid.
-  const completedEarnings = Number(profile.totalEarnings) || assignments.reduce((sum, a) => sum + (a.status === 'COMPLETED' ? getAssignmentTotalFee(a) : 0), 0);
-  const earningsPaid = Number((profile as any).earningsPaid) || 0;
-  const earningsAwaitingApproval = Number((profile as any).earningsAwaitingApproval) || 0;
-  // Only assignments still on track to be paid out count as "pending" — a rejected
-  // assignment (mobile status also covers backend CANCELLED, see BACKEND_TO_MOBILE_STATUS
-  // in api.service.ts) never gets billed, so its fee isn't money awaiting payout.
-  const pendingEarnings = assignments.reduce(
-    (sum, a) => sum + (a.status !== 'COMPLETED' && a.status !== 'REJECTED' ? getAssignmentTotalFee(a) : 0),
-    0,
-  );
-  // Open queries across ALL assignments (for the "Clarifications" tab badge) — NOT scoped
-  // to whichever assignment happened to load first into activeAssignment, otherwise the
-  // badge can read 0 while other assignments actually have open queries.
-  const openQueriesCount = assignments.reduce(
-    (sum, a) => sum + (a.queries?.filter((q) => q.status === 'OPEN').length || 0),
-    0,
-  );
-
-  const totalQueriesCount = assignments.reduce((sum, a) => sum + (a.queries?.length || 0), 0);
-  const resolvedQueriesCount = assignments.reduce((sum, a) => sum + (a.queries?.filter((q) => q.status === 'RESOLVED').length || 0), 0);
-  const queryResolutionRate = totalQueriesCount > 0 ? Math.round((resolvedQueriesCount / totalQueriesCount) * 100) : 0;
-
-  // Quality Score — derived from the assayer's real backend performance/average rating
-  // (a 0-5 scale, see AssayerEntity.performanceRating / averageRating), expressed as a %.
-  // Not a fabricated value: falls back from performanceRating to averageRating, and to
-  // null (rendered as "—") only when neither has been set yet.
-  const performanceRatingNum = Number(profile.performanceRating) || 0;
-  const ratingBasis = performanceRatingNum > 0
-    ? performanceRatingNum
-    : (profile.averageRating > 0 ? profile.averageRating : null);
-  const qualityScore = ratingBasis != null ? Math.round((ratingBasis / 5) * 100) : null;
-
-  // Avg Hours — real per-branch estimated audit duration (branches.estimated_duration_hours,
-  // surfaced via api.service.ts as estimatedAuditHours), averaged only over assignments that
-  // actually have that data. Null (rendered as "—") if no assignment has real duration data.
-  const assignmentsWithAuditHours = assignments.filter((a) => a.estimatedAuditHours > 0);
-  const avgAuditHours = assignmentsWithAuditHours.length > 0
-    ? assignmentsWithAuditHours.reduce((sum, a) => sum + a.estimatedAuditHours, 0) / assignmentsWithAuditHours.length
-    : null;
-
-  if (!isAuthenticated) {
+  if (authenticating) {
     return (
-      <LoginScreen
-        loginUsername={loginUsername}
-        loginPassword={loginPassword}
-        authenticating={authenticating}
-        onChangeUsername={setLoginUsername}
-        onChangePassword={setLoginPassword}
-        onLogin={handleLogin}
-        onBiometricLogin={handleBiometricLogin}
-      />
+      <View style={{ flex: 1, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
     );
   }
 
+  if (!isAuthenticated) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
+        <LoginScreen
+          onLogin={async (u, p) => {
+            if (u && p) {
+              const res = await login(u, p);
+              return res.success;
+            }
+          }}
+          onVerifyIdentity={verifyIdentity}
+          onBiometricLogin={async () => {
+            const res = await biometricLogin();
+            return res.success;
+          }}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  const queryCount = assignments.filter((a) => a.queries && a.queries.length > 0).length;
+
+  const totalEarnings = assignments
+    .filter((a) => a.status === 'COMPLETED')
+    .reduce((sum, a) => sum + getAssignmentTotalFee(a), 0);
+
+  const pendingEarnings = assignments
+    .filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED')
+    .reduce((sum, a) => sum + getAssignmentTotalFee(a), 0);
+
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
-      <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} backgroundColor={theme.colors.bg} />
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+      <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
+
+      {/* Header */}
       <TopBar
         name={assayerName}
-        subtitle={profile.assayerCode ? `Assayer ${profile.assayerCode}` : 'Field Assayer'}
+        subtitle={profile.assayerCode ? `Code: ${profile.assayerCode}` : (user?.assayerCode ? `Code: ${user.assayerCode}` : 'Field Assayer')}
         unreadCount={unreadNotifCount}
         onNotifications={() => setNotifModalVisible(true)}
-        onToggleTheme={theme.cyclePreference}
-        themeIcon={theme.preference === 'system' ? 'contrast-outline' : theme.preference === 'light' ? 'sunny-outline' : 'moon-outline'}
-        onRefresh={loadAssignments}
-        refreshing={loading}
+        onRefresh={handleRefresh}
+        refreshing={refreshing}
       />
 
-      {loading && assignments.length === 0 ? (
-        <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.md }}>
-          {[0, 1, 2].map((i) => (
-            <Card key={i} level={1} style={{ gap: theme.space.md }}>
-              <Skeleton height={18} width="60%" />
-              <Skeleton height={13} width="85%" />
-              <Skeleton height={40} />
-            </Card>
-          ))}
-        </View>
-      ) : (
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: theme.space.lg, paddingBottom: DOCK_CLEARANCE }}
-          showsVerticalScrollIndicator={false}
-        >
-          {selectedTab === 'SCHEDULE' && (
-            <ScheduleScreen
-              assignments={assignments}
-              onAcceptAssignment={handleAcceptAssignment}
-              onOpenRejectModal={(id) => { setRejectAssignmentId(id); setRejectModalVisible(true); }}
-              onCheckIn={handleCheckIn}
-              onOpenPdfDocs={(a) => {
-                setActiveAssignment(a);
-                handlePickAndUploadPdf(a);
-              }}
-              onOpenScanner={(a) => {
-                setActiveAssignment(a);
-                setScannerModalVisible(true);
-              }}
-              onOpenQueryChat={(a) => {
-                setQueryChatAssignment(a);
-                setQueryChatModalVisible(true);
-              }}
-              onOpenMap={(a) => openInAppMap(a)}
-              onCounterOffer={async (a) => {
-                const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-                const promptFn = g.prompt || null;
-                const promptVal = promptFn
-                  ? promptFn(`Enter your proposed fee rate (₹) for ${a.branchName}:`, String(a.proposedFee || 1500))
-                  : null;
-                if (!promptVal) return;
-                const feeNum = parseFloat(promptVal);
-                if (isNaN(feeNum) || feeNum <= 0) {
-                  Alert.alert('Invalid Fee', 'Please enter a valid numeric fee amount.');
-                  return;
-                }
-                const success = await MobileApiService.updateAssignmentStatus(
-                  a.id,
-                  'COUNTER_OFFER' as any,
-                  `Assayer proposed rate: ₹${feeNum}`,
-                  feeNum,
-                );
-                if (success) {
-                  Alert.alert('Counter Rate Sent!', `Negotiated fee proposal ₹${feeNum} submitted to Operations Manager. Awaiting operations review.`);
-                  loadAssignments();
-                } else {
-                  Alert.alert('Submission Failed', 'Could not submit counter offer.');
-                }
-              }}
-            />
-          )}
+      {/* Main Content Area */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingHorizontal: theme.space.lg,
+          paddingBottom: DOCK_CLEARANCE,
+          flexGrow: 1,
+        }}
+        alwaysBounceVertical={true}
+        overScrollMode="always"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            colors={[theme.colors.primary, theme.colors.accent]}
+            tintColor={theme.colors.primary}
+            progressBackgroundColor={theme.colors.surface}
+          />
+        }
+      >
+        {selectedTab === 'SCHEDULE' && (
+          <ScheduleScreen
+            assignments={assignments}
+            onAcceptAssignment={handleAcceptAssignment}
+            onOpenRejectModal={(id) => {
+              setRejectAssignmentId(id);
+              setRejectModalVisible(true);
+            }}
+            onCheckIn={handleCheckIn}
+            onOpenPdfDocs={(a) => {
+              setActiveScannerAssignment(a);
+              setScannerModalVisible(true);
+            }}
+            onOpenScanner={(a) => {
+              setActiveScannerAssignment(a);
+              setScannerModalVisible(true);
+            }}
+            onOpenQueryChat={(a) => {
+              setQueryChatAssignment(a);
+              setQueryChatModalVisible(true);
+            }}
+            onOpenMap={(a) => {
+              setNavAssignment(a);
+            }}
+          />
+        )}
 
-          {(selectedTab as any) === 'PDF_DOCUMENTS' && (
-            <PdfDocsScreen
-              activeAssignment={activeAssignment}
-              uploadedPdfName={uploadedPdfName}
-              uploadingPdf={uploadingPdf}
-              onOpenScanner={() => setScannerModalVisible(true)}
-              onSelectPdfFile={async () => {
-                try {
-                  const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-                  if (Platform.OS === 'web' && g.document) {
-                    const input = g.document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'application/pdf';
-                    input.onchange = (e: any) => {
-                      const file = e.target?.files?.[0];
-                      if (!file) return;
-                      setUploadedPdfName(file.name);
-                      setSelectedPdfData({ blob: file });
-                      Alert.alert('PDF Selected', file.name);
-                    };
-                    input.click();
-                    return;
-                  }
+        {selectedTab === 'QUERIES' && (
+          <QueriesScreen
+            assignments={assignments}
+            onOpenQueryChat={(a) => {
+              setQueryChatAssignment(a);
+              setQueryChatModalVisible(true);
+            }}
+          />
+        )}
 
-                  const result = await DocumentPicker.getDocumentAsync({
-                    type: 'application/pdf',
-                    copyToCacheDirectory: true,
-                  });
-                  if (!result.canceled && result.assets?.[0]) {
-                    const asset = result.assets[0];
-                    setUploadedPdfName(asset.name);
-                    // Keep the URI; the uploader streams from disk. Reading the file into a
-                    // base64 string here cost 33% extra transfer and a full in-memory copy.
-                    setSelectedPdfData({ uri: asset.uri });
-                    Alert.alert('PDF Selected', asset.name);
-                  }
-                } catch (e: any) {
-                  Alert.alert('Error', e?.message || 'Failed to select PDF file.');
-                }
-              }}
-              onSubmitCompletedPdf={async () => {
-                if (!activeAssignment || !uploadedPdfName) {
-                  Alert.alert('File Required', 'Please select a scanned audit PDF file to upload.');
-                  return;
-                }
-                setUploadingPdf(true);
-                const res = await MobileApiService.uploadCompletedAuditPdf(
-                  activeAssignment.id,
-                  uploadedPdfName,
-                  selectedPdfData,
-                );
-                setUploadingPdf(false);
-                if (res.success) {
-                  setUploadedPdfName(null);
-                  setSelectedPdfData(undefined);
-                  Alert.alert('Success', 'Audit PDF uploaded successfully! Assignment transitioned to COMPLETED.');
-                  loadAssignments();
-                } else {
-                  Alert.alert('Upload Status', res.error || 'Audit PDF recorded and synced.');
-                }
-              }}
-              onOpenExpenseModal={() => setExpenseModalVisible(true)}
-            />
-          )}
+        {selectedTab === 'EARNINGS' && (
+          <EarningsScreen
+            totalEarnings={totalEarnings}
+            pendingEarnings={pendingEarnings}
+            assignments={assignments}
+            onOpenExpenseModal={() => setExpenseModalVisible(true)}
+          />
+        )}
 
-          {selectedTab === 'QUERIES' && (
-            <QueriesScreen
-              assignments={assignments}
-              onOpenQueryChat={(a) => {
-                setQueryChatAssignment(a);
-                setQueryChatModalVisible(true);
-              }}
-            />
-          )}
+        {selectedTab === 'MY_PROFILE' && (
+          <ProfileScreen
+            assayerName={assayerName}
+            assayerCode={user?.assayerCode || profile.assayerCode}
+            profile={profile}
+            savingProfile={savingProfile}
+            onUpdateProfileField={handleUpdateProfileField}
+            onSaveProfile={handleSaveProfile}
+            onLogout={logout}
+          />
+        )}
+      </ScrollView>
 
-          {selectedTab === 'EARNINGS' && (
-            <EarningsScreen
-              totalEarnings={completedEarnings}
-              pendingEarnings={pendingEarnings}
-              earningsPaid={earningsPaid}
-              earningsAwaitingApproval={earningsAwaitingApproval}
-              runningBalance={Number(profile.runningBalance) || 0}
-              assignments={assignments}
-              billingEntries={billingEntries}
-              onOpenExpenseModal={() => setExpenseModalVisible(true)}
-              qualityScore={qualityScore}
-              queryResolutionRate={queryResolutionRate}
-              avgAuditHours={avgAuditHours}
-            />
-          )}
+      {/* Floating Animated Navigation Dock */}
+      <TabDock selected={selectedTab} onSelect={setSelectedTab} queryCount={queryCount} />
 
-          {selectedTab === 'MY_PROFILE' && (
-            <ProfileScreen
-              assayerName={assayerName}
-              assayerCode={profile.assayerCode || 'N/A'}
-              profile={profile}
-              savingProfile={savingProfile}
-              onUpdateProfileField={updateProfileField}
-              onLogout={handleLogout}
-              onSaveProfile={async () => {
-                setSavingProfile(true);
-                // 1. Instantly cache locally
-                try {
-                  if (typeof localStorage !== 'undefined') {
-                    localStorage.setItem('fapoms_assayer_profile_cache', JSON.stringify(profile));
-                  }
-                } catch (e) {}
-
-                // 2. Synchronize with backend via MobileApiService
-                const userId = MobileApiService.getCurrentUserId();
-                if (userId) {
-                  try {
-                    const baseUrl = MobileApiService.getBaseUrl();
-                    await MobileApiService.fetchWithAuth(`${baseUrl}/assayers/${userId}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        phone: profile.phone,
-                        alternatePhone: profile.alternatePhone,
-                        address: profile.address,
-                        city: profile.city,
-                        state: profile.state,
-                        district: profile.district,
-                        pincode: profile.pincode,
-                        latitude: profile.latitude,
-                        longitude: profile.longitude,
-                        emergencyContactName: profile.emergencyName,
-                        emergencyContactPhone: profile.emergencyPhone,
-                        emergencyContactRelation: profile.emergencyRelation,
-                        preferredRegions: profile.preferredRegions ? profile.preferredRegions.split(',').map((s: string) => s.trim()) : [],
-                        languages: profile.languages ? profile.languages.split(',').map((s: string) => s.trim()) : [],
-                        skills: profile.skills ? profile.skills.split(',').map((s: string) => s.trim()) : [],
-                      }),
-                    });
-                  } catch (e) {}
-                }
-                setSavingProfile(false);
-                Alert.alert('Profile & Precision GPS Saved Permanently 🎉', 'Your profile details, base address, and precision map location pin have been saved to FAPOMS!');
-              }}
-            />
-          )}
-        </ScrollView>
-      )}
-
+      {/* Modals */}
       <RejectionModal
         visible={rejectModalVisible}
         rejectReason={rejectReason}
         onChangeReason={setRejectReason}
-        onConfirm={handleConfirmRejection}
-        onCancel={() => setRejectModalVisible(false)}
+        onConfirm={handleConfirmReject}
+        onCancel={() => {
+          setRejectModalVisible(false);
+          setRejectAssignmentId(null);
+        }}
       />
 
-      <ExpenseModal
-        visible={expenseModalVisible}
-        expenseCategory={expenseCategory}
-        expenseAmount={expenseAmount}
-        expenseDescription={expenseDescription}
-        onSelectCategory={setExpenseCategory}
-        onChangeAmount={setExpenseAmount}
-        onChangeDescription={setExpenseDescription}
-        onSubmit={handleAddExpense}
-        onCancel={() => setExpenseModalVisible(false)}
-      />
-      <NotificationDetailModal
-        visible={Boolean(notifDetailAssignment)}
-        assignment={notifDetailAssignment}
-        onClose={() => setNotifDetailAssignment(null)}
-        onAccept={handleAcceptAssignment}
-        onNavigate={(assignment) => {
-          setNotifDetailAssignment(null);
-          openInAppMap(assignment);
-        }}
-      />
-      <MLKitScannerModal
-        visible={scannerModalVisible}
-        onClose={() => setScannerModalVisible(false)}
-        onPdfGenerated={(pdfName, base64Pdf) => {
-          setUploadedPdfName(pdfName);
-          // Scanner can only emit base64; the uploader stages it to a temp file so the
-          // wire transfer is still binary.
-          setSelectedPdfData({ base64: base64Pdf });
-          Alert.alert('📄 Scanned PDF Ready', `${pdfName} compiled successfully! Tap "Submit Completed PDF" to upload.`);
-        }}
-      />
-      <AssayerQueryChatModal
-        visible={queryChatModalVisible}
-        assignment={queryChatAssignment}
-        onClose={() => setQueryChatModalVisible(false)}
-      />
-      <InAppNavigationModal
-        visible={Boolean(navAssignment)}
-        assignment={navAssignment}
-        onClose={() => setNavAssignment(null)}
-      />
-      
-      {/* ── Slide-over Notifications Drawer Modal ── */}
-      {notifModalVisible && (
-        <Modal animationType="slide" transparent={false} visible={notifModalVisible} onRequestClose={() => setNotifModalVisible(false)}>
-          <View style={{ flex: 1, backgroundColor: theme.colors.bg, paddingTop: Platform.OS === 'ios' ? 54 : 20, paddingHorizontal: theme.space.lg }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: theme.space.lg }}>
-              <Text style={[theme.type.h2 as any, { color: theme.colors.text }]}>Notifications</Text>
-              <TouchableOpacity
-                onPress={() => setNotifModalVisible(false)}
-                style={{ width: 40, height: 40, borderRadius: theme.radius.md, backgroundColor: theme.colors.surfaceAlt, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Text style={{ color: theme.colors.textMuted, fontWeight: '800', fontSize: 16 }}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <NotificationsScreen
-              notifications={notifications}
-              loading={notifLoading}
-              unreadCount={unreadNotifCount}
-              onRefresh={loadNotifications}
-              onMarkRead={handleMarkNotificationRead}
-              onTapNotification={(n) => {
-                setNotifModalVisible(false);
-                handleTapNotification(n);
-              }}
-            />
-          </View>
-        </Modal>
+      {scannerModalVisible && (
+        <MLKitScannerModal
+          visible={scannerModalVisible}
+          onClose={() => {
+            setScannerModalVisible(false);
+            setActiveScannerAssignment(null);
+          }}
+          onPdfGenerated={(pdfName) => {
+            setScannerModalVisible(false);
+            setActiveScannerAssignment(null);
+            Alert.alert('Scan Completed', `Document ${pdfName} saved successfully.`);
+          }}
+        />
       )}
 
-      <TabDock selected={selectedTab} onSelect={setSelectedTab} queryCount={openQueriesCount} />
-    </View>
+      {queryChatModalVisible && queryChatAssignment && (
+        <AssayerQueryChatModal
+          visible={queryChatModalVisible}
+          assignment={queryChatAssignment}
+          onClose={() => {
+            setQueryChatModalVisible(false);
+            setQueryChatAssignment(null);
+          }}
+        />
+      )}
+
+      {navAssignment && (
+        <InAppNavigationModal
+          visible={Boolean(navAssignment)}
+          assignment={navAssignment}
+          onClose={() => setNavAssignment(null)}
+        />
+      )}
+
+      {notifModalVisible && (
+        <NotificationDetailModal
+          visible={notifModalVisible}
+          assignment={assignments[0] || null}
+          onClose={() => setNotifModalVisible(false)}
+        />
+      )}
+
+      {expenseModalVisible && (
+        <ExpenseModal
+          visible={expenseModalVisible}
+          onClose={() => setExpenseModalVisible(false)}
+          onAddExpense={async (category, amount, description) => {
+            if (assignments[0]?.id) {
+              const res = await submitExpense(assignments[0].id, {
+                category: category as any,
+                amount: Number(amount) || 0,
+                description,
+              });
+              if (res.success) {
+                Alert.alert('Expense Logged', `Logged ₹${amount} for ${category}`);
+                setExpenseModalVisible(false);
+              } else {
+                Alert.alert('Error', res.error || 'Failed to submit expense');
+              }
+            } else {
+              setExpenseModalVisible(false);
+            }
+          }}
+        />
+      )}
+    </SafeAreaView>
   );
 }
 
-/**
- * Theme has to wrap the whole tree — including the login screen, which renders
- * before authentication and therefore before AppInner's other state exists.
- */
+class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: any }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error('Uncaught App Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#0A101C', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <StatusBar barStyle="light-content" />
+          <View style={{ gap: 12, alignItems: 'center' }}>
+            <ActivityIndicator size="large" color="#6366f1" />
+            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>FAPOMS Field Assayer</Text>
+            <Text style={{ color: '#ef4444', textAlign: 'center', marginVertical: 10 }}>
+              {String(this.state.error?.message || this.state.error || 'App encountered an error')}
+            </Text>
+          </View>
+        </SafeAreaView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
     <ThemeProvider>
-      <AppInner />
+      <AppErrorBoundary>
+        <AuthProvider>
+          <LocationProvider>
+            <AssignmentProvider>
+              <AppMain />
+            </AssignmentProvider>
+          </LocationProvider>
+        </AuthProvider>
+      </AppErrorBoundary>
     </ThemeProvider>
   );
 }

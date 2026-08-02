@@ -56,7 +56,7 @@ const money = (n?: number | null) => (n == null ? '—' : `₹${Number(n).toLoca
 
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted,#7c8595)',
+  letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
 export const AssayerDetailDrawer: React.FC<{
@@ -142,7 +142,7 @@ export const AssayerDetailDrawer: React.FC<{
     setBusy(false);
   };
 
-  const tone = a ? STATUS_COLORS[a.lifecycleStatus] ?? '#6b7280' : '#6b7280';
+  const tone = a ? STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)' : 'var(--text-muted)';
 
   return (
     <>
@@ -152,7 +152,7 @@ export const AssayerDetailDrawer: React.FC<{
         aria-label="Assayer detail"
         style={{
           position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(560px, 100vw)', zIndex: 61,
-          background: 'var(--bg-card,#12151c)', borderLeft: '1px solid var(--border-color,#232833)',
+          background: 'var(--bg-card)', borderLeft: '1px solid var(--border-color)',
           display: 'flex', flexDirection: 'column', boxShadow: '-16px 0 40px rgba(0,0,0,0.4)',
         }}
       >
@@ -160,17 +160,17 @@ export const AssayerDetailDrawer: React.FC<{
           <div style={{ padding: '28px' }}>{err ?? 'Loading…'}</div>
         ) : (
           <>
-            <header style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-color,#232833)' }}>
+            <header style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
                 <div style={{ minWidth: 0 }}>
                   <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>{a.displayName}</h2>
-                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '5px', fontSize: '11.5px', color: 'var(--text-muted,#7c8595)' }}>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '5px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
                     <span style={{ fontFamily: 'monospace' }}>{a.assayerCode}</span>
                     <span style={{ color: tone, fontWeight: 700 }}>{(a.lifecycleStatus ?? '').replace(/_/g, ' ')}</span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
                   </div>
                 </div>
-                <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted,#7c8595)', cursor: 'pointer', height: 'fit-content' }}>
+                <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', height: 'fit-content' }}>
                   <X size={18} />
                 </button>
               </div>
@@ -197,7 +197,7 @@ export const AssayerDetailDrawer: React.FC<{
               </div>
             </header>
 
-            <nav style={{ display: 'flex', gap: '2px', padding: '0 12px', borderBottom: '1px solid var(--border-color,#232833)' }}>
+            <nav style={{ display: 'flex', gap: '2px', padding: '0 12px', borderBottom: '1px solid var(--border-color)' }}>
               {TABS.map((t) => {
                 const Icon = t.icon;
                 const on = tab === t.key;
@@ -206,8 +206,8 @@ export const AssayerDetailDrawer: React.FC<{
                     style={{
                       display: 'flex', alignItems: 'center', gap: '5px', padding: '9px 11px',
                       fontSize: '12px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
-                      color: on ? '#818cf8' : 'var(--text-muted,#7c8595)',
-                      borderBottom: `2px solid ${on ? '#818cf8' : 'transparent'}`,
+                      color: on ? 'var(--accent)' : 'var(--text-muted)',
+                      borderBottom: `2px solid ${on ? 'var(--accent)' : 'transparent'}`,
                     }}>
                     <Icon size={12} /> {t.label}
                   </button>
@@ -217,7 +217,7 @@ export const AssayerDetailDrawer: React.FC<{
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
               {err && (
-                <div style={{ padding: '9px 12px', borderRadius: '7px', background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: '12px', marginBottom: '12px' }}>
+                <div style={{ padding: '9px 12px', borderRadius: '7px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12px', marginBottom: '12px' }}>
                   {err}
                 </div>
               )}
@@ -225,11 +225,11 @@ export const AssayerDetailDrawer: React.FC<{
               {tab === 'summary' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {missing.length > 0 && (
-                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'rgba(251,146,60,0.09)', border: '1px solid rgba(251,146,60,0.25)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#fb923c', fontWeight: 700, fontSize: '12.5px' }}>
+                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--warning)', fontWeight: 700, fontSize: '12.5px' }}>
                         <AlertTriangle size={14} /> {missing.length} required field(s) missing
                       </div>
-                      <ul style={{ margin: '7px 0 0', paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary,#9aa4b5)' }}>
+                      <ul style={{ margin: '7px 0 0', paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                         {missing.map((f) => <li key={String(f.key)}>{f.label} — blocks {f.why.toLowerCase()}</li>)}
                       </ul>
                       {canManage && (
@@ -240,7 +240,7 @@ export const AssayerDetailDrawer: React.FC<{
                     </div>
                   )}
                   {missing.length === 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#34d399', fontSize: '12.5px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--success)', fontSize: '12.5px' }}>
                       <CheckCircle2 size={14} /> Record complete — payroll and duty-of-care fields are all present.
                     </div>
                   )}
@@ -252,12 +252,12 @@ export const AssayerDetailDrawer: React.FC<{
                       </div>
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <select value={target} onChange={(e) => setTarget(e.target.value)}
-                          style={{ padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }}>
+                          style={{ padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
                           <option value="">Choose…</option>
                           {transitions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
                         </select>
                         <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)"
-                          style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }} />
+                          style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }} />
                         <button onClick={move} disabled={!target || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 13px' }}>
                           {busy ? 'Moving…' : 'Move'}
                         </button>
@@ -282,14 +282,14 @@ export const AssayerDetailDrawer: React.FC<{
                   rows={loaded.commercial}
                   empty="No pay structure recorded — this assayer cannot be billed or paid until one exists."
                   render={(c: any) => (
-                    <div key={c.id} style={{ padding: '11px 0', borderBottom: '1px solid rgba(148,163,184,0.08)' }}>
+                    <div key={c.id} style={{ padding: '11px 0', borderBottom: '1px solid var(--border-hair)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px' }}>
                         <strong>{money(c.baseFee)} base</strong>
-                        <span style={{ color: 'var(--text-muted,#7c8595)', fontSize: '11.5px' }}>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
                           {fmtDate(c.startDate)} → {c.endDate ? fmtDate(c.endDate) : 'open'}
                         </span>
                       </div>
-                      <div style={{ fontSize: '11.5px', color: 'var(--text-muted,#7c8595)', marginTop: '3px' }}>
+                      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
                         {money(c.hourlyRate)}/hr · {money(c.dailyRate)}/day · travel {money(c.travelReimbursement)}
                       </div>
                     </div>
@@ -302,9 +302,9 @@ export const AssayerDetailDrawer: React.FC<{
                   rows={loaded.skills}
                   empty="No skills, languages or certifications recorded — planning cannot match this person on competency."
                   render={(w: any) => (
-                    <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(148,163,184,0.08)', fontSize: '12.5px' }}>
+                    <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '12.5px' }}>
                       <span><strong>{w.name}</strong> <span style={{ ...label, marginLeft: '6px' }}>{w.type}</span></span>
-                      <span style={{ color: 'var(--text-muted,#7c8595)', fontSize: '11.5px' }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
                         {w.level ?? ''}{w.expiryDate ? ` · expires ${fmtDate(w.expiryDate)}` : ''}
                       </span>
                     </div>
@@ -319,7 +319,7 @@ export const AssayerDetailDrawer: React.FC<{
                       <input value={remark} onChange={(e) => setRemark(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') addRemark(); }}
                         placeholder="Add a remark…"
-                        style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-page,#0d1016)', color: 'inherit', border: '1px solid var(--border-color,#232833)' }} />
+                        style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }} />
                       <button onClick={addRemark} disabled={!remark.trim() || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 12px' }}>
                         <Send size={12} />
                       </button>
@@ -329,7 +329,7 @@ export const AssayerDetailDrawer: React.FC<{
                     rows={loaded.remarks}
                     empty="No remarks yet."
                     render={(r: any) => (
-                      <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid rgba(148,163,184,0.08)' }}>
+                      <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
                         <div style={{ fontSize: '12.5px' }}>{r.content}</div>
                         <div style={{ ...label, marginTop: '4px' }}>
                           {r.authorName ?? 'system'} · {fmtWhen(r.createdAt)}{r.category ? ` · ${r.category}` : ''}
@@ -345,7 +345,7 @@ export const AssayerDetailDrawer: React.FC<{
                   rows={loaded.history}
                   empty="No recorded activity."
                   render={(h: any) => (
-                    <div key={h.id} style={{ padding: '10px 0', borderBottom: '1px solid rgba(148,163,184,0.08)' }}>
+                    <div key={h.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
                       <div style={{ fontSize: '12.5px' }}>
                         {(h.eventType ?? '').replace(/_/g, ' ').toLowerCase()}
                         {(h.previousState || h.newState) && (
@@ -355,7 +355,7 @@ export const AssayerDetailDrawer: React.FC<{
                       <div style={{ ...label, marginTop: '4px' }}>
                         {h.performedByName ?? 'system'} · {fmtWhen(h.occurredAt)}
                       </div>
-                      {h.remarks && <div style={{ fontSize: '11.5px', color: 'var(--text-secondary,#9aa4b5)', marginTop: '3px' }}>{h.remarks}</div>}
+                      {h.remarks && <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '3px' }}>{h.remarks}</div>}
                     </div>
                   )}
                 />
@@ -374,7 +374,7 @@ const Facts: React.FC<{ rows: [string, any][] }> = ({ rows }) => (
       <div key={k}>
         <dt style={label}>{k}</dt>
         <dd style={{ margin: '2px 0 0', fontSize: '12.5px' }}>
-          {v === null || v === undefined || v === '' ? <span style={{ color: 'var(--text-muted,#7c8595)' }}>—</span> : String(v)}
+          {v === null || v === undefined || v === '' ? <span style={{ color: 'var(--text-muted)' }}>—</span> : String(v)}
         </dd>
       </div>
     ))}
@@ -385,8 +385,8 @@ const Facts: React.FC<{ rows: [string, any][] }> = ({ rows }) => (
 const List: React.FC<{ rows: any[] | undefined; empty: string; render: (r: any) => React.ReactNode }> = ({
   rows, empty, render,
 }) => {
-  if (rows === undefined) return <div style={{ color: 'var(--text-muted,#7c8595)', fontSize: '12.5px' }}>Loading…</div>;
-  if (rows.length === 0) return <div style={{ color: 'var(--text-muted,#7c8595)', fontSize: '12.5px', padding: '18px 0' }}>{empty}</div>;
+  if (rows === undefined) return <div style={{ color: 'var(--text-muted)', fontSize: '12.5px' }}>Loading…</div>;
+  if (rows.length === 0) return <div style={{ color: 'var(--text-muted)', fontSize: '12.5px', padding: '18px 0' }}>{empty}</div>;
   return <>{rows.map(render)}</>;
 };
 

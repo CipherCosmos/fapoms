@@ -15,9 +15,9 @@ export const AlertBanner: React.FC<{
 }> = ({ type, message, children, onClose, style }) => {
   if (!message && !children) return null;
   const isSuccess = type === 'success';
-  const color = isSuccess ? 'var(--accent-secondary)' : '#f87171';
-  const bg = isSuccess ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)';
-  const border = isSuccess ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)';
+  const color = isSuccess ? 'var(--success)' : 'var(--danger)';
+  const bg = isSuccess ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)';
+  const border = isSuccess ? 'rgba(63,125,83,0.25)' : 'rgba(177,68,68,0.25)';
   return (
     <div
       style={{

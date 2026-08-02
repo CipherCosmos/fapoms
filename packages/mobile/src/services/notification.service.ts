@@ -27,6 +27,18 @@ if (Notifications && Notifications.setNotificationHandler) {
   }
 }
 
+if (Platform.OS === 'android' && Notifications && Notifications.setNotificationChannelAsync) {
+  Notifications.setNotificationChannelAsync('default', {
+    name: 'FAPOMS Field Notifications',
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#38BDF8',
+    enableVibrate: true,
+    showBadge: true,
+    sound: 'default',
+  }).catch(() => {});
+}
+
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
   const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
   if (Platform.OS === 'web' && g.window && 'Notification' in g.window) {
@@ -121,5 +133,23 @@ export function setupNotificationListeners(
     };
   } catch (err) {
     return () => {};
+  }
+}
+
+export async function scheduleLocalNotification(title: string, body: string, data?: any) {
+  if (!Notifications || !Notifications.scheduleNotificationAsync) return;
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        data: data || {},
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+      },
+      trigger: null, // trigger immediately in system tray
+    });
+  } catch (e) {
+    console.error('Failed to schedule local notification', e);
   }
 }
