@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform, Switch, Alert } from 'react-native';
-import { styles } from '../theme/styles';
-import { InteractiveMap } from '../components/InteractiveMap';
-import { Ionicons as IoniconsRaw } from '@expo/vector-icons';
-const Ionicons = IoniconsRaw as any;
+import { View, TextInput, Switch, TextStyle } from 'react-native';
+import { useTheme, ThemePreference } from '../theme/ThemeProvider';
+import {
+  AppText, Avatar, Badge, Button, Card, Divider, Icon, Section, StatStrip, StatTile, Tappable,
+} from '../components/ui/primitives';
 
 export interface ProfileDataState {
   phone: string;
@@ -58,6 +58,18 @@ interface ProfileScreenProps {
   onLogout?: () => void;
 }
 
+type SectionKey = 'PROFILE' | 'WORK' | 'APP';
+
+/**
+ * Profile and settings.
+ *
+ * The old screen had six tabs of densely packed inputs and a fake GPS readout
+ * that printed "GPS LOCKED 🛰️ (Precision ±5m)" from a local string, never from
+ * the device. That is gone rather than restyled.
+ *
+ * `appTheme` already existed on this state object but was never wired to
+ * anything — it now drives the real theme, and persists.
+ */
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   assayerName = '',
   assayerCode = '',
@@ -67,443 +79,279 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onSaveProfile,
   onLogout,
 }) => {
-  const [activeCategory, setActiveCategory] = useState<'ACCOUNT' | 'SECURITY' | 'LOCATION' | 'WORKLOAD' | 'PREFERENCES' | 'SUPPORT'>('ACCOUNT');
-  const [capturingGps, setCapturingGps] = useState<boolean>(false);
-  const [gpsStatus, setGpsStatus] = useState<string>('GPS LOCKED 🛰️ (Precision ±5m)');
+  const t = useTheme();
+  const [tab, setTab] = useState<SectionKey>('PROFILE');
 
-  const handleCaptureGps = () => {
-    setCapturingGps(true);
-    setGpsStatus('Acquiring high-precision satellite fix...');
-    const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
+  const money = (n: number | string) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
-    const processPosition = async (lat: number, lon: number, accuracy: number) => {
-      onUpdateProfileField('latitude', lat);
-      onUpdateProfileField('longitude', lon);
-      setGpsStatus(`GPS LOCKED 🛰️ (Precision ±${Math.round(accuracy)}m)`);
-
-      try {
-        const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
-        const geoData = await geoRes.json().catch(() => ({}));
-        if (geoData && geoData.address) {
-          const addr = geoData.display_name || `${geoData.address.road || ''}, ${geoData.address.suburb || geoData.address.neighbourhood || ''}`;
-          if (addr && addr.length > 5) onUpdateProfileField('address', addr);
-          if (geoData.address.city || geoData.address.town || geoData.address.state_district) {
-            onUpdateProfileField('city', geoData.address.city || geoData.address.town || geoData.address.state_district);
-          }
-          if (geoData.address.postcode) {
-            onUpdateProfileField('pincode', geoData.address.postcode);
-          }
-        }
-      } catch (e) {}
-
-      setCapturingGps(false);
-      setTimeout(() => {
-        onSaveProfile();
-      }, 300);
-    };
-
-    if (nav && nav.geolocation) {
-      nav.geolocation.getCurrentPosition(
-        (pos: any) => {
-          const lat = parseFloat(pos.coords.latitude.toFixed(7));
-          const lon = parseFloat(pos.coords.longitude.toFixed(7));
-          processPosition(lat, lon, pos.coords.accuracy || 5);
-        },
-        (_err: any) => {
-          setCapturingGps(false);
-          setGpsStatus('GPS acquisition timed out. Please check location permissions.');
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
-      );
-    } else {
-      setCapturingGps(false);
-      setGpsStatus('Geolocation not supported on this device.');
-    }
+  const Field: React.FC<{
+    label: string;
+    value: string;
+    onChange: (v: string) => void;
+    placeholder?: string;
+    keyboardType?: 'default' | 'numeric' | 'phone-pad';
+    autoCapitalize?: 'none' | 'characters' | 'words';
+  }> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none' }) => {
+    const [focus, setFocus] = useState(false);
+    return (
+      <View style={{ gap: t.space.sm }}>
+        <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+        <TextInput
+          value={String(value ?? '')}
+          onChangeText={onChange}
+          onFocus={() => setFocus(true)}
+          onBlur={() => setFocus(false)}
+          placeholder={placeholder}
+          placeholderTextColor={t.colors.textFaint}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
+          style={{
+            backgroundColor: t.colors.bg,
+            borderRadius: t.radius.md,
+            borderWidth: 1.5,
+            borderColor: focus ? t.colors.primary : t.colors.border,
+            paddingHorizontal: t.space.lg,
+            height: 50,
+            color: t.colors.text,
+            fontSize: 15,
+            fontWeight: '600',
+            paddingVertical: 0,
+          } as TextStyle}
+        />
+      </View>
+    );
   };
 
-  const categories = [
-    { key: 'ACCOUNT', label: 'Account & Identity', icon: 'person-outline' as const },
-    { key: 'SECURITY', label: 'Security & Auth', icon: 'shield-checkmark-outline' as const },
-    { key: 'LOCATION', label: 'Location & Radius', icon: 'location-outline' as const },
-    { key: 'WORKLOAD', label: 'Audit & Workload', icon: 'briefcase-outline' as const },
-    { key: 'PREFERENCES', label: 'App Preferences', icon: 'options-outline' as const },
-    { key: 'SUPPORT', label: 'Help & Support', icon: 'help-circle-outline' as const },
+  const Toggle: React.FC<{ label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }> = ({
+    label, hint, value, onChange,
+  }) => (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.sm }}>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <AppText variant="body">{label}</AppText>
+        {hint && <AppText variant="caption" tone="faint">{hint}</AppText>}
+      </View>
+      <Switch
+        value={!!value}
+        onValueChange={onChange}
+        trackColor={{ false: t.colors.surfacePress, true: t.colors.primarySoft }}
+        thumbColor={value ? t.colors.primary : t.colors.textFaint}
+      />
+    </View>
+  );
+
+  const THEME_OPTIONS: { key: ThemePreference; label: string; icon: 'contrast-outline' | 'sunny-outline' | 'moon-outline' }[] = [
+    { key: 'system', label: 'System', icon: 'contrast-outline' },
+    { key: 'light', label: 'Light', icon: 'sunny-outline' },
+    { key: 'dark', label: 'Dark', icon: 'moon-outline' },
   ];
 
   return (
-    <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false}>
-      {/* ── User Header Card ── */}
-      <View style={[styles.card, { padding: 16, backgroundColor: 'rgba(30,41,59,0.95)', borderColor: 'rgba(99,102,241,0.25)', marginBottom: 16 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <View style={{
-            width: 56,
-            height: 56,
-            borderRadius: 28,
-            backgroundColor: '#4f46e5',
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 2,
-            borderColor: 'rgba(255,255,255,0.2)',
-          }}>
-            <Text style={{ fontSize: 24, fontWeight: '900', color: '#ffffff' }}>
-              {(assayerName || 'A').charAt(0).toUpperCase()}
-            </Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={{ fontSize: 18, fontWeight: '800', color: '#ffffff' }}>{assayerName || 'Authorized Assayer'}</Text>
-              <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
-                <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '800' }}>VERIFIED</Text>
-              </View>
-            </View>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
-              Code: <Text style={{ color: '#38bdf8', fontWeight: '700' }}>{assayerCode || profile.assayerCode || 'N/A'}</Text> • BIS Certified
-            </Text>
-          </View>
+    <View style={{ gap: t.space.xl }}>
+      {/* Identity */}
+      <Card level={2} style={{ alignItems: 'center', gap: t.space.md }}>
+        <Avatar name={assayerName || 'Assayer'} size={72} />
+        <View style={{ alignItems: 'center', gap: 4 }}>
+          <AppText variant="h2">{assayerName || 'Field Assayer'}</AppText>
+          {(assayerCode || profile.assayerCode) ? (
+            <Badge label={assayerCode || profile.assayerCode} tone="primary" icon="id-card-outline" />
+          ) : null}
         </View>
-      </View>
+      </Card>
 
-      {/* ── Settings Category Selection Menu ── */}
-      <Text style={{ fontSize: 12, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, marginLeft: 2 }}>
-        Settings & Configuration
-      </Text>
+      <StatStrip>
+        <StatTile label="Completed" value={profile.completedAssignments ?? 0} icon="checkmark-done" tone="success" />
+        <StatTile label="Assigned" value={profile.totalAssignments ?? 0} icon="clipboard-outline" />
+        <StatTile label="Balance" value={money(profile.runningBalance)} icon="wallet-outline" tone="accent" />
+        {Number(profile.averageRating) > 0 && (
+          <StatTile label="Rating" value={Number(profile.averageRating).toFixed(1)} icon="star" tone="warning" hint="out of 5" />
+        )}
+      </StatStrip>
 
-      <View style={{ gap: 8, marginBottom: 16 }}>
-        {categories.map((cat) => {
-          const isActive = activeCategory === cat.key;
+      {/* Three groups instead of six crowded tabs */}
+      <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+        {([
+          { k: 'PROFILE' as const, label: 'Profile', icon: 'person-outline' as const },
+          { k: 'WORK' as const, label: 'Work', icon: 'briefcase-outline' as const },
+          { k: 'APP' as const, label: 'App', icon: 'settings-outline' as const },
+        ]).map((s) => {
+          const active = tab === s.k;
           return (
-            <TouchableOpacity
-              key={cat.key}
-              onPress={() => setActiveCategory(cat.key as any)}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: 14,
-                backgroundColor: isActive ? 'rgba(99, 102, 241, 0.15)' : 'rgba(30, 41, 59, 0.7)',
-                borderRadius: 14,
-                borderWidth: 1,
-                borderColor: isActive ? '#6366f1' : 'rgba(255, 255, 255, 0.08)',
-              }}
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  backgroundColor: isActive ? '#4f46e5' : 'rgba(15, 23, 42, 0.6)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
-                  <Ionicons name={cat.icon} size={18} color={isActive ? '#ffffff' : '#a5b4fc'} />
-                </View>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: isActive ? '#ffffff' : '#cbd5e1' }}>
-                  {cat.label}
-                </Text>
+            <Tappable key={s.k} onPress={() => setTab(s.k)} style={{ flex: 1 }}>
+              <View style={{
+                alignItems: 'center', gap: 5, paddingVertical: t.space.md, borderRadius: t.radius.md,
+                backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
+                borderWidth: 1, borderColor: active ? 'transparent' : t.colors.border,
+              }}>
+                <Icon name={s.icon} size={18} color={active ? t.colors.primary : t.colors.textFaint} />
+                <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{s.label}</AppText>
               </View>
-              <Ionicons name={isActive ? 'chevron-down' : 'chevron-forward'} size={18} color={isActive ? '#818cf8' : '#64748b'} />
-            </TouchableOpacity>
+            </Tappable>
           );
         })}
       </View>
 
-      {/* ── Settings Content Card ── */}
-      <View style={[styles.card, { padding: 18, backgroundColor: 'rgba(30, 41, 59, 0.9)', borderColor: 'rgba(99, 102, 241, 0.2)', marginBottom: 24 }]}>
-        {/* 1. ACCOUNT & IDENTITY */}
-        {activeCategory === 'ACCOUNT' && (
-          <View>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Account & Personal Identity</Text>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Manage your contact numbers and official credentials.</Text>
+      {tab === 'PROFILE' && (
+        <>
+          <Section title="Contact">
+            <Card level={1} style={{ gap: t.space.lg }}>
+              <Field label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" />
+              <Field label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" />
+            </Card>
+          </Section>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Mobile Phone Number:</Text>
-              <TextInput style={styles.textInput} value={profile.phone} onChangeText={(val) => onUpdateProfileField('phone', val)} keyboardType="phone-pad" />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Alternate Phone Number:</Text>
-              <TextInput style={styles.textInput} value={profile.alternatePhone} onChangeText={(val) => onUpdateProfileField('alternatePhone', val)} keyboardType="phone-pad" />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>BIS Hallmark License Number:</Text>
-              <TextInput style={styles.textInput} value={profile.licenseNo} onChangeText={(val) => onUpdateProfileField('licenseNo', val)} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Languages Spoken:</Text>
-              <TextInput style={styles.textInput} value={profile.languages} onChangeText={(val) => onUpdateProfileField('languages', val)} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>PAN Card (Verified):</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.panNumber ? `${profile.panNumber} (Verified ✅)` : 'NOT REGISTERED'} editable={false} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Bank Account (Verified):</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.bankAccountNumber ? `XXXX-XXXX-${profile.bankAccountNumber.slice(-4)}` : 'NOT REGISTERED'} editable={false} />
-            </View>
-          </View>
-        )}
-
-        {/* 2. SECURITY & AUTHENTICATION */}
-        {activeCategory === 'SECURITY' && (
-          <View>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Security & Quick Login</Text>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Configure biometric hardware and 4-digit passcode authentication.</Text>
-
-            {/* Biometrics Switch */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 14 }}>
-              <View style={{ flex: 1, paddingRight: 10 }}>
-                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Face ID / Fingerprint Auth</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Allow rapid sign-in via device biometric hardware</Text>
-              </View>
-              <Switch
-                value={profile.biometricsEnabled !== false}
-                onValueChange={(val) => onUpdateProfileField('biometricsEnabled', val)}
-                trackColor={{ false: '#475569', true: '#4f46e5' }}
-                thumbColor={profile.biometricsEnabled !== false ? '#38bdf8' : '#cbd5e1'}
-              />
-            </View>
-
-            {/* Quick 4-Digit PIN */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>4-Digit Quick Passcode / PIN:</Text>
-              <TextInput
-                style={styles.textInput}
-                value={profile.pinCode || ''}
-                onChangeText={(val) => onUpdateProfileField('pinCode', val.slice(0, 4))}
-                placeholder="Set 4-Digit Security PIN (e.g. 1234)"
-                placeholderTextColor="#475569"
-                keyboardType="numeric"
-                secureTextEntry
-              />
-            </View>
-          </View>
-        )}
-
-        {/* 3. LOCATION & RADIUS */}
-        {activeCategory === 'LOCATION' && (
-          <View>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Base Location & Service Radius</Text>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Set your registered base address and preferred audit distance.</Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Base City & District:</Text>
-              <TextInput style={styles.textInput} value={profile.city} onChangeText={(val) => onUpdateProfileField('city', val)} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Registered Street Address:</Text>
-              <TextInput style={styles.textInput} value={profile.address} onChangeText={(val) => onUpdateProfileField('address', val)} multiline />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Postal Pincode:</Text>
-              <TextInput style={styles.textInput} value={profile.pincode} onChangeText={(val) => onUpdateProfileField('pincode', val)} keyboardType="number-pad" />
-            </View>
-
-            {/* Service Radius Selector */}
-            <View style={{ marginTop: 12, backgroundColor: 'rgba(15,23,42,0.6)', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
-              <Text style={{ fontSize: 11, color: '#94a3b8', fontWeight: '800', marginBottom: 8 }}>PREFERRED SERVICE RADIUS</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <TouchableOpacity
-                  onPress={() => onUpdateProfileField('preferredRadius', Math.max(1, (profile.preferredRadius || 10) - 5))}
-                  style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }}
-                >
-                  <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '800' }}>−</Text>
-                </TouchableOpacity>
-                <View style={{ flex: 1, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 22, fontWeight: '800', color: '#38bdf8' }}>{profile.preferredRadius || 10}</Text>
-                  <Text style={{ fontSize: 10, color: '#64748b' }}>kilometers</Text>
+          <Section title="Address">
+            <Card level={1} style={{ gap: t.space.lg }}>
+              <Field label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" />
+              <View style={{ flexDirection: 'row', gap: t.space.md }}>
+                <View style={{ flex: 1 }}>
+                  <Field label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" />
                 </View>
-                <TouchableOpacity
-                  onPress={() => onUpdateProfileField('preferredRadius', Math.min(100, (profile.preferredRadius || 10) + 5))}
-                  style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center' }}
-                >
-                  <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '800' }}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Map Preview */}
-            <View style={{ marginTop: 14, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: '#0f172a' }}>
-              {Platform.OS === 'web' ? (
-                <InteractiveMap
-                  latitude={profile.latitude || 28.6315}
-                  longitude={profile.longitude || 77.2167}
-                  radiusKm={profile.preferredRadius || 10}
-                  onLocationChange={(lat, lng) => {
-                    onUpdateProfileField('latitude', lat);
-                    onUpdateProfileField('longitude', lng);
-                  }}
-                  onRadiusChange={(km) => onUpdateProfileField('preferredRadius', km)}
-                />
-              ) : (
-                <View style={{ height: 160, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ color: '#94a3b8', fontSize: 12 }}>Map rendering enabled for Web & Native</Text>
+                <View style={{ flex: 1 }}>
+                  <Field label="Pincode" value={profile.pincode} onChange={(v) => onUpdateProfileField('pincode', v)} keyboardType="numeric" />
                 </View>
-              )}
-            </View>
-
-            <TouchableOpacity
-              onPress={handleCaptureGps}
-              disabled={capturingGps}
-              style={{
-                marginTop: 14, backgroundColor: '#4f46e5', paddingVertical: 12, borderRadius: 10,
-                alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
-              }}
-            >
-              {capturingGps ? (
-                <ActivityIndicator color="#ffffff" size="small" />
-              ) : (
-                <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13 }}>📍 Auto-Detect GPS Satellite Fix</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* 4. WORKLOAD & CAPACITY */}
-        {activeCategory === 'WORKLOAD' && (
-          <View>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Audit & Operational Capacity</Text>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Configured daily and weekly workload limits set by Sumeru Operations.</Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Max Daily Audit Limit:</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxDailyWorkload || 0} Audits / Day`} editable={false} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Max Weekly Audit Limit:</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={`${profile.maxWeeklyWorkload || 0} Audits / Week`} editable={false} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Assayer Employment Type:</Text>
-              <TextInput style={[styles.textInput, { color: '#94a3b8' }]} value={profile.employmentType || 'CONTRACTOR'} editable={false} />
-            </View>
-          </View>
-        )}
-
-        {/* 5. APP PREFERENCES */}
-        {activeCategory === 'PREFERENCES' && (
-          <View>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Application Preferences</Text>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Customize app behavior, notifications, and offline data sync.</Text>
-
-            {/* Offline Data Sync */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 12 }}>
-              <View style={{ flex: 1, paddingRight: 10 }}>
-                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Offline Audit Caching</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Auto-save audit reports locally when offline</Text>
               </View>
-              <Switch
-                value={profile.offlineSyncEnabled !== false}
-                onValueChange={(val) => onUpdateProfileField('offlineSyncEnabled', val)}
-                trackColor={{ false: '#475569', true: '#4f46e5' }}
-                thumbColor={profile.offlineSyncEnabled !== false ? '#38bdf8' : '#cbd5e1'}
-              />
-            </View>
-
-            {/* Push Notifications */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 12 }}>
-              <View style={{ flex: 1, paddingRight: 10 }}>
-                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Dispatch Push Notifications</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Receive instant alerts for new audit invites</Text>
+              <View style={{ flexDirection: 'row', gap: t.space.md }}>
+                <View style={{ flex: 1 }}>
+                  <Field label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field label="State" value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} autoCapitalize="words" />
+                </View>
               </View>
-              <Switch
+            </Card>
+          </Section>
+
+          <Section title="Emergency contact">
+            <Card level={1} style={{ gap: t.space.lg }}>
+              <Field label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" />
+              <View style={{ flexDirection: 'row', gap: t.space.md }}>
+                <View style={{ flex: 1 }}>
+                  <Field label="Phone" value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field label="Relation" value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" />
+                </View>
+              </View>
+            </Card>
+          </Section>
+        </>
+      )}
+
+      {tab === 'WORK' && (
+        <>
+          <Section title="Capability">
+            <Card level={1} style={{ gap: t.space.lg }}>
+              <Field label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" />
+              <Field label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" />
+              <Field label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" />
+            </Card>
+          </Section>
+
+          <Section title="Capacity">
+            <Card level={1} style={{ gap: t.space.lg }}>
+              <View style={{ flexDirection: 'row', gap: t.space.md }}>
+                <View style={{ flex: 1 }}>
+                  <Field label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={(v) => onUpdateProfileField('maxDailyWorkload', Number(v) || 0)} keyboardType="numeric" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={(v) => onUpdateProfileField('maxWeeklyWorkload', Number(v) || 0)} keyboardType="numeric" />
+                </View>
+              </View>
+              <Field label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" />
+              <Field label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" />
+            </Card>
+          </Section>
+
+          <Section title="Payment details">
+            <Card level={1} style={{ gap: t.space.lg }}>
+              <AppText variant="caption" tone="faint">
+                Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
+              </AppText>
+              <Field label="PAN" value={profile.panNumber} onChange={(v) => onUpdateProfileField('panNumber', v)} autoCapitalize="characters" />
+              <Field label="Bank account" value={profile.bankAccountNumber} onChange={(v) => onUpdateProfileField('bankAccountNumber', v)} keyboardType="numeric" />
+              <Field label="IFSC" value={profile.ifscCode} onChange={(v) => onUpdateProfileField('ifscCode', v)} autoCapitalize="characters" />
+            </Card>
+          </Section>
+        </>
+      )}
+
+      {tab === 'APP' && (
+        <>
+          <Section title="Appearance">
+            <Card level={1} style={{ gap: t.space.md }}>
+              <AppText variant="small" tone="muted">
+                Follow your phone's setting, or pin the app to one mode.
+              </AppText>
+              <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                {THEME_OPTIONS.map((o) => {
+                  const active = t.preference === o.key;
+                  return (
+                    <Tappable
+                      key={o.key}
+                      style={{ flex: 1 }}
+                      onPress={() => {
+                        t.setPreference(o.key);
+                        // Keep the persisted profile field in step with the live theme.
+                        onUpdateProfileField('appTheme', o.key.toUpperCase() as ProfileDataState['appTheme']);
+                      }}
+                    >
+                      <View style={{
+                        alignItems: 'center', gap: 6, paddingVertical: t.space.lg, borderRadius: t.radius.md,
+                        backgroundColor: active ? t.colors.primarySoft : t.colors.bg,
+                        borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
+                      }}>
+                        <Icon name={o.icon} size={20} color={active ? t.colors.primary : t.colors.textFaint} />
+                        <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{o.label}</AppText>
+                      </View>
+                    </Tappable>
+                  );
+                })}
+              </View>
+            </Card>
+          </Section>
+
+          <Section title="Notifications">
+            <Card level={1}>
+              <Toggle
+                label="Push notifications"
+                hint="New assignments, clarifications and payment updates"
                 value={profile.pushNotificationsEnabled !== false}
-                onValueChange={(val) => onUpdateProfileField('pushNotificationsEnabled', val)}
-                trackColor={{ false: '#475569', true: '#4f46e5' }}
-                thumbColor={profile.pushNotificationsEnabled !== false ? '#38bdf8' : '#cbd5e1'}
+                onChange={(v) => onUpdateProfileField('pushNotificationsEnabled', v)}
               />
-            </View>
-
-            {/* Audio Alerts */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
-              <View style={{ flex: 1, paddingRight: 10 }}>
-                <Text style={{ fontSize: 14, fontWeight: '800', color: '#ffffff' }}>Sound & Chime Alerts</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Play audio chime when new dispatch is assigned</Text>
-              </View>
-              <Switch
-                value={profile.soundAlertsEnabled !== false}
-                onValueChange={(val) => onUpdateProfileField('soundAlertsEnabled', val)}
-                trackColor={{ false: '#475569', true: '#4f46e5' }}
-                thumbColor={profile.soundAlertsEnabled !== false ? '#38bdf8' : '#cbd5e1'}
+              <Divider spacing={t.space.xs} />
+              <Toggle
+                label="Sound alerts"
+                value={!!profile.soundAlertsEnabled}
+                onChange={(v) => onUpdateProfileField('soundAlertsEnabled', v)}
               />
-            </View>
-          </View>
-        )}
+            </Card>
+          </Section>
 
-        {/* 6. HELP & SUPPORT */}
-        {activeCategory === 'SUPPORT' && (
-          <View>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#ffffff', marginBottom: 4 }}>Sumeru Support & Emergency</Text>
-            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>Direct hotline to Sumeru Operations & Control Center.</Text>
+          <Section title="Security">
+            <Card level={1}>
+              <Toggle
+                label="Biometric sign-in"
+                hint="Resume a saved session with your fingerprint or face"
+                value={!!profile.biometricsEnabled}
+                onChange={(v) => onUpdateProfileField('biometricsEnabled', v)}
+              />
+            </Card>
+          </Section>
+        </>
+      )}
 
-            <TouchableOpacity
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 12,
-                backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12,
-                borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 10,
-              }}
-              onPress={() => Alert.alert('Support Helpline', 'Contacting Sumeru Operations Helpline: +91 1800-123-4567')}
-            >
-              <Ionicons name="call-outline" size={20} color="#38bdf8" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: '#ffffff' }}>Operations Control Desk</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8' }}>Toll-free 24/7 Helpline: 1800-123-4567</Text>
-              </View>
-            </TouchableOpacity>
+      <Button
+        label={savingProfile ? 'Saving…' : 'Save changes'}
+        icon="save-outline"
+        onPress={onSaveProfile}
+        loading={savingProfile}
+        size="lg"
+        full
+      />
 
-            <TouchableOpacity
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 12,
-                backgroundColor: 'rgba(15,23,42,0.6)', padding: 14, borderRadius: 12,
-                borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', marginBottom: 10,
-              }}
-              onPress={() => Alert.alert('App Information', 'Sumeru Global Audit & Support Suite v2.4.0 (Build 2026.07)')}
-            >
-              <Ionicons name="information-circle-outline" size={20} color="#a5b4fc" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: '#ffffff' }}>App Build & Version</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8' }}>v2.4.0 • Enterprise Production Engine</Text>
-              </View>
-            </TouchableOpacity>
-
-            {onLogout && (
-              <TouchableOpacity
-                style={{
-                  marginTop: 10, backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                  paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.3)',
-                  alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
-                }}
-                onPress={onLogout}
-              >
-                <Ionicons name="log-out-outline" size={18} color="#f87171" />
-                <Text style={{ color: '#f87171', fontWeight: '800', fontSize: 14 }}>Sign Out of App Session</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
-        {/* ── Save Settings Action Button ── */}
-        <TouchableOpacity
-          style={[styles.saveBtn, { marginTop: 22, backgroundColor: '#4f46e5', paddingVertical: 14, borderRadius: 12 }]}
-          disabled={savingProfile}
-          onPress={onSaveProfile}
-        >
-          {savingProfile ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={[styles.btnTextWhite, { fontSize: 14, fontWeight: '800', letterSpacing: 0.3 }]}>
-              💾 Save Settings Permanently
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+      {onLogout && (
+        <Button label="Sign out" icon="log-out-outline" variant="danger" onPress={onLogout} full />
+      )}
+    </View>
   );
 };

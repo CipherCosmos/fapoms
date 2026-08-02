@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Modal as RNModal, Platform, ActivityIndic
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
+import { Icon } from './ui/primitives';
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
 import { InteractiveMap } from './MapEntry';
@@ -528,7 +529,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                         backgroundColor: active ? '#2563eb' : 'transparent',
                       }}
                     >
-                      <Ionicons name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? '#fff' : '#94a3b8'} />
+                      <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? '#fff' : '#94a3b8'} />
                       <Text style={{ color: active ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 13 }}>
                         {m === 'driving' ? 'Drive' : 'Transit'}
                       </Text>
@@ -550,7 +551,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                   {/* ETA + fare row */}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Ionicons name="time-outline" size={18} color="#38bdf8" />
+                      <Icon name="time-outline" size={18} color="#38bdf8" />
                       <Text style={{ fontSize: 24, fontWeight: '900', color: '#fff' }}>
                         {travelSeconds != null ? formatDuration(travelSeconds) : '--'}
                       </Text>
@@ -569,7 +570,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                     </View>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                    <Ionicons name="navigate" size={13} color="#94a3b8" />
+                    <Icon name="navigate" size={13} color="#94a3b8" />
                     <Text style={{ color: '#94a3b8', fontSize: 12 }}>
                       {distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—'} {mode === 'driving' ? 'driving' : 'transit'} distance
                     </Text>
@@ -581,7 +582,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                       <ScrollView nestedScrollEnabled style={{ flex: 1 }}>
                         {steps.map((s, i) => (
                           <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 }}>
-                            <Ionicons name={maneuverIcon(s.maneuver)} size={14} color="#60a5fa" />
+                            <Icon name={maneuverIcon(s.maneuver)} size={14} color="#60a5fa" />
                             <Text style={{ color: '#e2e8f0', fontSize: 12, flex: 1 }} numberOfLines={2}>
                               {i === 0 ? <Text style={{ color: '#38bdf8', fontWeight: '800' }}>• </Text> : null}
                               {s.instruction}

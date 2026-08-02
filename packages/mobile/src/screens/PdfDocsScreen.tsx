@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, Linking, ActivityIndicator, Alert } from 'react-native';
+import React from 'react';
+import { View } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
-import { MobileApiService } from '../services/api.service';
-import { styles } from '../theme/styles';
-import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Badge, Button, Card, EmptyState, Icon, Section } from '../components/ui/primitives';
 
 interface PdfDocsScreenProps {
   activeAssignment: AssayerAssignment | null;
@@ -15,6 +14,13 @@ interface PdfDocsScreenProps {
   onOpenExpenseModal: () => void;
 }
 
+/**
+ * Returning the completed audit packet.
+ *
+ * Presented as the three ordered steps it actually is — capture, review, submit
+ * — because the old screen showed every control at once with no indication of
+ * which came first, and left the submit button tappable with nothing attached.
+ */
 export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   activeAssignment,
   uploadedPdfName,
@@ -24,184 +30,88 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   onSubmitCompletedPdf,
   onOpenExpenseModal,
 }) => {
-  const [branchDocuments, setBranchDocuments] = useState<any[]>([]);
-  const [loadingDocs, setLoadingDocs] = useState(false);
+  const t = useTheme();
 
-  const branchId = activeAssignment?.projectBranchId;
+  if (!activeAssignment) {
+    return (
+      <EmptyState
+        icon="document-text-outline"
+        title="No audit selected"
+        body="Open a stop from your route and check in to start returning its paperwork."
+      />
+    );
+  }
 
-  // Readiness tells the assayer *why* there is nothing to download — paperwork not
-  // prepared at all, versus prepared but not yet released by operations. Without it
-  // an empty list looked identical in both cases and the only option was to keep
-  // re-checking blindly.
-  const [readiness, setReadiness] = useState<{
-    state: 'READY' | 'PREPARING' | 'NONE'; message: string;
-    awaitingDispatchCount: number; lastDispatchedAt: string | null;
-  } | null>(null);
-
-  const loadDocuments = useCallback(async () => {
-    if (!branchId) return;
-    setLoadingDocs(true);
-    const res = await MobileApiService.getBranchDocuments(branchId);
-    setBranchDocuments(res.success && res.data ? res.data : []);
-    setReadiness(res.readiness ?? null);
-    setLoadingDocs(false);
-  }, [branchId]);
-
-  useEffect(() => {
-    loadDocuments();
-  }, [loadDocuments]);
-
-  if (!activeAssignment) return null;
+  const hasFile = Boolean(uploadedPdfName);
 
   return (
-    <View>
-      <Text style={styles.sectionHeading}>Branch Audit Documents: {activeAssignment.branchName}</Text>
+    <View style={{ gap: t.space.xl }}>
+      <Card level={1} style={{ gap: t.space.sm }}>
+        <AppText variant="overline" tone="faint">RETURNING PAPERWORK FOR</AppText>
+        <AppText variant="h2" numberOfLines={2}>{activeAssignment.branchName}</AppText>
+        <AppText variant="small" tone="muted" numberOfLines={2}>{activeAssignment.branchAddress}</AppText>
+      </Card>
 
-      {/* SECTION 1: DOWNLOAD ASSIGNED BRANCH PDF */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>1. Download Assigned Branch Audit PDF</Text>
-        <Text style={styles.branchSubText}>
-          Download the generated customer audit PDF document sent by the operations team for this branch.
-        </Text>
-
-        {loadingDocs && <ActivityIndicator color="#6366f1" style={{ marginBottom: 10 }} />}
-
-        {/* Explicit empty state. The list used to silently render nothing here, which was
-            indistinguishable from "still loading" — and previously the backend papered over it
-            by fabricating a placeholder PDF on read, so this case never appeared at all. */}
-        {!loadingDocs && branchDocuments.length === 0 && (
-          <View style={{
-            paddingVertical: 16, paddingHorizontal: 12, alignItems: 'center',
-            backgroundColor: readiness?.state === 'PREPARING' ? 'rgba(251,191,36,0.08)' : 'transparent',
-            borderRadius: 8,
-            borderWidth: readiness?.state === 'PREPARING' ? 1 : 0,
-            borderColor: 'rgba(251,191,36,0.3)',
-          }}>
-            <Ionicons
-              name={readiness?.state === 'PREPARING' ? 'time-outline' : 'document-outline'}
-              size={22}
-              color={readiness?.state === 'PREPARING' ? '#fbbf24' : '#64748b'}
-            />
-            <Text style={{
-              color: readiness?.state === 'PREPARING' ? '#fbbf24' : '#94a3b8',
-              fontSize: 12, marginTop: 6, textAlign: 'center', fontWeight: '600',
-            }}>
-              {readiness?.state === 'PREPARING' ? 'Paperwork is on its way' : 'Nothing to download yet'}
-            </Text>
-            <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4, textAlign: 'center', lineHeight: 16 }}>
-              {readiness?.message ?? 'No audit paperwork has been dispatched for this branch yet.'}
-            </Text>
+      <Section title="1 · Capture the audited sheets">
+        <Card level={1} style={{ gap: t.space.md }}>
+          <AppText variant="small" tone="muted">
+            Scan every page of the completed packet, or attach a PDF you have already produced.
+          </AppText>
+          <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+            {onOpenScanner && (
+              <Button label="Scan pages" icon="scan" onPress={onOpenScanner} style={{ flex: 1 }} />
+            )}
+            <Button label="Attach PDF" icon="folder-open-outline" variant="neutral" onPress={onSelectPdfFile} style={{ flex: 1 }} />
           </View>
-        )}
+        </Card>
+      </Section>
 
-        {branchDocuments.length > 0 && readiness?.lastDispatchedAt && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 }}>
-            <Ionicons name="checkmark-circle" size={13} color="#34d399" />
-            <Text style={{ fontSize: 11, color: '#34d399', fontWeight: '600' }}>
-              Released by operations {new Date(readiness.lastDispatchedAt).toLocaleString()}
-            </Text>
-          </View>
-        )}
-
-        {branchDocuments.length > 0 && (
-          <View style={{ marginBottom: 12 }}>
-            {branchDocuments.map((doc: any) => (
-              <TouchableOpacity
-                key={doc.id}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#334155' }}
-                onPress={async () => {
-                  // Downloads are no longer an open URL — the endpoint requires a short-lived
-                  // token scoped to this document, so fetch one with our session first. The
-                  // result names the actual reason for a failure (expired session vs. the
-                  // document genuinely not being ready vs. a dropped connection) instead of
-                  // collapsing everything into one "check your connection" message that was
-                  // wrong whenever the real cause was something else — most often an expired
-                  // session, which "check your connection" gives no way to recover from.
-                  const result = await MobileApiService.getDocumentDownloadUrl(doc.id);
-                  if (!result.ok) {
-                    Alert.alert(
-                      result.reason === 'SESSION_EXPIRED' ? 'Session Expired' : 'Download unavailable',
-                      result.message,
-                    );
-                    return;
-                  }
-                  Linking.openURL(result.url);
-                }}
-              >
-                <Text style={{ fontSize: 14, color: '#818cf8', fontWeight: '600', flex: 1 }}>{doc.fileName || doc.documentType || 'Document'}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Ionicons name="download" size={11} color="#94a3b8" />
-                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>Download</Text>
+      <Section title="2 · Review">
+        <Card level={1}>
+          {hasFile ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+              <View style={{
+                width: 40, height: 40, borderRadius: t.radius.md, backgroundColor: t.colors.successSoft,
+                alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Icon name="document-text" size={19} color={t.colors.success} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
+                <AppText variant="bodyStrong" numberOfLines={1}>{uploadedPdfName}</AppText>
+                <View style={{ flexDirection: 'row' }}>
+                  <Badge label="Ready to submit" tone="success" dot />
                 </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* Was `Linking.openURL()` onto the documents *API* endpoint, which opened raw JSON in
-            the browser rather than any document — and now returns 401, since that endpoint is
-            no longer public. The documents are already listed above, so the useful action here
-            is refreshing that list. */}
-        <TouchableOpacity style={styles.saveBtn} onPress={loadDocuments} disabled={loadingDocs}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="refresh" size={14} color="#fff" />
-            <Text style={styles.btnTextWhite}>
-              {loadingDocs ? 'Checking for documents…' : 'Check for New Documents'}
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* SECTION 2: UPLOAD COMPLETED SCANNED PDF */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>2. Upload Completed & Signed Audit PDF</Text>
-        <Text style={styles.branchSubText}>
-          After completing the physical gold assay audit at the branch, scan or capture the completed PDF report with signatures and upload it here to complete your assignment.
-        </Text>
-
-        {uploadedPdfName && (
-          <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#10b981' }}>
-            <Text style={{ color: '#34d399', fontWeight: '700', fontSize: 13 }}>Selected / Scanned File: {uploadedPdfName}</Text>
-          </View>
-        )}
-
-        <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-          <TouchableOpacity style={[styles.mapBtn, { flex: 1, backgroundColor: '#6366f1' }]} onPress={onOpenScanner || onSelectPdfFile}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="camera" size={14} color="#fff" />
-            <Text style={styles.btnTextWhite}>Camera Scan Pages</Text>
-          </View>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.mapBtn, { flex: 1, backgroundColor: '#334155' }]} onPress={onSelectPdfFile}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="folder" size={14} color="#fff" />
-            <Text style={styles.btnTextWhite}>Pick PDF File</Text>
-          </View>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.checkInBtn, { marginTop: 14, backgroundColor: uploadedPdfName ? '#10b981' : '#475569' }]}
-          disabled={uploadingPdf}
-          onPress={onSubmitCompletedPdf}
-        >
-          {uploadingPdf ? (
-            <ActivityIndicator color="#ffffff" />
+              </View>
+            </View>
           ) : (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="checkmark-circle" size={14} color="#fff" />
-            <Text style={styles.btnTextWhite}>Submit Completed PDF & Finalize Audit</Text>
-          </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+              <Icon name="alert-circle-outline" size={19} color={t.colors.textFaint} />
+              <AppText variant="small" tone="muted" style={{ flex: 1 }}>
+                Nothing captured yet — complete step 1 first.
+              </AppText>
+            </View>
           )}
-        </TouchableOpacity>
-      </View>
+        </Card>
+      </Section>
 
-      <TouchableOpacity style={styles.addExpBtn} onPress={onOpenExpenseModal}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Ionicons name="add" size={14} color="#0f172a" />
-        <Text style={styles.btnTextDark}>Add Travel / Additional Expense</Text>
-      </View>
-      </TouchableOpacity>
+      <Section title="3 · Submit">
+        <Button
+          label={uploadingPdf ? 'Submitting…' : 'Submit to the data entry desk'}
+          icon="cloud-upload-outline"
+          onPress={onSubmitCompletedPdf}
+          loading={uploadingPdf}
+          disabled={!hasFile}
+          size="lg"
+          full
+        />
+        {!hasFile && (
+          <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+            Capture the sheets before submitting.
+          </AppText>
+        )}
+      </Section>
+
+      <Button label="Log an expense for this trip" icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} full />
     </View>
   );
 };

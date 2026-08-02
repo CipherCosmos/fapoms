@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Platform, Modal, TouchableOpacity } from 'react-native';
+import { SafeAreaView, ScrollView, View, Text, ActivityIndicator, Alert, Platform, Modal, TouchableOpacity, StatusBar } from 'react-native';
 import { registerRootComponent } from 'expo';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -11,8 +11,9 @@ import { connectMobileSocket, disconnectMobileSocket, getMobileSocket } from './
 
 // Modular Theme & Layout Components
 import { styles } from './src/theme/styles';
-import { Header } from './src/components/Header';
-import { TabBar, TabType } from './src/components/TabBar';
+import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
+import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
+import { Skeleton, Card } from './src/components/ui/primitives';
 import { RejectionModal } from './src/components/RejectionModal';
 import { ExpenseModal } from './src/components/ExpenseModal';
 
@@ -31,7 +32,8 @@ import { MLKitScannerModal } from './src/components/MLKitScannerModal';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
 import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 
-export default function App() {
+function AppInner() {
+  const theme = useTheme();
   // Authentication State (Read saved session synchronously to prevent flash on refresh)
   const initialSession = MobileApiService.restoreSession();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(Boolean(initialSession));
@@ -698,23 +700,35 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <Header
-        assayerName={assayerName}
-        unreadNotifCount={unreadNotifCount}
+    <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+      <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} backgroundColor={theme.colors.bg} />
+      <TopBar
+        name={assayerName}
+        subtitle={profile.assayerCode ? `Assayer ${profile.assayerCode}` : 'Field Assayer'}
+        unreadCount={unreadNotifCount}
+        onNotifications={() => setNotifModalVisible(true)}
+        onToggleTheme={theme.cyclePreference}
+        themeIcon={theme.preference === 'system' ? 'contrast-outline' : theme.preference === 'light' ? 'sunny-outline' : 'moon-outline'}
         onRefresh={loadAssignments}
-        onLogout={handleLogout}
-        onNotificationsPress={() => setNotifModalVisible(true)}
+        refreshing={loading}
       />
-      <TabBar selectedTab={selectedTab} onSelectTab={setSelectedTab} openQueriesCount={openQueriesCount} unreadNotifCount={unreadNotifCount} />
 
-      {loading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#2563eb" />
-          <Text style={styles.loadingText}>Syncing schedule with FAPOMS server...</Text>
+      {loading && assignments.length === 0 ? (
+        <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.md }}>
+          {[0, 1, 2].map((i) => (
+            <Card key={i} level={1} style={{ gap: theme.space.md }}>
+              <Skeleton height={18} width="60%" />
+              <Skeleton height={13} width="85%" />
+              <Skeleton height={40} />
+            </Card>
+          ))}
         </View>
       ) : (
-        <ScrollView style={styles.contentScroll}>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: theme.space.lg, paddingBottom: DOCK_CLEARANCE }}
+          showsVerticalScrollIndicator={false}
+        >
           {selectedTab === 'SCHEDULE' && (
             <ScheduleScreen
               assignments={assignments}
@@ -960,11 +974,14 @@ export default function App() {
       {/* ── Slide-over Notifications Drawer Modal ── */}
       {notifModalVisible && (
         <Modal animationType="slide" transparent={false} visible={notifModalVisible} onRequestClose={() => setNotifModalVisible(false)}>
-          <SafeAreaView style={{ flex: 1, backgroundColor: '#090d16' }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, backgroundColor: '#0f172a', borderBottomWidth: 1, borderBottomColor: 'rgba(99,102,241,0.2)' }}>
-              <Text style={{ fontSize: 18, fontWeight: '900', color: '#ffffff' }}>🔔 Notifications & Dispatch Alerts</Text>
-              <TouchableOpacity onPress={() => setNotifModalVisible(false)} style={{ backgroundColor: 'rgba(239,68,68,0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
-                <Text style={{ color: '#f87171', fontWeight: '800', fontSize: 13 }}>✕ Close</Text>
+          <View style={{ flex: 1, backgroundColor: theme.colors.bg, paddingTop: Platform.OS === 'ios' ? 54 : 20, paddingHorizontal: theme.space.lg }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: theme.space.lg }}>
+              <Text style={[theme.type.h2 as any, { color: theme.colors.text }]}>Notifications</Text>
+              <TouchableOpacity
+                onPress={() => setNotifModalVisible(false)}
+                style={{ width: 40, height: 40, borderRadius: theme.radius.md, backgroundColor: theme.colors.surfaceAlt, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Text style={{ color: theme.colors.textMuted, fontWeight: '800', fontSize: 16 }}>✕</Text>
               </TouchableOpacity>
             </View>
             <NotificationsScreen
@@ -978,10 +995,24 @@ export default function App() {
                 handleTapNotification(n);
               }}
             />
-          </SafeAreaView>
+          </View>
         </Modal>
       )}
-    </SafeAreaView>
+
+      <TabDock selected={selectedTab} onSelect={setSelectedTab} queryCount={openQueriesCount} />
+    </View>
+  );
+}
+
+/**
+ * Theme has to wrap the whole tree — including the login screen, which renders
+ * before authentication and therefore before AppInner's other state exists.
+ */
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
   );
 }
 

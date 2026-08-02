@@ -1,95 +1,92 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import { View } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
-import { styles } from '../theme/styles';
-import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Badge, Button, Card, EmptyState, FadeIn, Segmented } from '../components/ui/primitives';
 
 interface QueriesScreenProps {
   assignments: AssayerAssignment[];
   onOpenQueryChat: (assignment: AssayerAssignment) => void;
 }
 
-export const QueriesScreen: React.FC<QueriesScreenProps> = ({
-  assignments,
-  onOpenQueryChat,
-}) => {
-  // Extract only assignments that have actual query history initiated by Data Entry
-  const activeQueryAssignments = assignments.filter((a) => a.queries && a.queries.length > 0);
+/**
+ * Clarifications raised by the data entry desk about audits you submitted.
+ *
+ * Sorted so anything still waiting on *you* is at the top — the old screen
+ * listed them in whatever order the API returned, so an open question could sit
+ * below a dozen resolved ones.
+ */
+export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpenQueryChat }) => {
+  const t = useTheme();
+  const [tab, setTab] = React.useState<'OPEN' | 'ALL'>('OPEN');
+
+  const withQueries = assignments.filter((a) => a.queries && a.queries.length > 0);
+
+  const stateOf = (a: AssayerAssignment) => {
+    const qs = a.queries || [];
+    if (qs.some((q) => q.status === 'OPEN')) return 'NEEDS_YOU' as const;
+    if (qs.some((q) => q.status === 'RESPONDED')) return 'WAITING_DESK' as const;
+    return 'RESOLVED' as const;
+  };
+
+  const rank = { NEEDS_YOU: 0, WAITING_DESK: 1, RESOLVED: 2 };
+  const sorted = withQueries.slice().sort((a, b) => rank[stateOf(a)] - rank[stateOf(b)]);
+  const openOnly = sorted.filter((a) => stateOf(a) !== 'RESOLVED');
+  const shown = tab === 'OPEN' ? openOnly : sorted;
+
+  const META = {
+    NEEDS_YOU: { label: 'Needs your reply', tone: 'danger' as const, cta: 'Reply now', icon: 'chatbubble-ellipses' as const },
+    WAITING_DESK: { label: 'With the desk', tone: 'warning' as const, cta: 'Open conversation', icon: 'chatbubble-ellipses-outline' as const },
+    RESOLVED: { label: 'Resolved', tone: 'success' as const, cta: 'View history', icon: 'eye-outline' as const },
+  };
 
   return (
-    <View style={{ gap: 14 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Ionicons name="chatbubble" size={16} color="#f8fafc" />
-        <Text style={styles.sectionHeading}>Data Entry Validation Queries</Text>
-      </View>
-      
-      {activeQueryAssignments.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Ionicons name="happy" size={44} color="#94a3b8" style={{ marginBottom: 12 }} />
-          <Text style={styles.emptyText}>No clarification queries raised by Data Entry team yet.</Text>
-        </View>
+    <View style={{ gap: t.space.lg }}>
+      <Segmented
+        value={tab}
+        onChange={(k) => setTab(k as 'OPEN' | 'ALL')}
+        options={[
+          { key: 'OPEN', label: 'Needs attention', count: openOnly.length },
+          { key: 'ALL', label: 'All', count: sorted.length },
+        ]}
+      />
+
+      {shown.length === 0 ? (
+        <EmptyState
+          icon="checkmark-circle-outline"
+          title={tab === 'OPEN' ? 'Nothing waiting on you' : 'No clarifications yet'}
+          body="When the data entry desk cannot read something on a sheet you submitted, they ask here — with the exact area of the page marked."
+        />
       ) : (
-        activeQueryAssignments.map((assignment) => {
-          const hasOpenQueries = (assignment.queries || []).some((q) => q.status === 'OPEN');
-          const hasRespondedQueries = (assignment.queries || []).some((q) => q.status === 'RESPONDED');
-          const isFullyResolved = (assignment.queries || []).length > 0 && (assignment.queries || []).every((q) => q.status === 'RESOLVED');
-          
+        shown.map((a, i) => {
+          const meta = META[stateOf(a)];
+          const count = (a.queries || []).length;
           return (
-            <View key={assignment.id} style={[styles.card, (hasOpenQueries || hasRespondedQueries) && { borderColor: '#6366f1', borderWidth: 1.5 }]}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.queryValidator}>{assignment.bankName}</Text>
-                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-                  {hasOpenQueries ? (
-                    <View style={{ backgroundColor: 'rgba(239,68,68,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
-                      <Text style={{ color: '#f87171', fontSize: 10, fontWeight: '800' }}>● OPEN QUERY</Text>
-                    </View>
-                  ) : hasRespondedQueries ? (
-                    <View style={{ backgroundColor: 'rgba(245,158,11,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                        <Ionicons name="chatbubble" size={10} color="#fbbf24" />
-                        <Text style={{ color: '#fbbf24', fontSize: 10, fontWeight: '800' }}>RESPONDED</Text>
-                      </View>
-                    </View>
-                  ) : isFullyResolved ? (
-                    <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                        <Ionicons name="lock-closed" size={10} color="#34d399" />
-                        <Text style={{ color: '#34d399', fontSize: 10, fontWeight: '800' }}>CLOSED / RESOLVED</Text>
-                      </View>
-                    </View>
-                  ) : null}
+            <FadeIn key={a.id} delay={Math.min(i, 6) * 45}>
+              <Card level={1} style={{ gap: t.space.md }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
+                  <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                    <AppText variant="h3" numberOfLines={1}>{a.branchName}</AppText>
+                    <AppText variant="caption" tone="faint" numberOfLines={1}>
+                      {a.bankName ?? '—'}{a.branchCode ? ` · ${a.branchCode}` : ''}
+                    </AppText>
+                  </View>
+                  <Badge label={`${count}`} tone={meta.tone} icon="chatbubble-outline" />
                 </View>
-              </View>
 
-              <Text style={styles.queryCust}>Branch: {assignment.branchName} ({assignment.branchCode})</Text>
-              <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Assessment #{assignment.assignmentCode} • Audit Date: {assignment.scheduledDate}</Text>
-
-              <TouchableOpacity
-                style={{
-                  marginTop: 14,
-                  paddingVertical: 12,
-                  paddingHorizontal: 16,
-                  backgroundColor: isFullyResolved ? 'rgba(51,65,85,0.8)' : '#00a884',
-                  borderRadius: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                }}
-                onPress={() => onOpenQueryChat(assignment)}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Ionicons
-                    name={isFullyResolved ? 'eye' : 'chatbubble'}
-                    size={14}
-                    color="#fff"
-                  />
-                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
-                    {isFullyResolved ? 'View Closed Chat History (Read Only)' : 'Open Live Query Room'}
-                  </Text>
+                <View style={{ flexDirection: 'row' }}>
+                  <Badge label={meta.label} tone={meta.tone} dot />
                 </View>
-              </TouchableOpacity>
-            </View>
+
+                <Button
+                  label={meta.cta}
+                  icon={meta.icon}
+                  variant={stateOf(a) === 'RESOLVED' ? 'neutral' : 'primary'}
+                  onPress={() => onOpenQueryChat(a)}
+                  full
+                />
+              </Card>
+            </FadeIn>
           );
         })
       )}

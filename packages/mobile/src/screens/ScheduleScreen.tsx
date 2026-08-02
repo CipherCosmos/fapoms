@@ -1,10 +1,11 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Linking } from 'react-native';
+import { View, Linking } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { AssayerAssignment } from '../types/mobile-app';
-import { styles } from '../theme/styles';
 import { MobileApiService } from '../services/api.service';
 import { getAssignmentTotalFee } from '../utils/fees';
-import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
@@ -18,6 +19,32 @@ interface ScheduleScreenProps {
   onOpenMap?: (assignment: AssayerAssignment) => void;
 }
 
+type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
+
+const STATUS_META: Record<string, { label: string; tone: Tone }> = {
+  PENDING: { label: 'Awaiting your response', tone: 'warning' },
+  NEGOTIATION: { label: 'In negotiation', tone: 'accent' },
+  ACCEPTED: { label: 'Accepted', tone: 'info' },
+  CHECKED_IN: { label: 'On site', tone: 'primary' },
+  IN_PROGRESS: { label: 'In progress', tone: 'primary' },
+  COMPLETED: { label: 'Completed', tone: 'success' },
+  REJECTED: { label: 'Declined', tone: 'danger' },
+  CANCELLED: { label: 'Cancelled', tone: 'danger' },
+};
+
+const money = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
+const fmtDate = (d?: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' }) : 'Today';
+
+/**
+ * The route: every branch this assayer owes work on.
+ *
+ * Rebuilt around one card per stop that leads with where and when, states
+ * plainly what is being asked, and shows only the actions legal in the current
+ * status. The old version stacked six nested inline-styled rows per card at
+ * 11px type and repeated the fee in three places.
+ */
 export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   assignments,
   onAcceptAssignment,
@@ -29,253 +56,167 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onOpenQueryChat,
   onOpenMap,
 }) => {
-  const [filterTab, setFilterTab] = React.useState<'ACTIVE' | 'COMPLETED'>('ACTIVE');
+  const t = useTheme();
+  const [tab, setTab] = React.useState<'ACTIVE' | 'DONE'>('ACTIVE');
 
-  const activeAssignments = assignments.filter(a => a.status !== 'COMPLETED' && a.status !== 'REJECTED');
-  const completedAssignments = assignments.filter(a => a.status === 'COMPLETED' || a.status === 'REJECTED');
-  const displayedAssignments = filterTab === 'ACTIVE' ? activeAssignments : completedAssignments;
+  const active = assignments.filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED');
+  const done = assignments.filter((a) => a.status === 'COMPLETED' || a.status === 'REJECTED');
+  const shown = tab === 'ACTIVE' ? active : done;
 
   return (
-    <View>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <View style={{ flexDirection: 'row', gap: 6, backgroundColor: '#1e293b', padding: 4, borderRadius: 8, borderWidth: 1, borderColor: '#334155' }}>
-          <TouchableOpacity
-            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: filterTab === 'ACTIVE' ? '#3b82f6' : 'transparent' }}
-            onPress={() => setFilterTab('ACTIVE')}
-          >
-            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Active Dispatches ({activeAssignments.length})</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: filterTab === 'COMPLETED' ? '#10b981' : 'transparent' }}
-            onPress={() => setFilterTab('COMPLETED')}
-          >
-            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Audit Archive ({completedAssignments.length})</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+    <View style={{ gap: t.space.lg }}>
+      <Segmented
+        value={tab}
+        onChange={(k) => setTab(k as 'ACTIVE' | 'DONE')}
+        options={[
+          { key: 'ACTIVE', label: 'Active', count: active.length },
+          { key: 'DONE', label: 'History', count: done.length },
+        ]}
+      />
 
-      {displayedAssignments.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Ionicons
-            name={filterTab === 'ACTIVE' ? 'clipboard' : 'document-text'}
-            size={44}
-            color="#94a3b8"
-            style={{ marginBottom: 12 }}
-          />
-          <Text style={styles.emptyText}>No {filterTab.toLowerCase()} audit assignments found</Text>
-        </View>
+      {shown.length === 0 ? (
+        <EmptyState
+          icon={tab === 'ACTIVE' ? 'map-outline' : 'checkmark-done-outline'}
+          title={tab === 'ACTIVE' ? 'No active stops' : 'Nothing completed yet'}
+          body={tab === 'ACTIVE'
+            ? 'New branch assignments appear here as soon as operations dispatch them to you.'
+            : 'Audits you finish or decline are kept here for your records.'}
+        />
       ) : (
-        displayedAssignments.map((assignment, index) => (
-          <View key={assignment.id} style={styles.card}>
-            {/* Card Header: Stop Sequence & Status Pill */}
-            <View style={styles.cardHeader}>
-              <View style={styles.seqBadge}>
-                <Text style={styles.seqText}>STOP #{index + 1}</Text>
-              </View>
-              <Text style={[styles.statusBadge, styles[`status_${assignment.status}` as keyof typeof styles] as any]}>
-                ● {assignment.status.replace('_', ' ')}
-              </Text>
-            </View>
+        shown.map((a, i) => {
+          const meta = STATUS_META[a.status] ?? { label: a.status.replace(/_/g, ' '), tone: 'neutral' as Tone };
+          const fee = getAssignmentTotalFee(a);
+          const rounds = a.negotiationCount || 0;
 
-            {/* Branch Title & Address */}
-            <Text style={styles.branchName}>{assignment.branchName}</Text>
-            <Text style={styles.address}>{assignment.branchAddress}</Text>
-
-            {/* Audit Date & Bank Info Banner */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, marginBottom: 10, backgroundColor: 'rgba(99,102,241,0.1)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(99,102,241,0.25)' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Ionicons name="calendar" size={12} color="#a5b4fc" />
-                  <Text style={{ fontSize: 12, color: '#a5b4fc', fontWeight: '800' }}>
-                    Scheduled: {assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }) : 'Today'}
-                  </Text>
-                </View>
-              {assignment.bankName ? (
-                <View style={{ backgroundColor: 'rgba(15,23,42,0.6)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
-                  <Text style={{ fontSize: 11, color: '#38bdf8', fontWeight: '700' }}>{assignment.bankName}</Text>
-                </View>
-              ) : null}
-            </View>
-
-            {/* Scannable Metrics Grid */}
-            <View style={styles.metricsRow}>
-              <View style={styles.metricBox}>
-                <Text style={styles.metricLabel}>Distance</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                    <Ionicons name="location" size={12} color="#f8fafc" />
-                    <Text style={styles.metricVal}>
-                      {assignment.distanceKm != null ? `${assignment.distanceKm} km` : 'Nearby'}
-                    </Text>
+          return (
+            <FadeIn key={a.id} delay={Math.min(i, 6) * 45}>
+              <Card level={1} style={{ gap: t.space.md }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
+                  <View style={{
+                    width: 38, height: 38, borderRadius: t.radius.md, backgroundColor: t.colors.primarySoft,
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <AppText variant="bodyStrong" tone="primary">{i + 1}</AppText>
                   </View>
-              </View>
-              <View style={styles.metricBox}>
-                <Text style={styles.metricLabel}>Gold Packets</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                    <Ionicons name="cube" size={12} color="#f8fafc" />
-                    <Text style={styles.metricVal}>{assignment.estimatedCustomerCount || 15} Pkts</Text>
+                  <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                    <AppText variant="h3" numberOfLines={1}>{a.branchName}</AppText>
+                    <AppText variant="small" tone="muted" numberOfLines={2}>{a.branchAddress}</AppText>
                   </View>
-              </View>
-              <View style={styles.metricBox}>
-                <Text style={styles.metricLabel}>Audit Fee</Text>
-                {/* Same fallback-applied total shown in Earnings, so the price shown here
-                    at accept-time matches what's actually paid out later. */}
-                <Text style={[styles.metricVal, { color: assignment.agreedBaseFee > 0 ? '#34d399' : '#fbbf24' }]}>
-                  ₹{getAssignmentTotalFee(assignment)}
-                </Text>
-              </View>
-            </View>
+                </View>
 
-            {/* Status: PENDING (Accept / Reject / Negotiate) */}
-            {assignment.status === 'PENDING' && (
-              <View style={{ gap: 10, marginTop: 12 }}>
-                {assignment.negotiationCount && assignment.negotiationCount > 0 ? (
-                  <View style={{ padding: 10, backgroundColor: 'rgba(245,158,11,0.12)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)', gap: 4 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        <Ionicons name="chatbubble" size={12} color="#fbbf24" />
-                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#fbbf24' }}>
-                          Counter Offer Round #{assignment.negotiationCount}/3
-                        </Text>
+                <View style={{ flexDirection: 'row', gap: t.space.sm, flexWrap: 'wrap' }}>
+                  <Badge label={meta.label} tone={meta.tone} dot />
+                  {a.bankName ? <Badge label={a.bankName} tone="neutral" /> : null}
+                </View>
+
+                <Divider spacing={2} />
+
+                <View style={{ flexDirection: 'row', gap: t.space.lg }}>
+                  <Fact icon="calendar-outline" label="Date" value={fmtDate(a.scheduledDate)} />
+                  <Fact icon="cube-outline" label="Packets" value={String(a.estimatedCustomerCount || 15)} />
+                  <Fact
+                    icon="cash-outline"
+                    label="Fee"
+                    value={fee > 0 ? money(fee) : 'To agree'}
+                    tone={fee > 0 ? 'success' : 'warning'}
+                  />
+                </View>
+
+                {a.status === 'PENDING' && (
+                  <View style={{ gap: t.space.sm }}>
+                    {rounds > 0 && (
+                      <View style={{
+                        padding: t.space.md, borderRadius: t.radius.md,
+                        backgroundColor: t.colors.accentSoft, gap: 3,
+                      }}>
+                        <AppText variant="caption" tone="accent">
+                          Counter-offer round {rounds} of 3 · proposed {money(a.proposedFee ?? 0)}
+                        </AppText>
+                        {a.remarks ? <AppText variant="small" tone="muted">{a.remarks}</AppText> : null}
                       </View>
-                      <Text style={{ fontSize: 11, color: '#fcd34d', fontWeight: '700' }}>
-                        Proposed: ₹{assignment.proposedFee}
-                      </Text>
+                    )}
+                    <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                      <Button label="Accept" icon="checkmark" onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
+                      <Button label="Decline" icon="close" variant="danger" onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
                     </View>
-                    {assignment.remarks ? (
-                      <Text style={{ fontSize: 11, color: '#cbd5e1' }}>{assignment.remarks}</Text>
-                    ) : null}
-                  </View>
-                ) : null}
-
-                <View style={styles.actionGrid}>
-                  <TouchableOpacity style={styles.acceptBtn} onPress={() => onAcceptAssignment(assignment.id)}>
-                    <Text style={styles.btnTextWhite}>Accept Audit ₹{getAssignmentTotalFee(assignment)}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.rejectBtn} onPress={() => onOpenRejectModal(assignment.id)}>
-                    <Text style={styles.btnTextWhite}>Decline</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {onCounterOffer && (
-                  <TouchableOpacity
-                    style={[
-                      styles.mapBtn,
-                      {
-                        backgroundColor: (assignment.negotiationCount || 0) >= 3 ? 'rgba(71,85,105,0.4)' : 'rgba(139,92,246,0.2)',
-                        borderColor: (assignment.negotiationCount || 0) >= 3 ? '#475569' : '#8b5cf6',
-                        marginTop: 4,
-                      },
-                    ]}
-                    disabled={(assignment.negotiationCount || 0) >= 3}
-                    onPress={() => onCounterOffer(assignment)}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Ionicons
-                        name={(assignment.negotiationCount || 0) >= 3 ? 'lock-closed' : 'chatbubble'}
-                        size={12}
-                        color={(assignment.negotiationCount || 0) >= 3 ? '#94a3b8' : '#c084fc'}
+                    {onCounterOffer && (
+                      <Button
+                        label={rounds >= 3 ? 'Negotiation closed' : `Propose a different fee (${rounds}/3)`}
+                        icon={rounds >= 3 ? 'lock-closed-outline' : 'swap-horizontal'}
+                        variant="neutral"
+                        disabled={rounds >= 3}
+                        onPress={() => onCounterOffer(a)}
+                        full
                       />
-                      <Text style={{ color: (assignment.negotiationCount || 0) >= 3 ? '#94a3b8' : '#c084fc', fontSize: 12, fontWeight: '800' }}>
-                        {(assignment.negotiationCount || 0) >= 3
-                          ? 'Max Negotiation Limit Reached (3/3)'
-                          : `Propose Counter Fee Rate (${assignment.negotiationCount || 0}/3 Rounds)`}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
+                    )}
+                  </View>
                 )}
-              </View>
-            )}
 
-            {/* Status: ACCEPTED (Navigation & Check-In) */}
-            {assignment.status === 'ACCEPTED' && (
-              <View style={[styles.btnRow, { marginTop: 12 }]}>
-                <TouchableOpacity
-                  style={[styles.mapBtn, { flex: 1, backgroundColor: 'rgba(234,88,12,0.2)', borderColor: '#ea580c' }]}
-                  onPress={() => onOpenMap && onOpenMap(assignment)}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <Ionicons name="map" size={14} color="#ff8c00" />
-                    <Text style={{ color: '#ff8c00', fontSize: 13, fontWeight: '800' }}>
-                      In-App Map
-                    </Text>
+                {a.status === 'ACCEPTED' && (
+                  <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                    {onOpenMap && (
+                      <Button label="Navigate" icon="navigate" variant="neutral" onPress={() => onOpenMap(a)} style={{ flex: 1 }} />
+                    )}
+                    <Button label="Check in" icon="log-in-outline" onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
                   </View>
-                </TouchableOpacity>
+                )}
 
-                <TouchableOpacity style={[styles.checkInBtn, { flex: 1 }]} onPress={() => onCheckIn(assignment)}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="location" size={14} color="#fff" />
-                    <Text style={styles.btnTextWhite}>Check-In at Branch</Text>
-                  </View>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Status: CHECKED IN / IN PROGRESS (Camera Scanner & Docs) */}
-            {(assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS') && (
-              <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)', gap: 10 }}>
-                <View style={{ gap: 8 }}>
-                  <TouchableOpacity
-                    style={[styles.primaryBtn, { backgroundColor: '#6366f1' }]}
-                    onPress={() => onOpenScanner ? onOpenScanner(assignment) : onOpenPdfDocs(assignment)}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="camera" size={14} color="#fff" />
-                    <Text style={styles.primaryBtnText}>Document Scanner</Text>
-                  </View>
-                  </TouchableOpacity>
-
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    <TouchableOpacity
-                      style={[styles.secondaryBtn, { flex: 1 }]}
-                      onPress={() => Linking.openURL(`${MobileApiService.getBaseUrl()}/documents/project-branch/${assignment.projectBranchId}/download-pdf`)}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Ionicons name="download" size={14} color="#f8fafc" />
-                        <Text style={styles.secondaryBtnText}>Download PDF</Text>
-                      </View>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.primaryBtn, { flex: 1, backgroundColor: '#10b981' }]}
-                      onPress={() => onOpenPdfDocs(assignment)}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Ionicons name="folder" size={14} color="#fff" />
-                        <Text style={styles.primaryBtnText}>Upload Docs</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* Status: COMPLETED */}
-            {assignment.status === 'COMPLETED' && (
-              <View style={{ marginTop: 12, padding: 12, backgroundColor: 'rgba(16,185,129,0.12)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)', gap: 6 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Ionicons name="checkmark-circle" size={14} color="#34d399" />
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#34d399' }}>
-                    Audit Completed
-                  </Text>
-                </View>
-
-                {assignment.queries && assignment.queries.length > 0 ? (
-                  <TouchableOpacity
-                    style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#00a884', borderRadius: 10, alignItems: 'center', marginTop: 4 }}
-                    onPress={() => onOpenQueryChat ? onOpenQueryChat(assignment) : onOpenPdfDocs(assignment)}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Ionicons name="chatbubble" size={14} color="#fff" />
-                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
-                        Open Query Chat
-                      </Text>
+                {(a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS') && (
+                  <View style={{ gap: t.space.sm }}>
+                    <Button
+                      label="Scan audit sheets"
+                      icon="scan"
+                      onPress={() => (onOpenScanner ? onOpenScanner(a) : onOpenPdfDocs(a))}
+                      full
+                    />
+                    <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                      <Button
+                        label="Packet PDF"
+                        icon="download-outline"
+                        variant="neutral"
+                        onPress={() => Linking.openURL(
+                          `${MobileApiService.getBaseUrl()}/documents/project-branch/${a.projectBranchId}/download-pdf`,
+                        )}
+                        style={{ flex: 1 }}
+                      />
+                      <Button label="Upload" icon="cloud-upload-outline" variant="neutral" onPress={() => onOpenPdfDocs(a)} style={{ flex: 1 }} />
                     </View>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            )}
-          </View>
-        ))
+                  </View>
+                )}
+
+                {a.status === 'COMPLETED' && a.queries && a.queries.length > 0 && (
+                  <Button
+                    label={`${a.queries.length} clarification${a.queries.length > 1 ? 's' : ''} from the desk`}
+                    icon="chatbubble-ellipses-outline"
+                    variant="accent"
+                    onPress={() => (onOpenQueryChat ? onOpenQueryChat(a) : onOpenPdfDocs(a))}
+                    full
+                  />
+                )}
+              </Card>
+            </FadeIn>
+          );
+        })
       )}
+    </View>
+  );
+};
+
+const Fact: React.FC<{
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  tone?: 'success' | 'warning';
+}> = ({ icon, label, value, tone }) => {
+  const t = useTheme();
+  const color = tone === 'success' ? t.colors.success : tone === 'warning' ? t.colors.warning : t.colors.text;
+  return (
+    <View style={{ flex: 1, gap: 4 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+        <Icon name={icon} size={12} color={t.colors.textFaint} />
+        <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+      </View>
+      <AppText variant="bodyStrong" numberOfLines={1} style={{ color }}>{value}</AppText>
     </View>
   );
 };

@@ -216,9 +216,45 @@ export class UserService {
   }
 
   /** Admin-initiated reset — there was no way to help a locked-out staff member. */
+  /**
+   * Clears a lockout without touching the password — the standard IAM split
+   * between "unlock" and "reset password". Only meaningful when the account is
+   * actually LOCKED; a deliberately SUSPENDED account stays suspended.
+   */
+  async unlockAccount(id: string, actorId: string): Promise<UserEntity> {
+    const user = await this.findById(id);
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    if (user.status === UserStatus.LOCKED) {
+      user.status = UserStatus.ACTIVE;
+    }
+    user.updatedBy = actorId;
+    const saved = await this.userRepository.save(user);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'USER_UNLOCKED',
+      entityType: 'USER',
+      entityId: id,
+      userId: actorId,
+      remarks: `${user.username} unlocked by an administrator`,
+    });
+
+    return saved;
+  }
+
   async resetPassword(id: string, newPassword: string, actorId: string): Promise<void> {
     const user = await this.findById(id);
     user.passwordHash = await bcrypt.hash(newPassword, 12);
+    // An admin resetting a password is, in practice, always trying to get someone
+    // back in — including someone the login flow auto-locked after 5 failed
+    // attempts. Without this the reset silently did not work: the account would
+    // still fail lockedUntil / status !== ACTIVE checks on the very next login.
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    if (user.status === UserStatus.LOCKED) {
+      user.status = UserStatus.ACTIVE;
+    }
     user.updatedBy = actorId;
     await this.userRepository.save(user);
 
@@ -279,7 +315,16 @@ export class UserService {
     return saved;
   }
 
+  /**
+   * Every role with its full permission set. The frontend previously assigned
+   * whole roles to a user with no visibility into what each one actually
+   * grants — this is what makes a real permission matrix possible instead of a
+   * list of opaque role-name checkboxes.
+   */
   async findAllRoles(): Promise<RoleEntity[]> {
-    return this.roleRepository.find();
+    return this.roleRepository.find({
+      relations: ['permissions'],
+      order: { name: 'ASC' },
+    });
   }
 }

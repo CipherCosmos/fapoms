@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { View, Text, Platform } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
+import { Icon } from './ui/primitives';
 import { MapRenderProps } from './MapWeb';
 
 // Native (Android/iOS) implementation of the in-app map.
@@ -65,7 +66,7 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({ origin, destina
           gap: 4,
         }}
       >
-        <Ionicons name="navigate" size={12} color="#38bdf8" />
+        <Icon name="navigate" size={12} color="#38bdf8" />
         <Text style={{ fontSize: 10, color: '#94a3b8' }}>Live traffic</Text>
       </View>
     </View>

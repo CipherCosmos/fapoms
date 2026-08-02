@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Platform } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { Ionicons } from '@expo/vector-icons';
+import { Icon } from './ui/primitives';
 
 interface NotificationDetailModalProps {
   visible: boolean;
@@ -52,7 +53,7 @@ export const NotificationDetailModal: React.FC<NotificationDetailModalProps> = (
               <Text style={badgeText}>ASSIGNMENT DETAILS</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={{ padding: 4 }}>
-              <Ionicons name="close" size={18} color="#94a3b8" />
+              <Icon name="close" size={18} color="#94a3b8" />
             </TouchableOpacity>
           </View>
 

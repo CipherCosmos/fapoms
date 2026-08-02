@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Icon } from './ui/primitives';
 
 // Web implementation of the in-app map. Uses Leaflet + OpenStreetMap tiles with an
 // optional OSRM route polyline. Kept free with no API key. Native uses react-native-maps.
@@ -127,7 +128,7 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
           zIndex: 1000,
         }}
       >
-        <Ionicons name="navigate" size={12} color="#38bdf8" />
+        <Icon name="navigate" size={12} color="#38bdf8" />
         <Text style={{ fontSize: 10, color: '#94a3b8' }}>OpenStreetMap</Text>
       </View>
     </View>

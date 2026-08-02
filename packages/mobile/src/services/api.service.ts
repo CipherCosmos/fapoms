@@ -233,52 +233,6 @@ export class MobileApiService {
     } catch (err: any) {
       return { verified: false, error: err?.message || 'Network error.' };
     }
-  }> {
-    try {
-      const response = await fetch(`${API_BASE_URL}/assayers`, {
-        headers: this.getHeaders(),
-      });
-      if (!response.ok) {
-        return { verified: false, error: 'Unable to reach FAPOMS Assayer Master Database.' };
-      }
-      const data = await response.json();
-      const items: any[] = Array.isArray(data) ? data : (data.items || []);
-
-      // Exact-identifier match only — assayerCode, phone, email, or full display name.
-      // No fuzzy/substring matching and no "first item in the list" fallback: every
-      // assayer is a distinct individual, so an identifier that doesn't precisely match
-      // must never resolve to someone else's identity.
-      const searchKey = identifier.trim().toLowerCase();
-      const matchedAssayer = items.find(
-        (a: any) =>
-          a.assayerCode?.toLowerCase() === searchKey ||
-          a.phone?.toLowerCase() === searchKey ||
-          a.email?.toLowerCase() === searchKey ||
-          `${a.firstName} ${a.lastName}`.toLowerCase() === searchKey ||
-          a.id === identifier.trim()
-      );
-
-      if (!matchedAssayer) {
-        return {
-          verified: false,
-          error: 'Assayer code, phone, or email not registered in the FAPOMS Master Database.',
-        };
-      }
-
-      const fullName = `${matchedAssayer.firstName} ${matchedAssayer.lastName}`;
-      return {
-        verified: true,
-        assayer: {
-          id: matchedAssayer.id,
-          code: matchedAssayer.assayerCode,
-          name: fullName,
-          phone: matchedAssayer.phone,
-          status: matchedAssayer.lifecycleStatus,
-        },
-      };
-    } catch (err: any) {
-      return { verified: false, error: 'Database network error during identity check.' };
-    }
   }
 
   /**

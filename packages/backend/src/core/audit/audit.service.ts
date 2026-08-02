@@ -94,4 +94,20 @@ export class AuditService {
 
     return { events, total };
   }
+
+  /** The global feed: everything, most recent first, optionally narrowed by category. */
+  async getRecentActivity(
+    limit = 50,
+    offset = 0,
+    category?: string,
+  ): Promise<{ events: AuditEventEntity[]; total: number }> {
+    const [events, total] = await this.auditRepository.findAndCount({
+      where: category ? { category } : {},
+      order: { occurredAt: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
+
+    return { events, total };
+  }
 }

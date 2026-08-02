@@ -19,6 +19,7 @@ import { MobileApiService } from '../services/api.service';
 import { connectMobileSocket } from '../services/socket';
 import { MLKitScannerModal } from './MLKitScannerModal';
 import { Ionicons } from '@expo/vector-icons';
+import { Icon } from './ui/primitives';
 
 interface AssayerQueryChatModalProps {
   visible: boolean;
@@ -179,7 +180,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
             </Text>
           </View>
           <View style={styles.lockBadge}>
-            <Ionicons name="lock-closed" size={10} color="#00a884" />
+            <Icon name="lock-closed" size={10} color="#00a884" />
             <Text style={styles.lockText}>Confidential</Text>
           </View>
         </View>
@@ -194,14 +195,14 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           {/* Encryption Banner */}
           <View style={styles.encryptedBanner}>
             <Text style={styles.encryptedText}>
-              <Ionicons name="lock-closed" size={10} color="#ffe596" /> Messages & files are end-to-end encrypted within FAPOMS. No third-party access.
+              <Icon name="lock-closed" size={10} color="#ffe596" /> Messages & files are end-to-end encrypted within FAPOMS. No third-party access.
             </Text>
           </View>
 
           {/* Queries / Messages stream across ALL queries for this audit */}
           {queries.length === 0 ? (
             <View style={styles.emptyState}>
-              <Ionicons name="chatbubble" size={36} color="#8696a0" />
+              <Icon name="chatbubble" size={36} color="#8696a0" />
               <Text style={styles.emptyStateText}>No active queries for this branch.</Text>
             </View>
           ) : (
@@ -263,7 +264,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                                   ? new Date(q.respondedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                   : 'Just now'}
                               </Text>
-                              <Ionicons name="checkmark-done" size={10} color="#53bdeb" />
+                              <Icon name="checkmark-done" size={10} color="#53bdeb" />
                             </View>
                           </TouchableOpacity>
                         );
@@ -317,10 +318,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                               <Image source={{ uri: fullUrl }} style={styles.imagePreview} />
                             ) : (
                               <View style={styles.fileDocRow}>
-                                <Ionicons name="document-text" size={24} color="#e9edef" />
+                                <Icon name="document-text" size={24} color="#e9edef" />
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.fileName}>{att.fileName || `Document #${idx + 1}`}</Text>
-                                  <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '700', marginTop: 2 }}><Ionicons name="download" size={10} color="#34d399" /> Tap to Save / Download</Text>
+                                  <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '700', marginTop: 2 }}><Icon name="download" size={10} color="#34d399" /> Tap to Save / Download</Text>
                                 </View>
                               </View>
                             )}
@@ -328,7 +329,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                               <Text style={isOutgoing ? styles.outgoingMessageTime : styles.messageTime}>
                                 {new Date(att.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </Text>
-                              {isOutgoing && <Ionicons name="checkmark-done" size={10} color="#53bdeb" />}
+                              {isOutgoing && <Icon name="checkmark-done" size={10} color="#53bdeb" />}
                             </View>
                           </TouchableOpacity>
                         );
@@ -344,11 +345,11 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         {replyToMessage && (
           <View style={styles.replyBanner}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.replySender}><Ionicons name="return-down-back" size={12} color="#00a884" /> Replying to {replyToMessage.sender}</Text>
+              <Text style={styles.replySender}><Icon name="return-down-back" size={12} color="#00a884" /> Replying to {replyToMessage.sender}</Text>
               <Text style={styles.replyPreview} numberOfLines={1}>{replyToMessage.text}</Text>
             </View>
             <TouchableOpacity onPress={() => setReplyToMessage(null)}>
-              <Ionicons name="close" size={16} color="#ff6b6b" />
+              <Icon name="close" size={16} color="#ff6b6b" />
             </TouchableOpacity>
           </View>
         )}
@@ -358,10 +359,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           <View style={styles.pendingBar}>
             {attachments.map((att, idx) => (
               <View key={idx} style={styles.pendingTag}>
-                <Ionicons name="paperclip" size={11} color="#e9edef" />
+                <Icon name="attach" size={11} color="#e9edef" />
                 <Text style={styles.pendingTagText}>{att.fileName}</Text>
                 <TouchableOpacity onPress={() => removePendingAttachment(idx)}>
-                  <Ionicons name="close" size={11} color="#ff6b6b" />
+                  <Icon name="close" size={11} color="#ff6b6b" />
                 </TouchableOpacity>
               </View>
             ))}
@@ -372,17 +373,17 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         {queries.length > 0 && queries.every((q: any) => q.status === 'RESOLVED') ? (
           <View style={{ backgroundColor: '#182229', padding: 14, borderTopWidth: 1, borderTopColor: '#2a3942', alignItems: 'center' }}>
             <Text style={{ color: '#8696a0', fontSize: 12, fontWeight: '700' }}>
-              <Ionicons name="lock-closed" size={10} color="#8696a0" /> Clarification Query Marked Resolved by Data Entry. Chat is Closed.
+              <Icon name="lock-closed" size={10} color="#8696a0" /> Clarification Query Marked Resolved by Data Entry. Chat is Closed.
             </Text>
           </View>
         ) : (
           <View style={styles.inputBar}>
             <TouchableOpacity style={styles.iconBtn} onPress={handlePickAttachment}>
-              <Ionicons name="paperclip" size={22} color="#8696a0" />
+              <Icon name="attach" size={22} color="#8696a0" />
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.iconBtn} onPress={() => setIsCameraActive(true)}>
-              <Ionicons name="camera" size={22} color="#8696a0" />
+              <Icon name="camera" size={22} color="#8696a0" />
             </TouchableOpacity>
 
             <TextInput
@@ -399,7 +400,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
               onPress={handleSendResponse}
               disabled={isSubmitting}
             >
-              <Text style={styles.sendIcon}>{isSubmitting ? '...' : <Ionicons name="send" size={16} color="#fff" />}</Text>
+              <Text style={styles.sendIcon}>{isSubmitting ? '...' : <Icon name="send" size={16} color="#fff" />}</Text>
             </TouchableOpacity>
           </View>
         )}

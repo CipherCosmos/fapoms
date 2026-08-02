@@ -191,6 +191,15 @@ export class UserController {
     };
   }
 
+  @Post(':id/unlock')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('user:edit:organization')
+  @ApiOperation({ summary: 'Clear a lockout without changing the password' })
+  async unlockAccount(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    const user = await this.userService.unlockAccount(id, req.user.id);
+    return { success: true, data: this.sanitizeUser(user) };
+  }
+
   @Post(':id/reset-password')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
   @RequirePermissions('user:edit:organization')
@@ -205,8 +214,15 @@ export class UserController {
   }
 
   /** Remove sensitive fields before sending to client */
+  /**
+   * Only the password hash is a secret. `failedLoginAttempts` and `lockedUntil`
+   * were stripped here too, on every response — meaning the only people who can
+   * even reach this admin-gated controller had no way to see that an account
+   * was locked out, or why, and no signal that a reset actually needed to touch
+   * the lock state (see UserService.resetPassword).
+   */
   private sanitizeUser(user: any) {
-    const { passwordHash, failedLoginAttempts, lockedUntil, ...safe } = user;
+    const { passwordHash, ...safe } = user;
     return safe;
   }
 }
