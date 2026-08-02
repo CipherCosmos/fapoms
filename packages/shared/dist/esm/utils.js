@@ -40,4 +40,33 @@ export function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
+/**
+ * Branch and assayer state names come from different sources — client branch
+ * lists and internal rosters — and do not agree: a branch is in `MAHARASHTRA`
+ * while an assayer living there is recorded under `Maharashtra` or `maharashtra`,
+ * and `ANDRAPRADESH` faces `A.P`. Comparing raw values treats these as different
+ * states. Canonicalise for comparison; keep the original for display.
+ */
+const STATE_ALIASES = {
+    AP: 'ANDHRA PRADESH', 'A P': 'ANDHRA PRADESH', ANDRAPRADESH: 'ANDHRA PRADESH',
+    ANDHRAPRADESH: 'ANDHRA PRADESH', 'ANDHRA PRADESH': 'ANDHRA PRADESH',
+    TS: 'TELANGANA', TELANGANA: 'TELANGANA',
+    TN: 'TAMIL NADU', TAMILNADU: 'TAMIL NADU', 'TAMIL NADU': 'TAMIL NADU',
+    KL: 'KERALA', KERALA: 'KERALA',
+    KA: 'KARNATAKA', KARNATAKA: 'KARNATAKA',
+    MH: 'MAHARASHTRA', MAHARASHTRA: 'MAHARASHTRA',
+    OD: 'ODISHA', ORISSA: 'ODISHA', ODISHA: 'ODISHA',
+    RJ: 'RAJASTHAN', RAJASTHAN: 'RAJASTHAN',
+    UP: 'UTTAR PRADESH', UTTARPRADESH: 'UTTAR PRADESH', 'UTTAR PRADESH': 'UTTAR PRADESH',
+    PY: 'PUDUCHERRY', PONDICHERRY: 'PUDUCHERRY', PUDUCHERRY: 'PUDUCHERRY',
+    DL: 'DELHI', 'NEW DELHI': 'DELHI', DELHI: 'DELHI',
+    GJ: 'GUJARAT', GUJARAT: 'GUJARAT', WB: 'WEST BENGAL', 'WEST BENGAL': 'WEST BENGAL',
+};
+/** Uppercase, strip punctuation, collapse spaces, then resolve known aliases. */
+export function canonicalState(raw) {
+    if (!raw)
+        return 'UNKNOWN';
+    const k = String(raw).toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
+    return STATE_ALIASES[k] ?? STATE_ALIASES[k.replace(/\s/g, '')] ?? k;
+}
 //# sourceMappingURL=utils.js.map

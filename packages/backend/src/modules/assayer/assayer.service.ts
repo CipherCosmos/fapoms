@@ -1114,7 +1114,35 @@ export class AssayerService implements OnModuleInit {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return { activities, total };
+    return { activities: await this.withActorNames(activities), total };
+  }
+
+  /**
+   * Fills in `performedByName`, which is written as null at event time — the audit
+   * trail stored only an actor UUID, so every history view rendered "system" no
+   * matter who actually made the change. Resolved on read so existing rows gain
+   * names too. An actor is a staff user, or an assayer acting on their own record.
+   */
+  private async withActorNames(activities: AssayerActivityEntity[]): Promise<AssayerActivityEntity[]> {
+    const ids = [...new Set(activities.map((a) => a.performedBy).filter(Boolean))] as string[];
+    if (ids.length === 0) return activities;
+
+    const names = new Map<string, string>();
+    const rows = await this.activityRepository.manager.query(
+      `SELECT id, COALESCE(NULLIF(TRIM(CONCAT_WS(' ', first_name, last_name)), ''), username) AS name
+         FROM users WHERE id = ANY($1)
+       UNION ALL
+       SELECT id, display_name AS name FROM assayers WHERE id = ANY($1)`,
+      [ids],
+    );
+    for (const r of rows) names.set(r.id, r.name);
+
+    return activities.map((a) => {
+      if (!a.performedByName && a.performedBy && names.has(a.performedBy)) {
+        a.performedByName = names.get(a.performedBy)!;
+      }
+      return a;
+    });
   }
 
   // ---- Commercial Profiles ----

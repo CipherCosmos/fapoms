@@ -35,6 +35,10 @@ export class OperationsSnapshotService {
     // Works the queues rather than steering the book — no money, no portfolio view.
     OPERATIONS_EXECUTIVE: ['attention', 'due', 'funnel', 'documents'],
     FINANCE_MANAGER:      ['money', 'projects', 'activity'],
+    // HR steer people, not the audit book: capacity tells them whether the
+    // workforce can absorb the work, activity gives them the audit trail. The
+    // detail lives in the dedicated workforce console at /hr.
+    HR_MANAGER:           ['capacity', 'activity'],
     DOCUMENT_EXECUTIVE:   ['documents', 'due'],
     DATA_ENTRY_HEAD:      ['documents'],
     VALIDATION_MANAGER:   ['validation', 'documents', 'activity'],
@@ -50,6 +54,7 @@ export class OperationsSnapshotService {
     OPERATIONS_MANAGER:   'Coverage, capacity and delivery risk',
     OPERATIONS_EXECUTIVE: 'Your queues for today',
     FINANCE_MANAGER:      'Billing, collections and margin',
+    HR_MANAGER:           'Workforce readiness, compliance and staffing gaps',
     DOCUMENT_EXECUTIVE:   'Paperwork in and out',
     DATA_ENTRY_HEAD:      'Returned paperwork awaiting processing',
     VALIDATION_MANAGER:   'Validation throughput and open queries',

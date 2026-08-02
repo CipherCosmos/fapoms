@@ -207,7 +207,33 @@ export class MobileApiService {
     return response;
   }
 
+  /**
+   * Confirms an identifier before asking for a password.
+   *
+   * Previously downloaded the entire assayer roster from a public endpoint and
+   * matched client-side — which is why that endpoint had to be public, exposing
+   * every assayer's bcrypt hash and personal details to anyone who could reach
+   * the API. The server now answers for one identifier and returns only a name.
+   */
   static async verifyAssayerIdentity(identifier: string): Promise<{ verified: boolean; assayer?: any; error?: string }> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/verify-assayer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        return { verified: false, error: data?.message || 'Unable to reach FAPOMS.' };
+      }
+      if (!data.data?.verified) {
+        return { verified: false, error: 'That identifier was not recognised.' };
+      }
+      return { verified: true, assayer: data.data };
+    } catch (err: any) {
+      return { verified: false, error: err?.message || 'Network error.' };
+    }
+  }> {
     try {
       const response = await fetch(`${API_BASE_URL}/assayers`, {
         headers: this.getHeaders(),

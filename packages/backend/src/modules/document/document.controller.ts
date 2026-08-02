@@ -436,6 +436,7 @@ export class DocumentController {
   }
 
   @Get(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get document metadata' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const doc = await this.documentService.findOne(id);
@@ -534,7 +535,11 @@ export class DocumentController {
     SystemRole.OPERATIONS_MANAGER,
     SystemRole.OPERATIONS_EXECUTIVE,
     SystemRole.DOCUMENT_EXECUTIVE,
+    // The whole data entry desk opens returned packets, not just the head, and
+    // validation reviews them before they go back to the client.
     SystemRole.DATA_ENTRY_HEAD,
+    SystemRole.VALIDATION_MANAGER,
+    SystemRole.VALIDATOR,
   )
   @ApiOperation({ summary: 'Issue a short-lived signed download URL for a document' })
   async issueDownloadToken(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
@@ -562,6 +567,7 @@ export class DocumentController {
    * method — which is what answers "where is branch X's paperwork right now".
    */
   @Get(':id/trail')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Full transport/chain-of-custody trail for a document' })
   async getTransportTrail(@Param('id', ParseUUIDPipe) id: string) {
     const doc = await this.documentService.findOne(id);
@@ -744,14 +750,7 @@ export class DocumentController {
   }
 
   @Get('project-branch/:projectBranchId/assayer-view')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: "Dispatch-gated documents for a branch, with readiness so the field app can explain what to expect" })
   async assayerBranchDocuments(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
     const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
@@ -759,6 +758,7 @@ export class DocumentController {
   }
 
   @Get('assessment/:assessmentId')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get documents for an assessment' })
   async findByAssessment(@Param('assessmentId', ParseUUIDPipe) assessmentId: string) {
     const list = await this.documentService.findByAssessment(assessmentId);
@@ -773,7 +773,7 @@ export class DocumentController {
   }
 
   @Get()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get all system documents' })
   async findAll() {
     const list = await this.documentService.findAll();
@@ -781,6 +781,7 @@ export class DocumentController {
   }
 
   @Get('stats/summary')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get document statistics' })
   async getStats() {
     const stats = await this.documentService.getDocumentStats();
@@ -833,5 +834,58 @@ export class DocumentController {
     await this.assessmentRepository.update(assessmentId, { status: AssessmentStatus.COMPLETED });
 
     return { success: true, data: doc, message: 'Excel report uploaded successfully. Assessment marked COMPLETED.' };
+  }
+
+  // ── Data entry desk ───────────────────────────────────────────────────────
+
+  @Get('data-entry/queue')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
+    SystemRole.VALIDATION_MANAGER, SystemRole.OPERATIONS_MANAGER,
+  )
+  @ApiOperation({ summary: "Returned packets at the data entry desk and who owns each" })
+  async dataEntryQueue(@Query('assignedTo') assignedTo?: string) {
+    return { success: true, data: await this.documentService.dataEntryQueue(assignedTo) };
+  }
+
+  @Get('data-entry/mine')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATOR,
+  )
+  @ApiOperation({ summary: 'Packets delegated to the signed-in team member' })
+  async myDataEntryQueue(@Req() req: any) {
+    return { success: true, data: await this.documentService.dataEntryQueue(req.user.id) };
+  }
+
+  @Get('data-entry/team')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'People a returned packet can be delegated to' })
+  async dataEntryTeam() {
+    return { success: true, data: await this.documentService.dataEntryTeam() };
+  }
+
+  @Post(':id/assign-data-entry')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'Delegate a returned packet to a data entry team member' })
+  async assignDataEntry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { assigneeId: string },
+    @Req() req: any,
+  ) {
+    const doc = await this.documentService.assignForDataEntry(id, body.assigneeId, req.user.id);
+    return { success: true, data: doc };
+  }
+
+  @Post(':id/complete-data-entry')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATOR,
+  )
+  @ApiOperation({ summary: 'Hand a processed packet back to the data entry head' })
+  async completeDataEntry(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    const doc = await this.documentService.completeDataEntry(id, req.user.id);
+    return { success: true, data: doc };
   }
 }

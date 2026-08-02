@@ -8,6 +8,8 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -147,6 +149,16 @@ export class UserService {
     const user = await this.findById(id);
     const previousStatus = user.status;
 
+    // Deactivating yourself, or the last active SUPER_ADMINISTRATOR, leaves the
+    // system with nobody who can undo it through the API — the only way back
+    // would be a direct database edit. Neither check existed before this.
+    if (dto.status && dto.status !== UserStatus.ACTIVE && previousStatus === UserStatus.ACTIVE) {
+      if (id === updatedById) {
+        throw new ForbiddenException('You cannot deactivate your own account.');
+      }
+      await this.assertNotLastActiveSuperAdmin(id);
+    }
+
     if (dto.firstName !== undefined) user.firstName = dto.firstName;
     if (dto.lastName !== undefined) user.lastName = dto.lastName;
     if (dto.firstName || dto.lastName) {
@@ -189,6 +201,37 @@ export class UserService {
     return saved;
   }
 
+  /** Refuses the action if `excludingUserId` is the only active SUPER_ADMINISTRATOR left. */
+  private async assertNotLastActiveSuperAdmin(excludingUserId: string): Promise<void> {
+    const count = await this.userRepository
+      .createQueryBuilder('u')
+      .innerJoin('u.roles', 'r')
+      .where('r.name = :name', { name: 'SUPER_ADMINISTRATOR' })
+      .andWhere('u.status = :status', { status: UserStatus.ACTIVE })
+      .andWhere('u.id != :id', { id: excludingUserId })
+      .getCount();
+    if (count === 0) {
+      throw new BadRequestException('At least one active SUPER_ADMINISTRATOR must remain.');
+    }
+  }
+
+  /** Admin-initiated reset — there was no way to help a locked-out staff member. */
+  async resetPassword(id: string, newPassword: string, actorId: string): Promise<void> {
+    const user = await this.findById(id);
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.updatedBy = actorId;
+    await this.userRepository.save(user);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'USER_PASSWORD_RESET',
+      entityType: 'USER',
+      entityId: id,
+      userId: actorId,
+      remarks: `Password reset for ${user.username} by an administrator`,
+    });
+  }
+
   async assignRoles(
     userId: string,
     roleIds: string[],
@@ -198,6 +241,16 @@ export class UserService {
     const roles = await this.roleRepository.find({
       where: { id: In(roleIds) }
     });
+
+    const hadSuperAdmin = user.roles?.some((r) => r.name === 'SUPER_ADMINISTRATOR');
+    const keepsSuperAdmin = roles.some((r) => r.name === 'SUPER_ADMINISTRATOR');
+    if (hadSuperAdmin && !keepsSuperAdmin) {
+      if (userId === assignedById) {
+        throw new ForbiddenException('You cannot remove your own SUPER_ADMINISTRATOR role.');
+      }
+      await this.assertNotLastActiveSuperAdmin(userId);
+    }
+
     user.roles = roles;
     user.updatedBy = assignedById;
     const saved = await this.userRepository.save(user);

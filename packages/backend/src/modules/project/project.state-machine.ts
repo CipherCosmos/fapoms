@@ -91,6 +91,14 @@ export class ProjectStateMachine {
     if (project.status === ProjectStatus.COMPLETED) {
       throw new BadRequestException('Cannot cancel a completed project.');
     }
+    // ARCHIVED and CANCELLED are terminal. Without this an archived project could
+    // be pulled back out into CANCELLED, undoing a closed record.
+    if (project.status === ProjectStatus.ARCHIVED) {
+      throw new BadRequestException('Cannot cancel an archived project.');
+    }
+    if (project.status === ProjectStatus.CANCELLED) {
+      throw new BadRequestException('Project is already cancelled.');
+    }
     const prev = project.status;
     project.status = ProjectStatus.CANCELLED;
     return new ProjectCancelledEvent(project.id, prev, project.status, userId);

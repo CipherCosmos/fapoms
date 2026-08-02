@@ -15,13 +15,13 @@ import {
   UseGuards,
   Req,
   ParseUUIDPipe,
-  BadRequestException,
-} from '@nestjs/common';
+  BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { SystemRole } from '@fapoms/shared';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 
 @ApiTags('Assignments')
 @ApiBearerAuth()
@@ -30,14 +30,18 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, 
 export class AssignmentController {
   constructor(private readonly assignmentService: AssignmentService) {}
 
+  // Was @Public(), and any non-UUID path segment fell through to findAll() — so
+  // `GET /assignments/assayer/x` returned the entire assignment book to an
+  // unauthenticated caller. Now authenticated, and an assayer may only read their
+  // own work.
   @Get('assayer/:assayerId')
-  @Public()
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get active assignments for a specific assayer (Mobile App API)' })
-  async findByAssayer(@Param('assayerId') assayerId: string) {
-    const isUuid = /^[0-9a-fA-F-]{36}$/.test(assayerId);
-    if (!isUuid) {
-      const result = await this.assignmentService.findAll(1, 100);
-      return { success: true, items: result.assignments };
+  async findByAssayer(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any) {
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
+    if (!isStaff && req.user?.id !== assayerId) {
+      throw new ForbiddenException('You may only view your own assignments');
     }
     const items = await this.assignmentService.findByAssayer(assayerId);
     return { success: true, items };
@@ -86,6 +90,9 @@ export class AssignmentController {
     };
   }
 
+  // The whole assignment book — staff only. Assayers reach their own work via
+  // GET /assignments/assayer/:id.
+  @Roles(...STAFF_ROLES)
   @Get()
   @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, assessmentStatus, or priority' })
   async findAll(

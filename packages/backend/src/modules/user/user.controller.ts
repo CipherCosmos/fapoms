@@ -18,10 +18,10 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray } from 'class-validator';
+import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum } from 'class-validator';
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, UserStatus } from '@fapoms/shared';
 
 class CreateUserRequestDto implements CreateUserDto {
   @IsString() @IsNotEmpty()
@@ -52,6 +52,34 @@ class CreateUserRequestDto implements CreateUserDto {
 class AssignRolesDto {
   @IsArray()
   roleIds: string[];
+}
+
+/**
+ * The controller previously typed this body as the bare `UpdateUserDto`
+ * interface, which class-validator cannot see — nothing about a PUT request
+ * was actually validated, including `status`, which accepted any string at all
+ * rather than one of the real UserStatus values.
+ */
+class UpdateUserRequestDto implements UpdateUserDto {
+  @IsOptional() @IsString()
+  firstName?: string;
+
+  @IsOptional() @IsString()
+  lastName?: string;
+
+  @IsOptional() @IsString()
+  phone?: string;
+
+  @IsOptional() @IsString()
+  departmentId?: string;
+
+  @IsOptional() @IsEnum(UserStatus)
+  status?: UserStatus;
+}
+
+class ResetPasswordRequestDto {
+  @IsString() @MinLength(8)
+  newPassword: string;
 }
 
 @ApiTags('Users')
@@ -133,7 +161,7 @@ export class UserController {
   @ApiOperation({ summary: 'Update user' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateUserDto,
+    @Body() dto: UpdateUserRequestDto,
     @Req() req: any,
   ) {
     const user = await this.userService.updateUser(id, dto, req.user.id);
@@ -161,6 +189,19 @@ export class UserController {
       success: true,
       data: this.sanitizeUser(user),
     };
+  }
+
+  @Post(':id/reset-password')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('user:edit:organization')
+  @ApiOperation({ summary: 'Admin resets a user\'s password' })
+  async resetPassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResetPasswordRequestDto,
+    @Req() req: any,
+  ) {
+    await this.userService.resetPassword(id, dto.newPassword, req.user.id);
+    return { success: true, data: { message: 'Password reset.' } };
   }
 
   /** Remove sensitive fields before sending to client */

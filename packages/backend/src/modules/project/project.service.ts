@@ -110,6 +110,9 @@ function getStateZone(stateName: string): string {
   return 'East Zone';
 }
 
+/** Partial edit of a project. Lifecycle moves go through transition(). */
+export type UpdateProjectDto = Partial<CreateProjectDto>;
+
 export interface CreateProjectDto {
   name: string;
   projectNumber: string;
@@ -171,7 +174,12 @@ export class ProjectService implements OnModuleInit {
         to: ProjectStatus.COMPLETED,
       },
       {
-        from: [ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION, ProjectStatus.VALIDATION],
+        // ON_HOLD was missing, so a parked project had no abandon path — it had to
+        // be resumed into SCHEDULING or EXECUTION first just to be cancelled.
+        from: [
+          ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING,
+          ProjectStatus.EXECUTION, ProjectStatus.VALIDATION, ProjectStatus.ON_HOLD,
+        ],
         to: ProjectStatus.CANCELLED,
       },
       {
@@ -246,14 +254,58 @@ export class ProjectService implements OnModuleInit {
     return this.projectQueryService.findOne(id);
   }
 
-  async update(id: string, dto: CreateProjectDto, userId: string): Promise<ProjectEntity> {
+  /**
+   * Moves a project to `targetStatus`, or explains why it cannot go there.
+   *
+   * Each branch delegates to the existing per-status method, so the state machine
+   * remains the only place transition legality is decided.
+   */
+  async transition(id: string, targetStatus: string, userId: string, reason?: string): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    if (project.status === targetStatus) {
+      throw new BadRequestException(`Project is already ${targetStatus}.`);
+    }
+
+    const moves: Record<string, () => Promise<any>> = {
+      [ProjectStatus.PLANNING]: () => this.startProjectPlanning(id, userId),
+      [ProjectStatus.SCHEDULING]: () => this.readyProjectForScheduling(id, userId),
+      [ProjectStatus.EXECUTION]: () => this.startProjectExecution(id, userId),
+      [ProjectStatus.VALIDATION]: () => this.startProjectValidation(id, userId),
+      [ProjectStatus.COMPLETED]: () => this.completeProject(id, userId),
+      [ProjectStatus.CANCELLED]: () => this.cancelProject(id, userId),
+      [ProjectStatus.ON_HOLD]: () => this.holdProject(id, userId),
+      [ProjectStatus.ARCHIVED]: () => this.archiveProject(id, userId),
+    };
+
+    const move = moves[targetStatus];
+    if (!move) throw new BadRequestException(`Unknown project status: ${targetStatus}`);
+    await move();
+
+    const updated = await this.findOne(id);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'PROJECT_STATUS_CHANGED',
+      entityType: 'PROJECT',
+      entityId: id,
+      userId,
+      remarks: reason
+        ? `${project.status} → ${targetStatus}: ${reason}`
+        : `${project.status} → ${targetStatus}`,
+    });
+    return updated;
+  }
+
+  async update(id: string, dto: UpdateProjectDto, userId: string): Promise<ProjectEntity> {
     const project = await this.findOne(id);
 
-    project.name = dto.name;
-    project.projectNumber = dto.projectNumber;
-    project.description = dto.description ?? null;
-    project.clientId = dto.clientId;
-    project.priority = dto.priority as any;
+    // Only touch what the caller actually sent. These were unconditional, so any
+    // omitted field was silently wiped — `description` in particular went null on
+    // every edit that did not resend it.
+    if (dto.name !== undefined) project.name = dto.name;
+    if (dto.projectNumber !== undefined) project.projectNumber = dto.projectNumber;
+    if (dto.description !== undefined) project.description = dto.description ?? null;
+    if (dto.clientId !== undefined) project.clientId = dto.clientId;
+    if (dto.priority !== undefined) project.priority = dto.priority as any;
     if (dto.startDate) project.startDate = new Date(dto.startDate);
     if (dto.endDate) project.endDate = new Date(dto.endDate);
     if (dto.budget !== undefined) project.budget = dto.budget;

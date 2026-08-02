@@ -24,7 +24,8 @@ export class SystemDashboardController {
   @Roles(
     SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
     SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.FINANCE_MANAGER, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
+    SystemRole.FINANCE_MANAGER, SystemRole.HR_MANAGER,
+    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
     SystemRole.DOCUMENT_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD,
     SystemRole.READ_ONLY_AUDITOR, SystemRole.CLIENT_USER,
   )

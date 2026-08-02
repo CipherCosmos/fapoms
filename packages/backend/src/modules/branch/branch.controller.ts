@@ -18,6 +18,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateBranchRequestDto implements CreateBranchDto {
@@ -110,6 +111,8 @@ class CreateDocumentRequestDto implements CreateDocumentDto {
 @ApiTags('Branches')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('branches')
 export class BranchController {
   constructor(private readonly branchService: BranchService) {}

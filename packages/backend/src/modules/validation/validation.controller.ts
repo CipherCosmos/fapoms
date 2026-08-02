@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Re
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ValidationService, CreateValidationCaseDto } from './validation.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ValidationStatus } from '@fapoms/shared';
 
 import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString } from 'class-validator';
@@ -40,12 +41,17 @@ class TransitionValidationCaseDto {
 @ApiTags('Validation')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('validation')
 export class ValidationController {
   constructor(private readonly validationService: ValidationService) {}
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER)
+  // The data entry head validates and submits, per how this team actually
+  // works — they were previously locked out of the pipeline stage that is their
+  // own job.
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
   @RequirePermissions('validation:create:organization')
   @ApiOperation({ summary: 'Register a project branch for document validation' })
   async create(@Body() dto: CreateValidationCaseRequestDto, @Req() req: any) {
@@ -58,8 +64,8 @@ export class ValidationController {
 
   @Get()
   @ApiOperation({ summary: 'List all validation queue cases' })
-  async findAll(@Query('page') page = 1, @Query('limit') limit = 50) {
-    const { validationCases, total } = await this.validationService.findAll(Number(page), Number(limit));
+  async findAll(@Query('page') page = 1, @Query('limit') limit = 50, @Query('projectBranchId') projectBranchId?: string) {
+    const { validationCases, total } = await this.validationService.findAll(Number(page), Number(limit), projectBranchId);
     return {
       success: true,
       data: validationCases,
@@ -84,7 +90,7 @@ export class ValidationController {
   }
 
   @Post(':id/assign')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Assign a validation case to a validator reviewer' })
   async assign(
     @Param('id', ParseUUIDPipe) id: string,
@@ -99,7 +105,7 @@ export class ValidationController {
   }
 
   @Post(':id/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Transition validation case status' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

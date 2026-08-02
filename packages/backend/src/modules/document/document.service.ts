@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ValidationService } from '../validation/validation.service';
 import { Repository, In } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
@@ -27,6 +28,124 @@ export interface CreateDocumentDto {
 export class DocumentService {
   private readonly logger = new Logger(DocumentService.name);
 
+  // ── Data entry desk ───────────────────────────────────────────────────────
+
+  /**
+   * The head's distribution board: every returned packet at the desk, with who
+   * owns it. Status alone said a packet had arrived but not who was working it,
+   * so allocation happened outside the system and nothing could be chased.
+   */
+  async dataEntryQueue(assignedTo?: string): Promise<any> {
+    const qb = this.documentRepository
+      .createQueryBuilder('d')
+      .leftJoin('project_branches', 'pb', 'pb.id = d.project_branch_id')
+      .leftJoin('branches', 'b', 'b.id = pb.branch_id')
+      .leftJoin('users', 'u', 'u.id = d.assigned_to_user_id')
+      .select([
+        'd.id AS id', 'd.file_name AS "fileName"', 'd.status AS status',
+        'd.received_at AS "receivedAt"', 'd.sent_to_data_entry_at AS "sentToDataEntryAt"',
+        'd.assigned_to_user_id AS "assignedToUserId"', 'd.assigned_at AS "assignedAt"',
+        'd.data_entry_completed_at AS "completedAt"',
+        'd.project_branch_id AS "projectBranchId"',
+        'b.name AS "branchName"', 'b.branch_code AS "branchCode"',
+        `COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS "assigneeName"`,
+      ])
+      .where('d.is_active = true')
+      .andWhere('d.type = :type', { type: DocumentType.AUDITED_RETURN_PDF })
+      .andWhere('d.status IN (:...statuses)', {
+        statuses: [DocumentStatus.RECEIVED, DocumentStatus.SENT_TO_DATA_ENTRY, DocumentStatus.SENT_TO_EXTERNAL_OCR],
+      });
+
+    if (assignedTo === 'unassigned') qb.andWhere('d.assigned_to_user_id IS NULL');
+    else if (assignedTo) qb.andWhere('d.assigned_to_user_id = :uid', { uid: assignedTo });
+
+    const rows = await qb.orderBy('d.received_at', 'ASC', 'NULLS LAST').getRawMany();
+
+    return {
+      total: rows.length,
+      unassigned: rows.filter((r: any) => !r.assignedToUserId).length,
+      inProgress: rows.filter((r: any) => r.assignedToUserId && !r.completedAt).length,
+      completed: rows.filter((r: any) => r.completedAt).length,
+      items: rows,
+    };
+  }
+
+  /**
+   * The people a packet can be delegated to. The head cannot call GET /users —
+   * that is admin-only — so without this they had no way to pick an assignee.
+   */
+  async dataEntryTeam(): Promise<any[]> {
+    return this.documentRepository.manager.query(`
+      SELECT DISTINCT u.id,
+             COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS name,
+             u.username, r.name AS role
+      FROM users u
+      JOIN user_roles ur ON ur.user_id = u.id
+      JOIN roles r ON r.id = ur.role_id
+      WHERE u.is_active = true
+        AND r.name IN ('DATA_ENTRY_HEAD', 'DOCUMENT_EXECUTIVE', 'VALIDATOR')
+      ORDER BY name
+    `);
+  }
+
+  /** Head delegates a returned packet to a team member. */
+  async assignForDataEntry(documentId: string, assigneeId: string, actorId: string): Promise<DocumentEntity> {
+    const doc = await this.findOne(documentId);
+    if (doc.type !== DocumentType.AUDITED_RETURN_PDF) {
+      throw new BadRequestException('Only returned audit packets are delegated to data entry.');
+    }
+    doc.assignedToUserId = assigneeId;
+    doc.assignedAt = new Date();
+    doc.assignedBy = actorId;
+    doc.dataEntryCompletedAt = null;
+    if (doc.status === DocumentStatus.RECEIVED) {
+      doc.status = DocumentStatus.SENT_TO_DATA_ENTRY;
+      doc.sentToDataEntryAt = doc.sentToDataEntryAt ?? new Date();
+    }
+    doc.updatedBy = actorId;
+    const saved = await this.documentRepository.save(doc);
+
+    // Opens the case (at PENDING) as soon as work starts, not only at hand-back,
+    // so the member has somewhere to raise a clarification while still processing.
+    if (doc.projectBranchId) {
+      try {
+        await this.validationService.getOrCreateForBranch(doc.projectBranchId, doc.assessmentId ?? null, actorId);
+      } catch (e) {
+        this.logger.warn(`Could not open validation case for branch ${doc.projectBranchId}: ${(e as Error).message}`);
+      }
+    }
+    return saved;
+  }
+
+  /**
+   * Member hands the processed packet back to the head. This is the moment the
+   * two previously separate worlds join: the returned document and its
+   * validation case. Before this, nothing ever advanced a case past PENDING, so
+   * the head's review queue and the data entry queue had no connection at all.
+   */
+  async completeDataEntry(documentId: string, actorId: string): Promise<DocumentEntity> {
+    const doc = await this.findOne(documentId);
+    if (!doc.assignedToUserId) {
+      throw new BadRequestException('This packet has not been delegated to anyone.');
+    }
+    doc.dataEntryCompletedAt = new Date();
+    doc.updatedBy = actorId;
+    const saved = await this.documentRepository.save(doc);
+
+    if (doc.projectBranchId) {
+      try {
+        await this.validationService.getOrAdvanceForHandBack(doc.projectBranchId, doc.assessmentId ?? null, actorId);
+      } catch (e) {
+        // A validation hiccup should not lose the hand-back itself — the head can
+        // still see the packet is done and open its case manually if this fails.
+        this.logger.warn(`Could not advance validation case for branch ${doc.projectBranchId}: ${(e as Error).message}`);
+      }
+    }
+    return saved;
+  }
+
+
+
   constructor(
     @InjectRepository(DocumentEntity)
     private readonly documentRepository: Repository<DocumentEntity>,
@@ -41,6 +160,7 @@ export class DocumentService {
     private readonly notificationService: NotificationService,
     private readonly pushNotificationService: PushNotificationService,
     private readonly localStorageService: LocalStorageService,
+    private readonly validationService: ValidationService,
   ) {}
 
   async create(dto: CreateDocumentDto, userId: string): Promise<DocumentEntity> {

@@ -29,6 +29,12 @@ class LoginDto {
   password: string;
 }
 
+class VerifyAssayerDto {
+  @IsString()
+  @IsNotEmpty()
+  identifier: string;
+}
+
 class RefreshDto {
   @IsString()
   @IsNotEmpty()
@@ -45,6 +51,28 @@ class BiometricLoginDto {
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  /**
+   * Confirms an assayer identifier exists, before the password step.
+   *
+   * The app previously did this by downloading the entire assayer list from a
+   * public `GET /assayers` and matching client-side — which is why that endpoint
+   * was public, and why every assayer's bcrypt hash and personal details were
+   * readable by anyone who could reach the API. This returns only what the login
+   * screen needs to greet the user, for one exact identifier.
+   */
+  @Post('verify-assayer')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Check an assayer identifier exists (pre-login, no credentials returned)' })
+  async verifyAssayer(@Body() dto: VerifyAssayerDto) {
+    const found = await this.authService.verifyAssayerIdentifier(dto.identifier);
+    return {
+      success: true,
+      // Deliberately minimal: existence plus a display name. No contact details,
+      // no banking, no identifiers beyond the one already supplied by the caller.
+      data: found ? { verified: true, displayName: found.displayName, assayerCode: found.assayerCode } : { verified: false },
+    };
+  }
 
   @Get('status')
   @HttpCode(HttpStatus.OK)

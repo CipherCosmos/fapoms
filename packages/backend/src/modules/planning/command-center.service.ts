@@ -11,28 +11,11 @@ import { DataSource } from 'typeorm';
  *
  * Canonicalising for comparison only; the display label stays human-readable.
  */
-const STATE_ALIASES: Record<string, string> = {
-  AP: 'ANDHRA PRADESH', 'A P': 'ANDHRA PRADESH', ANDRAPRADESH: 'ANDHRA PRADESH',
-  ANDHRAPRADESH: 'ANDHRA PRADESH', 'ANDHRA PRADESH': 'ANDHRA PRADESH',
-  TS: 'TELANGANA', TELANGANA: 'TELANGANA',
-  TN: 'TAMIL NADU', TAMILNADU: 'TAMIL NADU', 'TAMIL NADU': 'TAMIL NADU',
-  KL: 'KERALA', KERALA: 'KERALA',
-  KA: 'KARNATAKA', KARNATAKA: 'KARNATAKA',
-  MH: 'MAHARASHTRA', MAHARASHTRA: 'MAHARASHTRA',
-  OD: 'ODISHA', ORISSA: 'ODISHA', ODISHA: 'ODISHA',
-  RJ: 'RAJASTHAN', RAJASTHAN: 'RAJASTHAN',
-  UP: 'UTTAR PRADESH', UTTARPRADESH: 'UTTAR PRADESH', 'UTTAR PRADESH': 'UTTAR PRADESH',
-  PY: 'PUDUCHERRY', PONDICHERRY: 'PUDUCHERRY', PUDUCHERRY: 'PUDUCHERRY',
-  DL: 'DELHI', 'NEW DELHI': 'DELHI', DELHI: 'DELHI',
-  GJ: 'GUJARAT', GUJARAT: 'GUJARAT', WB: 'WEST BENGAL', 'WEST BENGAL': 'WEST BENGAL',
-};
-
-/** Uppercase, strip punctuation, collapse spaces, then resolve known aliases. */
-export function canonicalState(raw: string | null | undefined): string {
-  if (!raw) return 'UNKNOWN';
-  const k = String(raw).toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
-  return STATE_ALIASES[k] ?? STATE_ALIASES[k.replace(/\s/g, '')] ?? k;
-}
+// Moved to @fapoms/shared so HolidayService (a different module) can use the
+// exact same canonicalisation when matching a state-scoped holiday against a
+// branch's state — re-exported here so existing imports keep working.
+import { canonicalState } from '@fapoms/shared';
+export { canonicalState };
 
 /** A working day an assayer can actually sell, in hours. */
 const WORKING_HOURS_PER_DAY = 10;

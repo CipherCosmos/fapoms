@@ -52,6 +52,7 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
       SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.HR_MANAGER,
     ],
   },
   {
@@ -59,7 +60,11 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
-      SystemRole.CLIENT_USER,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.FINANCE_MANAGER,
+      // CLIENT_USER deliberately absent: `users` has no client_id, so an external
+      // client user cannot be scoped to their own record and would see every
+      // client's data. Restore once per-client scoping exists.
     ],
   },
   {
@@ -83,23 +88,24 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    path: '/assayers',
+    // The workforce console, roster included. Assayer administration belongs to HR
+    // and admins only — other roles reach the assayer data they need through their
+    // own tools (planning candidates, billing payees, client preferred-assayers),
+    // not through a general-purpose roster.
+    path: '/hr',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.ASSAYER,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.HR_MANAGER,
     ],
   },
   {
+    // Individual workforce record — same audience as the console it opens from.
     path: '/assayers/:id',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.ASSAYER,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.HR_MANAGER,
     ],
   },
   {
@@ -108,18 +114,39 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.DOCUMENT_EXECUTIVE,
+      SystemRole.VALIDATION_MANAGER,
+      SystemRole.VALIDATOR,
+      // Delegating returned packets to the data entry team is this role's whole
+      // job, but it had no route to the page that does it.
+      SystemRole.DATA_ENTRY_HEAD,
+      SystemRole.READ_ONLY_AUDITOR,
+    ],
+  },
+  {
+    // The data entry desk: returned packets, delegation, and clarifications with
+    // the assayer. Validation sees it because they review what the desk produces.
+    path: '/data-entry',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.DATA_ENTRY_HEAD,
       SystemRole.DOCUMENT_EXECUTIVE,
       SystemRole.VALIDATION_MANAGER,
       SystemRole.VALIDATOR,
     ],
   },
   {
-    path: '/validation',
+    // Was absent entirely, and canAccessRoute() returns true for unknown routes —
+    // so every role, including ASSAYER and CLIENT_USER, could open the internal
+    // holiday administration page. Operations is included because holidays drive
+    // audit scheduling, which they own.
+    path: '/holidays',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
-      SystemRole.VALIDATION_MANAGER,
-      SystemRole.VALIDATOR,
+      SystemRole.OPERATIONS_MANAGER,
     ],
   },
   {

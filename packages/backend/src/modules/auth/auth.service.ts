@@ -94,12 +94,19 @@ export class AuthService {
       // match only (code, phone, or email) — no fuzzy/partial matching, and no fallback
       // to "any active assayer" when nothing matches. An unrecognized identifier must fail.
       const cleanKey = usernameOrEmail.trim();
+      // passwordHash is `select: false` on the entity so it never leaves the
+      // database on ordinary reads; authentication is the one place that needs it,
+      // so it opts back in explicitly here.
       const assayer = await this.assayerRepository.findOne({
         where: [
           { assayerCode: ILike(cleanKey) },
           { phone: cleanKey },
           { email: ILike(cleanKey) },
         ],
+        select: {
+          id: true, assayerCode: true, displayName: true, email: true, phone: true,
+          organizationId: true, lifecycleStatus: true, passwordHash: true,
+        },
       });
 
       if (!assayer) {
@@ -370,6 +377,21 @@ export class AuthService {
   /**
    * Validate a JWT payload and return the user.
    */
+  /**
+   * Exact-identifier existence check for the pre-login screen. Returns only the
+   * display name — never contact details, banking data or the password hash.
+   */
+  async verifyAssayerIdentifier(identifier: string): Promise<{ displayName: string; assayerCode: string } | null> {
+    const key = (identifier || '').trim();
+    if (!key) return null;
+    const assayer = await this.assayerRepository.findOne({
+      where: [{ assayerCode: ILike(key) }, { phone: key }, { email: ILike(key) }],
+      select: { id: true, displayName: true, assayerCode: true, lifecycleStatus: true },
+    });
+    if (!assayer || assayer.lifecycleStatus !== 'ACTIVE') return null;
+    return { displayName: assayer.displayName, assayerCode: assayer.assayerCode };
+  }
+
   async validateJwtPayload(payload: JwtPayload): Promise<any> {
     const user = await this.userRepository.findOne({
       where: { id: payload.sub, status: UserStatus.ACTIVE },

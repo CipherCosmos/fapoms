@@ -6,6 +6,7 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { ValidationStateMachine } from './validation.state-machine';
+import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
@@ -32,6 +33,10 @@ export class ValidationService implements OnModuleInit {
 
   onModuleInit() {
     this.workflowEngine.registerWorkflow('validation', [
+      // Was missing entirely, so a fresh case could never be marked "ready to
+      // review" and the CORRECTION_REQUIRED loop below — which can only be
+      // entered from HUMAN_REVIEW — was unreachable dead code as a result.
+      { from: [ValidationStatus.PENDING, ValidationStatus.ASSIGNED], to: ValidationStatus.HUMAN_REVIEW },
       { from: [ValidationStatus.HUMAN_REVIEW, ValidationStatus.ASSIGNED, ValidationStatus.PENDING], to: ValidationStatus.APPROVED },
       { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.CORRECTION_REQUIRED },
       { from: [ValidationStatus.CORRECTION_REQUIRED], to: ValidationStatus.HUMAN_REVIEW },
@@ -87,9 +92,9 @@ export class ValidationService implements OnModuleInit {
     return validationCase;
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ validationCases: ValidationCaseEntity[]; total: number }> {
+  async findAll(page = 1, limit = 50, projectBranchId?: string): Promise<{ validationCases: ValidationCaseEntity[]; total: number }> {
     const [validationCases, total] = await this.validationCaseRepository.findAndCount({
-      where: { isActive: true },
+      where: { isActive: true, ...(projectBranchId ? { projectBranchId } : {}) },
       relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
       order: { createdAt: 'DESC' },
       take: limit,
@@ -234,9 +239,71 @@ export class ValidationService implements OnModuleInit {
       return this.requestCorrection(id, userId, remarks, notes, ocrResult);
     } else if (targetStatus === ValidationStatus.SUBMITTED) {
       return this.submitValidation(id, userId, remarks, notes, ocrResult);
+    } else if (targetStatus === ValidationStatus.HUMAN_REVIEW) {
+      return this.moveToReview(id, userId, remarks);
     } else {
       throw new BadRequestException(`Invalid validation status transition to ${targetStatus}`);
     }
+  }
+
+  async moveToReview(id: string, userId: string, remarks?: string): Promise<ValidationCaseEntity> {
+    const validationCase = await this.findOne(id);
+    const prevStatus = validationCase.status;
+    return this.workflowEngine.executeCommand(
+      'validation', validationCase.id, 'HUMAN_REVIEW_Command', prevStatus, ValidationStatus.HUMAN_REVIEW,
+      userId, SystemRole.SUPER_ADMINISTRATOR, [],
+      async () => {
+        const event = ValidationStateMachine.moveToReview(validationCase, userId, remarks);
+        validationCase.updatedBy = userId;
+        const saved = await this.validationCaseRepository.save(validationCase);
+        this.eventPublisher.publish(event.constructor.name, event);
+        await this.auditService.recordEvent({
+          category: EventCategory.WORKFLOW,
+          eventType: 'VALIDATION_HUMAN_REVIEW',
+          entityType: 'VALIDATION',
+          entityId: saved.id,
+          previousState: prevStatus,
+          newState: ValidationStatus.HUMAN_REVIEW,
+          userId,
+          remarks: remarks ?? 'Ready for review',
+        });
+        return saved;
+      },
+    );
+  }
+
+  /**
+   * Called when the data entry desk hands a packet back. Finds the case for this
+   * project branch (creating one if this is its first time through review) and
+   * advances it to HUMAN_REVIEW — the step that had no way to happen before this,
+   * since documents and validation cases were two disconnected worlds.
+   */
+  async getOrAdvanceForHandBack(projectBranchId: string, assessmentId: string | null, userId: string): Promise<ValidationCaseEntity> {
+    const validationCase = await this.getOrCreateForBranch(projectBranchId, assessmentId, userId);
+
+    if (validationCase.status === ValidationStatus.CORRECTION_REQUIRED || validationCase.status === ValidationStatus.PENDING) {
+      return this.moveToReview(validationCase.id, userId, 'Data entry complete — ready for review');
+    }
+    // Already ASSIGNED, HUMAN_REVIEW, or beyond: nothing to advance, hand-back is
+    // just a repeat notification (e.g. a second packet for the same branch).
+    return validationCase;
+  }
+
+  /**
+   * Finds the case for a branch, or opens one at PENDING. Called as soon as a
+   * packet is delegated for data entry — not only at hand-back — so a member can
+   * raise a clarification about something they are still typing in, rather than
+   * only after the head has it for review.
+   */
+  async getOrCreateForBranch(projectBranchId: string, assessmentId: string | null, userId: string): Promise<ValidationCaseEntity> {
+    const existing = await this.validationCaseRepository.findOne({
+      where: { projectBranchId, isActive: true },
+      relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
+    });
+    if (existing) return existing;
+
+    const created = await this.create({ projectBranchId, assessmentId: assessmentId ?? undefined }, userId);
+    return this.findOne(created.id);
   }
 
   async approveValidation(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity> {

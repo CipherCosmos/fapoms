@@ -76,6 +76,24 @@ export class DocumentEntity extends BaseEntity {
   receivedAt: Date | null;
 
   /** When it was handed to the Data Entry Head's queue. */
+  /**
+   * Which data entry team member owns this packet. SENT_TO_DATA_ENTRY recorded
+   * that a packet had reached the desk but not who was working it, so the head
+   * had no way to distribute and no member had a queue of their own.
+   */
+  @Column({ name: 'assigned_to_user_id', type: 'uuid', nullable: true })
+  assignedToUserId: string | null;
+
+  @Column({ name: 'assigned_at', type: 'timestamptz', nullable: true })
+  assignedAt: Date | null;
+
+  @Column({ name: 'assigned_by', type: 'uuid', nullable: true })
+  assignedBy: string | null;
+
+  /** Set when the member hands the processed packet back to the head. */
+  @Column({ name: 'data_entry_completed_at', type: 'timestamptz', nullable: true })
+  dataEntryCompletedAt: Date | null;
+
   @Column({ name: 'sent_to_data_entry_at', type: 'timestamptz', nullable: true })
   sentToDataEntryAt: Date | null;
 

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FileSpreadsheet, Eye, X, CheckCircle, Edit2, Trash2, Building2, FolderKanban, ClipboardList, ChevronRight, Clock, TrendingUp, ExternalLink, Compass } from 'lucide-react';
+import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
 import { connectSocket } from '../services/socket';
-import { StatusBadge, Modal, KpiCard, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
+import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 
 interface ClientOption {
   id: string;
@@ -28,6 +29,8 @@ interface ProjectItem {
   description: string | null;
   createdAt: string;
   client?: { id: string; name: string; clientCode: string };
+  /** Branch coverage, computed server-side in one grouped query. */
+  branchProgress?: { total: number; assigned: number; completed: number; uncovered: number };
 }
 
 interface ProjectDetail extends ProjectItem {
@@ -54,14 +57,17 @@ interface FormData {
   description: string;
 }
 
+// Mirrors registerWorkflow('project', ...) in project.service.ts, which is the
+// authority. Cancel was previously offered only from PLANNING, so a project in
+// any other live state could not be abandoned from the UI at all.
 const TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
-  [ProjectStatus.DRAFT]: [ProjectStatus.PLANNING],
+  [ProjectStatus.DRAFT]: [ProjectStatus.PLANNING, ProjectStatus.CANCELLED],
   [ProjectStatus.PLANNING]: [ProjectStatus.SCHEDULING, ProjectStatus.CANCELLED],
-  [ProjectStatus.SCHEDULING]: [ProjectStatus.EXECUTION, ProjectStatus.ON_HOLD],
-  [ProjectStatus.EXECUTION]: [ProjectStatus.VALIDATION, ProjectStatus.ON_HOLD],
-  [ProjectStatus.VALIDATION]: [ProjectStatus.COMPLETED],
+  [ProjectStatus.SCHEDULING]: [ProjectStatus.EXECUTION, ProjectStatus.ON_HOLD, ProjectStatus.CANCELLED],
+  [ProjectStatus.EXECUTION]: [ProjectStatus.VALIDATION, ProjectStatus.ON_HOLD, ProjectStatus.CANCELLED],
+  [ProjectStatus.VALIDATION]: [ProjectStatus.COMPLETED, ProjectStatus.CANCELLED],
   [ProjectStatus.COMPLETED]: [ProjectStatus.ARCHIVED],
-  [ProjectStatus.ON_HOLD]: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION],
+  [ProjectStatus.ON_HOLD]: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION, ProjectStatus.CANCELLED],
   [ProjectStatus.ARCHIVED]: [],
   [ProjectStatus.CANCELLED]: [],
 };
@@ -89,6 +95,43 @@ const LIFECYCLE_INDEX: Record<ProjectStatus, number> = {
   [ProjectStatus.ON_HOLD]: 2,
   [ProjectStatus.CANCELLED]: -1,
 };
+
+/** The happy path, in order. Rendered as the pipeline strip. */
+const PIPELINE: ProjectStatus[] = [
+  ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING,
+  ProjectStatus.EXECUTION, ProjectStatus.VALIDATION, ProjectStatus.COMPLETED,
+];
+
+/** States that sit outside the flow; shown only when something is actually in them. */
+const OFF_PIPELINE: ProjectStatus[] = [ProjectStatus.ON_HOLD, ProjectStatus.ARCHIVED, ProjectStatus.CANCELLED];
+
+const STAGE_TONE: Record<string, string> = {
+  [ProjectStatus.DRAFT]: '#94a3b8',
+  [ProjectStatus.PLANNING]: '#60a5fa',
+  [ProjectStatus.SCHEDULING]: '#a78bfa',
+  [ProjectStatus.EXECUTION]: '#34d399',
+  [ProjectStatus.VALIDATION]: '#facc15',
+  [ProjectStatus.COMPLETED]: '#22c55e',
+  [ProjectStatus.ON_HOLD]: '#fb923c',
+  [ProjectStatus.ARCHIVED]: '#64748b',
+  [ProjectStatus.CANCELLED]: '#f87171',
+};
+
+/** Live states where a deadline still means something. */
+const LIVE_STATES: string[] = [
+  ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING,
+  ProjectStatus.EXECUTION, ProjectStatus.VALIDATION, ProjectStatus.ON_HOLD,
+];
+
+/** Days to the end date, and whether that is a problem yet. */
+function scheduleHealth(p: { endDate: string | null; status: ProjectStatus }) {
+  if (!p.endDate || !LIVE_STATES.includes(p.status)) return null;
+  const days = Math.ceil((new Date(p.endDate).getTime() - Date.now()) / 86400000);
+  if (days < 0) return { days, label: `${Math.abs(days)}d overdue`, tone: '#f87171' };
+  if (days <= 7) return { days, label: `${days}d left`, tone: '#fb923c' };
+  if (days <= 30) return { days, label: `${days}d left`, tone: '#facc15' };
+  return { days, label: `${days}d left`, tone: 'var(--text-muted)' };
+}
 
 const LIFECYCLE_STEPS = ['Draft', 'Planning', 'Scheduling', 'Execution', 'Validation', 'Completed', 'Archived'];
 
@@ -133,6 +176,9 @@ export const Projects: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const projectIdParam = searchParams.get('id');
+  const roles = useCurrentRoles();
+  const canManage = canManageProjects(roles);
+  const canDelete = canDeleteProjects(roles);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -384,21 +430,12 @@ export const Projects: React.FC = () => {
     if (!detail) return;
     setMessage(null);
     try {
-      await api.request(`/projects/${detail.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          name: detail.name,
-          projectNumber: detail.projectNumber,
-          clientId: detail.clientId,
-          priority: detail.priority,
-          status: targetStatus,
-          startDate: detail.startDate?.substring(0, 10) || undefined,
-          endDate: detail.endDate?.substring(0, 10) || undefined,
-          budget: detail.budget ?? undefined,
-          scope: detail.scope || undefined,
-          requiredSkills: detail.requiredSkills || undefined,
-          requiredCertifications: detail.requiredCertifications || undefined,
-        })
+      // Sends the intent only. This used to PUT the entire project just to change
+      // one field, so any value that had moved on underneath — a rename, a new
+      // budget — was silently overwritten with whatever this tab last loaded.
+      await api.request(`/projects/${detail.id}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus }),
       });
       setMessage({ type: 'success', text: `Project moved to ${targetStatus}` });
       loadProjects();
@@ -455,10 +492,6 @@ export const Projects: React.FC = () => {
     return match ? match.name : '—';
   };
 
-  const totalCount = projects.length;
-  const planningCount = projects.filter(p => p.status === ProjectStatus.DRAFT || p.status === ProjectStatus.PLANNING).length;
-  const activeCount = projects.filter(p => p.status === ProjectStatus.SCHEDULING || p.status === ProjectStatus.EXECUTION).length;
-  const completedCount = projects.filter(p => p.status === ProjectStatus.COMPLETED || p.status === ProjectStatus.ARCHIVED).length;
 
   const renderForm = (onSubmit: (e: React.FormEvent) => void, onClose: () => void, title: string) => (
     <Modal open asForm onSubmit={onSubmit} onClose={onClose} title={title} width="560px" maxHeight="90vh" closeIcon={<X size={18} />}
@@ -562,9 +595,11 @@ export const Projects: React.FC = () => {
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <FileSpreadsheet size={15} /> Export
           </button>
-          <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}>
-            Create Project
-          </PrimaryButton>
+          {canManage && (
+            <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}>
+              Create Project
+            </PrimaryButton>
+          )}
         </div>
       </div>
 
@@ -574,11 +609,57 @@ export const Projects: React.FC = () => {
       )}
 
       {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
-        <KpiCard layout="label-first" label="Total Projects" value={totalCount} icon={<FolderKanban />} iconColor="var(--accent-primary)" />
-        <KpiCard layout="label-first" label="Planning / Draft" value={planningCount} icon={<ClipboardList />} iconColor="var(--accent-secondary)" />
-        <KpiCard layout="label-first" label="Active" value={activeCount} icon={<TrendingUp />} iconColor="var(--status-active)" />
-        <KpiCard layout="label-first" label="Completed / Archived" value={completedCount} icon={<CheckCircle />} iconColor="var(--priority-low)" />
+      {/* The lifecycle itself, as the primary filter. The previous four tiles
+          collapsed nine states into four buckets, hiding exactly the thing this
+          page exists to manage — including ON_HOLD and CANCELLED entirely. */}
+      <div className="glass-card" style={{ padding: '12px 14px' }}>
+        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', alignItems: 'stretch' }}>
+          {PIPELINE.map((stage, i) => {
+            const n = projects.filter(p => p.status === stage).length;
+            const on = statusFilter === stage;
+            const s = STAGE_TONE[stage];
+            return (
+              <React.Fragment key={stage}>
+                {i > 0 && <div style={{ alignSelf: 'center', color: 'var(--text-muted)', opacity: 0.4, fontSize: '11px' }}>›</div>}
+                <button
+                  onClick={() => setStatusFilter(on ? 'ALL' : stage)}
+                  title={`${n} project(s) in ${stage}`}
+                  style={{
+                    flex: '1 1 0', minWidth: '92px', padding: '9px 8px', cursor: 'pointer',
+                    borderRadius: 'var(--radius-sm)', textAlign: 'left',
+                    background: on ? `${s}22` : 'transparent',
+                    border: `1px solid ${on ? s : 'transparent'}`,
+                    opacity: n === 0 && !on ? 0.45 : 1,
+                  }}>
+                  <div style={{ fontSize: '19px', fontWeight: 700, color: n > 0 ? s : 'var(--text-muted)', lineHeight: 1 }}>{n}</div>
+                  <div style={{ fontSize: '9.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    {stage.replace(/_/g, ' ')}
+                  </div>
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </div>
+        {OFF_PIPELINE.some(st => projects.some(p => p.status === st)) && (
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px', paddingTop: '9px', borderTop: '1px solid var(--border-color)' }}>
+            {OFF_PIPELINE.map(stage => {
+              const n = projects.filter(p => p.status === stage).length;
+              if (n === 0) return null;
+              const on = statusFilter === stage;
+              return (
+                <button key={stage} onClick={() => setStatusFilter(on ? 'ALL' : stage)}
+                  style={{
+                    padding: '4px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                    background: on ? `${STAGE_TONE[stage]}22` : 'transparent',
+                    border: `1px solid ${on ? STAGE_TONE[stage] : 'var(--border-color)'}`,
+                    color: STAGE_TONE[stage],
+                  }}>
+                  {stage.replace(/_/g, ' ')} {n}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Filter Row */}
@@ -642,12 +723,45 @@ export const Projects: React.FC = () => {
                           {p.priority}
                         </span>
                       </td>
+                      {/* Coverage: how far the branch book has actually got. A project
+                          with no branches previously looked the same as a fully
+                          scheduled one. */}
+                      <td style={{ fontSize: '12px' }}>
+                        {(() => {
+                          const bp = p.branchProgress;
+                          if (!bp || bp.total === 0) {
+                            return <span style={{ color: '#fb923c', fontSize: '11.5px' }}>No branches</span>;
+                          }
+                          const pct = Math.round((bp.assigned / bp.total) * 100);
+                          return (
+                            <div style={{ minWidth: '92px' }} title={`${bp.assigned} covered, ${bp.completed} done, ${bp.uncovered} unable to cover, of ${bp.total}`}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
+                                <span>{bp.assigned}/{bp.total}</span>
+                                <span style={{ color: 'var(--text-muted)' }}>{pct}%</span>
+                              </div>
+                              <div style={{ height: '4px', borderRadius: '2px', background: 'rgba(148,163,184,0.18)', overflow: 'hidden' }}>
+                                <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? '#22c55e' : '#60a5fa' }} />
+                              </div>
+                              {bp.uncovered > 0 && (
+                                <div style={{ fontSize: '10px', color: '#f87171', marginTop: '2px' }}>{bp.uncovered} uncovered</div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      {/* Schedule: the dates, plus whether the deadline is a problem. */}
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                         {p.startDate ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <Clock size={12} style={{ opacity: 0.5 }} />
-                            {new Date(p.startDate).toLocaleDateString()} – {p.endDate ? new Date(p.endDate).toLocaleDateString() : 'Ongoing'}
-                          </div>
+                          <>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <Clock size={12} style={{ opacity: 0.5 }} />
+                              {new Date(p.startDate).toLocaleDateString()} – {p.endDate ? new Date(p.endDate).toLocaleDateString() : 'Ongoing'}
+                            </div>
+                            {(() => {
+                              const h = scheduleHealth(p);
+                              return h ? <div style={{ fontSize: '11px', fontWeight: 600, color: h.tone, marginTop: '2px' }}>{h.label}</div> : null;
+                            })()}
+                          </>
                         ) : (
                           <span style={{ opacity: 0.5, fontStyle: 'italic' }}>Not scheduled</span>
                         )}
@@ -829,10 +943,10 @@ export const Projects: React.FC = () => {
                                       <span style={{ fontWeight: 600, color: '#fff' }}>{b.name}</span>
                                       <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.branchCode})</span>
                                     </div>
-                                    <button type="button" onClick={() => { handleAddBranch(b.id); setBranchSearch(''); }}
+                                    {canManage && <button type="button" onClick={() => { handleAddBranch(b.id); setBranchSearch(''); }}
                                       style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
                                       + Add
-                                    </button>
+                                    </button>}
                                   </div>
                                 ))
                               )}
@@ -857,7 +971,7 @@ export const Projects: React.FC = () => {
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{pb.status}</span>
-                                {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
+                                {canManage && (detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
                                   <button type="button" onClick={() => handleRemoveBranch(pb.id)}
                                     style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                                     <X size={14} />
@@ -908,7 +1022,9 @@ export const Projects: React.FC = () => {
                     {/* Lifecycle Transitions */}
                     <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Transitions</span>
-                      {CAN_TRANSITION[detail.status] ? (
+                      {!canManage ? (
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>You have read-only access to projects.</span>
+                      ) : CAN_TRANSITION[detail.status] ? (
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                           {TRANSITIONS[detail.status]?.map(target => (
                             <button key={target} onClick={() => handleTransition(target)}
@@ -933,12 +1049,16 @@ export const Projects: React.FC = () => {
                       <button onClick={() => navigate(`/planning?projectId=${detail.id}`)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
                         <ExternalLink size={13} /> Planning Workspace
                       </button>
-                      <button onClick={openEdit} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
-                        <Edit2 size={13} /> Edit
-                      </button>
-                      <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}>
-                        <Trash2 size={13} /> Delete
-                      </button>
+                      {canManage && (
+                        <button onClick={openEdit} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
+                          <Edit2 size={13} /> Edit
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}>
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

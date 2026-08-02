@@ -8,7 +8,7 @@ import {
   Map,
   CalendarDays,
   Files,
-  ShieldAlert,
+  
   ClipboardList,
   Users,
   Sliders,
@@ -16,8 +16,7 @@ import {
   Receipt,
   ChevronLeft,
   ChevronRight,
-  LogOut,
-} from 'lucide-react';
+  LogOut, UserCog, Inbox } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 
@@ -55,9 +54,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
         { name: 'Clients', path: '/clients', icon: Building2 },
         { name: 'Billing', path: '/billing', icon: Receipt },
         { name: 'Branches', path: '/branches', icon: GitMerge },
-        { name: 'Assayers', path: '/assayers', icon: Users },
+        { name: 'Workforce', path: '/hr', icon: UserCog },
         { name: 'Documents', path: '/documents', icon: Files },
-        { name: 'Validation', path: '/validation', icon: ShieldAlert },
+        { name: 'Data Entry & Validation', path: '/data-entry', icon: Inbox },
       ],
     },
     {

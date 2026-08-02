@@ -13,6 +13,7 @@ import { PushNotificationService } from '../notifications/push-notification.serv
 import { DocumentType, DocumentStatus } from '@fapoms/shared';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
+import { ValidationService } from '../validation/validation.service';
 
 describe('DocumentService', () => {
   let service: DocumentService;
@@ -68,6 +69,7 @@ describe('DocumentService', () => {
         { provide: NotificationService, useValue: mockNotificationService },
         { provide: PushNotificationService, useValue: mockPushNotificationService },
         { provide: LocalStorageService, useValue: { saveFile: jest.fn(), getFilePath: jest.fn() } },
+        { provide: ValidationService, useValue: { getOrAdvanceForHandBack: jest.fn() } },
       ],
     }).compile();
 

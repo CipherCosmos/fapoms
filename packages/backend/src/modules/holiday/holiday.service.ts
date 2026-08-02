@@ -12,7 +12,7 @@ import { Repository } from 'typeorm';
 import { HolidayEntity } from './holiday.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory } from '@fapoms/shared';
+import { EventCategory, canonicalState } from '@fapoms/shared';
 
 export interface CreateHolidayDto {
   name: string;
@@ -73,16 +73,18 @@ export class HolidayService {
     return holiday;
   }
 
-  async update(id: string, dto: CreateHolidayDto, userId: string): Promise<HolidayEntity> {
+  async update(id: string, dto: Partial<CreateHolidayDto>, userId: string): Promise<HolidayEntity> {
     const holiday = await this.findOne(id);
-    const holidayDate = new Date(dto.date);
 
-    holiday.name = dto.name;
-    holiday.date = holidayDate;
-    holiday.type = dto.type;
-    holiday.applicableStates = dto.applicableStates ?? null;
-    holiday.clientId = dto.clientId ?? null;
-    holiday.year = holidayDate.getFullYear();
+    if (dto.name !== undefined) holiday.name = dto.name;
+    if (dto.type !== undefined) holiday.type = dto.type;
+    if (dto.applicableStates !== undefined) holiday.applicableStates = dto.applicableStates ?? null;
+    if (dto.clientId !== undefined) holiday.clientId = dto.clientId ?? null;
+    if (dto.date !== undefined) {
+      const holidayDate = new Date(dto.date);
+      holiday.date = holidayDate;
+      holiday.year = holidayDate.getFullYear();
+    }
     holiday.updatedBy = userId;
 
     const saved = await this.holidayRepository.save(holiday);
@@ -160,10 +162,16 @@ export class HolidayService {
 
     if (holidays.length === 0) return false;
 
-    // If a state is specified, check if any holiday applies to it
+    // If a state is specified, check if any holiday applies to it. Branch and
+    // holiday state names come from different sources and disagree on casing and
+    // abbreviation ("MAHARASHTRA" vs "Maharashtra" vs "MH") — comparing raw
+    // strings meant a state-scoped holiday could never match a real branch, so
+    // every STATE-type holiday was silently inert for conflict checking.
     if (stateCode) {
+      const target = canonicalState(stateCode);
       return holidays.some(
-        h => !h.applicableStates || h.applicableStates.length === 0 || h.applicableStates.includes(stateCode)
+        h => !h.applicableStates || h.applicableStates.length === 0
+          || h.applicableStates.some(s => canonicalState(s) === target)
       );
     }
 

@@ -5,9 +5,13 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
+import { IsOptional, IsString, IsArray, IsNumber, IsObject } from 'class-validator';
 import { ValidationQueryService } from './validation-query.service';
+import { QueryThreadService } from './query-thread.service';
+import { QueryMessageAuthor } from './validation-query-message.entity';
 import { CreateValidationQueryDto, RespondValidationQueryDto } from './dto/validation-query.dto';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -34,19 +38,28 @@ const chatStorage = diskStorage({
   },
 });
 
+class PostQueryMessageDto {
+  @IsOptional() @IsString() body?: string;
+  @IsOptional() @IsArray() attachments?: { url: string; fileName: string; fileType: string }[];
+  @IsOptional() @IsNumber() pageNumber?: number;
+  @IsOptional() @IsObject() region?: { x: number; y: number; w: number; h: number };
+  @IsOptional() @IsString() snapshotPath?: string;
+}
+
 @ApiTags('Validation Queries')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('validation-queries')
 export class ValidationQueryController {
-  constructor(private readonly validationQueryService: ValidationQueryService) {}
+  constructor(private readonly validationQueryService: ValidationQueryService,
+    private readonly threadService: QueryThreadService,) {}
 
   // ───────────────────────────────────────────────────────────────────────────
   // FILE UPLOAD — Multer multipart/form-data (production-grade, no base64)
   // ───────────────────────────────────────────────────────────────────────────
 
   @Post('upload-attachment')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Upload chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FilesInterceptor('files', 10, { storage: chatStorage, limits: { fileSize: 25 * 1024 * 1024 } }))
@@ -65,7 +78,7 @@ export class ValidationQueryController {
 
   // Single file upload fallback (for simpler clients)
   @Post('upload-single')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Upload single chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { storage: chatStorage, limits: { fileSize: 25 * 1024 * 1024 } }))
@@ -122,6 +135,7 @@ export class ValidationQueryController {
   // QUERY CRUD
   // ───────────────────────────────────────────────────────────────────────────
 
+  @Roles(...STAFF_ROLES)
   @Get()
   @ApiOperation({ summary: 'List validation queries' })
   async findAll() {
@@ -130,7 +144,7 @@ export class ValidationQueryController {
   }
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Raise a new validation query to an assayer (Data Entry / Admin)' })
   async createQuery(@Body() dto: CreateValidationQueryDto, @Req() req: any) {
     const query = await this.validationQueryService.createQuery(dto, req.user.id);
@@ -150,7 +164,7 @@ export class ValidationQueryController {
   }
 
   @Post(':id/resolve')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Validator / Data Entry Head marks a responded query as RESOLVED' })
   async resolveQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const query = await this.validationQueryService.resolveQuery(id, req.user.id);
@@ -169,5 +183,48 @@ export class ValidationQueryController {
   async findByAssayer(@Param('assayerId') assayerId: string) {
     const list = await this.validationQueryService.findByAssayer(assayerId);
     return { success: true, data: list };
+  }
+
+  // ── Clarification thread ──────────────────────────────────────────────────
+  // A clarification used to be one question and one answer. The desk and the
+  // assayer need to go back and forth, with the desk able to point at a specific
+  // region of a specific page of the returned PDF.
+
+  @Get(':id/messages')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
+    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
+    SystemRole.OPERATIONS_MANAGER, SystemRole.ASSAYER,
+  )
+  @ApiOperation({ summary: 'Full clarification thread' })
+  async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    const messages = await this.threadService.listMessages(id);
+    return { success: true, data: messages };
+  }
+
+  @Post(':id/messages')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
+    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
+    SystemRole.ASSAYER,
+  )
+  @ApiOperation({ summary: 'Add a message to a clarification, optionally anchored to a PDF region' })
+  async postMessage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PostQueryMessageDto,
+    @Req() req: any,
+  ) {
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isAssayer = roles.includes(SystemRole.ASSAYER) && roles.length === 1;
+    const message = await this.threadService.postMessage(
+      id,
+      isAssayer ? QueryMessageAuthor.ASSAYER : QueryMessageAuthor.STAFF,
+      req.user.id,
+      req.user.displayName ?? req.user.username ?? null,
+      dto,
+    );
+    return { success: true, data: message };
   }
 }

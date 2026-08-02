@@ -7,6 +7,8 @@ import { AssayerGovernmentDocumentEntity } from './assayer-government-document.e
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
+import { HrController } from './hr.controller';
+import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
 import { AssayerController } from './assayer.controller';
 
@@ -22,8 +24,8 @@ import { AssayerController } from './assayer.controller';
       AssayerActivityEntity,
     ]),
   ],
-  controllers: [AssayerController],
-  providers: [AssayerService],
-  exports: [AssayerService, TypeOrmModule],
+  controllers: [AssayerController, HrController],
+  providers: [AssayerService, HrWorkforceService],
+  exports: [AssayerService, HrWorkforceService, TypeOrmModule],
 })
 export class AssayerModule {}

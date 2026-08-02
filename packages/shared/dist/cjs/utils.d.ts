@@ -13,4 +13,6 @@ export declare const INDIAN_STATES: {
  * @returns Distance in kilometers
  */
 export declare function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number;
+/** Uppercase, strip punctuation, collapse spaces, then resolve known aliases. */
+export declare function canonicalState(raw: string | null | undefined): string;
 //# sourceMappingURL=utils.d.ts.map

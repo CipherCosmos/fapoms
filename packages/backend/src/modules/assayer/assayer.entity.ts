@@ -17,7 +17,13 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'employee_id', type: 'varchar', length: 50, unique: true, nullable: true })
   employeeId: string | null;
 
-  @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true })
+  /**
+   * `select: false` so the hash is never loaded unless a query asks for it
+   * explicitly. It was previously returned by every assayer read, and the list
+   * endpoint was public — so anyone who could reach the API could enumerate every
+   * assayer's bcrypt hash. Authentication opts back in via addSelect.
+   */
+  @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true, select: false })
   passwordHash: string | null;
 
   @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })

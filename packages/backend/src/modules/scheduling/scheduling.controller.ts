@@ -53,7 +53,7 @@ export class SchedulingController {
   }
 
   @Get()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'List all active schedules' })
   async findAll(
     @Query('page') page = 1,
@@ -83,7 +83,7 @@ export class SchedulingController {
   }
 
   @Get(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get details for a single schedule by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const schedule = await this.schedulingService.findOne(id);

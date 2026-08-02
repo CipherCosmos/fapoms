@@ -152,6 +152,13 @@ export declare enum SystemRole {
     ASSAYER = "ASSAYER",
     CLIENT_USER = "CLIENT_USER",
     /**
+     * Owns the assayer workforce: onboarding and the lifecycle from INVITED through
+     * to ACTIVE, personal and banking details, government identity documents, and
+     * compensation terms. Assayer records were previously editable by whoever held
+     * an operations role, which mixed workforce administration into audit planning.
+     */
+    HR_MANAGER = "HR_MANAGER",
+    /**
      * Owns the money: client receivables, assayer disbursements, invoicing and
      * financial reporting. Finance work was previously bundled into the operations
      * roles because billing had no dedicated owner, which meant anyone who could

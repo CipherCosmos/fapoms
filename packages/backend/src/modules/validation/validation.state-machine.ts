@@ -5,6 +5,7 @@ import {
   ValidationApprovedEvent,
   ValidationCorrectionRequestedEvent,
   ValidationSubmittedEvent,
+  ValidationMovedToReviewEvent,
 } from '../../core/events/domain-events';
 
 export class ValidationStateMachine {
@@ -58,6 +59,18 @@ export class ValidationStateMachine {
     if (notes) validationCase.correctionNotes = notes;
     if (ocrResult) validationCase.ocrResult = ocrResult;
     return new ValidationCorrectionRequestedEvent(validationCase.id, prev, validationCase.status, userId);
+  }
+
+  static moveToReview(
+    validationCase: ValidationCaseEntity,
+    userId: string,
+    remarks?: string,
+  ): ValidationMovedToReviewEvent {
+    this.validateTransition(validationCase.status, ValidationStatus.HUMAN_REVIEW);
+    const prev = validationCase.status;
+    validationCase.status = ValidationStatus.HUMAN_REVIEW;
+    if (remarks) validationCase.remarks = remarks;
+    return new ValidationMovedToReviewEvent(validationCase.id, prev, validationCase.status, userId);
   }
 
   static submitValidation(

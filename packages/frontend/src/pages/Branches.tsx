@@ -5,6 +5,7 @@ import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal } from '../c
 import { api } from '../services/api';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { connectSocket } from '../services/socket';
+import { useCurrentRoles, canManageBranches } from '../hooks/useCurrentRoles';
 
 interface ClientOption {
   id: string;
@@ -121,6 +122,9 @@ export const Branches: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Audit and finance can open this page but hold no branch write permission —
+  // showing them Add/Edit/Delete only produces a 403 when they click.
+  const canManage = canManageBranches(useCurrentRoles());
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
@@ -274,9 +278,11 @@ export const Branches: React.FC = () => {
             <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Filter size={13} /> Filters <ChevronDown size={12} style={{ transform: showFilters ? 'rotate(180deg)' : '' }} />
             </button>
-            <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Plus size={14} /> Add Branch
-            </button>
+            {canManage && (
+              <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Plus size={14} /> Add Branch
+              </button>
+            )}
           </div>
 
           {/* Advanced Filters */}
@@ -317,8 +323,10 @@ export const Branches: React.FC = () => {
                       <td style={{ fontSize: '12px' }}>{b.branchType || '-'}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '4px' }}>
-                          <button onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                          <button onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: '#ef4444' }}><Trash2 size={11} /></button>
+                          {canManage && <>
+                            <button onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
+                            <button onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: '#ef4444' }}><Trash2 size={11} /></button>
+                          </>}
                         </div>
                       </td>
                     </tr>
@@ -339,10 +347,12 @@ export const Branches: React.FC = () => {
                   <h4 style={{ fontSize: '16px', fontWeight: 700, margin: '2px 0' }}>{branchDetail.name}</h4>
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
-                  <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                  <button onClick={() => setShowContactModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Plus size={11} /> Contact
-                  </button>
+                  {canManage && <>
+                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
+                    <button onClick={() => setShowContactModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Plus size={11} /> Contact
+                    </button>
+                  </>}
                 </div>
               </div>
 

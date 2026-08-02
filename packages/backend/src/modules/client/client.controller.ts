@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ClientLifecycleStatus, ClientBillingStatus } from '@fapoms/shared';
 
 class CreateClientConfigDto {
@@ -154,6 +155,8 @@ class BillingRemarkDto {
 @ApiTags('Clients')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('clients')
 export class ClientController {
   constructor(private readonly clientService: ClientService) {}

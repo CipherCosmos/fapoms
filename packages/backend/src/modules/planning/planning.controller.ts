@@ -34,6 +34,7 @@ import { ExecutionGroupStatus } from './operations-execution-group.entity';
 import { FieldVisitStatus } from './field-visit.entity';
 import { IncidentSeverity } from './field-incident.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
 export class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
@@ -486,6 +487,7 @@ export class PlanningController {
     };
   }
 
+  @Roles(...STAFF_ROLES)
   @Get('rules')
   @ApiOperation({ summary: 'List all active business planning rules' })
   async getRules(@Query('scope') scope?: string) {

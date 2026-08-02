@@ -55,6 +55,7 @@ export class AssignmentCancelledEvent extends DomainEvent {}
 export class ValidationApprovedEvent extends DomainEvent {}
 export class ValidationCorrectionRequestedEvent extends DomainEvent {}
 export class ValidationSubmittedEvent extends DomainEvent {}
+export class ValidationMovedToReviewEvent extends DomainEvent {}
 
 // Assayer Events
 export class AssayerDocumentVerificationStartedEvent extends DomainEvent {}

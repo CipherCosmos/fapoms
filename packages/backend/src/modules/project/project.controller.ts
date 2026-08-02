@@ -29,6 +29,7 @@ import { In, Repository } from 'typeorm';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject } from 'class-validator';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { UserEntity } from '../user/user.entity';
 
@@ -51,9 +52,39 @@ export class CreateProjectRequestDto implements CreateProjectDto {
   @IsOptional() @IsString() status?: string;
 }
 
+/**
+ * Partial update. Every field is optional so a caller can change one thing without
+ * resending — and without overwriting — the rest of the record.
+ */
+class UpdateProjectRequestDto {
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() projectNumber?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() clientId?: string;
+  @IsOptional() @IsString() priority?: string;
+  @IsOptional() @IsString() startDate?: string;
+  @IsOptional() @IsString() endDate?: string;
+  @IsOptional() @IsNumber() budget?: number;
+  @IsOptional() @IsString() scope?: string;
+  @IsOptional() @IsArray() requiredSkills?: string[];
+  @IsOptional() @IsArray() requiredCertifications?: string[];
+  @IsOptional() @IsObject() sla?: Record<string, any>;
+  @IsOptional() @IsObject() risks?: Record<string, any>;
+  @IsOptional() @IsObject() milestones?: Record<string, any>;
+  @IsOptional() @IsObject() dependencies?: Record<string, any>;
+}
+
+/** A lifecycle move, with the reason recorded on the audit trail. */
+class TransitionProjectRequestDto {
+  @IsString() @IsNotEmpty() targetStatus: string;
+  @IsOptional() @IsString() reason?: string;
+}
+
 @ApiTags('Projects')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('projects')
 export class ProjectController {
   constructor(
@@ -74,8 +105,9 @@ export class ProjectController {
     };
   }
 
+  // Was @Public(): the entire project portfolio was readable without a token.
+  // The controller-level staff gate now applies.
   @Get()
-  @Public()
   @ApiOperation({ summary: 'Get paginated list of projects' })
   async findAll(
     @Query('page') page?: number,
@@ -111,7 +143,7 @@ export class ProjectController {
   @ApiOperation({ summary: 'Update project details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CreateProjectRequestDto,
+    @Body() dto: UpdateProjectRequestDto,
     @Req() req: any,
   ) {
     const project = await this.projectService.update(id, dto, req.user.id);
@@ -119,6 +151,22 @@ export class ProjectController {
       success: true,
       data: project,
     };
+  }
+
+  // Lifecycle moves used to ride on PUT, which meant resending the whole project
+  // to change one field and produced a generic "updated" audit entry. This states
+  // the intent, validates against the state machine, and records why.
+  @Post(':id/transition')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:edit:organization')
+  @ApiOperation({ summary: 'Move a project to another lifecycle status' })
+  async transition(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TransitionProjectRequestDto,
+    @Req() req: any,
+  ) {
+    const project = await this.projectService.transition(id, dto.targetStatus, req.user.id, dto.reason);
+    return { success: true, data: project };
   }
 
   @Delete(':id')
@@ -138,7 +186,7 @@ export class ProjectController {
   // attribution below, since that made the gap more consequential (it would have exposed
   // which staff member is handling which negotiation to an unauthenticated caller too).
   @Get(':id/branches')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get unassigned and planning branches queue for project' })
   async getProjectBranches(@Param('id', ParseUUIDPipe) id: string) {
     const branches = await this.projectService.findProjectBranches(id);
