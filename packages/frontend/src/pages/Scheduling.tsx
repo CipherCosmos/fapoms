@@ -11,6 +11,7 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
+import { useProject } from '../context/ProjectContext';
 import { Modal, FilterSelect, AlertBanner } from '../components/ui';
 
 interface Schedule {
@@ -48,6 +49,7 @@ interface Schedule {
 
 interface AssignmentOption {
   id: string;
+  projectId: string;
   assignmentNumber: string;
   assayerId: string;
   assayer: { displayName: string; };
@@ -91,6 +93,8 @@ export const Scheduling: React.FC = () => {
 
   useSocketInvalidation();
 
+  const { selectedProjectId } = useProject();
+
   const { data: rawSchedules = [], isLoading: isLoadingSchedules } = useQuery({
     queryKey: queryKeys.schedules.list,
     queryFn: () => api.request<Schedule[]>('/schedules'),
@@ -110,6 +114,15 @@ export const Scheduling: React.FC = () => {
     refetchOnMount: 'always',
   });
   const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
+
+  // Global project filter from the header — every panel below only shows the
+  // selected project (or everything when 'ALL').
+  const scopedSchedules = selectedProjectId === 'ALL'
+    ? schedules
+    : schedules.filter((s) => s.projectId === selectedProjectId);
+  const scopedAssignments = selectedProjectId === 'ALL'
+    ? assignments
+    : assignments.filter((a) => a.projectId === selectedProjectId);
 
   const { data: holidaysRes } = useQuery({
     queryKey: ['holidays', currentYear],
@@ -195,7 +208,7 @@ export const Scheduling: React.FC = () => {
     setSelectedAssignmentId(assignmentId);
     setScheduleDate(selectedDate || today.toISOString().split('T')[0]);
     setShowCreateModal(true);
-    const sel = assignments.find(a => a.id === assignmentId);
+    const sel = scopedAssignments.find(a => a.id === assignmentId);
     if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, selectedDate);
   };
 
@@ -249,7 +262,7 @@ export const Scheduling: React.FC = () => {
 
   const todayStr = today.toISOString().split('T')[0];
 
-  const filteredSchedules = schedules.filter(s => {
+  const filteredSchedules = scopedSchedules.filter(s => {
     const schDateStr = new Date(s.scheduledDate).toISOString().split('T')[0];
     if (statusFilter === 'ALL') return true;
     if (statusFilter === 'ONGOING') return schDateStr === todayStr && s.status !== ScheduleStatus.COMPLETED;
@@ -281,7 +294,7 @@ export const Scheduling: React.FC = () => {
               </span>
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              {schedules.length} Active Schedules • {assignments.length} Unscheduled Confirmed Offers
+              {scopedSchedules.length} Active Schedules • {scopedAssignments.length} Unscheduled Confirmed Offers
             </div>
           </div>
         </div>
@@ -338,7 +351,7 @@ export const Scheduling: React.FC = () => {
               <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>Confirmed Offers</div>
             </div>
             <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
-              {assignments.length}
+              {scopedAssignments.length}
             </span>
           </div>
 
@@ -348,13 +361,13 @@ export const Scheduling: React.FC = () => {
                 <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
                 Loading unscheduled assignments…
               </div>
-            ) : assignments.length === 0 ? (
+            ) : scopedAssignments.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '30px 16px', color: 'var(--text-muted)', fontSize: '12px' }}>
                 <CheckCircle2 size={24} style={{ margin: '0 auto 8px', opacity: 0.4, color: 'var(--success)' }} />
-                All confirmed assignments are scheduled on the calendar!
+                No unscheduled confirmed offers for the selected project.
               </div>
             ) : (
-              assignments.map(a => (
+              scopedAssignments.map(a => (
                 <div key={a.id} style={{ padding: '10px', borderRadius: '8px', marginBottom: '6px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.projectBranch?.branch?.name}</div>
@@ -672,12 +685,12 @@ export const Scheduling: React.FC = () => {
             <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Assignment *</label>
             <select value={selectedAssignmentId} onChange={e => {
               setSelectedAssignmentId(e.target.value);
-              const sel = assignments.find(a => a.id === e.target.value);
+              const sel = scopedAssignments.find(a => a.id === e.target.value);
               if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
             }} required
               style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}>
               <option value="">— Select Confirmed Offer —</option>
-              {assignments.map(a => (
+              {scopedAssignments.map(a => (
                 <option key={a.id} value={a.id}>
                   {a.assignmentNumber} — {a.projectBranch?.branch?.name} ({a.assayer?.displayName})
                 </option>
@@ -697,7 +710,7 @@ export const Scheduling: React.FC = () => {
             <input type="date" value={scheduleDate} onChange={e => {
               setScheduleDate(e.target.value);
               if (selectedAssignmentId) {
-                const sel = assignments.find(a => a.id === selectedAssignmentId);
+                const sel = scopedAssignments.find(a => a.id === selectedAssignmentId);
                 if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, e.target.value);
               }
             }} required

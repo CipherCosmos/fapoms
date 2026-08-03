@@ -77,6 +77,23 @@ export class QueryThreadService {
     const saved = await this.messageRepository.save(message);
 
     query.lastMessageAt = saved.createdAt;
+    // The desk points the assayer at a marked crop on the packet. That lives on the
+    // *message* (snapshotPath), but the mobile chat reads attachments off the query —
+    // so mirror the crop onto the query's attachment list, otherwise the assayer
+    // never sees the image the desk is talking about.
+    if (authorType === QueryMessageAuthor.STAFF && saved.snapshotPath) {
+      const existing = Array.isArray(query.attachments) ? query.attachments : [];
+      query.attachments = [
+        ...existing,
+        {
+          url: saved.snapshotPath,
+          fileName: saved.pageNumber ? `Marked area on page ${saved.pageNumber}` : 'Marked area',
+          fileType: 'image/png',
+          uploadedBy: 'VALIDATOR',
+          timestamp: saved.createdAt?.toISOString?.() ?? new Date().toISOString(),
+        },
+      ];
+    }
     if (authorType === QueryMessageAuthor.ASSAYER) {
       query.status = ValidationQueryStatus.RESPONDED;
       query.respondedAt = saved.createdAt;

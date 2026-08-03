@@ -412,7 +412,7 @@ function AppMain() {
     );
   }
 
-  const queryCount = assignments.filter((a) => a.queries && a.queries.length > 0).length;
+  const queryCount = assignments.filter((a) => (a.queries || []).some((q) => q.status !== 'RESOLVED')).length;
 
   const totalEarnings = assignments
     .filter((a) => a.status === 'COMPLETED')

@@ -168,8 +168,13 @@ export class DocumentService {
       where: { id: dto.assessmentId, isActive: true },
     }).catch(() => null);
 
+    // The packet is keyed to a project branch so the data entry desk can open and
+    // advance it by branch. Resolve it whether we were given an assessment, a branch
+    // id, or an assignment id, and carry it onto the stored document.
+    let pb: any = null;
+
     if (!assessment) {
-      let pb = await this.projectBranchRepository.findOne({ where: { id: dto.assessmentId } }).catch(() => null);
+      pb = await this.projectBranchRepository.findOne({ where: { id: dto.assessmentId } }).catch(() => null);
       if (!pb) {
         const asn = await this.assignmentRepository.findOne({ where: { id: dto.assessmentId } }).catch(() => null);
         if (asn?.projectBranchId) {
@@ -198,8 +203,15 @@ export class DocumentService {
       throw new NotFoundException(`Assessment, ProjectBranch or Assignment ${dto.assessmentId} not found.`);
     }
 
+    if (!pb) {
+      pb = await this.projectBranchRepository
+        .findOne({ where: { projectId: assessment.projectId, branchId: assessment.branchId } })
+        .catch(() => null);
+    }
+
     const doc = this.documentRepository.create({
       assessmentId: assessment.id,
+      projectBranchId: pb?.id ?? null,
       fileName: dto.fileName,
       filePath: dto.filePath,
       fileSize: dto.fileSize,

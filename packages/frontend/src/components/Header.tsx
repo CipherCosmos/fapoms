@@ -1,10 +1,11 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { LogOut, Wifi, WifiOff, Menu } from 'lucide-react';
+import { LogOut, Wifi, WifiOff, Menu, Layers } from 'lucide-react';
 import { NotificationDropdown } from './NotificationDropdown';
 import { ThemePicker } from './ThemePicker';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { BrandLogo } from './BrandLogo';
+import { useProject } from '../context/ProjectContext';
 
 interface HeaderProps {
   onLogout?: () => void;
@@ -33,6 +34,7 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
 export const Header: React.FC<HeaderProps> = ({ onLogout, onToggleSidebar, title }) => {
   const location = useLocation();
   const live = useSocketConnection();
+  const { projects, loading, selectedProjectId, setSelectedProjectId } = useProject();
 
   const match = BREADCRUMBS.find((b) => location.pathname.startsWith(b.prefix));
 
@@ -82,6 +84,34 @@ export const Header: React.FC<HeaderProps> = ({ onLogout, onToggleSidebar, title
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {projects.length > 0 && (
+          <div
+            title="Global project filter — applies across all pages"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '4px 8px', borderRadius: 'var(--radius-full)',
+              background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+            }}
+          >
+            <Layers size={12} style={{ color: 'var(--accent)' }} />
+            <select
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              disabled={loading}
+              title="Global project filter"
+              style={{
+                background: 'transparent', border: 'none', color: 'var(--text-primary)',
+                fontSize: '12px', fontWeight: 600, cursor: 'pointer', outline: 'none',
+                maxWidth: '160px',
+              }}
+            >
+              <option value="ALL">All projects</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.projectNumber} — {p.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div
           title={live ? 'Live updates connected' : 'Live updates disconnected'}
           style={{
