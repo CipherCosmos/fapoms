@@ -6,6 +6,13 @@ declare class CreateHolidayRequestDto implements CreateHolidayDto {
     applicableStates?: string[];
     clientId?: string;
 }
+declare class UpdateHolidayRequestDto {
+    name?: string;
+    date?: string | Date;
+    type?: string;
+    applicableStates?: string[];
+    clientId?: string;
+}
 export declare class HolidayController {
     private readonly holidayService;
     constructor(holidayService: HolidayService);
@@ -38,7 +45,7 @@ export declare class HolidayController {
         };
         error?: undefined;
     }>;
-    update(id: string, dto: CreateHolidayRequestDto, req: any): Promise<{
+    update(id: string, dto: UpdateHolidayRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./holiday.entity").HolidayEntity;
     }>;

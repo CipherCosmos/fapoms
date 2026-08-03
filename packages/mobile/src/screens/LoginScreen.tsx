@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle, Pressable,
+  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle, Pressable, Image,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 
@@ -38,12 +37,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onBiometricLogin,
 }) => {
   const t = useTheme();
-  const [internalUsername, setInternalUsername] = useState('');
-  const [internalPassword, setInternalPassword] = useState('');
+  const [internalUsername, setInternalUsername] = useState('AS0127');
+  const [internalPassword, setInternalPassword] = useState('Password@123');
   const [internalLoading, setInternalLoading] = useState(false);
 
-  const username = controlledUsername !== undefined ? controlledUsername : internalUsername;
-  const password = controlledPassword !== undefined ? controlledPassword : internalPassword;
+  const username = controlledUsername || internalUsername;
+  const password = controlledPassword || internalPassword;
   const authenticating = controlledAuthenticating !== undefined ? controlledAuthenticating : internalLoading;
 
   const setUsername = (val: string) => {
@@ -56,11 +55,40 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     controlledOnChangePassword?.(val);
   };
 
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const handleLoginPress = async () => {
-    if (onLogin) {
+    setErrorMsg(null);
+    if (!username || !password) {
+      setErrorMsg('Please enter both Assayer Code and Password.');
+      return;
+    }
+    setInternalLoading(true);
+    try {
+      if (onLogin) {
+        const res: any = await onLogin(username, password);
+        if (res === false || (typeof res === 'object' && res?.success === false)) {
+          setErrorMsg(res?.error || 'Invalid credentials. Please try again.');
+        }
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Connection failed. Please check backend server.');
+    } finally {
+      setInternalLoading(false);
+    }
+  };
+
+  const handleBiometricPress = async () => {
+    setErrorMsg(null);
+    if (onBiometricLogin) {
       setInternalLoading(true);
       try {
-        await onLogin(username, password);
+        const res: any = await onBiometricLogin();
+        if (res === false || (typeof res === 'object' && res?.success === false)) {
+          setErrorMsg(res?.error || 'Biometric authentication failed.');
+        }
+      } catch (err: any) {
+        setErrorMsg(err?.message || 'Biometric login failed.');
       } finally {
         setInternalLoading(false);
       }
@@ -111,16 +139,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           gap: t.space['2xl'],
         }}>
           <View style={{ alignItems: 'center', gap: t.space.md }}>
-            <View style={[{
-              width: 68, height: 68, borderRadius: t.radius['2xl'],
-              backgroundColor: t.colors.primary,
-              alignItems: 'center', justifyContent: 'center',
-            }, t.elevation(2)]}>
-              <Icon name="shield-checkmark" size={32} color={t.colors.onPrimary} />
-            </View>
+            <Image
+              source={(() => {
+                const img = require('../../assets/logo.png');
+                return typeof img === 'object' && img?.default ? img.default : img;
+              })()}
+              style={{ width: 84, height: 68, resizeMode: 'contain' }}
+            />
             <View style={{ alignItems: 'center', gap: 2 }}>
-              <AppText variant="h1">FAPOMS Field</AppText>
-              <AppText variant="caption" tone="muted">Gold audit operations</AppText>
+              <AppText variant="h1" style={{ color: t.colors.primary, fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontWeight: '700' }}>Gold Audit Pro</AppText>
+              <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>BY SUMERU GLOBAL</AppText>
             </View>
           </View>
 
@@ -168,16 +196,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               </View>
             </View>
 
+            {errorMsg ? (
+              <View style={{ backgroundColor: t.colors.dangerSoft || '#fee2e2', padding: t.space.md, borderRadius: t.radius.md, borderWidth: 1, borderColor: '#fca5a5' }}>
+                <AppText variant="caption" style={{ color: t.colors.danger || '#ef4444', textAlign: 'center' }}>
+                  {errorMsg}
+                </AppText>
+              </View>
+            ) : null}
+
             <Button
               label={authenticating ? 'Signing in…' : 'Sign in'}
               onPress={handleLoginPress}
               loading={authenticating}
-              disabled={!username || !password}
               size="lg"
               full
             />
 
-            <Tappable onPress={onBiometricLogin}>
+            <Tappable onPress={handleBiometricPress}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
                 <Icon name="finger-print" size={18} color={t.colors.textMuted} />
                 <AppText variant="small" tone="muted">Use biometric sign-in</AppText>

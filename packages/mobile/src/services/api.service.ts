@@ -35,9 +35,9 @@ const MOBILE_TO_BACKEND_STATUS: Record<string, string> = {
   ACCEPTED: 'ACCEPTED',
   CHECKED_IN: 'CHECKED_IN',
   IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
   REJECTED: 'REJECTED',
 };
-
 export class MobileApiService {
   static authToken: string | null = null;
   static refreshToken: string | null = null;
@@ -112,14 +112,13 @@ export class MobileApiService {
 
   static async validateSession(): Promise<boolean> {
     const id = this.currentUserId;
-    if (!id) return false;
+    if (!id || !this.authToken) return false;
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/profile`);
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/profile`, {}, 5000);
       if (response.ok) return true;
       this.clearSession();
       return false;
     } catch {
-      this.clearSession();
       return false;
     }
   }
@@ -210,14 +209,35 @@ export class MobileApiService {
     }
   }
 
-  static async fetchWithAuth(url: string, options?: RequestInit): Promise<Response> {
+  static async fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 3000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      return response;
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  }
+
+  static async fetchWithAuth(url: string, options?: RequestInit, timeoutMs = 3000): Promise<Response> {
     const cacheBust = `${url}${url.includes('?') ? '&' : '?'}_t=${Date.now()}`;
-    const headers = { ...this.getHeaders(), ...(options?.headers as Record<string, string> || {}) };
-    let response = await fetch(cacheBust, { ...options, headers });
+    // A FormData body needs the browser to set the multipart boundary itself; forcing
+    // application/json here (the default for JSON calls) corrupts the upload and makes the
+    // server reject it with a 400 "no file content received". Keep the auth header though.
+    const isForm =
+      typeof FormData !== 'undefined' && typeof options?.body !== 'string' && options?.body instanceof FormData;
+    const headers: Record<string, string> = {};
+    if (this.authToken) headers['Authorization'] = `Bearer ${this.authToken}`;
+    if (!isForm) headers['Content-Type'] = 'application/json';
+    Object.assign(headers, options?.headers || {});
+    let response = await this.fetchWithTimeout(cacheBust, { ...options, headers }, timeoutMs);
     if (response.status === 401) {
       const refreshed = await this.tryRefresh();
       if (refreshed) {
-        response = await fetch(cacheBust, { ...options, headers: { ...this.getHeaders(), ...(options?.headers as Record<string, string> || {}) } });
+        response = await this.fetchWithTimeout(cacheBust, { ...options, headers }, timeoutMs);
       }
     }
     return response;
@@ -259,7 +279,7 @@ export class MobileApiService {
   static async biometricLogin(): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
     const refreshToken = this.getRefreshToken();
     if (!refreshToken) {
-      return { success: false, error: 'No saved session on this device. Please sign in with your password first.' };
+      return { success: false, error: 'No saved session found. Please sign in with your Assayer Code and password first.' };
     }
 
     try {
@@ -273,7 +293,7 @@ export class MobileApiService {
       if (response.ok && data.success && data.data?.accessToken) {
         const userPayload = data.data.user || {};
         const token = data.data.accessToken;
-        const name = userPayload.name || userPayload.displayName || userPayload.username;
+        const name = userPayload.name || userPayload.displayName || userPayload.username || 'Assayer';
         this.setAuthToken(token, userPayload.id, name);
         if (data.data.refreshToken) {
           this.storeRefreshToken(data.data.refreshToken);
@@ -283,7 +303,7 @@ export class MobileApiService {
 
       return {
         success: false,
-        error: data.message || 'Saved session expired. Please sign in with your password.',
+        error: data.message || 'Biometric session expired. Please sign in with your password.',
       };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error during biometric login.' };
@@ -315,7 +335,7 @@ export class MobileApiService {
         error: data.message || 'Invalid credentials or unregistered Assayer Code.',
       };
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error during authentication.' };
+      return { success: false, error: err?.message || 'Network error connecting to server.' };
     }
   }
 
@@ -450,9 +470,6 @@ export class MobileApiService {
           scheduledDate: item.scheduledDate || '',
           sequenceOrder: idx + 1,
           estimatedCustomerCount: item.customerCount || item.projectBranch?.packetCount || (item.customers && item.customers.length > 0 ? item.customers.length : 15),
-          // Real backend-configured branch audit duration (branches.estimated_duration_hours),
-          // not a fabricated value. 0 (rather than undefined) when the backend genuinely has
-          // no branch data attached, so downstream averages/UI can detect "no real data".
           estimatedAuditHours: branch?.estimatedDurationHours != null ? Number(branch.estimatedDurationHours) : 0,
           status: (BACKEND_TO_MOBILE_STATUS as any)[item.status] || 'PENDING',
           proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
@@ -494,10 +511,14 @@ export class MobileApiService {
     reason?: string,
     counterFee?: number,
   ): Promise<boolean> {
-    const backendStatus = (MOBILE_TO_BACKEND_STATUS as any)[status] || status;
+    const backendStatus = counterFee !== undefined ? 'COUNTER_OFFER' : ((MOBILE_TO_BACKEND_STATUS as any)[status] || status);
     const body: any = { targetStatus: backendStatus };
     if (reason) body.reason = reason;
-    if (counterFee !== undefined) body.fee = counterFee;
+    if (counterFee !== undefined) {
+      body.fee = counterFee;
+      body.counterFee = counterFee;
+      body.proposedFee = counterFee;
+    }
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),

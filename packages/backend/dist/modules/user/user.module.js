@@ -16,6 +16,7 @@ const capability_entity_1 = require("./capability.entity");
 const responsibility_entity_1 = require("./responsibility.entity");
 const user_service_1 = require("./user.service");
 const user_controller_1 = require("./user.controller");
+const operations_snapshot_service_1 = require("./operations-snapshot.service");
 const system_dashboard_controller_1 = require("./system-dashboard.controller");
 let UserModule = class UserModule {
 };
@@ -26,7 +27,7 @@ exports.UserModule = UserModule = __decorate([
             typeorm_1.TypeOrmModule.forFeature([user_entity_1.UserEntity, role_entity_1.RoleEntity, permission_entity_1.PermissionEntity, capability_entity_1.CapabilityEntity, responsibility_entity_1.ResponsibilityEntity]),
         ],
         controllers: [user_controller_1.UserController, system_dashboard_controller_1.SystemDashboardController],
-        providers: [user_service_1.UserService],
+        providers: [operations_snapshot_service_1.OperationsSnapshotService, user_service_1.UserService],
         exports: [user_service_1.UserService],
     })
 ], UserModule);

@@ -30,7 +30,6 @@ class AssignmentStateMachine {
         const prev = assignment.status;
         assignment.status = shared_1.AssignmentStatus.REJECTED;
         assignment.rejectReason = reason ?? 'Rejected';
-        assignment.isActive = false;
         return { previousState: prev, newState: assignment.status, userId };
     }
     static cancel(assignment, userId, reason) {
@@ -38,7 +37,6 @@ class AssignmentStateMachine {
         const prev = assignment.status;
         assignment.status = shared_1.AssignmentStatus.CANCELLED;
         assignment.cancelReason = reason ?? 'Cancelled';
-        assignment.isActive = false;
         return { previousState: prev, newState: assignment.status, userId };
     }
 }

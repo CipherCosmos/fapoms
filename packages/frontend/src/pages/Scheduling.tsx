@@ -91,21 +91,25 @@ export const Scheduling: React.FC = () => {
 
   useSocketInvalidation();
 
-  const { data: schedules = [], isLoading: isLoadingSchedules } = useQuery({
+  const { data: rawSchedules = [], isLoading: isLoadingSchedules } = useQuery({
     queryKey: queryKeys.schedules.list,
     queryFn: () => api.request<Schedule[]>('/schedules'),
     staleTime: 5_000,
+    retry: 1,
     refetchOnWindowFocus: true,
     refetchOnMount: 'always',
   });
+  const schedules = Array.isArray(rawSchedules) ? rawSchedules : [];
 
-  const { data: assignments = [], isLoading: isLoadingAssignments } = useQuery({
+  const { data: rawAssignments = [], isLoading: isLoadingAssignments } = useQuery({
     queryKey: [...queryKeys.assignments.all, 'available'],
     queryFn: () => api.request<AssignmentOption[]>('/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100'),
     staleTime: 5_000,
+    retry: 1,
     refetchOnWindowFocus: true,
     refetchOnMount: 'always',
   });
+  const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
 
   const { data: holidaysRes } = useQuery({
     queryKey: ['holidays', currentYear],
@@ -150,6 +154,11 @@ export const Scheduling: React.FC = () => {
       const data = await api.request<any[]>(`/documents/project-branch/${branchId}`);
       setDocuments(Array.isArray(data) ? data : []);
     } catch { setDocuments([]); }
+  };
+
+  const openDocumentDownload = async (documentId: string) => {
+    const { downloadUrl } = await api.request<{ downloadUrl: string }>(`/documents/${documentId}/download-token`);
+    window.open(`/api/v1${downloadUrl}`, '_blank', 'noopener,noreferrer');
   };
 
   const handlePrevMonth = () => {
@@ -318,11 +327,11 @@ export const Scheduling: React.FC = () => {
         <AlertBanner type="success" message={successMsg} />
       )}
 
-      {/* ── WORKSPACE BODY: 3 PANEL FLEX ── */}
-      <div style={{ flex: 1, display: 'flex', gap: '10px', minHeight: 0, overflow: 'hidden' }}>
+      {/* ── WORKSPACE BODY: RESPONSIVE 3-PANEL FLEX ── */}
+      <div className="responsive-grid-split" style={{ flex: 1, minHeight: 0, overflow: 'auto', gridTemplateColumns: '260px 1fr 260px' }}>
         
-        {/* PANEL 1: UNASSIGNED CONFIRMED AUDITS QUEUE (LEFT DRAWER 280px) */}
-        <div style={{ width: '280px', minWidth: '280px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        {/* PANEL 1: UNASSIGNED CONFIRMED AUDITS QUEUE */}
+        <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>UNSCHEDULED QUEUE</span>
@@ -474,8 +483,8 @@ export const Scheduling: React.FC = () => {
           )}
         </div>
 
-        {/* PANEL 3: DATE AGENDAS & AUDIT PACKET INSPECTOR (RIGHT FLEX 340px) */}
-        <div style={{ width: '340px', minWidth: '340px', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        {/* PANEL 3: DATE AGENDAS & AUDIT PACKET INSPECTOR */}
+        <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           
           {/* Selected Date Header */}
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -626,9 +635,11 @@ export const Scheduling: React.FC = () => {
                   documents.map(doc => (
                     <div key={doc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 6px', background: 'var(--bg-surface-2)', borderRadius: '4px', fontSize: '10px', marginBottom: '3px' }}>
                       <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{doc.fileName}</span>
-                      <a href={`/api/v1/documents/${doc.id}/download`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+                      <button type="button" aria-label={`Download ${doc.fileName}`} title="Download"
+                        onClick={() => openDocumentDownload(doc.id).catch((e: any) => setError(e?.message || 'Failed to open download.'))}
+                        style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
                         <Download size={11} />
-                      </a>
+                      </button>
                     </div>
                   ))
                 )}

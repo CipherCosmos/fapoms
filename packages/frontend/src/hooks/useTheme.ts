@@ -17,15 +17,25 @@ export const THEMES: ThemeMeta[] = [
   { id: 'paper', label: 'Pure Paper', group: 'light', description: 'Cool neutral white — clean & minimal.', swatch: ['#1B2430', '#F6F7F9', '#8A6416'] },
   { id: 'sepia', label: 'Desert Ink', group: 'light', description: 'High-contrast warm — easy on the eyes.', swatch: ['#1F160B', '#FBF6ED', '#7A4E0A'] },
   { id: 'snow', label: 'Snow', group: 'light', description: 'Pure white & black — bold monochrome.', swatch: ['#111113', '#FFFFFF', '#111113'] },
+  { id: 'nordic-frost', label: 'Nordic Frost', group: 'light', description: 'Arctic white & navy — crisp & clear.', swatch: ['#0F172A', '#F8FAFC', '#2563EB'] },
+  { id: 'rose-quartz', label: 'Rose Quartz', group: 'light', description: 'Warm blush & champagne gold.', swatch: ['#2D1B22', '#FFFBF9', '#E11D48'] },
+
   // Dark
   { id: 'noir', label: 'Sumeru Noir', group: 'dark', description: 'Warm charcoal & gold — the signature dark.', swatch: ['#F3EEE4', '#161210', '#D8AE47'] },
   { id: 'black-gold', label: 'Black Gold', group: 'dark', description: 'True black & gold — premium contrast.', swatch: ['#F5F3EE', '#050505', '#D8AE47'] },
   { id: 'black-white', label: 'Black & White', group: 'dark', description: 'Pure monochrome — maximum clarity.', swatch: ['#FFFFFF', '#000000', '#FFFFFF'] },
   { id: 'slate', label: 'Cool Slate', group: 'dark', description: 'Neutral graphite — modern & restrained.', swatch: ['#EDEFF3', '#14161A', '#D9B25A'] },
   { id: 'midnight', label: 'Midnight', group: 'dark', description: 'Deep, high-contrast — maximum focus.', swatch: ['#F5F6FA', '#0C0D11', '#E0B75F'] },
-  // Glass
-  { id: 'glass-light', label: 'Glass Light', group: 'glass', description: 'Frosted translucent panels over aurora.', swatch: ['#2A2A35', '#EFE9DD', '#7A5A14'] },
+  { id: 'carbon', label: 'Titanium Carbon', group: 'dark', description: 'High-tech dark carbon & icy blue.', swatch: ['#F1F5F9', '#0F1115', '#38BDF8'] },
+
+  // Glass (Glassmorphic Dark & Light)
   { id: 'glass-dark', label: 'Glass Noir', group: 'glass', description: 'Dark frosted glass with soft color glows.', swatch: ['#F2EFF7', '#14121A', '#D9B25A'] },
+  { id: 'glass-obsidian', label: 'Obsidian Flame', group: 'glass', description: 'Charcoal obsidian glass with amber flame glow.', swatch: ['#FFFBEB', '#0F0E13', '#F59E0B'] },
+  { id: 'glass-cyberpunk', label: 'Cyberpunk Neon', group: 'glass', description: 'Dark neon glass with electric cyan glow.', swatch: ['#ECFEFF', '#0D0F18', '#00F0FF'] },
+  { id: 'glass-emerald', label: 'Emerald Velvet', group: 'glass', description: 'Deep emerald glass with mint gold glow.', swatch: ['#ECFDF5', '#0A1714', '#10B981'] },
+  { id: 'glass-amethyst', label: 'Amethyst Royal', group: 'glass', description: 'Midnight violet glass with royal purple glow.', swatch: ['#FAF5FF', '#120D1D', '#A855F7'] },
+  { id: 'glass-sapphire', label: 'Sapphire Abyss', group: 'glass', description: 'Ocean abyss dark glass with cobalt electric glow.', swatch: ['#EFF6FF', '#081220', '#3B82F6'] },
+  { id: 'glass-light', label: 'Glass Light', group: 'glass', description: 'Frosted translucent panels over aurora.', swatch: ['#2A2A35', '#EFE9DD', '#7A5A14'] },
 ];
 
 export const CUSTOM_THEME_ID = 'custom';

@@ -194,9 +194,9 @@ export declare class AssayerController {
         success: boolean;
         data: import("./assayer.entity").AssayerEntity;
     }>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(req: any, page?: number, limit?: number): Promise<{
         success: boolean;
-        data: import("./assayer.entity").AssayerEntity[];
+        data: Partial<any>[];
         meta: {
             pagination: {
                 page: number;
@@ -208,13 +208,13 @@ export declare class AssayerController {
             };
         };
     }>;
-    findOne(id: string): Promise<{
+    findOne(id: string, req: any): Promise<{
         success: boolean;
-        data: import("./assayer.entity").AssayerEntity;
+        data: Partial<any>;
     }>;
-    getProfile(assayerId: string): Promise<{
+    getProfile(assayerId: string, req: any): Promise<{
         success: boolean;
-        data: import("./assayer.entity").AssayerEntity;
+        data: Partial<any>;
     }>;
     update(id: string, dto: UpdateAssayerRequestDto, req: any): Promise<{
         success: boolean;

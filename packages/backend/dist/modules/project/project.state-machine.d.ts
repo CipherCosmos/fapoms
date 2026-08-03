@@ -1,6 +1,6 @@
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
-import { ProjectPlanningStartedEvent, ProjectSchedulingReadyEvent, ProjectExecutionStartedEvent, ProjectValidationStartedEvent, ProjectCompletedEvent, ProjectCancelledEvent, ProjectBranchPlanningStartedEvent, ProjectBranchAssignmentConfirmedEvent, ProjectBranchAuditScheduledEvent, ProjectBranchAuditCompletedEvent, ProjectBranchValidationCompletedEvent, ProjectBranchClosedEvent } from '../../core/events/domain-events';
+import { ProjectPlanningStartedEvent, ProjectSchedulingReadyEvent, ProjectExecutionStartedEvent, ProjectValidationStartedEvent, ProjectCompletedEvent, ProjectCancelledEvent, ProjectOnHoldEvent, ProjectArchivedEvent, ProjectBranchPlanningStartedEvent, ProjectBranchAssignmentConfirmedEvent, ProjectBranchAuditScheduledEvent, ProjectBranchAuditCompletedEvent, ProjectBranchValidationCompletedEvent, ProjectBranchClosedEvent } from '../../core/events/domain-events';
 export declare class ProjectStateMachine {
     static startPlanning(project: ProjectEntity, userId: string): ProjectPlanningStartedEvent;
     static readyForScheduling(project: ProjectEntity, userId: string): ProjectSchedulingReadyEvent;
@@ -8,6 +8,8 @@ export declare class ProjectStateMachine {
     static startValidation(project: ProjectEntity, userId: string): ProjectValidationStartedEvent;
     static completeProject(project: ProjectEntity, userId: string): ProjectCompletedEvent;
     static cancelProject(project: ProjectEntity, userId: string): ProjectCancelledEvent;
+    static holdProject(project: ProjectEntity, userId: string): ProjectOnHoldEvent;
+    static archiveProject(project: ProjectEntity, userId: string): ProjectArchivedEvent;
 }
 export declare class ProjectBranchStateMachine {
     static initiatePlanning(pb: ProjectBranchEntity, userId: string): ProjectBranchPlanningStartedEvent;

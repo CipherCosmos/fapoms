@@ -56,6 +56,15 @@ let AuditService = class AuditService {
         });
         return { events, total };
     }
+    async getRecentActivity(limit = 50, offset = 0, category) {
+        const [events, total] = await this.auditRepository.findAndCount({
+            where: category ? { category } : {},
+            order: { occurredAt: 'DESC' },
+            take: limit,
+            skip: offset,
+        });
+        return { events, total };
+    }
 };
 exports.AuditService = AuditService;
 exports.AuditService = AuditService = __decorate([

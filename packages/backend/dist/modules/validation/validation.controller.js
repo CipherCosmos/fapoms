@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const validation_service_1 = require("./validation.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 const class_validator_1 = require("class-validator");
 class CreateValidationCaseRequestDto {
@@ -76,8 +77,8 @@ let ValidationController = class ValidationController {
             data: vCase,
         };
     }
-    async findAll(page = 1, limit = 50) {
-        const { validationCases, total } = await this.validationService.findAll(Number(page), Number(limit));
+    async findAll(page = 1, limit = 50, projectBranchId) {
+        const { validationCases, total } = await this.validationService.findAll(Number(page), Number(limit), projectBranchId);
         return {
             success: true,
             data: validationCases,
@@ -115,7 +116,7 @@ let ValidationController = class ValidationController {
 exports.ValidationController = ValidationController;
 __decorate([
     (0, common_1.Post)(),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.DATA_ENTRY_HEAD),
     (0, guards_1.RequirePermissions)('validation:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Register a project branch for document validation' }),
     __param(0, (0, common_1.Body)()),
@@ -129,8 +130,9 @@ __decorate([
     (0, swagger_1.ApiOperation)({ summary: 'List all validation queue cases' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
+    __param(2, (0, common_1.Query)('projectBranchId')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:paramtypes", [Object, Object, String]),
     __metadata("design:returntype", Promise)
 ], ValidationController.prototype, "findAll", null);
 __decorate([
@@ -143,7 +145,7 @@ __decorate([
 ], ValidationController.prototype, "findOne", null);
 __decorate([
     (0, common_1.Post)(':id/assign'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR, shared_1.SystemRole.DATA_ENTRY_HEAD),
     (0, swagger_1.ApiOperation)({ summary: 'Assign a validation case to a validator reviewer' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -154,7 +156,7 @@ __decorate([
 ], ValidationController.prototype, "assign", null);
 __decorate([
     (0, common_1.Post)(':id/transition'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR, shared_1.SystemRole.DATA_ENTRY_HEAD),
     (0, swagger_1.ApiOperation)({ summary: 'Transition validation case status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -167,6 +169,7 @@ exports.ValidationController = ValidationController = __decorate([
     (0, swagger_1.ApiTags)('Validation'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('validation'),
     __metadata("design:paramtypes", [validation_service_1.ValidationService])
 ], ValidationController);

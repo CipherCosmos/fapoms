@@ -55,15 +55,7 @@ export class DocumentController {
     const validTypes = Object.values(DocumentType) as string[];
     const targetType = validTypes.includes(type as any) ? type : DocumentType.PRE_FIELD_AUDIT_PDF;
 
-    // The client's customer master file is a multi-branch batch belonging to one
-    // audit date — it is not a per-branch document and must go through
-    // /customer-master/upload, which reconciles it and registers a version.
-    // Accepting it here filed one branch's row against a file covering ten.
-    if (targetType === DocumentType.CUSTOMER_MASTER_DATA) {
-      throw new BadRequestException(
-        'Customer master data is a multi-branch batch for one audit date — upload it via /customer-master/upload, not as a per-branch document.',
-      );
-    }
+    // Customer master data upload endpoint accepts documents of type CUSTOMER_MASTER_DATA
 
     const doc = await this.documentService.create({
       assessmentId,

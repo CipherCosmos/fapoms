@@ -11,6 +11,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { SystemRole } from '@fapoms/shared';
+export type UpdateProjectDto = Partial<CreateProjectDto>;
 export interface CreateProjectDto {
     name: string;
     projectNumber: string;
@@ -48,7 +49,8 @@ export declare class ProjectService implements OnModuleInit {
         total: number;
     }>;
     findOne(id: string): Promise<ProjectEntity>;
-    update(id: string, dto: CreateProjectDto, userId: string): Promise<ProjectEntity>;
+    transition(id: string, targetStatus: string, userId: string, reason?: string): Promise<ProjectEntity>;
+    update(id: string, dto: UpdateProjectDto, userId: string): Promise<ProjectEntity>;
     remove(id: string, userId: string): Promise<void>;
     findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]>;
     associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]>;
@@ -61,6 +63,10 @@ export declare class ProjectService implements OnModuleInit {
     startProjectValidation(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
     completeProject(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
     cancelProject(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    holdProject(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    archiveProject(id: string, userId: string, role?: SystemRole): Promise<ProjectEntity>;
+    getBranchHistory(projectBranchId: string): Promise<any>;
+    private recordBranchTransition;
     initiateBranchPlanning(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
     confirmBranchAssignment(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;
     scheduleBranchAudit(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity>;

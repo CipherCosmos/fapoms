@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet, Image, ScrollView, Alert, ActivityIndicator, Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Tappable } from './ui/primitives';
+import { assetToBase64 } from '../utils/pickDocument';
 
 export interface MLKitScannerModalProps {
   visible: boolean;
@@ -136,9 +135,7 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
 
       if (!result.canceled && result.assets?.[0]) {
         const asset = result.assets[0];
-        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        const base64 = await assetToBase64(asset);
 
         setScannedPages((prev) => [
           ...prev,
@@ -185,6 +182,8 @@ export const MLKitScannerModal: React.FC<MLKitScannerModalProps> = ({
       Alert.alert('PDF Compiler Error', err?.message || 'Failed to assemble real PDF from scanned pages.');
     }
   };
+
+  if (!visible) return null;
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>

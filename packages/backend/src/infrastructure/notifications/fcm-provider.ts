@@ -96,9 +96,20 @@ export class FcmProvider implements PushProvider, OnModuleInit {
         token: payload.token,
         notification: { title: payload.title, body: payload.body },
         data: payload.data,
-        android: { priority: 'high' },
+        android: {
+          priority: 'high',
+          notification: {
+            title: payload.title,
+            body: payload.body,
+            sound: 'default',
+            channelId: 'fapoms_audit_alerts',
+            priority: 'high',
+            defaultSound: true,
+            defaultVibrateTimings: true,
+          },
+        },
         apns: {
-          payload: { aps: { sound: 'default', badge: 1 } },
+          payload: { aps: { sound: 'default', badge: 1, contentAvailable: true } },
         },
       };
 
@@ -120,9 +131,20 @@ export class FcmProvider implements PushProvider, OnModuleInit {
         tokens,
         notification: { title: payload.title, body: payload.body },
         data: payload.data,
-        android: { priority: 'high' },
+        android: {
+          priority: 'high',
+          notification: {
+            title: payload.title,
+            body: payload.body,
+            sound: 'default',
+            channelId: 'fapoms_audit_alerts',
+            priority: 'high',
+            defaultSound: true,
+            defaultVibrateTimings: true,
+          },
+        },
         apns: {
-          payload: { aps: { sound: 'default', badge: 1 } },
+          payload: { aps: { sound: 'default', badge: 1, contentAvailable: true } },
         },
       };
 

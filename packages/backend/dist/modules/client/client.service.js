@@ -21,6 +21,7 @@ const client_configuration_entity_1 = require("./client-configuration.entity");
 const client_contact_entity_1 = require("./client-contact.entity");
 const client_contract_entity_1 = require("./client-contract.entity");
 const client_billing_entity_1 = require("./client-billing.entity");
+const client_billing_history_entity_1 = require("./client-billing-history.entity");
 const audit_service_1 = require("../../core/audit/audit.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
@@ -34,20 +35,28 @@ const VALID_LIFECYCLE_TRANSITIONS = {
     [shared_1.ClientLifecycleStatus.TERMINATED]: [shared_1.ClientLifecycleStatus.ARCHIVED],
     [shared_1.ClientLifecycleStatus.ARCHIVED]: [],
 };
+const VALID_BILLING_TRANSITIONS = {
+    [shared_1.ClientBillingStatus.DRAFT]: [shared_1.ClientBillingStatus.ACTIVE, shared_1.ClientBillingStatus.INACTIVE],
+    [shared_1.ClientBillingStatus.ACTIVE]: [shared_1.ClientBillingStatus.SUSPENDED, shared_1.ClientBillingStatus.INACTIVE],
+    [shared_1.ClientBillingStatus.SUSPENDED]: [shared_1.ClientBillingStatus.ACTIVE, shared_1.ClientBillingStatus.INACTIVE],
+    [shared_1.ClientBillingStatus.INACTIVE]: [shared_1.ClientBillingStatus.ACTIVE],
+};
 let ClientService = class ClientService {
     clientRepository;
     configRepository;
     contactRepository;
     contractRepository;
     billingRepository;
+    billingHistoryRepository;
     auditService;
     eventPublisher;
-    constructor(clientRepository, configRepository, contactRepository, contractRepository, billingRepository, auditService, eventPublisher) {
+    constructor(clientRepository, configRepository, contactRepository, contractRepository, billingRepository, billingHistoryRepository, auditService, eventPublisher) {
         this.clientRepository = clientRepository;
         this.configRepository = configRepository;
         this.contactRepository = contactRepository;
         this.contractRepository = contractRepository;
         this.billingRepository = billingRepository;
+        this.billingHistoryRepository = billingHistoryRepository;
         this.auditService = auditService;
         this.eventPublisher = eventPublisher;
     }
@@ -128,13 +137,32 @@ let ClientService = class ClientService {
         }
         return client;
     }
-    async findAll(page = 1, limit = 20) {
+    async findAll(page = 1, limit = 20, filters = {}) {
+        const where = { isActive: true };
+        if (filters.search) {
+            where.name = (0, typeorm_2.Like)(`%${filters.search}%`);
+        }
+        if (filters.status) {
+            where.lifecycleStatus = filters.status;
+        }
+        if (filters.clientType) {
+            where.clientType = filters.clientType;
+        }
+        if (filters.priority) {
+            where.priority = filters.priority;
+        }
+        const sortable = new Set([
+            'name', 'displayName', 'clientCode', 'clientType', 'priority',
+            'lifecycleStatus', 'industry', 'createdAt', 'updatedAt',
+        ]);
+        const sortBy = sortable.has(filters.sortBy ?? '') ? (filters.sortBy ?? 'name') : 'name';
+        const sortOrder = filters.sortOrder === 'DESC' ? 'DESC' : 'ASC';
         const [clients, total] = await this.clientRepository.findAndCount({
-            where: { isActive: true },
+            where,
             relations: ['configuration'],
             take: limit,
             skip: (page - 1) * limit,
-            order: { name: 'ASC' },
+            order: { [sortBy]: sortOrder },
         });
         return { clients, total };
     }
@@ -424,12 +452,33 @@ let ClientService = class ClientService {
         await this.findOne(clientId);
         return this.billingRepository.findOne({ where: { clientId, isActive: true } });
     }
+    BILLING_FIELDS = [
+        { key: 'paymentTerms', label: 'Payment Terms' },
+        { key: 'currency', label: 'Currency' },
+        { key: 'taxIdentifier', label: 'Tax Identifier' },
+        { key: 'invoiceCycle', label: 'Invoice Cycle' },
+        { key: 'billingAddress', label: 'Billing Address' },
+        { key: 'bankAccount', label: 'Bank Account' },
+        { key: 'bankName', label: 'Bank Name' },
+        { key: 'ifscCode', label: 'IFSC Code' },
+        { key: 'notes', label: 'Notes' },
+    ];
+    stringify(value) {
+        if (value === null || value === undefined)
+            return null;
+        return String(value);
+    }
+    async recordBillingHistory(clientId, userId, entry) {
+        return this.billingHistoryRepository.save(this.billingHistoryRepository.create({ clientId, createdBy: userId, updatedBy: userId, ...entry }));
+    }
     async upsertBilling(clientId, dto, userId) {
         await this.findOne(clientId);
         let billing = await this.billingRepository.findOne({ where: { clientId } });
+        const changes = [];
         if (!billing) {
             billing = this.billingRepository.create({
                 clientId,
+                status: shared_1.ClientBillingStatus.DRAFT,
                 paymentTerms: dto.paymentTerms ?? 'NET30',
                 currency: dto.currency ?? 'INR',
                 taxIdentifier: dto.taxIdentifier ?? null,
@@ -444,27 +493,31 @@ let ClientService = class ClientService {
             });
         }
         else {
-            if (dto.paymentTerms !== undefined)
-                billing.paymentTerms = dto.paymentTerms;
-            if (dto.currency !== undefined)
-                billing.currency = dto.currency;
-            if (dto.taxIdentifier !== undefined)
-                billing.taxIdentifier = dto.taxIdentifier;
-            if (dto.invoiceCycle !== undefined)
-                billing.invoiceCycle = dto.invoiceCycle;
-            if (dto.billingAddress !== undefined)
-                billing.billingAddress = dto.billingAddress;
-            if (dto.bankAccount !== undefined)
-                billing.bankAccount = dto.bankAccount;
-            if (dto.bankName !== undefined)
-                billing.bankName = dto.bankName;
-            if (dto.ifscCode !== undefined)
-                billing.ifscCode = dto.ifscCode;
-            if (dto.notes !== undefined)
-                billing.notes = dto.notes;
+            for (const f of this.BILLING_FIELDS) {
+                const incoming = dto[f.key];
+                if (incoming === undefined)
+                    continue;
+                const fromValue = this.stringify(billing[f.key]);
+                const toValue = this.stringify(incoming);
+                if (fromValue !== toValue) {
+                    changes.push({ field: f.key, label: f.label, fromValue, toValue });
+                    billing[f.key] = incoming;
+                }
+            }
             billing.updatedBy = userId;
         }
         const saved = await this.billingRepository.save(billing);
+        if (changes.length > 0) {
+            for (const change of changes) {
+                await this.recordBillingHistory(clientId, userId, {
+                    eventType: shared_1.ClientBillingEventType.PROFILE_UPDATE,
+                    field: change.field,
+                    remarks: `${change.label} updated`,
+                    fromValue: change.fromValue,
+                    toValue: change.toValue,
+                });
+            }
+        }
         await this.auditService.recordEvent({
             category: shared_1.EventCategory.OPERATIONAL,
             eventType: 'CLIENT_BILLING_UPDATED',
@@ -475,6 +528,57 @@ let ClientService = class ClientService {
         });
         return saved;
     }
+    async transitionBillingStatus(clientId, targetStatus, userId, remarks) {
+        await this.findOne(clientId);
+        const billing = await this.billingRepository.findOne({ where: { clientId } });
+        if (!billing) {
+            throw new common_1.NotFoundException('Billing profile not found for this client.');
+        }
+        const allowed = VALID_BILLING_TRANSITIONS[billing.status] ?? [];
+        if (billing.status === targetStatus) {
+            throw new common_1.ConflictException(`Billing is already ${targetStatus}.`);
+        }
+        if (!allowed.includes(targetStatus)) {
+            throw new common_1.BadRequestException(`Cannot transition billing from ${billing.status} to ${targetStatus}. Allowed: ${allowed.join(', ') || 'none'}.`);
+        }
+        const fromStatus = billing.status;
+        billing.status = targetStatus;
+        billing.updatedBy = userId;
+        const saved = await this.billingRepository.save(billing);
+        await this.recordBillingHistory(clientId, userId, {
+            eventType: shared_1.ClientBillingEventType.STATUS_CHANGE,
+            fromStatus,
+            toStatus: targetStatus,
+            remarks: remarks ?? null,
+        });
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.OPERATIONAL,
+            eventType: 'CLIENT_BILLING_STATUS_CHANGED',
+            entityType: 'CLIENT',
+            entityId: clientId,
+            userId,
+            remarks: `Billing status ${fromStatus} -> ${targetStatus}`,
+        });
+        return saved;
+    }
+    async addBillingRemark(clientId, remarks, userId) {
+        await this.findOne(clientId);
+        const billing = await this.billingRepository.findOne({ where: { clientId } });
+        if (!billing) {
+            throw new common_1.NotFoundException('Billing profile not found for this client.');
+        }
+        return this.recordBillingHistory(clientId, userId, {
+            eventType: shared_1.ClientBillingEventType.REMARK,
+            remarks,
+        });
+    }
+    async findBillingHistory(clientId) {
+        await this.findOne(clientId);
+        return this.billingHistoryRepository.find({
+            where: { clientId },
+            order: { createdAt: 'DESC' },
+        });
+    }
 };
 exports.ClientService = ClientService;
 exports.ClientService = ClientService = __decorate([
@@ -484,7 +588,9 @@ exports.ClientService = ClientService = __decorate([
     __param(2, (0, typeorm_1.InjectRepository)(client_contact_entity_1.ClientContactEntity)),
     __param(3, (0, typeorm_1.InjectRepository)(client_contract_entity_1.ClientContractEntity)),
     __param(4, (0, typeorm_1.InjectRepository)(client_billing_entity_1.ClientBillingEntity)),
+    __param(5, (0, typeorm_1.InjectRepository)(client_billing_history_entity_1.ClientBillingHistoryEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

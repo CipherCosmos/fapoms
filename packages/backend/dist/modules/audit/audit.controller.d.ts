@@ -7,8 +7,8 @@ declare class StartAuditDto {
     scheduledDate: string;
 }
 declare class CloseAuditDto {
-    baseFee: number;
-    travelAllowance: number;
+    baseFee?: number;
+    travelAllowance?: number;
 }
 export declare class AuditController {
     private readonly auditService;

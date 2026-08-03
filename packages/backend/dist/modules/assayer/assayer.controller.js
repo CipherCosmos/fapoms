@@ -20,6 +20,17 @@ const class_validator_1 = require("class-validator");
 const assayer_service_1 = require("./assayer.service");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
+const assayer_visibility_1 = require("./assayer-visibility");
+const STAFF_ASSAYER_EDITORS = [
+    shared_1.SystemRole.SUPER_ADMINISTRATOR,
+    shared_1.SystemRole.ADMINISTRATOR,
+    shared_1.SystemRole.HR_MANAGER,
+];
+const SELF_EDITABLE_FIELDS = [
+    'phone', 'alternatePhone', 'email',
+    'address', 'city', 'district', 'state', 'pincode',
+    'latitude', 'longitude',
+];
 class CreateAssayerRequestDto {
     assayerCode;
     firstName;
@@ -933,11 +944,11 @@ let AssayerController = class AssayerController {
             data: assayer,
         };
     }
-    async findAll(page = 1, limit = 20) {
+    async findAll(req, page = 1, limit = 20) {
         const { assayers, total } = await this.assayerService.findAll(page, limit);
         return {
             success: true,
-            data: assayers,
+            data: (0, assayer_visibility_1.scopeAssayerListForRoles)(assayers, (0, assayer_visibility_1.rolesOf)(req.user), req.user?.id),
             meta: {
                 pagination: {
                     page,
@@ -950,21 +961,35 @@ let AssayerController = class AssayerController {
             },
         };
     }
-    async findOne(id) {
+    async findOne(id, req) {
         const assayer = await this.assayerService.findOne(id);
         return {
             success: true,
-            data: assayer,
+            data: (0, assayer_visibility_1.scopeAssayerForRoles)(assayer, (0, assayer_visibility_1.rolesOf)(req.user), req.user?.id === id),
         };
     }
-    async getProfile(assayerId) {
+    async getProfile(assayerId, req) {
         const assayer = await this.assayerService.getProfile(assayerId);
         return {
             success: true,
-            data: assayer,
+            data: (0, assayer_visibility_1.scopeAssayerForRoles)(assayer, (0, assayer_visibility_1.rolesOf)(req.user), req.user?.id === assayerId),
         };
     }
     async update(id, dto, req) {
+        const roles = (0, assayer_visibility_1.rolesOf)(req.user);
+        const isStaff = roles.some((r) => STAFF_ASSAYER_EDITORS.includes(r));
+        if (!isStaff) {
+            if (req.user?.id !== id) {
+                throw new common_1.ForbiddenException('You may only update your own profile');
+            }
+            const attempted = Object.entries(dto ?? {})
+                .filter(([, v]) => v !== undefined)
+                .map(([k]) => k);
+            const forbidden = attempted.filter((f) => !SELF_EDITABLE_FIELDS.includes(f));
+            if (forbidden.length) {
+                throw new common_1.ForbiddenException(`These fields are maintained by HR and cannot be self-edited: ${forbidden.join(', ')}`);
+            }
+        }
         const updatedBy = req.user?.id && /^[0-9a-fA-F-]{36}$/.test(req.user.id) ? req.user.id : id;
         const assayer = await this.assayerService.update(id, dto, updatedBy);
         return {
@@ -1134,7 +1159,7 @@ exports.AssayerController = AssayerController;
 __decorate([
     (0, common_1.Post)(),
     (0, common_1.HttpCode)(201),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Register a new field assayer' }),
     __param(0, (0, common_1.Body)()),
@@ -1144,35 +1169,38 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "create", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.FINANCE_MANAGER),
     (0, common_1.Get)(),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'List all registered assayers' }),
-    __param(0, (0, common_1.Query)('page')),
-    __param(1, (0, common_1.Query)('limit')),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Query)('page')),
+    __param(2, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:paramtypes", [Object, Object, Object]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "findAll", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.FINANCE_MANAGER),
     (0, common_1.Get)(':id'),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get details for a single assayer by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "findOne", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.ASSAYER),
     (0, common_1.Get)(':assayerId/profile'),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' }),
     __param(0, (0, common_1.Param)('assayerId')),
+    __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "getProfile", null);
 __decorate([
-    (0, guards_1.Public)(),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.ASSAYER),
     (0, common_1.Put)(':id'),
     (0, swagger_1.ApiOperation)({ summary: 'Update assayer contact, banking, or operational details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
@@ -1185,7 +1213,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, common_1.HttpCode)(204),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete assayer profile' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
@@ -1197,7 +1225,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':assayerId/commercial'),
     (0, common_1.HttpCode)(201),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create a commercial profile for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -1209,8 +1237,8 @@ __decorate([
 ], AssayerController.prototype, "createCommercial", null);
 __decorate([
     (0, common_1.Put)('commercial/:id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('assayer:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update a commercial profile by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -1220,8 +1248,8 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "updateCommercial", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.FINANCE_MANAGER),
     (0, common_1.Get)(':assayerId/commercial'),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get all commercial profiles for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -1240,7 +1268,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':assayerId/workforce-attribute'),
     (0, common_1.HttpCode)(201),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Add a skill, certification, or language to an assayer profile' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -1252,8 +1280,8 @@ __decorate([
 ], AssayerController.prototype, "addWorkforceAttribute", null);
 __decorate([
     (0, common_1.Put)('workforce-attribute/:id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('assayer:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update a workforce attribute by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -1264,7 +1292,7 @@ __decorate([
 ], AssayerController.prototype, "updateWorkforceAttribute", null);
 __decorate([
     (0, common_1.Delete)('workforce-attribute/:id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Remove a workforce attribute by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
@@ -1274,6 +1302,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "removeWorkforceAttribute", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, common_1.Get)(':assayerId/workforce-attribute'),
     (0, swagger_1.ApiOperation)({ summary: 'Get workforce attributes for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -1285,8 +1314,8 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':id/lifecycle'),
     (0, common_1.HttpCode)(201),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('assayer:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition assayer lifecycle status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -1298,7 +1327,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':assayerId/government-document'),
     (0, common_1.HttpCode)(201),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Add a government document to an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -1310,8 +1339,8 @@ __decorate([
 ], AssayerController.prototype, "addGovernmentDocument", null);
 __decorate([
     (0, common_1.Put)('government-document/:id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('assayer:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update a government document verification status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -1321,8 +1350,8 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "updateGovernmentDocument", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, common_1.Get)(':assayerId/government-document'),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'List government documents for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -1344,7 +1373,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)(':assayerId/document'),
     (0, common_1.HttpCode)(201),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Upload a new versioned document for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -1356,8 +1385,8 @@ __decorate([
 ], AssayerController.prototype, "addAssayerDocument", null);
 __decorate([
     (0, common_1.Put)(':assayerId/document/:docId'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('assayer:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update document metadata' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Param)('docId', common_1.ParseUUIDPipe)),
@@ -1369,7 +1398,7 @@ __decorate([
 ], AssayerController.prototype, "updateAssayerDocument", null);
 __decorate([
     (0, common_1.Get)(':assayerId/document'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'List documents for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -1379,7 +1408,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)('document/:id'),
     (0, common_1.HttpCode)(204),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete an assayer document' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
@@ -1389,7 +1418,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "removeAssayerDocument", null);
 __decorate([
-    (0, guards_1.Public)(),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, common_1.Post)(':assayerId/remark'),
     (0, common_1.HttpCode)(201),
     (0, swagger_1.ApiOperation)({ summary: 'Add a remark to an assayer profile' }),
@@ -1403,7 +1432,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':assayerId/remark/:remarkId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('assayer:update:organization'),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update a remark' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Param)('remarkId', common_1.ParseUUIDPipe)),
@@ -1416,7 +1445,7 @@ __decorate([
 __decorate([
     (0, common_1.Delete)(':assayerId/remark/:remarkId'),
     (0, common_1.HttpCode)(204),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, guards_1.RequirePermissions)('assayer:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Delete a remark' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
@@ -1427,8 +1456,8 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "removeRemark", null);
 __decorate([
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, common_1.Get)(':assayerId/remark'),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'List remarks for an assayer' }),
     __param(0, (0, common_1.Param)('assayerId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Query)('visibility')),
@@ -1450,7 +1479,7 @@ __decorate([
 ], AssayerController.prototype, "getActivityTimeline", null);
 __decorate([
     (0, common_1.Get)('/template/download'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Download Excel template for assayer data entry' }),
     __param(0, (0, common_1.Res)()),
     __metadata("design:type", Function),
@@ -1459,7 +1488,7 @@ __decorate([
 ], AssayerController.prototype, "downloadTemplate", null);
 __decorate([
     (0, common_1.Post)('/upload'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
     (0, guards_1.RequirePermissions)('assayer:create:organization'),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
     (0, swagger_1.ApiOperation)({ summary: 'Upload assayers from Excel spreadsheet' }),

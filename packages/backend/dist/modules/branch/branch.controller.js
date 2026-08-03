@@ -19,6 +19,7 @@ const platform_express_1 = require("@nestjs/platform-express");
 const class_validator_1 = require("class-validator");
 const branch_service_1 = require("./branch.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 class CreateBranchRequestDto {
     branchCode;
@@ -569,7 +570,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('branch:update:organization'),
+    (0, guards_1.RequirePermissions)('branch:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update branch details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -612,7 +613,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/contacts/:contactId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('branch:update:organization'),
+    (0, guards_1.RequirePermissions)('branch:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update branch contact' }),
     __param(0, (0, common_1.Param)('contactId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -687,6 +688,7 @@ exports.BranchController = BranchController = __decorate([
     (0, swagger_1.ApiTags)('Branches'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('branches'),
     __metadata("design:paramtypes", [branch_service_1.BranchService])
 ], BranchController);

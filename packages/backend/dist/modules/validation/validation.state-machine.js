@@ -47,6 +47,14 @@ class ValidationStateMachine {
             validationCase.ocrResult = ocrResult;
         return new domain_events_1.ValidationCorrectionRequestedEvent(validationCase.id, prev, validationCase.status, userId);
     }
+    static moveToReview(validationCase, userId, remarks) {
+        this.validateTransition(validationCase.status, shared_1.ValidationStatus.HUMAN_REVIEW);
+        const prev = validationCase.status;
+        validationCase.status = shared_1.ValidationStatus.HUMAN_REVIEW;
+        if (remarks)
+            validationCase.remarks = remarks;
+        return new domain_events_1.ValidationMovedToReviewEvent(validationCase.id, prev, validationCase.status, userId);
+    }
     static submitValidation(validationCase, userId, remarks, notes, ocrResult) {
         this.validateTransition(validationCase.status, shared_1.ValidationStatus.SUBMITTED);
         const prev = validationCase.status;

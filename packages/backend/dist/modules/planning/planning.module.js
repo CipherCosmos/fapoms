@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PlanningModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
+const command_center_service_1 = require("./command-center.service");
 const planning_service_1 = require("./planning.service");
 const planning_controller_1 = require("./planning.controller");
 const planning_orchestrator_service_1 = require("./planning-orchestrator.service");
@@ -87,6 +88,7 @@ exports.PlanningModule = PlanningModule = __decorate([
         controllers: [planning_controller_1.PlanningController],
         providers: [
             planning_service_1.PlanningService,
+            command_center_service_1.CommandCenterService,
             planning_orchestrator_service_1.PlanningOrchestratorService,
             project_planning_service_1.ProjectPlanningService,
             optimization_engine_1.OptimizationEngine,

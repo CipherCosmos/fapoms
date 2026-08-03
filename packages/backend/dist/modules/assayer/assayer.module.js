@@ -16,6 +16,8 @@ const assayer_government_document_entity_1 = require("./assayer-government-docum
 const assayer_document_entity_1 = require("./assayer-document.entity");
 const assayer_remark_entity_1 = require("./assayer-remark.entity");
 const assayer_activity_entity_1 = require("./assayer-activity.entity");
+const hr_controller_1 = require("./hr.controller");
+const hr_workforce_service_1 = require("./hr-workforce.service");
 const assayer_service_1 = require("./assayer.service");
 const assayer_controller_1 = require("./assayer.controller");
 let AssayerModule = class AssayerModule {
@@ -34,9 +36,9 @@ exports.AssayerModule = AssayerModule = __decorate([
                 assayer_activity_entity_1.AssayerActivityEntity,
             ]),
         ],
-        controllers: [assayer_controller_1.AssayerController],
-        providers: [assayer_service_1.AssayerService],
-        exports: [assayer_service_1.AssayerService, typeorm_1.TypeOrmModule],
+        controllers: [assayer_controller_1.AssayerController, hr_controller_1.HrController],
+        providers: [assayer_service_1.AssayerService, hr_workforce_service_1.HrWorkforceService],
+        exports: [assayer_service_1.AssayerService, hr_workforce_service_1.HrWorkforceService, typeorm_1.TypeOrmModule],
     })
 ], AssayerModule);
 //# sourceMappingURL=assayer.module.js.map

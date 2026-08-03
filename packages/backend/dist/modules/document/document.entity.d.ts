@@ -1,7 +1,7 @@
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
-import { DocumentStatus, DocumentType } from '@fapoms/shared';
+import { DocumentStatus, DocumentType, DispatchMethod } from '@fapoms/shared';
 export declare class DocumentEntity extends BaseEntity {
     projectBranchId: string | null;
     assessmentId: string | null;
@@ -12,6 +12,17 @@ export declare class DocumentEntity extends BaseEntity {
     type: DocumentType;
     status: DocumentStatus;
     docVersion: number;
+    customerMasterVersionId: string | null;
+    dispatchedAt: Date | null;
+    dispatchMethod: DispatchMethod | null;
+    dispatchedBy: string | null;
+    receivedAt: Date | null;
+    assignedToUserId: string | null;
+    assignedAt: Date | null;
+    assignedBy: string | null;
+    dataEntryCompletedAt: Date | null;
+    sentToDataEntryAt: Date | null;
+    sentToExternalOcrAt: Date | null;
     projectBranch: ProjectBranchEntity | null;
     assessment: AssessmentEntity | null;
 }

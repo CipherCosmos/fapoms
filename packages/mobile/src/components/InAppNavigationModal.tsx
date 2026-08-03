@@ -2,7 +2,6 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { View, Text, TouchableOpacity, Modal as RNModal, Platform, ActivityIndicator, ScrollView } from 'react-native';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Icon, IconButton, Tappable } from './ui/primitives';
 import { AssayerAssignment } from '../types/mobile-app';
@@ -467,6 +466,8 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
       default: return 'navigate';
     }
   };
+
+  if (!visible) return null;
 
   return (
     <RNModal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>

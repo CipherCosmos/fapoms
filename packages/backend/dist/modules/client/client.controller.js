@@ -18,6 +18,7 @@ const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 const client_service_1 = require("./client.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 class CreateClientConfigDto {
     importMapping;
@@ -563,6 +564,27 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], LifecycleTransitionDto.prototype, "reason", void 0);
+class BillingStatusTransitionDto {
+    status;
+    remarks;
+}
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.ClientBillingStatus),
+    __metadata("design:type", String)
+], BillingStatusTransitionDto.prototype, "status", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], BillingStatusTransitionDto.prototype, "remarks", void 0);
+class BillingRemarkDto {
+    remarks;
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], BillingRemarkDto.prototype, "remarks", void 0);
 let ClientController = class ClientController {
     clientService;
     constructor(clientService) {
@@ -572,8 +594,15 @@ let ClientController = class ClientController {
         const client = await this.clientService.create(dto, req.user.id, req.user.organizationId);
         return { success: true, data: client };
     }
-    async findAll(page = 1, limit = 20) {
-        const { clients, total } = await this.clientService.findAll(page, limit);
+    async findAll(page = 1, limit = 20, search, status, clientType, priority, sortBy, sortOrder) {
+        const { clients, total } = await this.clientService.findAll(page, limit, {
+            search,
+            status,
+            clientType,
+            priority,
+            sortBy,
+            sortOrder,
+        });
         return {
             success: true,
             data: clients,
@@ -639,9 +668,21 @@ let ClientController = class ClientController {
         const billing = await this.clientService.findBilling(id);
         return { success: true, data: billing };
     }
+    async findBillingHistory(id) {
+        const history = await this.clientService.findBillingHistory(id);
+        return { success: true, data: history };
+    }
     async upsertBilling(id, dto, req) {
         const billing = await this.clientService.upsertBilling(id, dto, req.user.id);
         return { success: true, data: billing };
+    }
+    async transitionBillingStatus(id, dto, req) {
+        const billing = await this.clientService.transitionBillingStatus(id, dto.status, req.user.id, dto.remarks);
+        return { success: true, data: billing };
+    }
+    async addBillingRemark(id, dto, req) {
+        const entry = await this.clientService.addBillingRemark(id, dto.remarks, req.user.id);
+        return { success: true, data: entry };
     }
 };
 exports.ClientController = ClientController;
@@ -661,8 +702,14 @@ __decorate([
     (0, swagger_1.ApiOperation)({ summary: 'List all active client profiles' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
+    __param(2, (0, common_1.Query)('search')),
+    __param(3, (0, common_1.Query)('status')),
+    __param(4, (0, common_1.Query)('clientType')),
+    __param(5, (0, common_1.Query)('priority')),
+    __param(6, (0, common_1.Query)('sortBy')),
+    __param(7, (0, common_1.Query)('sortOrder')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:paramtypes", [Object, Object, String, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], ClientController.prototype, "findAll", null);
 __decorate([
@@ -676,7 +723,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('client:update:organization'),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update client profile and configuration' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -699,7 +746,7 @@ __decorate([
 __decorate([
     (0, common_1.Patch)(':id/lifecycle'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('client:update:organization'),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition client lifecycle status' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -731,7 +778,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/contacts/:contactId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('client:update:organization'),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update client contact' }),
     __param(0, (0, common_1.Param)('contactId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -774,7 +821,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/contracts/:contractId'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('client:update:organization'),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update client contract' }),
     __param(0, (0, common_1.Param)('contractId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -803,9 +850,17 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], ClientController.prototype, "findBilling", null);
 __decorate([
+    (0, common_1.Get)(':id/billing/history'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get client billing timeline (status changes, remarks, profile edits)' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], ClientController.prototype, "findBillingHistory", null);
+__decorate([
     (0, common_1.Put)(':id/billing'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
-    (0, guards_1.RequirePermissions)('client:update:organization'),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Create or update client billing information' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -814,10 +869,35 @@ __decorate([
     __metadata("design:paramtypes", [String, UpdateBillingRequestDto, Object]),
     __metadata("design:returntype", Promise)
 ], ClientController.prototype, "upsertBilling", null);
+__decorate([
+    (0, common_1.Patch)(':id/billing/status'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Transition client billing status' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, BillingStatusTransitionDto, Object]),
+    __metadata("design:returntype", Promise)
+], ClientController.prototype, "transitionBillingStatus", null);
+__decorate([
+    (0, common_1.Post)(':id/billing/remarks'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Add a remark to client billing timeline' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, BillingRemarkDto, Object]),
+    __metadata("design:returntype", Promise)
+], ClientController.prototype, "addBillingRemark", null);
 exports.ClientController = ClientController = __decorate([
     (0, swagger_1.ApiTags)('Clients'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('clients'),
     __metadata("design:paramtypes", [client_service_1.ClientService])
 ], ClientController);

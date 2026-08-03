@@ -18,7 +18,6 @@ import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { connectMobileSocket } from '../services/socket';
 import { MLKitScannerModal } from './MLKitScannerModal';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Icon, IconButton, Tappable } from './ui/primitives';
 
@@ -195,10 +194,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           contentContainerStyle={styles.chatContent}
           onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
         >
-          {/* Encryption Banner */}
           <View style={styles.encryptedBanner}>
+            <Icon name="lock-closed" size={10} color="#ffe596" />
             <Text style={styles.encryptedText}>
-              <Icon name="lock-closed" size={10} color="#ffe596" /> Messages & files are end-to-end encrypted within FAPOMS. No third-party access.
+              Messages & files are end-to-end encrypted within FAPOMS. No third-party access.
             </Text>
           </View>
 
@@ -324,7 +323,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                                 <Icon name="document-text" size={24} color="#e9edef" />
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.fileName}>{att.fileName || `Document #${idx + 1}`}</Text>
-                                  <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '700', marginTop: 2 }}><Icon name="download" size={10} color="#34d399" /> Tap to Save / Download</Text>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                                    <Icon name="download" size={10} color="#34d399" />
+                                    <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '700' }}>Tap to Save / Download</Text>
+                                  </View>
                                 </View>
                               </View>
                             )}
@@ -348,7 +350,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         {replyToMessage && (
           <View style={styles.replyBanner}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.replySender}><Icon name="return-down-back" size={12} color="#00a884" /> Replying to {replyToMessage.sender}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Icon name="return-down-back" size={12} color="#00a884" />
+                <Text style={styles.replySender}>Replying to {replyToMessage.sender}</Text>
+              </View>
               <Text style={styles.replyPreview} numberOfLines={1}>{replyToMessage.text}</Text>
             </View>
             <TouchableOpacity onPress={() => setReplyToMessage(null)}>
@@ -372,20 +377,14 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           </View>
         )}
 
-        {/* WhatsApp-style Input Footer Bar or Resolved Lock Banner */}
-        {queries.length > 0 && queries.every((q: any) => q.status === 'RESOLVED') ? (
-          <View style={{ backgroundColor: '#182229', padding: 14, borderTopWidth: 1, borderTopColor: '#2a3942', alignItems: 'center' }}>
-            <Text style={{ color: '#8696a0', fontSize: 12, fontWeight: '700' }}>
-              <Icon name="lock-closed" size={10} color="#8696a0" /> Clarification Query Marked Resolved by Data Entry. Chat is Closed.
-            </Text>
-          </View>
-        ) : (
+        {/* Bottom Input Area */}
+        {activeQueryId && (
           <View style={styles.inputBar}>
-            <TouchableOpacity style={styles.iconBtn} onPress={handlePickAttachment}>
+            <TouchableOpacity onPress={handlePickAttachment} style={styles.iconBtn}>
               <Icon name="attach" size={22} color="#8696a0" />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.iconBtn} onPress={() => setIsCameraActive(true)}>
+            <TouchableOpacity onPress={() => setIsCameraActive(true)} style={styles.iconBtn}>
               <Icon name="camera" size={22} color="#8696a0" />
             </TouchableOpacity>
 
@@ -403,7 +402,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
               onPress={handleSendResponse}
               disabled={isSubmitting}
             >
-              <Text style={styles.sendIcon}>{isSubmitting ? '...' : <Icon name="send" size={16} color="#fff" />}</Text>
+              {isSubmitting ? <Text style={styles.sendIcon}>...</Text> : <Icon name="send" size={16} color="#fff" />}
             </TouchableOpacity>
           </View>
         )}

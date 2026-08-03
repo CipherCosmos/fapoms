@@ -43,6 +43,29 @@ let ProjectQueryService = class ProjectQueryService {
             take: limit,
             skip: (page - 1) * limit,
         });
+        if (projects.length > 0) {
+            const counts = await this.projectBranchRepository
+                .createQueryBuilder('pb')
+                .select('pb.project_id', 'projectId')
+                .addSelect('COUNT(*)::int', 'total')
+                .addSelect(`COUNT(*) FILTER (WHERE pb.status IN ('ASSIGNMENT_CONFIRMED','SCHEDULED','AUDIT_COMPLETED','VALIDATION_COMPLETED','CLOSED'))::int`, 'assigned')
+                .addSelect(`COUNT(*) FILTER (WHERE pb.status IN ('VALIDATION_COMPLETED','CLOSED'))::int`, 'completed')
+                .addSelect(`COUNT(*) FILTER (WHERE pb.status = 'UNABLE_TO_COVER')::int`, 'uncovered')
+                .where('pb.project_id IN (:...ids)', { ids: projects.map((p) => p.id) })
+                .andWhere('pb.is_active = true')
+                .groupBy('pb.project_id')
+                .getRawMany();
+            const byId = new Map(counts.map((c) => [c.projectId, c]));
+            for (const project of projects) {
+                const c = byId.get(project.id);
+                project.branchProgress = {
+                    total: Number(c?.total ?? 0),
+                    assigned: Number(c?.assigned ?? 0),
+                    completed: Number(c?.completed ?? 0),
+                    uncovered: Number(c?.uncovered ?? 0),
+                };
+            }
+        }
         return { projects, total };
     }
     async findProjectBranches(projectId) {

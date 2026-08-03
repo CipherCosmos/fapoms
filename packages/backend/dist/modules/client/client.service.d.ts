@@ -4,8 +4,10 @@ import { ClientConfigurationEntity } from './client-configuration.entity';
 import { ClientContactEntity } from './client-contact.entity';
 import { ClientContractEntity } from './client-contract.entity';
 import { ClientBillingEntity } from './client-billing.entity';
+import { ClientBillingHistoryEntity } from './client-billing-history.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { ClientBillingStatus } from '@fapoms/shared';
 export interface CreateClientDto {
     clientCode: string;
     name: string;
@@ -123,12 +125,20 @@ export declare class ClientService {
     private readonly contactRepository;
     private readonly contractRepository;
     private readonly billingRepository;
+    private readonly billingHistoryRepository;
     private readonly auditService;
     private readonly eventPublisher;
-    constructor(clientRepository: Repository<ClientEntity>, configRepository: Repository<ClientConfigurationEntity>, contactRepository: Repository<ClientContactEntity>, contractRepository: Repository<ClientContractEntity>, billingRepository: Repository<ClientBillingEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
+    constructor(clientRepository: Repository<ClientEntity>, configRepository: Repository<ClientConfigurationEntity>, contactRepository: Repository<ClientContactEntity>, contractRepository: Repository<ClientContractEntity>, billingRepository: Repository<ClientBillingEntity>, billingHistoryRepository: Repository<ClientBillingHistoryEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher);
     create(dto: CreateClientDto, userId: string, organizationId?: string | null): Promise<ClientEntity>;
     findOne(id: string): Promise<ClientEntity>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, filters?: {
+        search?: string;
+        status?: string;
+        clientType?: string;
+        priority?: string;
+        sortBy?: string;
+        sortOrder?: 'ASC' | 'DESC';
+    }): Promise<{
         clients: ClientEntity[];
         total: number;
     }>;
@@ -144,5 +154,11 @@ export declare class ClientService {
     updateContract(contractId: string, dto: UpdateContractDto, userId: string): Promise<ClientContractEntity>;
     removeContract(contractId: string, userId: string): Promise<void>;
     findBilling(clientId: string): Promise<ClientBillingEntity | null>;
+    private readonly BILLING_FIELDS;
+    private stringify;
+    private recordBillingHistory;
     upsertBilling(clientId: string, dto: UpdateBillingDto, userId: string): Promise<ClientBillingEntity>;
+    transitionBillingStatus(clientId: string, targetStatus: ClientBillingStatus, userId: string, remarks?: string): Promise<ClientBillingEntity>;
+    addBillingRemark(clientId: string, remarks: string, userId: string): Promise<ClientBillingHistoryEntity>;
+    findBillingHistory(clientId: string): Promise<ClientBillingHistoryEntity[]>;
 }

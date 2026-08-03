@@ -16,6 +16,7 @@ exports.PlanningController = exports.UpdateBusinessRuleRequestDto = exports.Crea
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
+const command_center_service_1 = require("./command-center.service");
 const planning_service_1 = require("./planning.service");
 const planning_orchestrator_service_1 = require("./planning-orchestrator.service");
 const project_planning_service_1 = require("./project-planning.service");
@@ -28,6 +29,7 @@ const operations_control_center_service_1 = require("./operations-control-center
 const operations_execution_service_1 = require("./operations-execution.service");
 const field_operations_service_1 = require("./field-operations.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 class CreateBusinessRuleRequestDto {
     name;
@@ -109,6 +111,7 @@ __decorate([
 ], UpdateBusinessRuleRequestDto.prototype, "actions", void 0);
 let PlanningController = class PlanningController {
     planningService;
+    commandCenterService;
     planningOrchestratorService;
     projectPlanningService;
     optimizationEngine;
@@ -119,8 +122,9 @@ let PlanningController = class PlanningController {
     executionService;
     fieldService;
     dayPlannerService;
-    constructor(planningService, planningOrchestratorService, projectPlanningService, optimizationEngine, scenarioPlanningService, coveragePlanningEngine, operationsPlanningService, controlCenterService, executionService, fieldService, dayPlannerService) {
+    constructor(planningService, commandCenterService, planningOrchestratorService, projectPlanningService, optimizationEngine, scenarioPlanningService, coveragePlanningEngine, operationsPlanningService, controlCenterService, executionService, fieldService, dayPlannerService) {
         this.planningService = planningService;
+        this.commandCenterService = commandCenterService;
         this.planningOrchestratorService = planningOrchestratorService;
         this.projectPlanningService = projectPlanningService;
         this.optimizationEngine = optimizationEngine;
@@ -286,15 +290,20 @@ let PlanningController = class PlanningController {
             data: plan,
         };
     }
+    async commandCenter(clientId, state) {
+        return { success: true, data: await this.commandCenterService.overview({ clientId, state }) };
+    }
     async getRecommendations(branchId) {
         const recommendations = await this.planningService.getRecommendedCandidates(branchId);
         return {
             success: true,
             data: recommendations,
+            meta: { excluded: recommendations.excluded || [] },
         };
     }
-    async getDayPlans(projectId, targetDate) {
-        const plan = await this.dayPlannerService.generateDayPlans(projectId, targetDate);
+    async getDayPlans(projectId, targetDate, minDistanceKm) {
+        const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+        const plan = await this.dayPlannerService.generateDayPlans(projectId, targetDate, Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined);
         return {
             success: true,
             data: plan,
@@ -350,7 +359,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('field/visits/:visitId/status'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
-    (0, guards_1.RequirePermissions)('planning:update:organization'),
+    (0, guards_1.RequirePermissions)('planning:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' }),
     __param(0, (0, common_1.Param)('visitId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -372,7 +381,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('field/incidents/:incidentId/resolve'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('planning:update:organization'),
+    (0, guards_1.RequirePermissions)('planning:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Resolve active field incident' }),
     __param(0, (0, common_1.Param)('incidentId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -449,7 +458,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('control-center/tasks/:taskId/resolve'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('planning:update:organization'),
+    (0, guards_1.RequirePermissions)('planning:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Resolve an operations task with justification log' }),
     __param(0, (0, common_1.Param)('taskId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -470,7 +479,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('control-center/exceptions/:exceptionId/resolve'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('planning:update:organization'),
+    (0, guards_1.RequirePermissions)('planning:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Resolve or bypass exception log with justification' }),
     __param(0, (0, common_1.Param)('exceptionId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -510,7 +519,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('coverage-plans/:planId/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('planning:update:organization'),
+    (0, guards_1.RequirePermissions)('planning:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' }),
     __param(0, (0, common_1.Param)('planId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -560,6 +569,16 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PlanningController.prototype, "simulateScenario", null);
 __decorate([
+    (0, common_1.Get)('command-center'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.FINANCE_MANAGER, shared_1.SystemRole.READ_ONLY_AUDITOR),
+    (0, swagger_1.ApiOperation)({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' }),
+    __param(0, (0, common_1.Query)('clientId')),
+    __param(1, (0, common_1.Query)('state')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], PlanningController.prototype, "commandCenter", null);
+__decorate([
     (0, common_1.Get)('recommendations'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE),
     (0, swagger_1.ApiOperation)({ summary: 'Retrieve and rank candidate assayers for a branch' }),
@@ -574,8 +593,9 @@ __decorate([
     (0, swagger_1.ApiOperation)({ summary: 'Generate multi-branch day plans grouping nearby branches for single assayer coverage' }),
     __param(0, (0, common_1.Param)('projectId', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Query)('targetDate')),
+    __param(2, (0, common_1.Query)('minDistanceKm')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", Promise)
 ], PlanningController.prototype, "getDayPlans", null);
 __decorate([
@@ -592,7 +612,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)('rules/:id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('planning:update:organization'),
+    (0, guards_1.RequirePermissions)('planning:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update a business planning rule by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -613,6 +633,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PlanningController.prototype, "deleteRule", null);
 __decorate([
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Get)('rules'),
     (0, swagger_1.ApiOperation)({ summary: 'List all active business planning rules' }),
     __param(0, (0, common_1.Query)('scope')),
@@ -634,6 +655,7 @@ exports.PlanningController = PlanningController = __decorate([
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
     (0, common_1.Controller)('planning'),
     __metadata("design:paramtypes", [planning_service_1.PlanningService,
+        command_center_service_1.CommandCenterService,
         planning_orchestrator_service_1.PlanningOrchestratorService,
         project_planning_service_1.ProjectPlanningService,
         optimization_engine_1.OptimizationEngine,

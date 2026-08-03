@@ -19,6 +19,7 @@ import {
   LogOut, UserCog, Inbox } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
+import { BrandLogo } from './BrandLogo';
 
 interface SidebarProps {
   user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
@@ -115,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
     <aside className="sidebar-area" style={{ display: 'flex', flexDirection: 'column', height: '100%', transition: 'all var(--transition-normal)' }}>
       {/* Brand + Toggle */}
       <div style={{ 
-        padding: collapsed ? '16px 14px' : '24px', 
+        padding: collapsed ? '16px 14px' : '20px 24px', 
         borderBottom: '1px solid var(--border-color)', 
         background: 'rgba(0,0,0,0.2)',
         display: 'flex',
@@ -124,75 +125,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
         gap: collapsed ? 0 : '12px',
         position: 'relative'
       }}>
-        {!collapsed && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', overflow: 'hidden' }}>
-            <div style={{
-              background: 'var(--gradient-neon)',
-              width: '38px',
-              height: '38px',
-              borderRadius: '11px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--on-gradient)',
-              fontWeight: 800,
-              fontSize: '18px',
-              fontFamily: 'var(--font-display)',
-              boxShadow: 'var(--shadow-neon), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
-              flexShrink: 0,
-              position: 'relative'
-            }}>
-              <span style={{ position: 'relative', zIndex: 1 }}>S</span>
-              <span style={{ position: 'absolute', inset: '4px', borderRadius: '7px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
-            </div>
-            <div>
-              <h1 style={{ fontSize: '17px', fontWeight: 700, fontFamily: 'var(--font-display)', lineHeight: 1, color: 'var(--accent)' }}>Sumeru Audit Suite</h1>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>Audit Ops Suite</span>
-            </div>
-          </div>
-        )}
-        {collapsed && (
-          <div style={{
-            background: 'var(--gradient-neon)',
-            width: '38px',
-            height: '38px',
-            borderRadius: '11px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--on-gradient)',
-            fontWeight: 800,
-            fontSize: '18px',
-            fontFamily: 'var(--font-display)',
-            boxShadow: 'var(--shadow-neon), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
-            flexShrink: 0,
-            position: 'relative'
-          }}>
-            <span style={{ position: 'relative', zIndex: 1 }}>S</span>
-            <span style={{ position: 'absolute', inset: '4px', borderRadius: '7px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
-          </div>
-        )}
+        <BrandLogo size={collapsed ? 'sm' : 'md'} collapsed={collapsed} />
+
         <button
           onClick={onToggle}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           style={{
-            position: collapsed ? 'absolute' : 'static',
-            right: collapsed ? '-12px' : 'auto',
-            top: collapsed ? '50%' : 'auto',
-            transform: collapsed ? 'translateY(-50%)' : 'none',
-            background: 'var(--bg-surface-2)',
+            background: 'var(--bg-secondary)',
             border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-full)',
-            width: '24px',
-            height: '24px',
+            color: 'var(--text-secondary)',
+            width: '26px',
+            height: '26px',
+            borderRadius: '50%',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
-            color: 'var(--text-secondary)',
-            zIndex: 5,
-            flexShrink: 0
+            flexShrink: 0,
           }}
+          title={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>

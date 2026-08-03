@@ -35,14 +35,13 @@ const ocr_module_1 = require("./infrastructure/ocr/ocr.module");
 const geo_module_1 = require("./modules/geo/geo.module");
 const search_module_1 = require("./modules/search/search.module");
 const audit_history_module_1 = require("./modules/audit-history/audit-history.module");
-const billing_module_1 = require("./modules/billing/billing.module");
-const ledger_module_1 = require("./modules/ledger/ledger.module");
 const audit_module_2 = require("./modules/audit/audit.module");
 const customer_master_module_1 = require("./modules/customer-master/customer-master.module");
 const validation_query_module_1 = require("./modules/validation-query/validation-query.module");
 const queue_module_1 = require("./infrastructure/queue/queue.module");
 const sla_scanner_module_1 = require("./infrastructure/scheduler/sla-scanner.module");
 const realtime_module_1 = require("./modules/realtime/realtime.module");
+const billing_engine_module_1 = require("./modules/billing-engine/billing-engine.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -92,8 +91,7 @@ exports.AppModule = AppModule = __decorate([
             geo_module_1.GeoModule,
             search_module_1.SearchModule,
             audit_history_module_1.AuditHistoryModule,
-            billing_module_1.BillingModule,
-            ledger_module_1.LedgerModule,
+            billing_engine_module_1.BillingEngineModule,
             audit_module_2.AuditPlatformModule,
             customer_master_module_1.CustomerMasterModule,
             validation_query_module_1.ValidationQueryModule,

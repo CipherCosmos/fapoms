@@ -24,7 +24,7 @@ export declare class ValidationService implements OnModuleInit {
     onModuleInit(): void;
     create(dto: CreateValidationCaseDto, userId: string): Promise<ValidationCaseEntity>;
     findOne(id: string): Promise<ValidationCaseEntity>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, projectBranchId?: string): Promise<{
         validationCases: ValidationCaseEntity[];
         total: number;
     }>;
@@ -32,6 +32,9 @@ export declare class ValidationService implements OnModuleInit {
     autoBalanceUnassignedCases(availableValidatorIds: string[], userId: string): Promise<number>;
     private executeValidationTransition;
     transition(id: string, targetStatus: ValidationStatus, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;
+    moveToReview(id: string, userId: string, remarks?: string): Promise<ValidationCaseEntity>;
+    getOrAdvanceForHandBack(projectBranchId: string, assessmentId: string | null, userId: string): Promise<ValidationCaseEntity>;
+    getOrCreateForBranch(projectBranchId: string, assessmentId: string | null, userId: string): Promise<ValidationCaseEntity>;
     approveValidation(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;
     requestCorrection(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;
     submitValidation(id: string, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bull';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import {
   EventCategory,
   NotificationChannel,
@@ -11,6 +11,7 @@ import {
 import { NotificationEntity } from './notification.entity';
 import { UserEntity } from '../user/user.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NOTIFICATION_QUEUE } from './notification.constants';
 
@@ -66,6 +67,7 @@ export class NotificationDispatchService {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
     @InjectQueue(NOTIFICATION_QUEUE)
     private readonly deliveryQueue: Queue,
   ) {}
@@ -168,7 +170,7 @@ export class NotificationDispatchService {
 
     // `orIgnore` lets the partial unique index on `dedupe_key` absorb repeats
     // without the caller having to pre-check or catch a constraint violation.
-    const result = await this.notificationRepository
+    await this.notificationRepository
       .createQueryBuilder()
       .insert()
       .into(NotificationEntity)
@@ -176,8 +178,40 @@ export class NotificationDispatchService {
       .orIgnore()
       .execute();
 
-    const created = result.identifiers.filter(Boolean).length;
+    // `groupKey` is generated fresh above on every call, so it belongs only to
+    // rows this exact call actually wrote — a skipped duplicate keeps whichever
+    // groupKey its original insert had. Reading it back this way, rather than
+    // trusting positional alignment with the insert result's `identifiers`
+    // array, is what caught this: `orIgnore` silently had nothing to conflict
+    // on for a long stretch (see NotificationEntity's class comment) and every
+    // duplicate call still reported a plausible-looking `created` count the
+    // whole time, because the row count and the reported count were computed
+    // from two different things that happened to agree only by coincidence.
+    const createdRows = await this.notificationRepository.find({ where: { groupKey } });
+    const created = createdRows.length;
     const suppressed = rows.length - created;
+
+    // ── Real-time ─────────────────────────────────────────────────────────
+    // A suppressed duplicate must not re-notify anyone live — that's the whole
+    // point of dedupe — so this only fires for rows genuinely just inserted.
+    for (const row of createdRows) {
+      try {
+        this.eventPublisher.publish('notification:new', {
+          id: row.id,
+          userId: row.userId,
+          assayerId: row.assayerId,
+          title: row.title,
+          message: row.message,
+          category: row.category,
+          priority: row.priority,
+          link: row.link,
+          isRead: false,
+          createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
+        });
+      } catch (err: any) {
+        this.logger.warn(`Could not publish real-time notification ${row.id}: ${err?.message}`);
+      }
+    }
 
     // ── Hand push delivery to the queue ───────────────────────────────────
     // In-app is already done — the row is the delivery. Only push needs a job.
@@ -185,12 +219,11 @@ export class NotificationDispatchService {
     // stranded-row sweeper will pick it up, so Redis being down delays a push
     // rather than losing it.
     if (def.channels.includes(NotificationChannel.PUSH)) {
-      const ids = result.identifiers.filter(Boolean).map((i: any) => i.id);
-      for (const notificationId of ids) {
+      for (const row of createdRows) {
         try {
           await this.deliveryQueue.add(
             'deliver',
-            { notificationId },
+            { notificationId: row.id },
             {
               attempts: 5,
               backoff: { type: 'exponential', delay: 5000 },
@@ -200,7 +233,7 @@ export class NotificationDispatchService {
             },
           );
         } catch (err: any) {
-          this.logger.warn(`Could not enqueue push for ${notificationId}: ${err?.message}`);
+          this.logger.warn(`Could not enqueue push for ${row.id}: ${err?.message}`);
         }
       }
     }

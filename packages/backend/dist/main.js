@@ -6,6 +6,7 @@ const swagger_1 = require("@nestjs/swagger");
 const app_module_1 = require("./app.module");
 const bull_board_setup_1 = require("./infrastructure/queue/bull-board.setup");
 const express = require("express");
+const compression = require("compression");
 async function bootstrap() {
     const nodeEnv = process.env.NODE_ENV;
     const jwtSecret = process.env.JWT_SECRET;
@@ -13,6 +14,16 @@ async function bootstrap() {
         throw new Error('CRITICAL: JWT_SECRET must be set to a secure key in production environments!');
     }
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
+    app.use(compression({
+        threshold: 1024,
+        filter: (req, res) => {
+            const type = String(res.getHeader('Content-Type') || '');
+            if (/^(application\/pdf|image\/|video\/|application\/zip|application\/octet-stream)/.test(type)) {
+                return false;
+            }
+            return compression.filter(req, res);
+        },
+    }));
     app.use(express.json({ limit: '50mb' }));
     app.use(express.urlencoded({ limit: '50mb', extended: true }));
     app.setGlobalPrefix('api/v1');

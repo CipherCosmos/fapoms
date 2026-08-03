@@ -18,6 +18,7 @@ const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 const zone_service_1 = require("./zone.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 class CreateZoneRequestDto {
     name;
@@ -161,7 +162,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('zone:update:organization'),
+    (0, guards_1.RequirePermissions)('zone:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update operational zone mappings' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -185,6 +186,7 @@ exports.ZoneController = ZoneController = __decorate([
     (0, swagger_1.ApiTags)('Zones'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('zones'),
     __metadata("design:paramtypes", [zone_service_1.ZoneService])
 ], ZoneController);

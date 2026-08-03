@@ -463,7 +463,7 @@ export const Assignments: React.FC = () => {
         />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr minmax(340px, 420px)', gap: '20px', alignItems: 'start' }}>
+      <div className="responsive-grid-split" style={{ alignItems: 'start' }}>
         {/* Left Column - Assignments List */}
         <div className="glass-card" style={{ padding: 0, overflowX: 'auto' }}>
           {isLoading ? (

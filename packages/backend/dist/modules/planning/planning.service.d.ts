@@ -21,6 +21,14 @@ export interface AssayerRecommendation {
     longitude?: number | null;
     baseFee?: number;
     readableReasons?: ExplanationReason[];
+    scoreBreakdown?: Record<string, number>;
+    pendingOnThisBranch?: boolean;
+}
+export interface ExcludedCandidate {
+    assayerId: string;
+    displayName: string;
+    reason: string;
+    detail?: string;
 }
 export interface CreateBusinessRuleDto {
     name: string;

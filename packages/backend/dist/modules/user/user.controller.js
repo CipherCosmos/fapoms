@@ -75,6 +75,46 @@ __decorate([
     (0, class_validator_1.IsArray)(),
     __metadata("design:type", Array)
 ], AssignRolesDto.prototype, "roleIds", void 0);
+class UpdateUserRequestDto {
+    firstName;
+    lastName;
+    phone;
+    departmentId;
+    status;
+}
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateUserRequestDto.prototype, "firstName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateUserRequestDto.prototype, "lastName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateUserRequestDto.prototype, "phone", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateUserRequestDto.prototype, "departmentId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsEnum)(shared_1.UserStatus),
+    __metadata("design:type", String)
+], UpdateUserRequestDto.prototype, "status", void 0);
+class ResetPasswordRequestDto {
+    newPassword;
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(8),
+    __metadata("design:type", String)
+], ResetPasswordRequestDto.prototype, "newPassword", void 0);
 let UserController = class UserController {
     userService;
     constructor(userService) {
@@ -138,8 +178,16 @@ let UserController = class UserController {
             data: this.sanitizeUser(user),
         };
     }
+    async unlockAccount(id, req) {
+        const user = await this.userService.unlockAccount(id, req.user.id);
+        return { success: true, data: this.sanitizeUser(user) };
+    }
+    async resetPassword(id, dto, req) {
+        await this.userService.resetPassword(id, dto.newPassword, req.user.id);
+        return { success: true, data: { message: 'Password reset.' } };
+    }
     sanitizeUser(user) {
-        const { passwordHash, failedLoginAttempts, lockedUntil, ...safe } = user;
+        const { passwordHash, ...safe } = user;
         return safe;
     }
 };
@@ -192,19 +240,19 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
-    (0, guards_1.RequirePermissions)('user:update:organization'),
+    (0, guards_1.RequirePermissions)('user:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update user' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
     __param(2, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:paramtypes", [String, UpdateUserRequestDto, Object]),
     __metadata("design:returntype", Promise)
 ], UserController.prototype, "update", null);
 __decorate([
     (0, common_1.Put)(':id/roles'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
-    (0, guards_1.RequirePermissions)('user:update:organization'),
+    (0, guards_1.RequirePermissions)('user:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Assign roles to user' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -213,6 +261,29 @@ __decorate([
     __metadata("design:paramtypes", [String, AssignRolesDto, Object]),
     __metadata("design:returntype", Promise)
 ], UserController.prototype, "assignRoles", null);
+__decorate([
+    (0, common_1.Post)(':id/unlock'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('user:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Clear a lockout without changing the password' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], UserController.prototype, "unlockAccount", null);
+__decorate([
+    (0, common_1.Post)(':id/reset-password'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('user:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Admin resets a user\'s password' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, ResetPasswordRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], UserController.prototype, "resetPassword", null);
 exports.UserController = UserController = __decorate([
     (0, swagger_1.ApiTags)('Users'),
     (0, swagger_1.ApiBearerAuth)(),

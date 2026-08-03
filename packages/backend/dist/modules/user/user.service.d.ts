@@ -34,6 +34,9 @@ export declare class UserService {
         total: number;
     }>;
     updateUser(id: string, dto: UpdateUserDto, updatedById: string): Promise<UserEntity>;
+    private assertNotLastActiveSuperAdmin;
+    unlockAccount(id: string, actorId: string): Promise<UserEntity>;
+    resetPassword(id: string, newPassword: string, actorId: string): Promise<void>;
     assignRoles(userId: string, roleIds: string[], assignedById: string): Promise<UserEntity>;
     findAllRoles(): Promise<RoleEntity[]>;
 }

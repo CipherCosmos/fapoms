@@ -18,11 +18,18 @@ const swagger_1 = require("@nestjs/swagger");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const guards_1 = require("../auth/guards");
+const operations_snapshot_service_1 = require("./operations-snapshot.service");
 const shared_1 = require("@fapoms/shared");
 let SystemDashboardController = class SystemDashboardController {
     dataSource;
-    constructor(dataSource) {
+    operationsSnapshot;
+    constructor(dataSource, operationsSnapshot) {
         this.dataSource = dataSource;
+        this.operationsSnapshot = operationsSnapshot;
+    }
+    async getOperations(req) {
+        const roles = (req.user?.roles ?? []).map((r) => r?.name ?? r).filter(Boolean);
+        return { success: true, data: await this.operationsSnapshot.snapshot(roles, req.user?.id) };
     }
     async getMetrics() {
         const clientsCount = await this.dataSource.query('SELECT COUNT(*) AS count FROM clients WHERE is_active = true');
@@ -53,6 +60,15 @@ let SystemDashboardController = class SystemDashboardController {
 };
 exports.SystemDashboardController = SystemDashboardController;
 __decorate([
+    (0, common_1.Get)('operations'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.FINANCE_MANAGER, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR, shared_1.SystemRole.DOCUMENT_EXECUTIVE, shared_1.SystemRole.DATA_ENTRY_HEAD, shared_1.SystemRole.READ_ONLY_AUDITOR, shared_1.SystemRole.CLIENT_USER),
+    (0, swagger_1.ApiOperation)({ summary: "Role-scoped operational snapshot: only the sections the caller's roles include" }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], SystemDashboardController.prototype, "getOperations", null);
+__decorate([
     (0, common_1.Get)('metrics'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, swagger_1.ApiOperation)({ summary: 'Retrieve live aggregated system counts and event history metrics' }),
@@ -66,6 +82,7 @@ exports.SystemDashboardController = SystemDashboardController = __decorate([
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard),
     (0, common_1.Controller)('system-dashboard'),
     __param(0, (0, typeorm_1.InjectDataSource)()),
-    __metadata("design:paramtypes", [typeorm_2.DataSource])
+    __metadata("design:paramtypes", [typeorm_2.DataSource,
+        operations_snapshot_service_1.OperationsSnapshotService])
 ], SystemDashboardController);
 //# sourceMappingURL=system-dashboard.controller.js.map

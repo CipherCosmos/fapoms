@@ -11,12 +11,16 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var AssayerService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AssayerService = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const xlsx = require("xlsx");
+const bcrypt = require("bcrypt");
+const fs = require("fs");
+const path = require("path");
 const assayer_entity_1 = require("./assayer.entity");
 const assayer_commercial_profile_entity_1 = require("./assayer-commercial-profile.entity");
 const workforce_attribute_entity_1 = require("./workforce-attribute.entity");
@@ -29,33 +33,54 @@ const assayer_state_machine_1 = require("./assayer.state-machine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
-async function geocodeAddress(address, city, district, state) {
-    const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
-        .replace(/\s+/g, ' ')
-        .trim();
+const GEO_CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
+let geoCache = {};
+try {
+    if (fs.existsSync(GEO_CACHE_FILE))
+        geoCache = JSON.parse(fs.readFileSync(GEO_CACHE_FILE, 'utf8'));
+}
+catch { }
+function saveGeoCache() {
     try {
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-            }
-        });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-            const data = await res.json();
-            if (data && data[0]) {
-                return {
-                    lat: parseFloat(data[0].lat),
-                    lng: parseFloat(data[0].lon)
-                };
+        fs.writeFileSync(GEO_CACHE_FILE, JSON.stringify(geoCache, null, 2), 'utf8');
+    }
+    catch { }
+}
+async function geocodeAddress(address, city, district, state) {
+    const pincode = (address || '').match(/\b\d{6}\b/)?.[0] ?? null;
+    const queries = [
+        pincode ? `${pincode}, India` : null,
+        city && district ? `${city}, ${district}, ${state}, India` : null,
+        city ? `${city}, ${state}, India` : null,
+        district ? `${district}, ${state}, India` : null,
+        state ? `${state}, India` : null,
+    ].filter((q) => !!q && q.trim().length > 6);
+    for (const q of queries) {
+        const key = q.replace(/\s+/g, ' ').trim();
+        if (geoCache[key])
+            return geoCache[key];
+        await new Promise((r) => setTimeout(r, 1100));
+        try {
+            const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(key)}&format=json&limit=1&countrycodes=in`;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            const res = await fetch(url, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)' },
+            });
+            clearTimeout(timeoutId);
+            if (res.ok) {
+                const data = (await res.json());
+                if (data?.[0]) {
+                    const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+                    geoCache[key] = coords;
+                    saveGeoCache();
+                    return coords;
+                }
             }
         }
-    }
-    catch (err) {
-        console.error(`Error geocoding inside assayer service: ${cleanQ}`, err);
+        catch {
+        }
     }
     return null;
 }
@@ -78,7 +103,7 @@ function mapLifecycleToOperationalStatus(lifecycle) {
         return 'SUSPENDED';
     return 'INACTIVE';
 }
-let AssayerService = class AssayerService {
+let AssayerService = AssayerService_1 = class AssayerService {
     assayerRepository;
     commercialRepository;
     workforceAttributeRepository;
@@ -89,6 +114,7 @@ let AssayerService = class AssayerService {
     auditService;
     eventPublisher;
     workflowEngine;
+    logger = new common_1.Logger(AssayerService_1.name);
     constructor(assayerRepository, commercialRepository, workforceAttributeRepository, govDocRepository, assayerDocRepository, remarkRepository, activityRepository, auditService, eventPublisher, workflowEngine) {
         this.assayerRepository = assayerRepository;
         this.commercialRepository = commercialRepository;
@@ -223,13 +249,12 @@ let AssayerService = class AssayerService {
         let lng = dto.longitude;
         if (!lat || !lng) {
             const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
-            if (coords) {
-                lat = coords.lat;
-                lng = coords.lng;
-            }
-            else {
-                lat = 19.076;
-                lng = 72.8777;
+            lat = coords?.lat ?? undefined;
+            lng = coords?.lng ?? undefined;
+            if (!coords) {
+                this.logger.warn(`Assayer ${dto.assayerCode}: could not resolve coordinates from "${dto.address}" ` +
+                    `(${dto.city}, ${dto.district}, ${dto.state}). Saved without a location — ` +
+                    `they will not appear on the map and distance-based matching will skip them.`);
             }
         }
         const location = { type: 'Point', coordinates: [lng, lat] };
@@ -241,7 +266,7 @@ let AssayerService = class AssayerService {
             longitude: lng,
             location,
             lifecycleStatus: shared_1.AssayerLifecycleStatus.INVITED,
-            status: 'INACTIVE',
+            status: shared_1.AssayerStatus.INACTIVE,
             organizationId: organizationId ?? null,
             createdBy: userId,
             updatedBy: userId,
@@ -756,7 +781,7 @@ let AssayerService = class AssayerService {
         const completedResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
        LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND (a.status IN ('COMPLETED', 'AUDIT_COMPLETED') OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`, [assayerId]);
+       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`, [assayerId]);
         const completed = Number(completedResult[0]?.cnt ?? 0);
         const cancelled = await mgr.count('assignments', {
             where: { assayerId, status: shared_1.AssignmentStatus.CANCELLED, isActive: true },
@@ -764,12 +789,23 @@ let AssayerService = class AssayerService {
         const onTimeResult = await mgr.query(`SELECT COUNT(*) as cnt FROM assignments a
        LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
        WHERE a.assayer_id = $1 AND a.is_active = true
-       AND (a.status IN ('COMPLETED', 'AUDIT_COMPLETED') OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
+       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
        AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`, [assayerId]);
-        const earningsResult = await mgr.query(`SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) as total FROM assignments a
-       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
-       WHERE a.assayer_id = $1 AND a.is_active = true
-       AND (a.status IN ('ACCEPTED', 'COMPLETED', 'AUDIT_COMPLETED') OR pb.status IN ('ASSIGNMENT_CONFIRMED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`, [assayerId]);
+        const finRes = await mgr.query(`SELECT 
+         COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+         COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+         COALESCE(SUM(paid_amount), 0)                                      AS paid,
+         COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
+       FROM assayer_payables
+       WHERE assayer_id = $1 AND is_active = true
+         AND status NOT IN ('DISPUTED', 'ON_HOLD')`, [assayerId]).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
+        const totalEarnedFromPayables = Number(finRes[0]?.total_earned ?? 0);
+        const totalEarnedFromAssignments = await mgr.query(`SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
+         FROM assignments a
+        WHERE a.assayer_id = $1 AND a.is_active = true
+          AND a.status IN ('ACCEPTED', 'COMPLETED')`, [assayerId]).then(r => Number(r[0]?.total ?? 0)).catch(() => 0);
+        const realTotalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
+        const realRunningBalance = totalEarnedFromPayables > 0 ? Number(finRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
         const lastAssignment = await mgr.query(`SELECT updated_at FROM assignments a
        WHERE a.assayer_id = $1 AND a.is_active = true
        ORDER BY a.updated_at DESC LIMIT 1`, [assayerId]);
@@ -778,7 +814,7 @@ let AssayerService = class AssayerService {
             completedAssignments: completed,
             cancelledAssignments: cancelled,
             onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
-            totalEarnings: Number(earningsResult[0]?.total ?? 0),
+            totalEarnings: realTotalEarnings,
             lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
         });
         await this.recomputeAverageRating(assayerId);
@@ -800,6 +836,21 @@ let AssayerService = class AssayerService {
        JOIN assignments a ON a.id = vq.assignment_id
        WHERE a.assayer_id = $1 AND vq.is_active = true`, [target.id]).catch(() => [{ cnt: 0 }]);
         target.queryCount = Number(queryRes[0]?.cnt ?? 0);
+        const balanceRes = await mgr.query(`SELECT COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+              COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+              COALESCE(SUM(paid_amount), 0)                                      AS paid,
+              COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
+         FROM assayer_payables
+        WHERE assayer_id = $1 AND is_active = true
+          AND status NOT IN ('DISPUTED', 'ON_HOLD')`, [target.id]).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
+        const totalEarnedFromPayables = Number(balanceRes[0]?.total_earned ?? 0);
+        const totalEarnedFromAssignments = target.totalEarnings || 0;
+        const finalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
+        const finalBalance = totalEarnedFromPayables > 0 ? Number(balanceRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
+        target.totalEarnings = finalEarnings;
+        target.runningBalance = finalBalance;
+        target.earningsPaid = Number(balanceRes[0]?.paid ?? 0);
+        target.earningsAwaitingApproval = Number(balanceRes[0]?.awaiting_approval ?? 0);
         const totalOffered = await mgr.count('assignments', { where: { assayerId: target.id, isActive: true } });
         const acceptedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.COMPLETED]), isActive: true } });
         const rejectedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: shared_1.AssignmentStatus.REJECTED, isActive: true } });
@@ -839,7 +890,25 @@ let AssayerService = class AssayerService {
             skip: (page - 1) * limit,
             take: limit,
         });
-        return { activities, total };
+        return { activities: await this.withActorNames(activities), total };
+    }
+    async withActorNames(activities) {
+        const ids = [...new Set(activities.map((a) => a.performedBy).filter(Boolean))];
+        if (ids.length === 0)
+            return activities;
+        const names = new Map();
+        const rows = await this.activityRepository.manager.query(`SELECT id, COALESCE(NULLIF(TRIM(CONCAT_WS(' ', first_name, last_name)), ''), username) AS name
+         FROM users WHERE id = ANY($1)
+       UNION ALL
+       SELECT id, display_name AS name FROM assayers WHERE id = ANY($1)`, [ids]);
+        for (const r of rows)
+            names.set(r.id, r.name);
+        return activities.map((a) => {
+            if (!a.performedByName && a.performedBy && names.has(a.performedBy)) {
+                a.performedByName = names.get(a.performedBy);
+            }
+            return a;
+        });
     }
     async createCommercialProfile(assayerId, dto, userId) {
         await this.findOne(assayerId);
@@ -986,91 +1055,66 @@ let AssayerService = class AssayerService {
     }
     async generateTemplate() {
         const headers = [
-            'Assayer Code',
-            'First Name',
-            'Last Name',
-            'Display Name',
-            'Email',
-            'Phone',
-            'Alternate Phone',
-            'Address',
-            'State',
-            'District',
-            'City',
-            'Pincode',
-            'Region',
-            'Employee ID',
-            'Employee Code',
-            'Employment Type',
-            'Department',
-            'Joining Date',
-            'PAN Number',
-            'Bank Account Number',
-            'IFSC Code',
-            'Experience (Years)',
-            'Performance Rating',
-            'Max Daily Workload',
-            'Max Weekly Workload',
-            'Skills (comma-separated)',
-            'Languages (comma-separated)',
-            'Certifications (semicolon-separated: Name|YYYY-MM-DD)',
-            'Preferred Regions (comma-separated)',
-            'Specializations (comma-separated)',
-            'Emergency Contact Name',
-            'Emergency Contact Phone',
-            'Emergency Contact Relation',
-            'Working Hours Start',
-            'Working Hours End',
+            'Assayer code', 'Assayer Name', 'Phone', 'Residence Address', 'Initial Password',
+            'Location', 'District', 'State', 'Zone', 'Pincode', 'Preferred Regions',
+            'Email', 'Alternate Phone',
+            'Employment Type', 'Employee ID', 'Department', 'Joining Date',
+            'Skills', 'Certifications', 'Specializations', 'Languages',
+            'Experience (Years)', 'Performance Rating',
+            'Max Daily Workload', 'Max Weekly Workload',
+            'Working Hours Start', 'Working Hours End',
+            'Base Fee', 'Daily Rate', 'Hourly Rate',
+            'Travel Reimbursement', 'Accommodation Allowance', 'Meal Allowance',
+            'PAN Number', 'Bank Account Number', 'IFSC Code',
+            'Emergency Contact Name', 'Emergency Contact Phone', 'Emergency Contact Relation',
         ];
         const ws = xlsx.utils.json_to_sheet([], { header: headers });
-        ws['!cols'] = headers.map((h) => ({
-            wch: h === 'Certifications (semicolon-separated: Name|YYYY-MM-DD)' ? 45 : h.length > 25 ? 30 : 20,
-        }));
+        ws['!cols'] = headers.map((h) => ({ wch: h === 'Residence Address' ? 50 : Math.max(16, h.length + 4) }));
         const wb = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(wb, ws, 'Assayers');
         const instructions = [
-            { Field: 'Assayer Code', Required: 'Yes', Description: 'Unique identifier for the assayer' },
-            { Field: 'First Name', Required: 'Yes', Description: 'Assayer first name' },
-            { Field: 'Last Name', Required: 'Yes', Description: 'Assayer last name' },
-            { Field: 'Display Name', Required: 'No', Description: 'Auto-generated from first+last if left blank' },
-            { Field: 'Email', Required: 'No', Description: 'Work email address' },
-            { Field: 'Phone', Required: 'Yes', Description: 'Primary contact number' },
-            { Field: 'Alternate Phone', Required: 'No', Description: 'Secondary contact number' },
-            { Field: 'Address', Required: 'Yes', Description: 'Residential address' },
-            { Field: 'State', Required: 'Yes', Description: 'State name' },
-            { Field: 'District', Required: 'Yes', Description: 'District name' },
-            { Field: 'City', Required: 'Yes', Description: 'City name' },
-            { Field: 'Pincode', Required: 'No', Description: '6-digit pincode' },
-            { Field: 'Region', Required: 'No', Description: 'Geographic region' },
-            { Field: 'Employee ID', Required: 'No', Description: 'HR employee identifier' },
-            { Field: 'Employee Code', Required: 'No', Description: 'Internal employee code' },
-            { Field: 'Employment Type', Required: 'No', Description: 'INTERNAL / EXTERNAL / CONTRACT' },
-            { Field: 'Department', Required: 'No', Description: 'Department name' },
-            { Field: 'Joining Date', Required: 'No', Description: 'YYYY-MM-DD format' },
-            { Field: 'PAN Number', Required: 'No', Description: 'Tax PAN card number' },
-            { Field: 'Bank Account Number', Required: 'No', Description: 'Bank account for fee payments' },
-            { Field: 'IFSC Code', Required: 'No', Description: 'Bank IFSC code' },
-            { Field: 'Experience (Years)', Required: 'No', Description: 'Total years of experience' },
-            { Field: 'Performance Rating', Required: 'No', Description: 'Rating 1.00 - 10.00' },
-            { Field: 'Max Daily Workload', Required: 'No', Description: 'Max branches per day (default 3)' },
-            { Field: 'Max Weekly Workload', Required: 'No', Description: 'Max branches per week (default 15)' },
-            { Field: 'Skills', Required: 'No', Description: 'Comma-separated, e.g. Audit, Risk Assessment, Compliance' },
-            { Field: 'Languages', Required: 'No', Description: 'Comma-separated, e.g. English, Hindi, Marathi' },
-            { Field: 'Certifications', Required: 'No', Description: 'Semicolon-separated: Name|YYYY-MM-DD, e.g. CA|2015-06-01;CFA|2018-12-15' },
-            { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated region names' },
-            { Field: 'Specializations', Required: 'No', Description: 'Comma-separated specializations' },
-            { Field: 'Emergency Contact Name', Required: 'No', Description: 'Emergency contact person name' },
-            { Field: 'Emergency Contact Phone', Required: 'No', Description: 'Emergency contact phone number' },
-            { Field: 'Emergency Contact Relation', Required: 'No', Description: 'Relationship to assayer' },
-            { Field: 'Working Hours Start', Required: 'No', Description: 'Default shift start time, e.g. 09:00' },
-            { Field: 'Working Hours End', Required: 'No', Description: 'Default shift end time, e.g. 18:00' },
+            { Field: 'Assayer code', Required: 'Yes', Description: 'Unique code, e.g. AS0643. Re-importing the same code updates that assayer instead of creating a duplicate.' },
+            { Field: 'Assayer Name', Required: 'Yes', Description: 'Full name in one cell, e.g. "Shinil T". Split automatically — the last word is taken as the surname.' },
+            { Field: 'Phone', Required: 'Yes', Description: "The assayer's login identifier AND how dispatch notifications reach them. A record without it cannot be used." },
+            { Field: 'Residence Address', Required: 'Yes', Description: 'Full address. Used to compute travel distance to branches; a 6-digit pincode inside this text is picked up automatically.' },
+            { Field: 'Initial Password', Required: 'No', Description: "Password the assayer signs in with. Defaults to 'assayer123' when blank. Only applied when the assayer is first created — re-importing a roster never resets an existing password." },
+            { Field: 'Location', Required: 'No', Description: 'Town or locality, e.g. Kunnamangalam. Stored as the city.' },
+            { Field: 'District', Required: 'No', Description: 'Used for travel distance and coverage planning.' },
+            { Field: 'State', Required: 'No', Description: 'Used to apply state-specific public holidays to this assayer.' },
+            { Field: 'Zone', Required: 'No', Description: 'Operating zone, e.g. South. Casing is normalised, so "north" and "North" are one zone.' },
+            { Field: 'Pincode', Required: 'No', Description: 'Leave blank if already present in the address.' },
+            { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated. Regions this assayer prefers; improves their match score for branches there.' },
+            { Field: 'Email', Required: 'No', Description: 'Used for notifications where available.' },
+            { Field: 'Alternate Phone', Required: 'No', Description: 'Secondary contact number.' },
+            { Field: 'Employment Type', Required: 'No', Description: 'INTERNAL / EXTERNAL / CONTRACT.' },
+            { Field: 'Employee ID', Required: 'No', Description: 'HR identifier, for internal staff.' },
+            { Field: 'Department', Required: 'No', Description: 'Department name.' },
+            { Field: 'Joining Date', Required: 'No', Description: 'YYYY-MM-DD.' },
+            { Field: 'Skills', Required: 'No', Description: 'Comma-separated, e.g. Gold Assaying, Hallmarking. A branch or client that requires a skill will only be matched to assayers who have it — blank means this assayer is excluded from any such work.' },
+            { Field: 'Certifications', Required: 'No', Description: 'Semicolon-separated as Name|YYYY-MM-DD, e.g. Certified Gold Assayer|2027-06-01. Expiry is enforced: an expired certification blocks assignment to work requiring it.' },
+            { Field: 'Specializations', Required: 'No', Description: 'Comma-separated areas of speciality.' },
+            { Field: 'Languages', Required: 'No', Description: 'Comma-separated, e.g. English, Malayalam, Tamil. Used to match assayers to branches where the language matters.' },
+            { Field: 'Experience (Years)', Required: 'No', Description: 'Whole number. Feeds the match score.' },
+            { Field: 'Performance Rating', Required: 'No', Description: '1.00 – 10.00. Feeds the match score; leave blank to let the system derive it from completed work.' },
+            { Field: 'Max Daily Workload', Required: 'No', Description: 'Branches per day. Defaults to 3. The day planner will not exceed this.' },
+            { Field: 'Max Weekly Workload', Required: 'No', Description: 'Branches per week. Defaults to 15. Enforced when scheduling.' },
+            { Field: 'Working Hours Start', Required: 'No', Description: 'e.g. 09:00. Used to fit branches into a realistic working day.' },
+            { Field: 'Working Hours End', Required: 'No', Description: 'e.g. 18:00.' },
+            { Field: 'Base Fee', Required: 'No', Description: 'Standard fee per audit for this assayer. Used as the opening offer during negotiation and as the cost side of every audit they perform.' },
+            { Field: 'Daily Rate', Required: 'No', Description: 'Day rate where the engagement is priced per day rather than per audit.' },
+            { Field: 'Hourly Rate', Required: 'No', Description: 'Hourly rate, where applicable.' },
+            { Field: 'Travel Reimbursement', Required: 'No', Description: 'Travel paid per assignment. This is recharged to the client where their contract allows, so leaving it blank understates both cost and recoverable revenue.' },
+            { Field: 'Accommodation Allowance', Required: 'No', Description: 'Paid for overnight assignments.' },
+            { Field: 'Meal Allowance', Required: 'No', Description: 'Paid per assignment day.' },
+            { Field: 'PAN Number', Required: 'No', Description: 'Needed before payment; TDS is withheld against it.' },
+            { Field: 'Bank Account Number', Required: 'No', Description: 'Needed to disburse fees.' },
+            { Field: 'IFSC Code', Required: 'No', Description: 'Needed to disburse fees.' },
+            { Field: 'Emergency Contact Name', Required: 'No', Description: 'Emergency contact person.' },
+            { Field: 'Emergency Contact Phone', Required: 'No', Description: 'Emergency contact number.' },
+            { Field: 'Emergency Contact Relation', Required: 'No', Description: 'Relationship to the assayer.' },
         ];
         const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
-        instrWs['!cols'] = [
-            { wch: 30 },
-            { wch: 10 },
-            { wch: 60 },
-        ];
+        instrWs['!cols'] = [{ wch: 26 }, { wch: 10 }, { wch: 95 }];
         xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
         return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
     }
@@ -1085,24 +1129,34 @@ let AssayerService = class AssayerService {
             const row = rows[i];
             const rowNum = i + 2;
             try {
-                const assayerCode = (row['Assayer Code'] || '').toString().trim();
+                const assayerCode = (row['Assayer Code'] || row['Assayer code'] || '').toString().trim();
                 if (!assayerCode) {
                     errors.push(`Row ${rowNum}: Assayer Code is required`);
                     continue;
                 }
-                const firstName = (row['First Name'] || '').toString().trim();
+                let firstName = (row['First Name'] || '').toString().trim();
+                let lastName = (row['Last Name'] || '').toString().trim();
+                const combinedName = (row['Assayer Name'] || row['Name'] || '').toString().trim();
+                if ((!firstName || !lastName) && combinedName) {
+                    const parts = combinedName.split(/\s+/).filter(Boolean);
+                    if (parts.length === 1) {
+                        firstName = firstName || parts[0];
+                        lastName = lastName || parts[0];
+                    }
+                    else {
+                        firstName = firstName || parts.slice(0, -1).join(' ');
+                        lastName = lastName || parts[parts.length - 1];
+                    }
+                }
                 if (!firstName) {
-                    errors.push(`Row ${rowNum} (${assayerCode}): First Name is required`);
+                    errors.push(`Row ${rowNum} (${assayerCode}): provide 'Assayer Name' or 'First Name'`);
                     continue;
                 }
-                const lastName = (row['Last Name'] || '').toString().trim();
-                if (!lastName) {
-                    errors.push(`Row ${rowNum} (${assayerCode}): Last Name is required`);
-                    continue;
-                }
-                const phone = (row['Phone'] || '').toString().trim();
+                if (!lastName)
+                    lastName = firstName;
+                const phone = (row['Phone'] || row['Mobile'] || row['Contact Number'] || '').toString().trim();
                 if (!phone) {
-                    errors.push(`Row ${rowNum} (${assayerCode}): Phone is required`);
+                    errors.push(`Row ${rowNum} (${assayerCode}): Phone is required — it is the login identifier and how dispatch notifications reach this assayer`);
                     continue;
                 }
                 const dto = {
@@ -1113,12 +1167,14 @@ let AssayerService = class AssayerService {
                     email: (row['Email'] || '').toString().trim() || undefined,
                     phone,
                     alternatePhone: (row['Alternate Phone'] || '').toString().trim() || undefined,
-                    address: (row['Address'] || '').toString().trim(),
+                    address: (row['Address'] || row['Residence Address'] || '').toString().trim(),
                     state: (row['State'] || '').toString().trim(),
                     district: (row['District'] || '').toString().trim(),
-                    city: (row['City'] || '').toString().trim(),
-                    pincode: (row['Pincode'] || '').toString().trim() || undefined,
-                    region: (row['Region'] || '').toString().trim() || undefined,
+                    city: (row['City'] || row['Location'] || '').toString().trim(),
+                    pincode: (row['Pincode'] || '').toString().trim()
+                        || (String(row['Residence Address'] || '').match(/\b\d{6}\b/)?.[0] ?? undefined),
+                    region: ((row['Region'] || row['Zone'] || '').toString().trim() || undefined)
+                        && (row['Region'] || row['Zone']).toString().trim().replace(/\b\w/g, (c) => c.toUpperCase()),
                     employeeId: (row['Employee ID'] || '').toString().trim() || undefined,
                     employeeCode: (row['Employee Code'] || '').toString().trim() || undefined,
                     employmentType: (row['Employment Type'] || '').toString().trim() || undefined,
@@ -1161,11 +1217,47 @@ let AssayerService = class AssayerService {
                     dto.workingHours = { start: whStart, end: whEnd };
                 }
                 const existing = await this.assayerRepository.findOne({ where: { assayerCode } });
-                if (existing) {
-                    await this.update(existing.id, dto, userId);
+                const saved = existing
+                    ? await this.update(existing.id, dto, userId)
+                    : await this.create(dto, userId);
+                if (!existing) {
+                    const supplied = (row['Initial Password'] || row['Password'] || '').toString().trim();
+                    const initial = supplied || 'assayer123';
+                    await this.assayerRepository.update(saved.id, {
+                        passwordHash: await bcrypt.hash(initial, 12),
+                    });
                 }
-                else {
-                    await this.create(dto, userId);
+                const num = (v) => {
+                    const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+                    return Number.isFinite(n) ? n : undefined;
+                };
+                const rates = {
+                    baseFee: num(row['Base Fee']),
+                    dailyRate: num(row['Daily Rate']),
+                    hourlyRate: num(row['Hourly Rate']),
+                    travelReimbursement: num(row['Travel Reimbursement']),
+                    accommodationAllowance: num(row['Accommodation Allowance']),
+                    mealAllowance: num(row['Meal Allowance']),
+                };
+                if (Object.values(rates).some((v) => v !== undefined)) {
+                    const activeProfile = await this.commercialRepository.findOne({
+                        where: { assayerId: saved.id, isActive: true },
+                        order: { effectiveStartDate: 'DESC' },
+                    }).catch(() => null);
+                    const payload = {
+                        baseFee: rates.baseFee ?? activeProfile?.baseFee ?? 0,
+                        dailyRate: rates.dailyRate ?? activeProfile?.dailyRate ?? 0,
+                        hourlyRate: rates.hourlyRate ?? activeProfile?.hourlyRate ?? 0,
+                        travelReimbursement: rates.travelReimbursement ?? activeProfile?.travelReimbursement ?? 0,
+                        accommodationAllowance: rates.accommodationAllowance ?? activeProfile?.accommodationAllowance ?? 0,
+                        mealAllowance: rates.mealAllowance ?? activeProfile?.mealAllowance ?? 0,
+                    };
+                    if (activeProfile) {
+                        await this.commercialRepository.save({ ...activeProfile, ...payload, updatedBy: userId });
+                    }
+                    else {
+                        await this.createCommercialProfile(saved.id, { ...payload, currency: 'INR', effectiveStartDate: new Date().toISOString() }, userId);
+                    }
                 }
                 importedCount++;
             }
@@ -1177,7 +1269,7 @@ let AssayerService = class AssayerService {
     }
 };
 exports.AssayerService = AssayerService;
-exports.AssayerService = AssayerService = __decorate([
+exports.AssayerService = AssayerService = AssayerService_1 = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
     __param(1, (0, typeorm_1.InjectRepository)(assayer_commercial_profile_entity_1.AssayerCommercialProfileEntity)),

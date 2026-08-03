@@ -32,6 +32,10 @@ const MAX_DAILY_WORK_HOURS = 10;
 const DAY_START_HOUR = 9;
 const CLUSTER_RADIUS_KM = 80;
 const TRAVEL_FEE_PER_KM = 8;
+const DEFAULT_MINUTES_PER_PACKET = 15;
+const DEFAULT_AUDIT_HOURS = 4;
+const UNDERUTILIZED_IDLE_HOURS_THRESHOLD = 3;
+const MAX_DATE_LOOKAHEAD_DAYS = 30;
 let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
     projectBranchRepository;
     projectRepository;
@@ -56,30 +60,32 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
         this.constraintEvaluator = constraintEvaluator;
         this.assayerService = assayerService;
     }
-    async generateDayPlans(projectId, targetDate) {
+    async generateDayPlans(projectId, targetDate, manualMinDistanceKm) {
         const project = await this.projectRepository.findOne({ where: { id: projectId } });
         if (!project)
             throw new common_1.NotFoundException(`Project ${projectId} not found.`);
         const client = project.clientId
             ? await this.clientRepository.findOne({ where: { id: project.clientId }, relations: ['configuration'] })
             : null;
-        const scheduledDate = targetDate ? new Date(targetDate) : new Date();
-        const dateStr = scheduledDate.toISOString().split('T')[0];
+        const effectiveMinDistanceKm = this.resolveMinDistanceKm(client, manualMinDistanceKm);
+        const minutesPerPacket = Number(client?.planningPreferences?.minutesPerPacket) || DEFAULT_MINUTES_PER_PACKET;
         const projectBranches = await this.projectBranchRepository.find({
             where: { projectId, isActive: true },
             relations: ['branch'],
         });
         const unassigned = projectBranches.filter((pb) => pb.status === 'IMPORTED' || pb.status === 'PLANNING' || pb.status === 'CANDIDATE_SEARCH');
+        const { scheduledDate, dateStr, dateAdjustment } = await this.resolveWorkingDate(targetDate ? new Date(targetDate) : new Date(), unassigned);
         if (unassigned.length === 0) {
             return this.emptyPlan(projectId, project.name, dateStr);
         }
-        const clusters = this.clusterBranches(unassigned);
+        const clusters = this.clusterBranches(unassigned, minutesPerPacket);
         const assayers = await this.assayerRepository.find({
-            where: { isActive: true, status: 'ACTIVE' },
+            where: { isActive: true, status: shared_1.AssayerStatus.ACTIVE },
         });
         await this.assayerService.hydrateAllWorkforceAttributes(assayers);
         const clusterResults = [];
         const unclusteredBranches = [];
+        const underutilizedBranches = [];
         for (const cluster of clusters) {
             if (!cluster.feasibleForOneDay) {
                 for (const b of cluster.branches) {
@@ -91,56 +97,142 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
                 }
                 continue;
             }
-            if (cluster.branches.length <= 1)
+            if (cluster.branches.length <= 1) {
+                const only = cluster.branches[0];
+                if (only) {
+                    const idle = Math.max(0, MAX_DAILY_WORK_HOURS - cluster.totalEstimatedAuditHours);
+                    if (idle >= UNDERUTILIZED_IDLE_HOURS_THRESHOLD) {
+                        underutilizedBranches.push({
+                            branchId: only.branchId,
+                            branchName: only.branchName,
+                            packetCount: only.packetCount,
+                            auditHours: cluster.totalEstimatedAuditHours,
+                            idleHours: parseFloat(idle.toFixed(1)),
+                            note: only.durationFromStaticFallback
+                                ? `Needs ~${cluster.totalEstimatedAuditHours.toFixed(1)}h but occupies a full paid day (~${idle.toFixed(1)}h idle). No packet count recorded for this cycle — estimate is from the branch default, so this may be inaccurate.`
+                                : `${only.packetCount} packet(s) ≈ ${cluster.totalEstimatedAuditHours.toFixed(1)}h, leaving ~${idle.toFixed(1)}h of the paid day idle. No nearby branch was close enough to bundle.`,
+                        });
+                    }
+                }
                 continue;
-            let dayPlans = await this.generateClusterDayPlans(cluster, assayers, client, scheduledDate);
+            }
+            let { dayPlans, excludedAssayers } = await this.generateClusterDayPlans(cluster, assayers, client, scheduledDate, effectiveMinDistanceKm);
             if (dayPlans.length === 0) {
-                dayPlans = await this.generateClusterDayPlans(cluster, assayers, client, scheduledDate, true);
+                ({ dayPlans, excludedAssayers } = await this.generateClusterDayPlans(cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true));
             }
             const bestPlan = dayPlans.length > 0 ? dayPlans[0] : null;
             clusterResults.push({
                 cluster,
                 dayPlans: dayPlans.slice(0, 5),
                 bestPlan,
+                excludedAssayers,
             });
         }
         this.globalOptimizeAssignments(clusterResults);
         const bestPlans = clusterResults.filter((r) => r.bestPlan).map((r) => r.bestPlan);
         const uniqueAssayers = new Set(bestPlans.map((p) => p.assayerId));
+        const totalCost = bestPlans.reduce((sum, p) => sum + p.estimatedTotalCost, 0);
+        const totalPackets = bestPlans.reduce((sum, p) => sum + p.totalPackets, 0);
         const summary = {
             totalClusters: clusterResults.length,
             totalBranchesCovered: bestPlans.reduce((sum, p) => sum + p.totalBranches, 0),
             totalAssayersNeeded: uniqueAssayers.size,
-            estimatedTotalCost: bestPlans.reduce((sum, p) => sum + p.estimatedTotalCost, 0),
+            estimatedTotalCost: totalCost,
             averageUtilization: bestPlans.length > 0
                 ? bestPlans.reduce((sum, p) => sum + p.utilizationPercent, 0) / bestPlans.length
                 : 0,
+            totalPackets,
+            averagePacketsPerDay: bestPlans.length > 0 ? parseFloat((totalPackets / bestPlans.length).toFixed(1)) : 0,
+            averageCostPerPacket: totalPackets > 0 ? parseFloat((totalCost / totalPackets).toFixed(2)) : null,
         };
         return {
             projectId,
             projectName: project.name,
             targetDate: dateStr,
+            effectiveMinDistanceKm,
+            dateAdjustment,
             clusters: clusterResults,
             unclusteredBranches,
+            underutilizedBranches,
             summary,
         };
     }
-    clusterBranches(projectBranches) {
+    async resolveWorkingDate(requested, branches) {
+        const states = [...new Set(branches.map((pb) => pb.branch?.state).filter(Boolean))];
+        const requestedStr = requested.toISOString().split('T')[0];
+        const candidate = new Date(requested);
+        for (let attempt = 0; attempt <= MAX_DATE_LOOKAHEAD_DAYS; attempt++) {
+            const blocker = await this.describeDateBlocker(candidate, states);
+            if (!blocker) {
+                const dateStr = candidate.toISOString().split('T')[0];
+                return {
+                    scheduledDate: candidate,
+                    dateStr,
+                    dateAdjustment: dateStr === requestedStr
+                        ? null
+                        : { requestedDate: requestedStr, reason: (await this.describeDateBlocker(requested, states)) || 'Not a working day' },
+                };
+            }
+            candidate.setDate(candidate.getDate() + 1);
+        }
+        return {
+            scheduledDate: requested,
+            dateStr: requestedStr,
+            dateAdjustment: {
+                requestedDate: requestedStr,
+                reason: `No working day found within ${MAX_DATE_LOOKAHEAD_DAYS} days — check the holiday calendar.`,
+            },
+        };
+    }
+    async describeDateBlocker(date, states) {
+        const day = date.getDay();
+        if (day === 0)
+            return 'Falls on a Sunday';
+        if (day === 6)
+            return 'Falls on a Saturday';
+        for (const state of states) {
+            const result = await this.constraintEvaluator.checkHoliday(state, date);
+            if (!result.passed) {
+                return result.reason || `Public holiday in ${state}`;
+            }
+        }
+        return null;
+    }
+    resolveAuditHours(pb, minutesPerPacket) {
+        const packetCount = pb.packetCount ?? null;
+        if (packetCount !== null && packetCount > 0) {
+            return {
+                hours: parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2)),
+                packetCount,
+                fromStaticFallback: false,
+            };
+        }
+        return {
+            hours: Number(pb.branch?.estimatedDurationHours) || DEFAULT_AUDIT_HOURS,
+            packetCount,
+            fromStaticFallback: true,
+        };
+    }
+    clusterBranches(projectBranches, minutesPerPacket) {
         const branchesWithCoords = projectBranches
             .filter((pb) => pb.branch?.latitude && pb.branch?.longitude)
-            .map((pb) => ({
-            id: pb.id,
-            branchId: pb.branchId,
-            branchName: pb.branch.name,
-            branchCode: pb.branch.branchCode,
-            latitude: Number(pb.branch.latitude),
-            longitude: Number(pb.branch.longitude),
-            packetCount: pb.packetCount || 40,
-            estimatedDurationHours: Number(pb.branch.estimatedDurationHours) || 4,
-            district: pb.branch.district,
-            city: pb.branch.city,
-        }))
-            .sort((a, b) => b.packetCount - a.packetCount);
+            .map((pb) => {
+            const { hours, packetCount, fromStaticFallback } = this.resolveAuditHours(pb, minutesPerPacket);
+            return {
+                id: pb.id,
+                branchId: pb.branchId,
+                branchName: pb.branch.name,
+                branchCode: pb.branch.branchCode,
+                latitude: Number(pb.branch.latitude),
+                longitude: Number(pb.branch.longitude),
+                packetCount,
+                estimatedDurationHours: hours,
+                durationFromStaticFallback: fromStaticFallback,
+                district: pb.branch.district,
+                city: pb.branch.city,
+            };
+        })
+            .sort((a, b) => b.estimatedDurationHours - a.estimatedDurationHours);
         const visited = new Set();
         const clusters = [];
         let clusterIdx = 0;
@@ -180,6 +272,7 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
     }
     buildCluster(members, index) {
         const totalAuditHours = members.reduce((sum, b) => sum + b.estimatedDurationHours, 0);
+        const totalPackets = members.reduce((sum, b) => sum + (b.packetCount ?? 0), 0);
         const centerLat = members.reduce((s, b) => s + b.latitude, 0) / members.length;
         const centerLng = members.reduce((s, b) => s + b.longitude, 0) / members.length;
         const maxDist = Math.max(...members.map((b) => (0, shared_1.calculateHaversineDistance)(centerLat, centerLng, b.latitude, b.longitude)));
@@ -189,6 +282,7 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
             centerLongitude: parseFloat(centerLng.toFixed(4)),
             radiusKm: parseFloat(maxDist.toFixed(1)),
             branches: members,
+            totalPackets,
             totalEstimatedAuditHours: parseFloat(totalAuditHours.toFixed(1)),
             feasibleForOneDay: totalAuditHours <= MAX_DAILY_WORK_HOURS,
         };
@@ -212,41 +306,77 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
         }
         return subClusters;
     }
-    async generateClusterDayPlans(cluster, assayers, client, scheduledDate, relaxDistance = false) {
+    resolveMinDistanceKm(client, manualMinDistanceKm) {
+        const clientFloor = Number(client?.planningPreferences?.minDistanceKm);
+        const values = [
+            typeof manualMinDistanceKm === 'number' && manualMinDistanceKm > 0 ? manualMinDistanceKm : undefined,
+            Number.isFinite(clientFloor) && clientFloor > 0 ? clientFloor : undefined,
+        ].filter((v) => v !== undefined);
+        return values.length > 0 ? Math.max(...values) : null;
+    }
+    async generateClusterDayPlans(cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, relaxDistance = false) {
         const planningPreferences = client?.planningPreferences || {};
         const requiredSkills = planningPreferences.requiredSkills || [];
         const requiredCerts = planningPreferences.requiredCertifications || [];
         const maxDistKm = relaxDistance ? Infinity : (Number(planningPreferences.maxDistanceKm) || Infinity);
+        const branchRecommendations = new Map();
+        for (const branch of cluster.branches) {
+            const branchEntity = await this.branchRepository.findOne({ where: { id: branch.branchId } });
+            if (!branchEntity)
+                continue;
+            const ranked = await this.recommendationEngine.recommend(branchEntity, scheduledDate);
+            branchRecommendations.set(branch.branchId, {
+                ranked,
+                excluded: ranked.excluded || [],
+            });
+        }
         const candidates = [];
-        for (const assayer of assayers) {
+        const excludedAssayers = [];
+        for (const assayerEntity of assayers) {
+            const assayer = assayerEntity;
             if (!assayer.latitude || !assayer.longitude)
                 continue;
-            if (client?.restrictedAssayers?.includes(assayer.id))
-                continue;
-            const assayerSkills = (assayer.skills || []).map((s) => s.toLowerCase());
-            if (requiredSkills.length > 0) {
-                const hasAll = requiredSkills.every((s) => assayerSkills.includes(s.toLowerCase()));
-                if (!hasAll)
+            let exclusion = null;
+            for (const branch of cluster.branches) {
+                const rec = branchRecommendations.get(branch.branchId);
+                if (!rec)
                     continue;
+                if (rec.ranked.some((r) => r.assayer.id === assayer.id))
+                    continue;
+                const entry = rec.excluded.find((e) => e.assayerId === assayer.id);
+                exclusion = {
+                    assayerId: assayer.id,
+                    displayName: assayer.displayName,
+                    reason: entry?.reason ?? `Not eligible for ${branch.branchName}`,
+                    detail: entry?.detail,
+                };
+                break;
             }
-            const assayerCerts = (assayer.certifications || []).map((c) => (typeof c === 'string' ? c : c.name || '').toLowerCase());
-            if (requiredCerts.length > 0) {
-                const hasAll = requiredCerts.every((c) => assayerCerts.includes(c.toLowerCase()));
-                if (!hasAll)
-                    continue;
+            if (exclusion) {
+                excludedAssayers.push(exclusion);
+                continue;
             }
             const aLat = assayer.latitude;
             const aLng = assayer.longitude;
             const branchDistances = cluster.branches.map((b) => (0, shared_1.calculateHaversineDistance)(aLat, aLng, b.latitude, b.longitude));
             const maxBranchDist = Math.max(...branchDistances);
-            if (maxBranchDist > maxDistKm)
+            const minBranchDist = Math.min(...branchDistances);
+            if (maxBranchDist > maxDistKm) {
+                excludedAssayers.push({
+                    assayerId: assayer.id,
+                    displayName: assayer.displayName,
+                    reason: `Too far — ${maxBranchDist.toFixed(0)}km exceeds the ${maxDistKm}km limit`,
+                });
                 continue;
-            const dbCheck = await this.constraintEvaluator.checkDoubleBooking(assayer.id, scheduledDate);
-            if (!dbCheck.passed)
+            }
+            if (effectiveMinDistanceKm !== null && minBranchDist < effectiveMinDistanceKm) {
+                excludedAssayers.push({
+                    assayerId: assayer.id,
+                    displayName: assayer.displayName,
+                    reason: `Too close — ${minBranchDist.toFixed(1)}km is within the ${effectiveMinDistanceKm}km minimum-distance rule`,
+                });
                 continue;
-            const leaveCheck = this.constraintEvaluator.checkLeaves(assayer, scheduledDate);
-            if (!leaveCheck.passed)
-                continue;
+            }
             const destinations = cluster.branches.map((b) => ({
                 id: b.branchId,
                 latitude: b.latitude,
@@ -286,8 +416,14 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
             const totalTravelKm = routeResult.totalDistanceKm;
             const totalAuditHours = cluster.totalEstimatedAuditHours;
             const totalDayHours = totalAuditHours + totalTravelMinutes / 60;
-            if (totalDayHours > MAX_DAILY_WORK_HOURS + 2)
+            if (totalDayHours > MAX_DAILY_WORK_HOURS + 2) {
+                excludedAssayers.push({
+                    assayerId: assayer.id,
+                    displayName: assayer.displayName,
+                    reason: `Day too long — ${totalDayHours.toFixed(1)}h exceeds the ${MAX_DAILY_WORK_HOURS + 2}h working-day limit`,
+                });
                 continue;
+            }
             const stepMins = routeResult.steps.reduce((s, st) => s + st.durationMinutes, 0);
             const returnTravelMinutes = totalTravelMinutes - stepMins;
             const dayEndMinutes = currentMinutes + Math.max(0, returnTravelMinutes);
@@ -301,12 +437,8 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
             const totalCost = baseFee * cluster.branches.length + travelFee;
             let totalScore = 0;
             for (const branch of cluster.branches) {
-                const branchEntity = await this.branchRepository.findOne({ where: { id: branch.branchId } });
-                if (branchEntity) {
-                    const results = await this.recommendationEngine.recommend(branchEntity, scheduledDate);
-                    const match = results.find((r) => r.assayer.id === assayer.id);
-                    totalScore += match ? match.score : 0;
-                }
+                const match = branchRecommendations.get(branch.branchId)?.ranked.find((r) => r.assayer.id === assayer.id);
+                totalScore += match ? match.score : 0;
             }
             const avgScore = cluster.branches.length > 0
                 ? parseFloat((totalScore / cluster.branches.length).toFixed(1))
@@ -314,10 +446,16 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
             const utilizationPercent = totalDayHours > 0
                 ? parseFloat(((totalAuditHours / totalDayHours) * 100).toFixed(1))
                 : 0;
-            if (utilizationPercent < 60)
+            if (utilizationPercent < 60) {
+                excludedAssayers.push({
+                    assayerId: assayer.id,
+                    displayName: assayer.displayName,
+                    reason: `Low utilization — only ${utilizationPercent.toFixed(0)}% of the day would be productive audit time (need 60%+)`,
+                });
                 continue;
-            const preferredSkills = planningPreferences.preferredSkills || [];
-            const preferredCerts = planningPreferences.preferredCertifications || [];
+            }
+            const assayerSkills = (assayer.skills || []).map((s) => s.toLowerCase());
+            const assayerCerts = (assayer.certifications || []).map((c) => (typeof c === 'string' ? c : c.name || '').toLowerCase());
             candidates.push({
                 assayerId: assayer.id,
                 assayerName: assayer.displayName,
@@ -336,6 +474,11 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
                 dayStartTime: this.minutesToTime(DAY_START_HOUR * 60),
                 dayEndTime,
                 utilizationPercent,
+                totalPackets: cluster.totalPackets,
+                costPerPacket: cluster.totalPackets > 0
+                    ? parseFloat((totalCost / cluster.totalPackets).toFixed(2))
+                    : null,
+                idleHours: parseFloat(Math.max(0, MAX_DAILY_WORK_HOURS - totalDayHours).toFixed(1)),
                 stops,
                 clientPreferencesMatch: {
                     skillsMatch: requiredSkills.length === 0 || requiredSkills.every((s) => assayerSkills.includes(s.toLowerCase())),
@@ -350,7 +493,7 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
                 return b.overallScore - a.overallScore;
             return a.estimatedTotalCost - b.estimatedTotalCost;
         });
-        return candidates;
+        return { dayPlans: candidates, excludedAssayers };
     }
     globalOptimizeAssignments(clusterResults) {
         const n = clusterResults.length;
@@ -398,14 +541,20 @@ let DayPlannerService = DayPlannerService_1 = class DayPlannerService {
             projectId,
             projectName,
             targetDate: dateStr,
+            effectiveMinDistanceKm: null,
+            dateAdjustment: null,
             clusters: [],
             unclusteredBranches: [],
+            underutilizedBranches: [],
             summary: {
                 totalClusters: 0,
                 totalBranchesCovered: 0,
                 totalAssayersNeeded: 0,
                 estimatedTotalCost: 0,
                 averageUtilization: 0,
+                totalPackets: 0,
+                averagePacketsPerDay: 0,
+                averageCostPerPacket: null,
             },
         };
     }

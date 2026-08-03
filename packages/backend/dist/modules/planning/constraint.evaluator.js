@@ -95,9 +95,10 @@ let ConstraintEvaluator = class ConstraintEvaluator {
         }
         return { passed: true };
     }
-    checkSkillsAndCertifications(assayer, project) {
+    checkSkillsAndCertifications(assayerEntity, project) {
+        const assayer = assayerEntity;
         if (project.requiredSkills && project.requiredSkills.length > 0) {
-            const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
+            const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
             const missingSkills = project.requiredSkills.filter((skill) => !assayerSkills.includes(skill.trim().toLowerCase()));
             if (missingSkills.length > 0) {
                 return {

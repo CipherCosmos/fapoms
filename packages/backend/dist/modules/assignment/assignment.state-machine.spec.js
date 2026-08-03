@@ -10,6 +10,7 @@ describe('AssignmentStateMachine', () => {
             id: 'assign-1',
             status: shared_1.AssignmentStatus.PENDING,
             proposedFee: 1000,
+            isActive: true,
         };
     });
     it('should transition from PENDING to ACCEPTED', () => {
@@ -22,7 +23,16 @@ describe('AssignmentStateMachine', () => {
         const event = assignment_state_machine_1.AssignmentStateMachine.rejectOffer(assignment, 'user-1', 'Not interested');
         expect(assignment.status).toBe(shared_1.AssignmentStatus.REJECTED);
         expect(assignment.rejectReason).toBe('Not interested');
-        expect(assignment.isActive).toBe(false);
+        expect(event.newState).toBe(shared_1.AssignmentStatus.REJECTED);
+    });
+    it('should NOT clear isActive when rejecting — terminal state is not a soft delete', () => {
+        assignment_state_machine_1.AssignmentStateMachine.rejectOffer(assignment, 'user-1', 'Not interested');
+        expect(assignment.isActive).toBe(true);
+    });
+    it('should NOT clear isActive when cancelling — terminal state is not a soft delete', () => {
+        assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, 'user-1');
+        assignment_state_machine_1.AssignmentStateMachine.cancel(assignment, 'user-1', 'Admin override');
+        expect(assignment.isActive).toBe(true);
     });
     it('should throw BadRequestException on invalid transition from ACCEPTED to REJECTED', () => {
         assignment_state_machine_1.AssignmentStateMachine.acceptOffer(assignment, 'user-1');

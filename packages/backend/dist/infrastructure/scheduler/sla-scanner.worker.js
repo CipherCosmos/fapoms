@@ -31,6 +31,16 @@ let SlaScannerWorker = SlaScannerWorker_1 = class SlaScannerWorker {
             this.logger.error('Error during periodic SLA scan:', err);
             throw err;
         }
+        try {
+            const declinedCount = await this.assignmentService.autoDeclineExpiredOffers();
+            if (declinedCount > 0) {
+                this.logger.log(`Auto-declined ${declinedCount} assignment offer(s) with no response within the SLA window.`);
+            }
+        }
+        catch (err) {
+            this.logger.error('Error during periodic auto-decline scan:', err);
+            throw err;
+        }
     }
 };
 exports.SlaScannerWorker = SlaScannerWorker;

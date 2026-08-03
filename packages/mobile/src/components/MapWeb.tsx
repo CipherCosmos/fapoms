@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { Icon } from './ui/primitives';
 
 // Web implementation of the in-app map. Uses Leaflet + OpenStreetMap tiles with an

@@ -1,3 +1,4 @@
+import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
 import { PlanningOrchestratorService } from './planning-orchestrator.service';
 import { ProjectPlanningService } from './project-planning.service';
@@ -33,6 +34,7 @@ export declare class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleD
 }
 export declare class PlanningController {
     private readonly planningService;
+    private readonly commandCenterService;
     private readonly planningOrchestratorService;
     private readonly projectPlanningService;
     private readonly optimizationEngine;
@@ -43,7 +45,7 @@ export declare class PlanningController {
     private readonly executionService;
     private readonly fieldService;
     private readonly dayPlannerService;
-    constructor(planningService: PlanningService, planningOrchestratorService: PlanningOrchestratorService, projectPlanningService: ProjectPlanningService, optimizationEngine: OptimizationEngine, scenarioPlanningService: ScenarioPlanningService, coveragePlanningEngine: CoveragePlanningEngine, operationsPlanningService: OperationsPlanningService, controlCenterService: OperationsControlCenterService, executionService: OperationsExecutionService, fieldService: FieldOperationsService, dayPlannerService: DayPlannerService);
+    constructor(planningService: PlanningService, commandCenterService: CommandCenterService, planningOrchestratorService: PlanningOrchestratorService, projectPlanningService: ProjectPlanningService, optimizationEngine: OptimizationEngine, scenarioPlanningService: ScenarioPlanningService, coveragePlanningEngine: CoveragePlanningEngine, operationsPlanningService: OperationsPlanningService, controlCenterService: OperationsControlCenterService, executionService: OperationsExecutionService, fieldService: FieldOperationsService, dayPlannerService: DayPlannerService);
     createVisit(body: {
         coveragePlanId: string;
         executionGroupId: string;
@@ -185,11 +187,18 @@ export declare class PlanningController {
         success: boolean;
         data: import("./optimization.engine").OptimizationPlan;
     }>;
+    commandCenter(clientId?: string, state?: string): Promise<{
+        success: boolean;
+        data: any;
+    }>;
     getRecommendations(branchId: string): Promise<{
         success: boolean;
         data: import("./planning.service").AssayerRecommendation[];
+        meta: {
+            excluded: any;
+        };
     }>;
-    getDayPlans(projectId: string, targetDate?: string): Promise<{
+    getDayPlans(projectId: string, targetDate?: string, minDistanceKm?: string): Promise<{
         success: boolean;
         data: import("./day-planner.service").ProjectDayPlan;
     }>;

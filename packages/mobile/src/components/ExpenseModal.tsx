@@ -33,6 +33,9 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   onAddExpense,
 }) => {
   const t = useTheme();
+
+  if (!visible) return null;
+
   const [internalCat, setInternalCat] = useState<ExpenseCategory>('TRAVEL_KM');
   const [internalAmt, setInternalAmt] = useState('');
   const [internalDesc, setInternalDesc] = useState('');

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Platform } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import { Ionicons } from '@expo/vector-icons';
 import { Icon } from './ui/primitives';
 import { MapRenderProps } from './MapWeb';
 
@@ -9,12 +8,12 @@ import { MapRenderProps } from './MapWeb';
 // Android: Google Maps provider with live traffic layer.
 // iOS: Apple Maps provider (free) with live traffic layer.
 const IS_ANDROID = Platform.OS === 'android';
-const MapViewComponent = MapView as any;
-const MarkerComponent = Marker as any;
-const PolylineComponent = Polyline as any;
+const MapViewComponent = MapView as unknown as React.ComponentType<any>;
+const MarkerComponent = Marker as unknown as React.ComponentType<any>;
+const PolylineComponent = Polyline as unknown as React.ComponentType<any>;
 
 export const InteractiveMapNative: React.FC<MapRenderProps> = ({ origin, destination, routeCoords, showTraffic = true, fitKey }) => {
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<any>(null);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -24,7 +23,7 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({ origin, destina
     pts.push(destination);
     if (pts.length >= 2) {
       setTimeout(() => {
-        mapRef.current?.fitToCoordinates(pts, { edgePadding: { top: 90, right: 50, bottom: 190, left: 50 }, animated: true });
+        mapRef.current?.fitToCoordinates?.(pts, { edgePadding: { top: 90, right: 50, bottom: 190, left: 50 }, animated: true });
       }, 300);
     }
   }, [origin, routeCoords, destination, fitKey]);

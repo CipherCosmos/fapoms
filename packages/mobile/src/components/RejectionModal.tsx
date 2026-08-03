@@ -20,6 +20,8 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
 }) => {
   const t = useTheme();
 
+  if (!visible) return null;
+
   const inputStyle: TextStyle = {
     backgroundColor: t.colors.bg,
     borderRadius: t.radius.md,

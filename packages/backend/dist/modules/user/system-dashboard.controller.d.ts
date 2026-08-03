@@ -1,7 +1,13 @@
 import { DataSource } from 'typeorm';
+import { OperationsSnapshotService } from './operations-snapshot.service';
 export declare class SystemDashboardController {
     private readonly dataSource;
-    constructor(dataSource: DataSource);
+    private readonly operationsSnapshot;
+    constructor(dataSource: DataSource, operationsSnapshot: OperationsSnapshotService);
+    getOperations(req: any): Promise<{
+        success: boolean;
+        data: any;
+    }>;
     getMetrics(): Promise<{
         success: boolean;
         data: {

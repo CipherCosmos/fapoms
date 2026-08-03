@@ -3,9 +3,12 @@ import type { ClientEntity } from './client.entity';
 export declare class ClientBillingEntity extends BaseEntity {
     clientId: string;
     client: ClientEntity;
+    status: string;
     paymentTerms: string;
     currency: string;
     taxIdentifier: string | null;
+    gstRate: number;
+    tdsRate: number;
     invoiceCycle: string;
     billingAddress: string;
     bankAccount: string | null;

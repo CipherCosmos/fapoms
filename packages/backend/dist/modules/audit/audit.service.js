@@ -17,20 +17,20 @@ const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const audit_entity_1 = require("./audit.entity");
-const billing_service_1 = require("../billing/billing.service");
-const ledger_service_1 = require("../ledger/ledger.service");
+const assignment_entity_1 = require("../assignment/assignment.entity");
+const billing_engine_service_1 = require("../billing-engine/billing-engine.service");
 const audit_history_service_1 = require("../audit-history/audit-history.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 let AuditService = class AuditService {
     auditRepository;
-    billingService;
-    ledgerService;
+    assignmentRepository;
+    billingEngine;
     historyService;
     eventPublisher;
-    constructor(auditRepository, billingService, ledgerService, historyService, eventPublisher) {
+    constructor(auditRepository, assignmentRepository, billingEngine, historyService, eventPublisher) {
         this.auditRepository = auditRepository;
-        this.billingService = billingService;
-        this.ledgerService = ledgerService;
+        this.assignmentRepository = assignmentRepository;
+        this.billingEngine = billingEngine;
         this.historyService = historyService;
         this.eventPublisher = eventPublisher;
     }
@@ -70,24 +70,32 @@ let AuditService = class AuditService {
         const audit = await this.auditRepository.findOne({ where: { id } });
         if (!audit)
             throw new common_1.NotFoundException(`Audit ${id} not found.`);
+        let resolvedBaseFee = baseFee;
+        let resolvedTravelAllowance = travelAllowance;
+        if (resolvedBaseFee === undefined || resolvedTravelAllowance === undefined) {
+            const assignment = audit.assignmentId
+                ? await this.assignmentRepository.findOne({ where: { id: audit.assignmentId } }).catch(() => null)
+                : null;
+            const agreedTotal = assignment ? Number(assignment.agreedFee ?? assignment.proposedFee ?? 0) : 0;
+            if (resolvedBaseFee === undefined)
+                resolvedBaseFee = agreedTotal;
+            if (resolvedTravelAllowance === undefined)
+                resolvedTravelAllowance = 0;
+        }
         audit.status = 'CLOSED';
         audit.completionDate = new Date();
         const saved = await this.auditRepository.save(audit);
-        const bill = await this.billingService.createBillingRecord({
-            auditId: saved.id,
-            assayerId: saved.assayerId,
-            baseFee,
-            travelAllowance,
-            penalties: 0,
-            invoiceStatus: 'ISSUED',
-        });
-        await this.ledgerService.addEntry(saved.assayerId, 'CREDIT', bill.netPayable, bill.id);
+        let payableId;
+        if (saved.assignmentId) {
+            const result = await this.billingEngine.syncPayableForAssignment(saved.assignmentId, 'system');
+            payableId = result.payableId;
+        }
         this.eventPublisher.publish('audit:closed', {
             eventType: 'audit:closed',
             aggregateId: id,
             assayerId: saved.assayerId,
-            billingId: bill.id,
-            payload: { id, status: 'CLOSED', completionDate: saved.completionDate, baseFee, travelAllowance },
+            payableId,
+            payload: { id, status: 'CLOSED', completionDate: saved.completionDate, baseFee: resolvedBaseFee, travelAllowance: resolvedTravelAllowance },
         });
         return saved;
     }
@@ -96,9 +104,10 @@ exports.AuditService = AuditService;
 exports.AuditService = AuditService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, typeorm_1.InjectRepository)(audit_entity_1.AuditEntity)),
+    __param(1, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
-        billing_service_1.BillingService,
-        ledger_service_1.LedgerService,
+        typeorm_2.Repository,
+        billing_engine_service_1.BillingEngineService,
         audit_history_service_1.AuditHistoryService,
         domain_event_publisher_1.DomainEventPublisher])
 ], AuditService);

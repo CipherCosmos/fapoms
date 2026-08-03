@@ -25,6 +25,17 @@ let DocumentEntity = class DocumentEntity extends base_entity_1.BaseEntity {
     type;
     status;
     docVersion;
+    customerMasterVersionId;
+    dispatchedAt;
+    dispatchMethod;
+    dispatchedBy;
+    receivedAt;
+    assignedToUserId;
+    assignedAt;
+    assignedBy;
+    dataEntryCompletedAt;
+    sentToDataEntryAt;
+    sentToExternalOcrAt;
     projectBranch;
     assessment;
 };
@@ -72,6 +83,50 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'doc_version', type: 'integer', default: 1 }),
     __metadata("design:type", Number)
 ], DocumentEntity.prototype, "docVersion", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'customer_master_version_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "customerMasterVersionId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'dispatched_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "dispatchedAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'dispatch_method', type: 'varchar', length: 20, nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "dispatchMethod", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'dispatched_by', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "dispatchedBy", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'received_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "receivedAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'assigned_to_user_id', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "assignedToUserId", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'assigned_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "assignedAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'assigned_by', type: 'uuid', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "assignedBy", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'data_entry_completed_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "dataEntryCompletedAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'sent_to_data_entry_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "sentToDataEntryAt", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'sent_to_external_ocr_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], DocumentEntity.prototype, "sentToExternalOcrAt", void 0);
 __decorate([
     (0, typeorm_1.ManyToOne)(() => project_branch_entity_1.ProjectBranchEntity, { onDelete: 'CASCADE', nullable: true }),
     (0, typeorm_1.JoinColumn)({ name: 'project_branch_id' }),

@@ -2,7 +2,7 @@ import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } fr
 export declare class AssignmentController {
     private readonly assignmentService;
     constructor(assignmentService: AssignmentService);
-    findByAssayer(assayerId: string): Promise<{
+    findByAssayer(assayerId: string, req: any): Promise<{
         success: boolean;
         items: import("./assignment.entity").AssignmentEntity[];
     }>;
@@ -25,7 +25,7 @@ export declare class AssignmentController {
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity;
     }>;
-    findAll(page?: number, limit?: number, status?: string, projectBranchStatus?: string, assessmentStatus?: string): Promise<{
+    findAll(page?: number, limit?: number, status?: string, projectBranchStatus?: string, assessmentStatus?: string, unscheduledOnly?: string, priority?: string): Promise<{
         success: boolean;
         data: import("./assignment.entity").AssignmentEntity[];
         meta: {
@@ -51,6 +51,12 @@ export declare class AssignmentController {
     transition(id: string, dto: any, req: any): Promise<{
         success: boolean;
         data: any;
+    }>;
+    escalate(id: string, body: {
+        reason?: string;
+    }, req: any): Promise<{
+        success: boolean;
+        data: import("./assignment.entity").AssignmentEntity;
     }>;
     getTimeline(id: string): Promise<{
         success: boolean;

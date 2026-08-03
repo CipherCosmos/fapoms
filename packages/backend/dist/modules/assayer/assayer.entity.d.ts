@@ -1,4 +1,5 @@
 import { BaseEntity } from '../../core/entities/base.entity';
+import { AssayerStatus, AssayerLifecycleStatus } from '@fapoms/shared';
 export declare class AssayerEntity extends BaseEntity {
     assayerCode: string;
     employeeId: string | null;
@@ -18,8 +19,8 @@ export declare class AssayerEntity extends BaseEntity {
     latitude: number | null;
     longitude: number | null;
     location: any | null;
-    status: string;
-    lifecycleStatus: string;
+    status: AssayerStatus;
+    lifecycleStatus: AssayerLifecycleStatus;
     organizationId: string | null;
     panNumber: string | null;
     bankAccountNumber: string | null;
@@ -37,13 +38,6 @@ export declare class AssayerEntity extends BaseEntity {
     emergencyContactRelation: string | null;
     photograph: string | null;
     preferredRegions: string[] | null;
-    skills: string[] | null;
-    certifications: {
-        name: string;
-        expiryDate: string;
-    }[] | null;
-    languages: string[] | null;
-    specializations: string[] | null;
     experienceYears: number;
     performanceRating: number;
     leaves: {
@@ -64,5 +58,13 @@ export declare class AssayerEntity extends BaseEntity {
     totalEarnings: number;
     lastAssignmentDate: Date | null;
     averageRating: number;
-    runningBalance: number;
 }
+export type AssayerWithWorkforceAttributes = AssayerEntity & {
+    skills?: string[];
+    certifications?: {
+        name: string;
+        expiryDate?: string | null;
+    }[];
+    languages?: string[];
+    specializations?: string[];
+};

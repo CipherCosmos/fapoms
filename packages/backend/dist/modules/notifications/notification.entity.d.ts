@@ -1,10 +1,32 @@
+import { NotificationCategory, NotificationChannel, NotificationPriority, NotificationStatus } from '@fapoms/shared';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { UserEntity } from '../user/user.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 export declare class NotificationEntity extends BaseEntity {
-    userId: string;
+    userId: string | null;
+    assayerId: string | null;
     title: string;
     message: string;
     isRead: boolean;
     link: string | null;
-    user: UserEntity;
+    type: string | null;
+    category: NotificationCategory;
+    priority: NotificationPriority;
+    status: NotificationStatus;
+    channels: NotificationChannel[];
+    sentAt: Date | null;
+    deliveredAt: Date | null;
+    readAt: Date | null;
+    failedAt: Date | null;
+    failureReason: string | null;
+    attempts: number;
+    entityType: string | null;
+    entityId: string | null;
+    payload: Record<string, any> | null;
+    sourceEventId: string | null;
+    actorUserId: string | null;
+    dedupeKey: string | null;
+    groupKey: string | null;
+    user: UserEntity | null;
+    assayer: AssayerEntity | null;
 }

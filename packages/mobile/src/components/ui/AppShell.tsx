@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Animated, Pressable, Platform, StatusBar, TextStyle } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Avatar, Icon, IconButton, Tappable } from './primitives';
 
@@ -13,7 +13,7 @@ import { AppText, Avatar, Icon, IconButton, Tappable } from './primitives';
  * and the tab bar is a floating, animated dock sized for thumbs.
  */
 
-type IconName = keyof typeof Ionicons.glyphMap;
+type IconName = string;
 
 export type TabType = 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
 

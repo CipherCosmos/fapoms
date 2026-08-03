@@ -10,6 +10,7 @@ export declare class ScheduleEntity extends BaseEntity {
     scheduledDate: Date;
     status: ScheduleStatus;
     remarks: string | null;
+    completedAt: Date | null;
     assignment: AssignmentEntity;
     project: ProjectEntity;
     assayer: AssayerEntity;

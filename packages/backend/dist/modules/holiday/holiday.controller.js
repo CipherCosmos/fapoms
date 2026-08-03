@@ -18,6 +18,7 @@ const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 const holiday_service_1 = require("./holiday.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 class CreateHolidayRequestDto {
     name;
@@ -50,6 +51,38 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], CreateHolidayRequestDto.prototype, "clientId", void 0);
+class UpdateHolidayRequestDto {
+    name;
+    date;
+    type;
+    applicableStates;
+    clientId;
+}
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateHolidayRequestDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDateString)(),
+    __metadata("design:type", Object)
+], UpdateHolidayRequestDto.prototype, "date", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateHolidayRequestDto.prototype, "type", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], UpdateHolidayRequestDto.prototype, "applicableStates", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateHolidayRequestDto.prototype, "clientId", void 0);
 let HolidayController = class HolidayController {
     holidayService;
     constructor(holidayService) {
@@ -108,7 +141,7 @@ let HolidayController = class HolidayController {
 exports.HolidayController = HolidayController;
 __decorate([
     (0, common_1.Post)(),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, guards_1.RequirePermissions)('holiday:create:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Register a national or regional holiday' }),
     __param(0, (0, common_1.Body)()),
@@ -140,19 +173,19 @@ __decorate([
 ], HolidayController.prototype, "checkHoliday", null);
 __decorate([
     (0, common_1.Put)(':id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
-    (0, guards_1.RequirePermissions)('holiday:update:organization'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('holiday:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update holiday record details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
     __param(2, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, CreateHolidayRequestDto, Object]),
+    __metadata("design:paramtypes", [String, UpdateHolidayRequestDto, Object]),
     __metadata("design:returntype", Promise)
 ], HolidayController.prototype, "update", null);
 __decorate([
     (0, common_1.Delete)(':id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
     (0, guards_1.RequirePermissions)('holiday:delete:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Soft delete holiday record' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
@@ -165,6 +198,7 @@ exports.HolidayController = HolidayController = __decorate([
     (0, swagger_1.ApiTags)('Holidays'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('holidays'),
     __metadata("design:paramtypes", [holiday_service_1.HolidayService])
 ], HolidayController);

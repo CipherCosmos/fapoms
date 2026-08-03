@@ -457,11 +457,13 @@ export class AssignmentService {
       if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.AUDIT_COMPLETED) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);
       }
-      // Also sync associated schedule to COMPLETED
+      // Also sync/upsert associated schedule to COMPLETED
       await this.dataSource.query(
-        `UPDATE schedules SET status = 'COMPLETED', completed_at = COALESCE(completed_at, NOW()) WHERE assignment_id = $1 AND is_active = true`,
-        [assignment.id]
-      ).catch(() => {});
+        `INSERT INTO schedules (id, version, is_active, assignment_id, project_id, assayer_id, scheduled_date, status, completed_at, remarks, created_by, updated_by)
+         VALUES (gen_random_uuid(), 1, true, $1, $2, $3, COALESCE($4, CURRENT_DATE), 'COMPLETED'::schedules_status_enum, NOW(), 'Completed audit', $5, $5)
+         ON CONFLICT (assignment_id) DO UPDATE SET status = 'COMPLETED'::schedules_status_enum, completed_at = COALESCE(schedules.completed_at, NOW()), updated_by = EXCLUDED.updated_by`,
+        [assignment.id, assignment.projectId, assignment.assayerId, assignment.scheduledDate, userId]
+      ).catch((err) => console.error('Schedule completion upsert failed:', err));
     } else {
       throw new BadRequestException(`Invalid assignment status transition to ${targetStatus}`);
     }

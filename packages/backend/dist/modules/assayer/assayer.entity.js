@@ -51,10 +51,6 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     emergencyContactRelation;
     photograph;
     preferredRegions;
-    skills;
-    certifications;
-    languages;
-    specializations;
     experienceYears;
     performanceRating;
     leaves;
@@ -69,7 +65,6 @@ let AssayerEntity = class AssayerEntity extends base_entity_1.BaseEntity {
     totalEarnings;
     lastAssignmentDate;
     averageRating;
-    runningBalance;
 };
 exports.AssayerEntity = AssayerEntity;
 __decorate([
@@ -81,7 +76,7 @@ __decorate([
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "employeeId", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'password_hash', type: 'varchar', length: 255, nullable: true }),
+    (0, typeorm_1.Column)({ name: 'password_hash', type: 'varchar', length: 255, nullable: true, select: false }),
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "passwordHash", void 0);
 __decorate([
@@ -277,10 +272,6 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 }),
     __metadata("design:type", Number)
 ], AssayerEntity.prototype, "averageRating", void 0);
-__decorate([
-    (0, typeorm_1.Column)({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, default: 0 }),
-    __metadata("design:type", Number)
-], AssayerEntity.prototype, "runningBalance", void 0);
 exports.AssayerEntity = AssayerEntity = __decorate([
     (0, typeorm_1.Entity)('assayers'),
     (0, typeorm_1.Index)(['assayerCode']),

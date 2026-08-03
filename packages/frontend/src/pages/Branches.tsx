@@ -258,7 +258,7 @@ export const Branches: React.FC = () => {
 
       {message && <AlertBanner type={message.type} message={message.text} />}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 420px', gap: '24px', alignItems: 'start' }}>
+      <div className="responsive-grid-split" style={{ alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {/* Toolbar */}
           <div className="glass-card" style={{ padding: '14px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>

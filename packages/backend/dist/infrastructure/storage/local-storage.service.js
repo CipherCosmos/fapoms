@@ -26,18 +26,25 @@ let LocalStorageService = class LocalStorageService {
         await fs.promises.writeFile(filePath, buffer);
         return `/uploads/${safeFileName}`;
     }
-    async getFileStream(relativePath) {
-        let absolutePath = relativePath.startsWith('/')
+    resolveExisting(relativePath) {
+        const absolutePath = relativePath.startsWith('/')
             ? path.join(this.uploadDir, path.basename(relativePath))
             : path.join(this.uploadDir, relativePath);
-        if (!fs.existsSync(absolutePath)) {
-            const directPath = path.resolve(this.uploadDir, '..', relativePath.replace(/^\//, ''));
-            if (fs.existsSync(directPath)) {
-                absolutePath = directPath;
-            }
-            else {
-                throw new common_1.BadRequestException(`File ${relativePath} not found on disk.`);
-            }
+        if (fs.existsSync(absolutePath))
+            return absolutePath;
+        const directPath = path.resolve(this.uploadDir, '..', relativePath.replace(/^\//, ''));
+        if (fs.existsSync(directPath))
+            return directPath;
+        throw new common_1.BadRequestException(`File ${relativePath} not found on disk.`);
+    }
+    async statFile(relativePath) {
+        const stat = await fs.promises.stat(this.resolveExisting(relativePath));
+        return { size: stat.size, mtimeMs: stat.mtimeMs };
+    }
+    async getFileStream(relativePath, start, end) {
+        const absolutePath = this.resolveExisting(relativePath);
+        if (start !== undefined && end !== undefined) {
+            return fs.createReadStream(absolutePath, { start, end });
         }
         return fs.createReadStream(absolutePath);
     }

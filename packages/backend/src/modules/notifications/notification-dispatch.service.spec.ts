@@ -8,6 +8,7 @@ import { UserEntity } from '../user/user.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NOTIFICATION_QUEUE } from './notification-delivery.worker';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('NotificationDispatchService', () => {
   let service: NotificationDispatchService;
@@ -16,6 +17,8 @@ describe('NotificationDispatchService', () => {
   let queuedJobs: any[];
 
   const mockQueue = { add: jest.fn(async (name: string, data: any) => { queuedJobs.push({ name, data }); return { id: '1' }; }) };
+  const publishCalls: any[] = [];
+  const mockEventPublisher = { publish: jest.fn((event: string, payload: any) => { publishCalls.push({ event, payload }); }) };
 
   const mockUserQb = {
     innerJoin: jest.fn().mockReturnThis(),
@@ -24,6 +27,8 @@ describe('NotificationDispatchService', () => {
     getMany: jest.fn(),
   };
 
+  let idCounter = 0;
+
   const mockNotifRepo = {
     createQueryBuilder: jest.fn(() => ({
       insert: () => ({
@@ -31,21 +36,29 @@ describe('NotificationDispatchService', () => {
           values: (rows: any[]) => {
             insertedRows = rows;
             return {
-              orIgnore: () => ({
-                execute: async () => ({ identifiers: rows.map(() => ({ id: 'x' })) }),
-              }),
+              orIgnore: () => ({ execute: async () => ({ identifiers: [] }) }),
             };
           },
         }),
       }),
       update: () => ({ set: () => ({ where: () => ({ andWhere: () => ({ execute: jest.fn() }) }) }) }),
     })),
+    // The mock never simulates a real unique-constraint skip (that's a Postgres
+    // concern, proven live against the real index, not a unit-test concern) —
+    // so this always reports every attempted row as having been created, which
+    // is exactly the behaviour every existing assertion below already expects.
+    find: jest.fn(async ({ where }: any) => {
+      return insertedRows
+        .filter((r) => r.groupKey === where.groupKey)
+        .map((r) => ({ ...r, id: `row-${++idCounter}`, createdAt: new Date() }));
+    }),
   };
 
   beforeEach(async () => {
     insertedRows = [];
     auditCalls = [];
     queuedJobs = [];
+    publishCalls.length = 0;
     mockQueue.add.mockClear();
     mockUserQb.getMany.mockReset();
 
@@ -58,6 +71,7 @@ describe('NotificationDispatchService', () => {
           useValue: { createQueryBuilder: jest.fn(() => mockUserQb) },
         },
         { provide: getQueueToken(NOTIFICATION_QUEUE), useValue: mockQueue },
+        { provide: DomainEventPublisher, useValue: mockEventPublisher },
         {
           provide: AuditService,
           useValue: { recordEvent: jest.fn(async (e) => { auditCalls.push(e); return e; }) },
@@ -165,6 +179,43 @@ describe('NotificationDispatchService', () => {
     expect(() =>
       service.emitSafe({ type: 'ASSIGNMENT_ESCALATED', entityId: 'a', payload: {} }),
     ).not.toThrow();
+  });
+
+  describe('real-time', () => {
+    it('publishes one notification:new event per recipient actually created', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+
+      await service.emit({
+        type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1',
+        payload: { branchName: 'Thrissur' },
+      });
+
+      expect(publishCalls).toHaveLength(2);
+      expect(publishCalls.every((c) => c.event === 'notification:new')).toBe(true);
+      expect(publishCalls.map((c) => c.payload.userId).sort()).toEqual(['ops-1', 'ops-2']);
+    });
+
+    it('carries the assayer id, not a user id, for an assayer-targeted event', async () => {
+      mockUserQb.getMany.mockResolvedValue([]);
+
+      await service.emit({
+        type: 'ASSIGNMENT_OFFERED', entityId: 'asn-1', assayerId: 'assayer-9',
+        payload: { branchName: 'Thrissur', scheduledDate: '2026-09-10' },
+      });
+
+      expect(publishCalls).toHaveLength(1);
+      expect(publishCalls[0].payload.assayerId).toBe('assayer-9');
+      expect(publishCalls[0].payload.userId).toBeNull();
+    });
+
+    it('a broken publisher does not stop the notification from being created', async () => {
+      mockEventPublisher.publish.mockImplementationOnce(() => { throw new Error('socket down'); });
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+
+      await expect(
+        service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} }),
+      ).resolves.toEqual(expect.objectContaining({ created: 1 }));
+    });
   });
 
   describe('queue hand-off', () => {

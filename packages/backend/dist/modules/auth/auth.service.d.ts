@@ -31,11 +31,16 @@ export declare class AuthService {
     login(usernameOrEmail: string, password: string, ipAddress?: string, userAgent?: string): Promise<TokenPair & {
         user: any;
     }>;
-    biometricLogin(assayerCode: string, ipAddress?: string, userAgent?: string): Promise<TokenPair & {
+    biometricLogin(refreshToken: string, ipAddress?: string, userAgent?: string): Promise<TokenPair & {
         user: any;
     }>;
     refreshAccessToken(refreshToken: string, ipAddress?: string, userAgent?: string): Promise<TokenPair>;
+    private redeemRefreshToken;
     logout(userId: string, ipAddress?: string): Promise<void>;
+    verifyAssayerIdentifier(identifier: string): Promise<{
+        displayName: string;
+        assayerCode: string;
+    } | null>;
     validateJwtPayload(payload: JwtPayload): Promise<any>;
     private generateTokenPair;
     private hashToken;

@@ -10,9 +10,9 @@ exports.AuditPlatformModule = void 0;
 const common_1 = require("@nestjs/common");
 const typeorm_1 = require("@nestjs/typeorm");
 const audit_entity_1 = require("./audit.entity");
+const assignment_entity_1 = require("../assignment/assignment.entity");
 const audit_service_1 = require("./audit.service");
-const billing_module_1 = require("../billing/billing.module");
-const ledger_module_1 = require("../ledger/ledger.module");
+const billing_engine_module_1 = require("../billing-engine/billing-engine.module");
 const audit_history_module_1 = require("../audit-history/audit-history.module");
 const audit_controller_1 = require("./audit.controller");
 let AuditPlatformModule = class AuditPlatformModule {
@@ -21,9 +21,8 @@ exports.AuditPlatformModule = AuditPlatformModule;
 exports.AuditPlatformModule = AuditPlatformModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([audit_entity_1.AuditEntity]),
-            billing_module_1.BillingModule,
-            ledger_module_1.LedgerModule,
+            typeorm_1.TypeOrmModule.forFeature([audit_entity_1.AuditEntity, assignment_entity_1.AssignmentEntity]),
+            billing_engine_module_1.BillingEngineModule,
             audit_history_module_1.AuditHistoryModule,
         ],
         controllers: [audit_controller_1.AuditController],

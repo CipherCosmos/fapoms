@@ -26,4 +26,8 @@ export declare class AuditService {
         events: AuditEventEntity[];
         total: number;
     }>;
+    getRecentActivity(limit?: number, offset?: number, category?: string): Promise<{
+        events: AuditEventEntity[];
+        total: number;
+    }>;
 }

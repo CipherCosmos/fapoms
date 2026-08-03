@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Platform } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { Icon } from './ui/primitives';
 
 interface InteractiveMapProps {

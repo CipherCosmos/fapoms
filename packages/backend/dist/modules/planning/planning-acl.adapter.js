@@ -23,6 +23,7 @@ const assayer_entity_1 = require("../assayer/assayer.entity");
 const assayer_service_1 = require("../assayer/assayer.service");
 const assignment_entity_1 = require("../assignment/assignment.entity");
 const project_branch_entity_1 = require("../project/project-branch.entity");
+const shared_1 = require("@fapoms/shared");
 let PlanningAntiCorruptionLayer = class PlanningAntiCorruptionLayer {
     branchRepository;
     assayerRepository;
@@ -56,7 +57,7 @@ let PlanningAntiCorruptionLayer = class PlanningAntiCorruptionLayer {
     }
     async getAvailableAssayers(date) {
         const assayers = await this.assayerRepository.find({
-            where: { isActive: true, status: 'ACTIVE' },
+            where: { isActive: true, status: shared_1.AssayerStatus.ACTIVE },
         });
         await this.assayerService.hydrateAllWorkforceAttributes(assayers);
         return assayers.map((a) => {

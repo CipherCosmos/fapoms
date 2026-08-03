@@ -24,5 +24,5 @@ export declare class ConstraintEvaluator {
     checkLeaves(assayer: AssayerEntity, scheduledDate: Date): ConstraintResult;
     checkProjectTimeline(project: ProjectEntity, scheduledDate: Date): ConstraintResult;
     checkHoliday(state: string, scheduledDate: Date): Promise<ConstraintResult>;
-    checkSkillsAndCertifications(assayer: AssayerEntity, project: ProjectEntity): ConstraintResult;
+    checkSkillsAndCertifications(assayerEntity: AssayerEntity, project: ProjectEntity): ConstraintResult;
 }

@@ -15,9 +15,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.NotificationController = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
+const shared_1 = require("@fapoms/shared");
 const notification_service_1 = require("./notification.service");
 const push_notification_service_1 = require("./push-notification.service");
 const guards_1 = require("../auth/guards");
+const assayer_visibility_1 = require("../assayer/assayer-visibility");
 let NotificationController = class NotificationController {
     notificationService;
     pushService;
@@ -25,24 +27,35 @@ let NotificationController = class NotificationController {
         this.notificationService = notificationService;
         this.pushService = pushService;
     }
-    async findMyNotifications(req) {
-        const userId = req?.user?.id;
-        if (!userId) {
-            return { success: true, data: [] };
+    isAssayer(user) {
+        return (0, assayer_visibility_1.rolesOf)(user).includes('ASSAYER');
+    }
+    async findMyNotifications(req, category, unreadOnly, limit, offset) {
+        const page = await this.notificationService.findByUser(req.user.id, { category, unreadOnly, limit, offset });
+        return { success: true, data: page.items, meta: { total: page.total, unreadCount: page.unreadCount, limit, offset } };
+    }
+    async unreadCount(req) {
+        const count = await this.notificationService.getUnreadCount(req.user.id);
+        return { success: true, data: { count } };
+    }
+    async getPreferences(req) {
+        const prefs = await this.notificationService.getPreferences(req.user.id, this.isAssayer(req.user));
+        return { success: true, data: prefs };
+    }
+    async setPreference(category, req, dto) {
+        if (!Object.values(shared_1.NotificationCategory).includes(category)) {
+            throw new common_1.BadRequestException(`Unknown category "${category}".`);
         }
-        const list = await this.notificationService.findByUser(userId);
-        return {
-            success: true,
-            data: list,
-        };
+        const saved = await this.notificationService.setPreference(req.user.id, this.isAssayer(req.user), category, dto);
+        return { success: true, data: saved };
     }
     async markAsRead(id, req) {
-        const userId = req?.user?.id || id;
-        const notif = await this.notificationService.markAsRead(id, userId);
-        return {
-            success: true,
-            data: notif,
-        };
+        const notif = await this.notificationService.markAsRead(id, req.user.id);
+        return { success: true, data: notif };
+    }
+    async markAllAsRead(req) {
+        const updated = await this.notificationService.markAllAsRead(req.user.id);
+        return { success: true, data: { updated } };
     }
     async registerDeviceToken(req, dto) {
         if (!dto.token || !dto.platform) {
@@ -64,23 +77,59 @@ let NotificationController = class NotificationController {
 exports.NotificationController = NotificationController;
 __decorate([
     (0, common_1.Get)(),
-    (0, guards_1.Public)(),
-    (0, swagger_1.ApiOperation)({ summary: 'Get notifications for current user' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Get a page of notifications for the authenticated user or assayer' }),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Query)('category')),
+    __param(2, (0, common_1.Query)('unreadOnly', new common_1.DefaultValuePipe(false), common_1.ParseBoolPipe)),
+    __param(3, (0, common_1.Query)('limit', new common_1.DefaultValuePipe(25), common_1.ParseIntPipe)),
+    __param(4, (0, common_1.Query)('offset', new common_1.DefaultValuePipe(0), common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, Boolean, Number, Number]),
+    __metadata("design:returntype", Promise)
+], NotificationController.prototype, "findMyNotifications", null);
+__decorate([
+    (0, common_1.Get)('unread-count'),
+    (0, swagger_1.ApiOperation)({ summary: 'Just the bell badge count — cheap enough to poll on its own' }),
     __param(0, (0, common_1.Req)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], NotificationController.prototype, "findMyNotifications", null);
+], NotificationController.prototype, "unreadCount", null);
+__decorate([
+    (0, common_1.Get)('preferences'),
+    (0, swagger_1.ApiOperation)({ summary: 'Per-category channel preferences for the authenticated recipient' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], NotificationController.prototype, "getPreferences", null);
+__decorate([
+    (0, common_1.Put)('preferences/:category'),
+    (0, swagger_1.ApiOperation)({ summary: 'Turn a channel on or off for one notification category' }),
+    __param(0, (0, common_1.Param)('category')),
+    __param(1, (0, common_1.Req)()),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], NotificationController.prototype, "setPreference", null);
 __decorate([
     (0, common_1.Post)(':id/read'),
-    (0, guards_1.Public)(),
-    (0, swagger_1.ApiOperation)({ summary: 'Mark notification as read' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Mark one of your own notifications as read' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], NotificationController.prototype, "markAsRead", null);
+__decorate([
+    (0, common_1.Post)('read-all'),
+    (0, swagger_1.ApiOperation)({ summary: 'Mark every one of your unread notifications as read' }),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], NotificationController.prototype, "markAllAsRead", null);
 __decorate([
     (0, common_1.Post)('device-token'),
     (0, swagger_1.ApiOperation)({ summary: 'Register or update push notification device token' }),

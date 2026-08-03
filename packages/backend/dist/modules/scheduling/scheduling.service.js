@@ -142,7 +142,21 @@ let SchedulingService = class SchedulingService {
             take: limit,
             skip: (page - 1) * limit,
         });
-        return { schedules, total };
+        const reconciledSchedules = schedules.map((sch) => {
+            const asnStatus = sch.assignment?.status;
+            const pbStatus = sch.assignment?.projectBranch?.status;
+            const isParentCompleted = asnStatus === 'COMPLETED' ||
+                ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(pbStatus);
+            if (isParentCompleted && sch.status !== shared_1.ScheduleStatus.COMPLETED) {
+                return {
+                    ...sch,
+                    status: shared_1.ScheduleStatus.COMPLETED,
+                    completedAt: sch.completedAt || sch.updatedAt,
+                };
+            }
+            return sch;
+        });
+        return { schedules: reconciledSchedules, total };
     }
     async transition(id, targetStatus, userId, remarks, newScheduledDate) {
         const schedule = await this.findOne(id);
@@ -163,6 +177,17 @@ let SchedulingService = class SchedulingService {
             schedule.scheduledDate = new Date(newScheduledDate);
             if (schedule.assignmentId) {
                 await this.assignmentService.scheduleAudit(schedule.assignmentId, userId, newScheduledDate);
+            }
+        }
+        if (targetStatus === shared_1.ScheduleStatus.COMPLETED) {
+            schedule.completedAt = new Date();
+            if (schedule.assignmentId) {
+                try {
+                    await this.assignmentService.completeAssignment(schedule.assignmentId, userId, 'Completed via schedule dispatch');
+                }
+                catch (err) {
+                    console.warn('Assignment completion cascade skipped:', err.message);
+                }
             }
         }
         schedule.updatedBy = userId;

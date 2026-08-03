@@ -29,6 +29,39 @@ describe('ProjectStateMachine', () => {
             project_state_machine_1.ProjectStateMachine.startPlanning(project, 'user-1');
         }).toThrow(common_1.BadRequestException);
     });
+    it('should put a SCHEDULING project on hold, and an EXECUTION project on hold', () => {
+        project.status = shared_1.ProjectStatus.SCHEDULING;
+        const event = project_state_machine_1.ProjectStateMachine.holdProject(project, 'user-1');
+        expect(project.status).toBe(shared_1.ProjectStatus.ON_HOLD);
+        expect(event.previousState).toBe(shared_1.ProjectStatus.SCHEDULING);
+        project.status = shared_1.ProjectStatus.EXECUTION;
+        project_state_machine_1.ProjectStateMachine.holdProject(project, 'user-1');
+        expect(project.status).toBe(shared_1.ProjectStatus.ON_HOLD);
+    });
+    it('should refuse to hold a project outside SCHEDULING/EXECUTION', () => {
+        project.status = shared_1.ProjectStatus.PLANNING;
+        expect(() => {
+            project_state_machine_1.ProjectStateMachine.holdProject(project, 'user-1');
+        }).toThrow(common_1.BadRequestException);
+    });
+    it('should resume an ON_HOLD project into either SCHEDULING or EXECUTION', () => {
+        project.status = shared_1.ProjectStatus.ON_HOLD;
+        project_state_machine_1.ProjectStateMachine.readyForScheduling(project, 'user-1');
+        expect(project.status).toBe(shared_1.ProjectStatus.SCHEDULING);
+        project.status = shared_1.ProjectStatus.ON_HOLD;
+        project_state_machine_1.ProjectStateMachine.startExecution(project, 'user-1');
+        expect(project.status).toBe(shared_1.ProjectStatus.EXECUTION);
+    });
+    it('should archive a COMPLETED project but refuse any other status', () => {
+        project.status = shared_1.ProjectStatus.COMPLETED;
+        const event = project_state_machine_1.ProjectStateMachine.archiveProject(project, 'user-1');
+        expect(project.status).toBe(shared_1.ProjectStatus.ARCHIVED);
+        expect(event.previousState).toBe(shared_1.ProjectStatus.COMPLETED);
+        project.status = shared_1.ProjectStatus.EXECUTION;
+        expect(() => {
+            project_state_machine_1.ProjectStateMachine.archiveProject(project, 'user-1');
+        }).toThrow(common_1.BadRequestException);
+    });
 });
 describe('ProjectBranchStateMachine', () => {
     let pb;

@@ -977,24 +977,30 @@ export class AssayerService implements OnModuleInit {
 
     // Earnings come from the billing engine's payables — the record finance
     // actually pays against — rather than being re-derived from assignment fees.
-    // Summing agreed fees here produced a third rival answer (no travel, no TDS)
-    // that disagreed with both the payable and what the mobile app displayed, so
-    // the assayer, the app and finance each saw a different number for one job.
-    // Falls back to the fee-based estimate only for work not yet booked as payable.
-    const earningsResult = await mgr.query(
-      `SELECT COALESCE(
-                (SELECT SUM(p.total_amount) FROM assayer_payables p
-                  WHERE p.assayer_id = $1 AND p.is_active = true
-                    AND p.status NOT IN ('DISPUTED', 'ON_HOLD')),
-                (SELECT SUM(COALESCE(a.agreed_fee, a.proposed_fee)) FROM assignments a
-                   LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
-                  WHERE a.assayer_id = $1 AND a.is_active = true
-                    AND (a.status IN ('ACCEPTED', 'COMPLETED')
-                         OR pb.status IN ('ASSIGNMENT_CONFIRMED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))),
-                0
-              ) as total`,
+    // Summing earnings & running balance from authoritative payables table
+    const finRes = await mgr.query(
+      `SELECT 
+         COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+         COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+         COALESCE(SUM(paid_amount), 0)                                      AS paid,
+         COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
+       FROM assayer_payables
+       WHERE assayer_id = $1 AND is_active = true
+         AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
       [assayerId],
-    );
+    ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
+
+    const totalEarnedFromPayables = Number(finRes[0]?.total_earned ?? 0);
+    const totalEarnedFromAssignments = await mgr.query(
+      `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
+         FROM assignments a
+        WHERE a.assayer_id = $1 AND a.is_active = true
+          AND a.status IN ('ACCEPTED', 'COMPLETED')`,
+      [assayerId],
+    ).then(r => Number(r[0]?.total ?? 0)).catch(() => 0);
+
+    const realTotalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
+    const realRunningBalance = totalEarnedFromPayables > 0 ? Number(finRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
 
     const lastAssignment = await mgr.query(
       `SELECT updated_at FROM assignments a
@@ -1008,7 +1014,7 @@ export class AssayerService implements OnModuleInit {
       completedAssignments: completed,
       cancelledAssignments: cancelled,
       onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
-      totalEarnings: Number(earningsResult[0]?.total ?? 0),
+      totalEarnings: realTotalEarnings,
       lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
     });
     await this.recomputeAverageRating(assayerId);
@@ -1042,22 +1048,25 @@ export class AssayerService implements OnModuleInit {
     ).catch(() => [{ cnt: 0 }]);
     (target as any).queryCount = Number(queryRes[0]?.cnt ?? 0);
 
-    // Money still owed to this assayer, derived from real payables in the billing
-    // engine. This used to be a `running_balance` column on the assayer that only
-    // the (now removed) ledger module wrote, via a code path that never ran — so it
-    // read 0 for everyone and the mobile earnings card never displayed.
+    // Money still owed to this assayer, derived from real payables in the billing engine
     const balanceRes = await mgr.query(
-      `SELECT COALESCE(SUM(total_amount - paid_amount), 0) AS owed,
-              COALESCE(SUM(paid_amount), 0)                AS paid,
+      `SELECT COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+              COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+              COALESCE(SUM(paid_amount), 0)                                      AS paid,
               COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
          FROM assayer_payables
         WHERE assayer_id = $1 AND is_active = true
           AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
       [target.id],
-    ).catch(() => [{ owed: 0, paid: 0, awaiting_approval: 0 }]);
-    // The same three figures finance sees, so the assayer's app and the finance
-    // console can never disagree about what a job was worth.
-    (target as any).runningBalance = Number(balanceRes[0]?.owed ?? 0);
+    ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
+
+    const totalEarnedFromPayables = Number(balanceRes[0]?.total_earned ?? 0);
+    const totalEarnedFromAssignments = target.totalEarnings || 0;
+    const finalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
+    const finalBalance = totalEarnedFromPayables > 0 ? Number(balanceRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
+
+    (target as any).totalEarnings = finalEarnings;
+    (target as any).runningBalance = finalBalance;
     (target as any).earningsPaid = Number(balanceRes[0]?.paid ?? 0);
     (target as any).earningsAwaitingApproval = Number(balanceRes[0]?.awaiting_approval ?? 0);
 

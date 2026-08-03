@@ -47,9 +47,11 @@ export declare class ClientEligibilityFilter implements CandidateFilter {
 }
 export declare class RuleEngineEligibilityFilter implements CandidateFilter {
     private readonly ruleEngine;
+    private readonly assignmentRepository;
     name: string;
-    constructor(ruleEngine: RuleEngine);
-    evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean>;
+    constructor(ruleEngine: RuleEngine, assignmentRepository: Repository<AssignmentEntity>);
+    evaluate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<boolean>;
+    explain(assayerEntity: AssayerEntity, context: PlanningContext): Promise<string[]>;
 }
 export declare class RequiredSkillsFilter implements CandidateFilter {
     private readonly projectBranchRepository;
@@ -110,7 +112,7 @@ export declare class CostScoreCalculator implements ScoreCalculator {
 }
 export declare class ClientPreferenceScoreCalculator implements ScoreCalculator {
     name: string;
-    calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
+    calculate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<number>;
 }
 export declare class BranchFamiliarityScoreCalculator implements ScoreCalculator {
     private readonly assignmentRepository;
@@ -163,14 +165,17 @@ export declare class RecommendationEngine {
     private readonly configResolver;
     private readonly assayerRepository;
     private readonly clientRepository;
+    private readonly assignmentRepository;
     private readonly constraintEvaluator;
     private readonly assayerService;
+    private static readonly logger;
     private filters;
     private calculators;
-    constructor(availabilityFilter: AvailabilityFilter, consecutiveBranchAuditFilter: ConsecutiveBranchAuditFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, requiredSkillsFilter: RequiredSkillsFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, rejectionAcceptanceCalculator: RejectionAcceptanceScoreCalculator, deliverySpeedCalculator: DeliverySpeedScoreCalculator, queryVolumeCalculator: QueryVolumeScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, customerDensityCalculator: CustomerDensityScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>, constraintEvaluator: ConstraintEvaluator, assayerService: AssayerService);
+    constructor(availabilityFilter: AvailabilityFilter, consecutiveBranchAuditFilter: ConsecutiveBranchAuditFilter, clientRestrictionFilter: ClientRestrictionFilter, clientEligibilityFilter: ClientEligibilityFilter, ruleEngineEligibilityFilter: RuleEngineEligibilityFilter, requiredSkillsFilter: RequiredSkillsFilter, distanceCalculator: DistanceScoreCalculator, travelTimeCalculator: TravelTimeScoreCalculator, workloadCalculator: WorkloadScoreCalculator, performanceCalculator: PerformanceScoreCalculator, rejectionAcceptanceCalculator: RejectionAcceptanceScoreCalculator, deliverySpeedCalculator: DeliverySpeedScoreCalculator, queryVolumeCalculator: QueryVolumeScoreCalculator, experienceCalculator: ExperienceScoreCalculator, costCalculator: CostScoreCalculator, clientPreferenceCalculator: ClientPreferenceScoreCalculator, branchFamiliarityCalculator: BranchFamiliarityScoreCalculator, slaComplianceCalculator: SLAComplianceScoreCalculator, customerDensityCalculator: CustomerDensityScoreCalculator, profitabilityCalculator: ProfitabilityScoreCalculator, riskCalculator: RiskScoreCalculator, configResolver: ConfigurationResolver, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>, assignmentRepository: Repository<AssignmentEntity>, constraintEvaluator: ConstraintEvaluator, assayerService: AssayerService);
     recommend(branch: BranchEntity, scheduledDate: Date, weights?: Record<string, number>): Promise<{
         assayer: AssayerEntity;
         score: number;
         breakdown: Record<string, number>;
+        pendingOnThisBranch: boolean;
     }[]>;
 }

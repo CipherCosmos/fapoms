@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, ScrollView, RefreshControl } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { AppNotification } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Card, EmptyState, FadeIn, Icon, Skeleton } from '../components/ui/primitives';
@@ -26,7 +25,7 @@ const relative = (iso: string) => {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 };
 
-const iconFor = (title: string): keyof typeof Ionicons.glyphMap => {
+const iconFor = (title: string): string => {
   const s = title.toLowerCase();
   if (s.includes('assign') || s.includes('audit')) return 'clipboard-outline';
   if (s.includes('quer') || s.includes('clarif')) return 'chatbubble-ellipses-outline';

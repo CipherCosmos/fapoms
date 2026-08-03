@@ -1,12 +1,14 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { LogOut, Wifi, WifiOff } from 'lucide-react';
+import { LogOut, Wifi, WifiOff, Menu } from 'lucide-react';
 import { NotificationDropdown } from './NotificationDropdown';
 import { ThemePicker } from './ThemePicker';
 import { useSocketConnection } from '../hooks/useSocketConnection';
+import { BrandLogo } from './BrandLogo';
 
 interface HeaderProps {
   onLogout?: () => void;
+  onToggleSidebar?: () => void;
   title?: string;
 }
 
@@ -28,7 +30,7 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/users', category: 'Administration', label: 'User Management' },
 ];
 
-export const Header: React.FC<HeaderProps> = ({ onLogout, title }) => {
+export const Header: React.FC<HeaderProps> = ({ onLogout, onToggleSidebar, title }) => {
   const location = useLocation();
   const live = useSocketConnection();
 
@@ -39,20 +41,39 @@ export const Header: React.FC<HeaderProps> = ({ onLogout, title }) => {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '0 24px',
+      padding: '0 16px',
       height: '48px',
       borderBottom: '1px solid var(--border-color)',
       background: 'var(--bg-secondary)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, overflow: 'hidden' }}>
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '4px',
+              borderRadius: 'var(--radius-sm)',
+            }}
+            title="Toggle Menu"
+          >
+            <Menu size={18} />
+          </button>
+        )}
+        <BrandLogo size="sm" showSubtext={false} />
         {match ? (
-          <>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>{match.category}</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>/</span>
-            <span style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-display)', color: 'var(--accent)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '11px', overflow: 'hidden' }}>
+            <span style={{ color: 'var(--text-muted)' }}>/</span>
+            <span style={{ fontWeight: 600, color: 'var(--accent)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {title || match.label}
             </span>
-          </>
+          </div>
         ) : (
           <span style={{ fontSize: '15px', fontWeight: 700, fontFamily: 'var(--font-display)', color: 'var(--accent)', whiteSpace: 'nowrap' }}>
             Sumeru Audit Suite

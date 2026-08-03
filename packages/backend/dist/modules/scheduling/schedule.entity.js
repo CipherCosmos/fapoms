@@ -23,6 +23,7 @@ let ScheduleEntity = class ScheduleEntity extends base_entity_1.BaseEntity {
     scheduledDate;
     status;
     remarks;
+    completedAt;
     assignment;
     project;
     assayer;
@@ -56,6 +57,10 @@ __decorate([
     (0, typeorm_1.Column)({ type: 'text', nullable: true }),
     __metadata("design:type", Object)
 ], ScheduleEntity.prototype, "remarks", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'completed_at', type: 'timestamptz', nullable: true }),
+    __metadata("design:type", Object)
+], ScheduleEntity.prototype, "completedAt", void 0);
 __decorate([
     (0, typeorm_1.OneToOne)(() => assignment_entity_1.AssignmentEntity, { onDelete: 'CASCADE' }),
     (0, typeorm_1.JoinColumn)({ name: 'assignment_id' }),

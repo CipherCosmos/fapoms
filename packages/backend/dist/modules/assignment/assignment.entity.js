@@ -29,6 +29,7 @@ let AssignmentEntity = class AssignmentEntity extends base_entity_1.BaseEntity {
     proposedFee;
     agreedFee;
     scheduledDate;
+    autoSchedule;
     completionDate;
     remarks;
     syncToken;
@@ -94,6 +95,10 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'scheduled_date', type: 'date', nullable: true }),
     __metadata("design:type", Object)
 ], AssignmentEntity.prototype, "scheduledDate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'auto_schedule', type: 'boolean', default: true }),
+    __metadata("design:type", Boolean)
+], AssignmentEntity.prototype, "autoSchedule", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'completion_date', type: 'date', nullable: true }),
     __metadata("design:type", Object)

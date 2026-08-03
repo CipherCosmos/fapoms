@@ -14,6 +14,7 @@ const client_configuration_entity_1 = require("./client-configuration.entity");
 const client_contact_entity_1 = require("./client-contact.entity");
 const client_contract_entity_1 = require("./client-contract.entity");
 const client_billing_entity_1 = require("./client-billing.entity");
+const client_billing_history_entity_1 = require("./client-billing-history.entity");
 const client_service_1 = require("./client.service");
 const client_controller_1 = require("./client.controller");
 let ClientModule = class ClientModule {
@@ -28,6 +29,7 @@ exports.ClientModule = ClientModule = __decorate([
                 client_contact_entity_1.ClientContactEntity,
                 client_contract_entity_1.ClientContractEntity,
                 client_billing_entity_1.ClientBillingEntity,
+                client_billing_history_entity_1.ClientBillingHistoryEntity,
             ]),
         ],
         controllers: [client_controller_1.ClientController],

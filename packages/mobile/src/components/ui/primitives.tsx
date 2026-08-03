@@ -7,23 +7,28 @@ import { useTheme } from '../../theme/ThemeProvider';
 import * as Font from 'expo-font';
 
 /**
- * Ionicons glyph map — loaded from the @expo/vector-icons data files.
- * We render icons directly as <Text> with the ionicons font family,
- * bypassing the @expo/vector-icons class component entirely.
- * This avoids the Hermes bytecode issue where the class component's
- * React.Component prototype chain gets broken during compilation,
- * causing "Objects are not valid as a React child" crashes.
+ * Ionicons rendered as plain <Text> with the ionicons font.
+ * This completely avoids importing the @expo/vector-icons class component,
+ * which breaks under the Hermes web transform ("Objects are not valid as
+ * a React child"). Instead we load the glyph map JSON + font file directly.
  */
 const _glyphMap: Record<string, number> = require('@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json');
 const _fontAsset = require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf');
 
-// Ensure the Ionicons font is loaded
-let _fontLoaded = Font.isLoaded('ionicons');
-if (!_fontLoaded) {
-  Font.loadAsync({ ionicons: _fontAsset }).then(() => { _fontLoaded = true; }).catch(() => {});
-}
+const FONT_FAMILY = Platform.select({ android: 'ionicons', default: 'Ionicons' })!;
 
-type IconName = keyof typeof _glyphMap;
+// Load the Ionicons font. On web we also inject a @font-face rule.
+let _fontReady = false;
+(async () => {
+  try {
+    if (!Font.isLoaded('Ionicons')) {
+      await Font.loadAsync({ Ionicons: _fontAsset });
+    }
+    _fontReady = true;
+  } catch {}
+})();
+
+export type IconName = string;
 
 export const Icon: React.FC<{ name: IconName; size?: number; color?: string; style?: StyleProp<TextStyle> }> = ({ name, size = 20, color = '#fff', style }) => {
   const glyph = _glyphMap[name as string];
@@ -36,9 +41,11 @@ export const Icon: React.FC<{ name: IconName; size?: number; color?: string; sty
         {
           fontSize: size,
           color,
-          fontFamily: Platform.OS === 'android' ? 'ionicons' : 'Ionicons',
+          fontFamily: FONT_FAMILY,
           fontWeight: 'normal',
           fontStyle: 'normal',
+          // Web needs explicit line-height to match the icon size
+          ...(Platform.OS === 'web' ? { lineHeight: size * 1.2 } : {}),
         },
         style,
       ]}
@@ -74,9 +81,14 @@ export const AppText: React.FC<{
     onPrimary: t.colors.onPrimary,
     onAccent: t.colors.onAccent,
   };
+
+  const safeChildren = typeof children === 'object' && children !== null && !(children as any).$$typeof && !Array.isArray(children)
+    ? String((children as any).message || (children as any).error || JSON.stringify(children))
+    : children;
+
   return (
     <Text numberOfLines={numberOfLines} style={[t.type[variant] as TextStyle, { color: toneMap[tone] }, style]}>
-      {children}
+      {safeChildren}
     </Text>
   );
 };

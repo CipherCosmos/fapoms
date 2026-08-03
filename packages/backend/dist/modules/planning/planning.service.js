@@ -73,8 +73,11 @@ let PlanningService = class PlanningService {
                 longitude: r.assayer.longitude,
                 baseFee,
                 readableReasons,
+                scoreBreakdown: r.breakdown,
+                pendingOnThisBranch: r.pendingOnThisBranch,
             });
         }
+        recommendations.excluded = results.excluded || [];
         return recommendations;
     }
     async createRule(dto, userId) {

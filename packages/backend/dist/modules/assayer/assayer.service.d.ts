@@ -170,6 +170,7 @@ export declare class AssayerService implements OnModuleInit {
     private readonly auditService;
     private readonly eventPublisher;
     private readonly workflowEngine;
+    private readonly logger;
     constructor(assayerRepository: Repository<AssayerEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, workforceAttributeRepository: Repository<WorkforceAttributeEntity>, govDocRepository: Repository<AssayerGovernmentDocumentEntity>, assayerDocRepository: Repository<AssayerDocumentEntity>, remarkRepository: Repository<AssayerRemarkEntity>, activityRepository: Repository<AssayerActivityEntity>, auditService: AuditService, eventPublisher: DomainEventPublisher, workflowEngine: WorkflowEngine);
     onModuleInit(): void;
     hydrateWorkforceAttributes(assayer: AssayerEntity): Promise<AssayerEntity>;
@@ -218,6 +219,7 @@ export declare class AssayerService implements OnModuleInit {
         activities: AssayerActivityEntity[];
         total: number;
     }>;
+    private withActorNames;
     createCommercialProfile(assayerId: string, dto: any, userId: string): Promise<AssayerCommercialProfileEntity>;
     updateCommercialProfile(profileId: string, dto: any, userId: string): Promise<AssayerCommercialProfileEntity>;
     getCommercialProfiles(assayerId: string): Promise<AssayerCommercialProfileEntity[]>;

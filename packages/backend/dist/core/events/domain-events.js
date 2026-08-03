@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AssayerArchivedEvent = exports.AssayerTerminatedEvent = exports.AssayerResignedEvent = exports.AssayerDeactivatedEvent = exports.AssayerSuspendedEvent = exports.AssayerOnLeaveEvent = exports.AssayerActivatedEvent = exports.AssayerTrainingStartedEvent = exports.AssayerBackgroundCheckInitiatedEvent = exports.AssayerDocumentVerificationStartedEvent = exports.ValidationSubmittedEvent = exports.ValidationCorrectionRequestedEvent = exports.ValidationApprovedEvent = exports.AssignmentCancelledEvent = exports.AssignmentClosedEvent = exports.AuditCompletedEvent = exports.AuditScheduledEvent = exports.OfferRejectedEvent = exports.OfferAcceptedEvent = exports.AssignmentNegotiationStartedEvent = exports.AssignmentContactInitiatedEvent = exports.AssignmentCandidateSelectedEvent = exports.ProjectBranchClosedEvent = exports.ProjectBranchValidationCompletedEvent = exports.ProjectBranchAuditCompletedEvent = exports.ProjectBranchAuditScheduledEvent = exports.ProjectBranchAssignmentConfirmedEvent = exports.ProjectBranchPlanningStartedEvent = exports.ProjectCancelledEvent = exports.ProjectCompletedEvent = exports.ProjectValidationStartedEvent = exports.ProjectExecutionStartedEvent = exports.ProjectSchedulingReadyEvent = exports.ProjectPlanningStartedEvent = exports.DomainEvent = void 0;
+exports.AssayerArchivedEvent = exports.AssayerTerminatedEvent = exports.AssayerResignedEvent = exports.AssayerDeactivatedEvent = exports.AssayerSuspendedEvent = exports.AssayerOnLeaveEvent = exports.AssayerActivatedEvent = exports.AssayerTrainingStartedEvent = exports.AssayerBackgroundCheckInitiatedEvent = exports.AssayerDocumentVerificationStartedEvent = exports.ValidationMovedToReviewEvent = exports.ValidationSubmittedEvent = exports.ValidationCorrectionRequestedEvent = exports.ValidationApprovedEvent = exports.AssignmentCancelledEvent = exports.AssignmentClosedEvent = exports.AuditCompletedEvent = exports.AuditScheduledEvent = exports.OfferRejectedEvent = exports.OfferAcceptedEvent = exports.AssignmentNegotiationStartedEvent = exports.AssignmentContactInitiatedEvent = exports.AssignmentCandidateSelectedEvent = exports.ProjectBranchClosedEvent = exports.ProjectBranchValidationCompletedEvent = exports.ProjectBranchAuditCompletedEvent = exports.ProjectBranchAuditScheduledEvent = exports.ProjectBranchAssignmentConfirmedEvent = exports.ProjectBranchPlanningStartedEvent = exports.ProjectArchivedEvent = exports.ProjectOnHoldEvent = exports.ProjectCancelledEvent = exports.ProjectCompletedEvent = exports.ProjectValidationStartedEvent = exports.ProjectExecutionStartedEvent = exports.ProjectSchedulingReadyEvent = exports.ProjectPlanningStartedEvent = exports.DomainEvent = void 0;
 class DomainEvent {
     aggregateId;
     previousState;
@@ -36,6 +36,12 @@ exports.ProjectCompletedEvent = ProjectCompletedEvent;
 class ProjectCancelledEvent extends DomainEvent {
 }
 exports.ProjectCancelledEvent = ProjectCancelledEvent;
+class ProjectOnHoldEvent extends DomainEvent {
+}
+exports.ProjectOnHoldEvent = ProjectOnHoldEvent;
+class ProjectArchivedEvent extends DomainEvent {
+}
+exports.ProjectArchivedEvent = ProjectArchivedEvent;
 class ProjectBranchPlanningStartedEvent extends DomainEvent {
 }
 exports.ProjectBranchPlanningStartedEvent = ProjectBranchPlanningStartedEvent;
@@ -90,6 +96,9 @@ exports.ValidationCorrectionRequestedEvent = ValidationCorrectionRequestedEvent;
 class ValidationSubmittedEvent extends DomainEvent {
 }
 exports.ValidationSubmittedEvent = ValidationSubmittedEvent;
+class ValidationMovedToReviewEvent extends DomainEvent {
+}
+exports.ValidationMovedToReviewEvent = ValidationMovedToReviewEvent;
 class AssayerDocumentVerificationStartedEvent extends DomainEvent {
 }
 exports.AssayerDocumentVerificationStartedEvent = AssayerDocumentVerificationStartedEvent;

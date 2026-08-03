@@ -1,5 +1,7 @@
 import { Response } from 'express';
+import { Repository } from 'typeorm';
 import { ProjectService, CreateProjectDto } from './project.service';
+import { UserEntity } from '../user/user.entity';
 export declare class CreateProjectRequestDto implements CreateProjectDto {
     name: string;
     projectNumber: string;
@@ -18,9 +20,31 @@ export declare class CreateProjectRequestDto implements CreateProjectDto {
     dependencies?: Record<string, any>;
     status?: string;
 }
+declare class UpdateProjectRequestDto {
+    name?: string;
+    projectNumber?: string;
+    description?: string;
+    clientId?: string;
+    priority?: string;
+    startDate?: string;
+    endDate?: string;
+    budget?: number;
+    scope?: string;
+    requiredSkills?: string[];
+    requiredCertifications?: string[];
+    sla?: Record<string, any>;
+    risks?: Record<string, any>;
+    milestones?: Record<string, any>;
+    dependencies?: Record<string, any>;
+}
+declare class TransitionProjectRequestDto {
+    targetStatus: string;
+    reason?: string;
+}
 export declare class ProjectController {
     private readonly projectService;
-    constructor(projectService: ProjectService);
+    private readonly userRepository;
+    constructor(projectService: ProjectService, userRepository: Repository<UserEntity>);
     create(dto: CreateProjectRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./project.entity").ProjectEntity;
@@ -40,7 +64,11 @@ export declare class ProjectController {
         success: boolean;
         data: import("./project.entity").ProjectEntity;
     }>;
-    update(id: string, dto: CreateProjectRequestDto, req: any): Promise<{
+    update(id: string, dto: UpdateProjectRequestDto, req: any): Promise<{
+        success: boolean;
+        data: import("./project.entity").ProjectEntity;
+    }>;
+    transition(id: string, dto: TransitionProjectRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./project.entity").ProjectEntity;
     }>;
@@ -49,6 +77,10 @@ export declare class ProjectController {
         data: {
             message: string;
         };
+    }>;
+    getBranchHistory(projectBranchId: string): Promise<{
+        success: boolean;
+        data: any;
     }>;
     getProjectBranches(id: string): Promise<{
         success: boolean;
@@ -59,6 +91,9 @@ export declare class ProjectController {
                 proposedFee: number | null;
                 agreedFee: number | null;
                 scheduledDate: Date | null;
+                remarks: string | null;
+                negotiatedByName: string | null;
+                negotiationCount: number;
                 assayer: {
                     displayName: string;
                     id: string;
@@ -101,3 +136,4 @@ export declare class ProjectController {
         data: import("./project-branch.entity").ProjectBranchEntity[];
     }>;
 }
+export {};

@@ -35,6 +35,10 @@ module.exports = {
     android: {
       package: 'com.fapoms.assayer',
       versionCode: 1,
+      // Present in the repo but never wired in — without this, a native build has no way to
+      // know which Firebase project to register push against, so `getDevicePushTokenAsync()`
+      // would either fail or register against nothing at all.
+      googleServicesFile: './google-services.json',
       permissions: [
         'CAMERA',
         'ACCESS_FINE_LOCATION',

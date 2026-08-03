@@ -18,10 +18,10 @@ const LIFECYCLE_TRANSITIONS = {
 };
 function mapLifecycleToOperationalStatus(lifecycle) {
     if (lifecycle === shared_1.AssayerLifecycleStatus.ACTIVE || lifecycle === shared_1.AssayerLifecycleStatus.ON_LEAVE)
-        return 'ACTIVE';
+        return shared_1.AssayerStatus.ACTIVE;
     if (lifecycle === shared_1.AssayerLifecycleStatus.SUSPENDED)
-        return 'SUSPENDED';
-    return 'INACTIVE';
+        return shared_1.AssayerStatus.SUSPENDED;
+    return shared_1.AssayerStatus.INACTIVE;
 }
 class AssayerStateMachine {
     static validateTransition(assayer, targetStatus) {

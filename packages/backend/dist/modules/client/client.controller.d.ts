@@ -105,6 +105,13 @@ declare class LifecycleTransitionDto {
     status: string;
     reason?: string;
 }
+declare class BillingStatusTransitionDto {
+    status: string;
+    remarks?: string;
+}
+declare class BillingRemarkDto {
+    remarks: string;
+}
 export declare class ClientController {
     private readonly clientService;
     constructor(clientService: ClientService);
@@ -112,7 +119,7 @@ export declare class ClientController {
         success: boolean;
         data: import("./client.entity").ClientEntity;
     }>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, search?: string, status?: string, clientType?: string, priority?: string, sortBy?: string, sortOrder?: 'ASC' | 'DESC'): Promise<{
         success: boolean;
         data: import("./client.entity").ClientEntity[];
         meta: {
@@ -184,9 +191,21 @@ export declare class ClientController {
         success: boolean;
         data: import("./client-billing.entity").ClientBillingEntity | null;
     }>;
+    findBillingHistory(id: string): Promise<{
+        success: boolean;
+        data: import("./client-billing-history.entity").ClientBillingHistoryEntity[];
+    }>;
     upsertBilling(id: string, dto: UpdateBillingRequestDto, req: any): Promise<{
         success: boolean;
         data: import("./client-billing.entity").ClientBillingEntity;
+    }>;
+    transitionBillingStatus(id: string, dto: BillingStatusTransitionDto, req: any): Promise<{
+        success: boolean;
+        data: import("./client-billing.entity").ClientBillingEntity;
+    }>;
+    addBillingRemark(id: string, dto: BillingRemarkDto, req: any): Promise<{
+        success: boolean;
+        data: import("./client-billing-history.entity").ClientBillingHistoryEntity;
     }>;
 }
 export {};

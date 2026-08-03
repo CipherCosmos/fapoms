@@ -16,10 +16,14 @@ exports.ProjectController = exports.CreateProjectRequestDto = void 0;
 const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const platform_express_1 = require("@nestjs/platform-express");
+const typeorm_1 = require("@nestjs/typeorm");
+const typeorm_2 = require("typeorm");
 const class_validator_1 = require("class-validator");
 const project_service_1 = require("./project.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
+const user_entity_1 = require("../user/user.entity");
 class CreateProjectRequestDto {
     name;
     projectNumber;
@@ -119,10 +123,118 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], CreateProjectRequestDto.prototype, "status", void 0);
+class UpdateProjectRequestDto {
+    name;
+    projectNumber;
+    description;
+    clientId;
+    priority;
+    startDate;
+    endDate;
+    budget;
+    scope;
+    requiredSkills;
+    requiredCertifications;
+    sla;
+    risks;
+    milestones;
+    dependencies;
+}
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "projectNumber", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "description", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "clientId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "priority", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "startDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "endDate", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdateProjectRequestDto.prototype, "budget", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], UpdateProjectRequestDto.prototype, "scope", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], UpdateProjectRequestDto.prototype, "requiredSkills", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], UpdateProjectRequestDto.prototype, "requiredCertifications", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateProjectRequestDto.prototype, "sla", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateProjectRequestDto.prototype, "risks", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateProjectRequestDto.prototype, "milestones", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsObject)(),
+    __metadata("design:type", Object)
+], UpdateProjectRequestDto.prototype, "dependencies", void 0);
+class TransitionProjectRequestDto {
+    targetStatus;
+    reason;
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], TransitionProjectRequestDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TransitionProjectRequestDto.prototype, "reason", void 0);
 let ProjectController = class ProjectController {
     projectService;
-    constructor(projectService) {
+    userRepository;
+    constructor(projectService, userRepository) {
         this.projectService = projectService;
+        this.userRepository = userRepository;
     }
     async create(dto, req) {
         const project = await this.projectService.create(dto, req.user.id, req.user.organizationId);
@@ -159,6 +271,10 @@ let ProjectController = class ProjectController {
             data: project,
         };
     }
+    async transition(id, dto, req) {
+        const project = await this.projectService.transition(id, dto.targetStatus, req.user.id, dto.reason);
+        return { success: true, data: project };
+    }
     async remove(id, req) {
         await this.projectService.remove(id, req.user.id);
         return {
@@ -166,13 +282,24 @@ let ProjectController = class ProjectController {
             data: { message: 'Project deleted successfully' },
         };
     }
+    async getBranchHistory(projectBranchId) {
+        return { success: true, data: await this.projectService.getBranchHistory(projectBranchId) };
+    }
     async getProjectBranches(id) {
         const branches = await this.projectService.findProjectBranches(id);
-        const data = branches.map(b => {
-            const activeAssignment = b.assignments
+        const activeAssignmentByBranch = new Map(branches.map(b => [
+            b.id,
+            b.assignments
                 ?.filter(a => a.status !== 'CANCELLED' && a.status !== 'REJECTED')
-                ?.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
-                ?.find(a => a.status === 'COMPLETED' || a.status === 'ACCEPTED' || true);
+                ?.sort((a, b2) => new Date(b2.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())?.[0],
+        ]));
+        const creatorIds = [...new Set([...activeAssignmentByBranch.values()].map(a => a?.createdBy).filter((v) => !!v))];
+        const creators = creatorIds.length
+            ? await this.userRepository.find({ where: { id: (0, typeorm_2.In)(creatorIds) }, select: ['id', 'displayName'] })
+            : [];
+        const creatorNameById = new Map(creators.map(u => [u.id, u.displayName]));
+        const data = branches.map(b => {
+            const activeAssignment = activeAssignmentByBranch.get(b.id);
             return {
                 ...b,
                 assignment: activeAssignment ? {
@@ -181,6 +308,11 @@ let ProjectController = class ProjectController {
                     proposedFee: activeAssignment.proposedFee,
                     agreedFee: activeAssignment.agreedFee,
                     scheduledDate: activeAssignment.scheduledDate,
+                    remarks: activeAssignment.remarks,
+                    negotiatedByName: activeAssignment.createdBy
+                        ? creatorNameById.get(activeAssignment.createdBy) ?? null
+                        : null,
+                    negotiationCount: activeAssignment.negotiationCount ?? 0,
                     assayer: activeAssignment.assayer ? {
                         displayName: activeAssignment.assayer.displayName,
                         id: activeAssignment.assayer.id,
@@ -240,7 +372,6 @@ __decorate([
 ], ProjectController.prototype, "create", null);
 __decorate([
     (0, common_1.Get)(),
-    (0, guards_1.Public)(),
     (0, swagger_1.ApiOperation)({ summary: 'Get paginated list of projects' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
@@ -259,15 +390,27 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
-    (0, guards_1.RequirePermissions)('project:update:organization'),
+    (0, guards_1.RequirePermissions)('project:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update project details' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
     __param(2, (0, common_1.Req)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, CreateProjectRequestDto, Object]),
+    __metadata("design:paramtypes", [String, UpdateProjectRequestDto, Object]),
     __metadata("design:returntype", Promise)
 ], ProjectController.prototype, "update", null);
+__decorate([
+    (0, common_1.Post)(':id/transition'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('project:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Move a project to another lifecycle status' }),
+    __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, TransitionProjectRequestDto, Object]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "transition", null);
 __decorate([
     (0, common_1.Delete)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
@@ -280,8 +423,16 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], ProjectController.prototype, "remove", null);
 __decorate([
+    (0, common_1.Get)('branches/:projectBranchId/history'),
+    (0, swagger_1.ApiOperation)({ summary: 'Full timeline for one project branch: status, assignments, documents, validation' }),
+    __param(0, (0, common_1.Param)('projectBranchId', common_1.ParseUUIDPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], ProjectController.prototype, "getBranchHistory", null);
+__decorate([
     (0, common_1.Get)(':id/branches'),
-    (0, guards_1.Public)(),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.READ_ONLY_AUDITOR),
     (0, swagger_1.ApiOperation)({ summary: 'Get unassigned and planning branches queue for project' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),
@@ -339,7 +490,10 @@ exports.ProjectController = ProjectController = __decorate([
     (0, swagger_1.ApiTags)('Projects'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('projects'),
-    __metadata("design:paramtypes", [project_service_1.ProjectService])
+    __param(1, (0, typeorm_1.InjectRepository)(user_entity_1.UserEntity)),
+    __metadata("design:paramtypes", [project_service_1.ProjectService,
+        typeorm_2.Repository])
 ], ProjectController);
 //# sourceMappingURL=project.controller.js.map

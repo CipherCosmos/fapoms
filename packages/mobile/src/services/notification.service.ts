@@ -28,15 +28,78 @@ if (Notifications && Notifications.setNotificationHandler) {
 }
 
 if (Platform.OS === 'android' && Notifications && Notifications.setNotificationChannelAsync) {
-  Notifications.setNotificationChannelAsync('default', {
-    name: 'FAPOMS Field Notifications',
+  Notifications.setNotificationChannelAsync('fapoms_audit_alerts', {
+    name: 'FAPOMS Audit Assignment Alerts',
     importance: Notifications.AndroidImportance.MAX,
-    vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#38BDF8',
+    vibrationPattern: [0, 500, 250, 500],
+    lightColor: '#FF6B00',
     enableVibrate: true,
     showBadge: true,
     sound: 'default',
   }).catch(() => {});
+}
+
+/**
+  * Synthesizes an audible dual-tone alert chime (880Hz -> 1320Hz)
+  * via Web Audio API when running in browser or preview context.
+  */
+export function playNotificationSound() {
+  try {
+    const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+    const AudioCtx = g.AudioContext || g.webkitAudioContext;
+    if (AudioCtx) {
+      const ctx = new AudioCtx();
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc2.type = 'triangle';
+
+      osc1.frequency.setValueAtTime(880, ctx.currentTime);
+      osc1.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.15);
+
+      osc2.frequency.setValueAtTime(440, ctx.currentTime);
+      osc2.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
+
+      gain.gain.setValueAtTime(0.35, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc1.start(ctx.currentTime);
+      osc2.start(ctx.currentTime);
+      osc1.stop(ctx.currentTime + 0.5);
+      osc2.stop(ctx.currentTime + 0.5);
+    }
+  } catch (e) {
+    console.log('Audio chime play error:', e);
+  }
+}
+
+/**
+ * Triggers audio chime, system tray notification, and browser OS desktop alert.
+ */
+export function triggerAlertNotification(title: string, body: string, data?: any) {
+  playNotificationSound();
+
+  const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
+  if (Platform.OS === 'web' && g.window && 'Notification' in g.window && g.Notification.permission === 'granted') {
+    try {
+      new g.Notification(title, {
+        body,
+        icon: '/logo.png',
+        tag: data?.assignmentId || 'fapoms-alert',
+        renotify: true,
+      });
+    } catch (e) {
+      console.log('Web notification trigger error:', e);
+    }
+  }
+
+  scheduleLocalNotification(title, body, data);
 }
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
@@ -72,7 +135,28 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
       return null;
     }
 
-    const tokenData = await Notifications.getExpoPushTokenAsync();
+    /**
+     * The raw native token, not `getExpoPushTokenAsync()`.
+     *
+     * The backend's `FcmProvider` calls Firebase Admin SDK directly with whatever token is
+     * registered — it expects a real FCM registration token. `getExpoPushTokenAsync()` returns
+     * an Expo-wrapped token (`ExponentPushToken[...]`) meant for Expo's *own* push relay
+     * instead; handing that to Firebase Admin SDK would be rejected outright. Registering
+     * nothing (rather than a token guaranteed to fail) had been silently masking this.
+     *
+     * On Android this correctly yields the FCM registration token, backed by the
+     * `google-services.json` now wired into `app.config.js`. On iOS it yields the raw APNs
+     * token instead, which Firebase Admin SDK's `send()` does not accept as-is — true FCM
+     * delivery there needs `@react-native-firebase/messaging` to bridge APNs↔FCM, which isn't
+     * in this project yet and would need a new native build. Registering it anyway would just
+     * manufacture a token guaranteed to fail on first send, so iOS is skipped here rather than
+     * pretending to support it.
+     */
+    if (Platform.OS === 'ios') {
+      return null;
+    }
+
+    const tokenData = await Notifications.getDevicePushTokenAsync();
     const token = tokenData?.data;
 
     const userId = MobileApiService.getCurrentUserId();
@@ -86,7 +170,8 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
           },
           body: JSON.stringify({
             token,
-            platform: Platform.OS === 'ios' ? 'ios' : 'android',
+            // iOS has already returned above — everything reaching here is Android.
+            platform: 'android',
           }),
         });
       } catch (e) {
@@ -136,8 +221,24 @@ export function setupNotificationListeners(
   }
 }
 
+/**
+ * Covers the one case `addNotificationResponseReceivedListener` cannot: the app was fully
+ * terminated, and the tap is what launched it. That listener only fires for a response
+ * received while JS is already running, so a cold start from a notification tap would
+ * otherwise open the app with no memory of why — landing on the default tab instead of the
+ * record the notification was about. Call this once, right after mount.
+ */
+export async function getLastNotificationResponseAsync(): Promise<any | null> {
+  if (!Notifications?.getLastNotificationResponseAsync) return null;
+  try {
+    return await Notifications.getLastNotificationResponseAsync();
+  } catch (err) {
+    return null;
+  }
+}
+
 export async function scheduleLocalNotification(title: string, body: string, data?: any) {
-  if (!Notifications || !Notifications.scheduleNotificationAsync) return;
+  if (Platform.OS === 'web' || !Notifications || !Notifications.scheduleNotificationAsync) return;
   try {
     await Notifications.scheduleNotificationAsync({
       content: {

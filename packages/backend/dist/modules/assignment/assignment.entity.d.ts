@@ -16,6 +16,7 @@ export declare class AssignmentEntity extends BaseEntity {
     proposedFee: number | null;
     agreedFee: number | null;
     scheduledDate: Date | null;
+    autoSchedule: boolean;
     completionDate: Date | null;
     remarks: string | null;
     syncToken: string | null;

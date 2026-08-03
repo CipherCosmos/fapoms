@@ -67,13 +67,19 @@ let HolidayService = class HolidayService {
     }
     async update(id, dto, userId) {
         const holiday = await this.findOne(id);
-        const holidayDate = new Date(dto.date);
-        holiday.name = dto.name;
-        holiday.date = holidayDate;
-        holiday.type = dto.type;
-        holiday.applicableStates = dto.applicableStates ?? null;
-        holiday.clientId = dto.clientId ?? null;
-        holiday.year = holidayDate.getFullYear();
+        if (dto.name !== undefined)
+            holiday.name = dto.name;
+        if (dto.type !== undefined)
+            holiday.type = dto.type;
+        if (dto.applicableStates !== undefined)
+            holiday.applicableStates = dto.applicableStates ?? null;
+        if (dto.clientId !== undefined)
+            holiday.clientId = dto.clientId ?? null;
+        if (dto.date !== undefined) {
+            const holidayDate = new Date(dto.date);
+            holiday.date = holidayDate;
+            holiday.year = holidayDate.getFullYear();
+        }
         holiday.updatedBy = userId;
         const saved = await this.holidayRepository.save(holiday);
         await this.auditService.recordEvent({
@@ -129,7 +135,9 @@ let HolidayService = class HolidayService {
         if (holidays.length === 0)
             return false;
         if (stateCode) {
-            return holidays.some(h => !h.applicableStates || h.applicableStates.length === 0 || h.applicableStates.includes(stateCode));
+            const target = (0, shared_1.canonicalState)(stateCode);
+            return holidays.some(h => !h.applicableStates || h.applicableStates.length === 0
+                || h.applicableStates.some(s => (0, shared_1.canonicalState)(s) === target));
         }
         return holidays.some(h => !h.applicableStates || h.applicableStates.length === 0);
     }

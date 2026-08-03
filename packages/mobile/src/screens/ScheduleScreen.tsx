@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, Linking } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { getAssignmentTotalFee } from '../utils/fees';
@@ -58,6 +57,38 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 }) => {
   const t = useTheme();
   const [tab, setTab] = React.useState<'ACTIVE' | 'DONE'>('ACTIVE');
+  const [downloadingId, setDownloadingId] = React.useState<string | null>(null);
+  const [downloadMsg, setDownloadMsg] = React.useState<{ id: string; tone: 'ok' | 'warn'; text: string } | null>(null);
+
+  const handleDownloadPdf = async (a: AssayerAssignment) => {
+    if (downloadingId) return;
+    setDownloadingId(a.id);
+    setDownloadMsg(null);
+    try {
+      const { success, data, error } = await MobileApiService.getBranchDocuments(a.projectBranchId);
+      if (!success || !data || data.length === 0) {
+        // The readiness block from the API explains exactly why nothing is here yet.
+        setDownloadMsg({ id: a.id, tone: 'warn', text: error || 'The audit packet is not available yet. You will be notified when it is sent.' });
+        return;
+      }
+      const doc =
+        data.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF') ||
+        data.find((d: any) => d.type === 'CUSTOMER_MASTER_DATA') ||
+        data[0];
+      const res = await MobileApiService.getDocumentDownloadUrl(doc.id);
+      if (!res.ok) {
+        setDownloadMsg({ id: a.id, tone: 'warn', text: res.message || 'This document is not available to download right now.' });
+        return;
+      }
+      await Linking.openURL(res.url);
+      setDownloadMsg({ id: a.id, tone: 'ok', text: 'Download started — check your browser/downloads.' });
+    } catch (e: any) {
+      setDownloadMsg({ id: a.id, tone: 'warn', text: e?.message || 'Could not open the audit packet.' });
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
 
   const active = assignments.filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED');
   const done = assignments.filter((a) => a.status === 'COMPLETED' || a.status === 'REJECTED');
@@ -171,16 +202,20 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     />
                     <View style={{ flexDirection: 'row', gap: t.space.sm }}>
                       <Button
-                        label="Packet PDF"
+                        label={downloadingId === a.id ? 'Opening…' : 'Packet PDF'}
                         icon="download-outline"
                         variant="neutral"
-                        onPress={() => Linking.openURL(
-                          `${MobileApiService.getBaseUrl()}/documents/project-branch/${a.projectBranchId}/download-pdf`,
-                        )}
+                        disabled={downloadingId !== null}
+                        onPress={() => handleDownloadPdf(a)}
                         style={{ flex: 1 }}
                       />
                       <Button label="Upload" icon="cloud-upload-outline" variant="neutral" onPress={() => onOpenPdfDocs(a)} style={{ flex: 1 }} />
                     </View>
+                    {downloadMsg && downloadMsg.id === a.id && (
+                      <AppText variant="small" style={{ color: downloadMsg.tone === 'ok' ? t.colors.success : t.colors.warning }}>
+                        {downloadMsg.text}
+                      </AppText>
+                    )}
                   </View>
                 )}
 
@@ -203,7 +238,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 };
 
 const Fact: React.FC<{
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: string;
   label: string;
   value: string;
   tone?: 'success' | 'warning';

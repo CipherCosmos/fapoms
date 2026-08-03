@@ -44,6 +44,7 @@ let ValidationService = class ValidationService {
     }
     onModuleInit() {
         this.workflowEngine.registerWorkflow('validation', [
+            { from: [shared_1.ValidationStatus.PENDING, shared_1.ValidationStatus.ASSIGNED], to: shared_1.ValidationStatus.HUMAN_REVIEW },
             { from: [shared_1.ValidationStatus.HUMAN_REVIEW, shared_1.ValidationStatus.ASSIGNED, shared_1.ValidationStatus.PENDING], to: shared_1.ValidationStatus.APPROVED },
             { from: [shared_1.ValidationStatus.HUMAN_REVIEW], to: shared_1.ValidationStatus.CORRECTION_REQUIRED },
             { from: [shared_1.ValidationStatus.CORRECTION_REQUIRED], to: shared_1.ValidationStatus.HUMAN_REVIEW },
@@ -91,9 +92,9 @@ let ValidationService = class ValidationService {
         }
         return validationCase;
     }
-    async findAll(page = 1, limit = 50) {
+    async findAll(page = 1, limit = 50, projectBranchId) {
         const [validationCases, total] = await this.validationCaseRepository.findAndCount({
-            where: { isActive: true },
+            where: { isActive: true, ...(projectBranchId ? { projectBranchId } : {}) },
             relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
             order: { createdAt: 'DESC' },
             take: limit,
@@ -206,9 +207,50 @@ let ValidationService = class ValidationService {
         else if (targetStatus === shared_1.ValidationStatus.SUBMITTED) {
             return this.submitValidation(id, userId, remarks, notes, ocrResult);
         }
+        else if (targetStatus === shared_1.ValidationStatus.HUMAN_REVIEW) {
+            return this.moveToReview(id, userId, remarks);
+        }
         else {
             throw new common_1.BadRequestException(`Invalid validation status transition to ${targetStatus}`);
         }
+    }
+    async moveToReview(id, userId, remarks) {
+        const validationCase = await this.findOne(id);
+        const prevStatus = validationCase.status;
+        return this.workflowEngine.executeCommand('validation', validationCase.id, 'HUMAN_REVIEW_Command', prevStatus, shared_1.ValidationStatus.HUMAN_REVIEW, userId, shared_1.SystemRole.SUPER_ADMINISTRATOR, [], async () => {
+            const event = validation_state_machine_1.ValidationStateMachine.moveToReview(validationCase, userId, remarks);
+            validationCase.updatedBy = userId;
+            const saved = await this.validationCaseRepository.save(validationCase);
+            this.eventPublisher.publish(event.constructor.name, event);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.WORKFLOW,
+                eventType: 'VALIDATION_HUMAN_REVIEW',
+                entityType: 'VALIDATION',
+                entityId: saved.id,
+                previousState: prevStatus,
+                newState: shared_1.ValidationStatus.HUMAN_REVIEW,
+                userId,
+                remarks: remarks ?? 'Ready for review',
+            });
+            return saved;
+        });
+    }
+    async getOrAdvanceForHandBack(projectBranchId, assessmentId, userId) {
+        const validationCase = await this.getOrCreateForBranch(projectBranchId, assessmentId, userId);
+        if (validationCase.status === shared_1.ValidationStatus.CORRECTION_REQUIRED || validationCase.status === shared_1.ValidationStatus.PENDING) {
+            return this.moveToReview(validationCase.id, userId, 'Data entry complete — ready for review');
+        }
+        return validationCase;
+    }
+    async getOrCreateForBranch(projectBranchId, assessmentId, userId) {
+        const existing = await this.validationCaseRepository.findOne({
+            where: { projectBranchId, isActive: true },
+            relations: ['projectBranch', 'projectBranch.branch', 'assessment', 'assessment.branch'],
+        });
+        if (existing)
+            return existing;
+        const created = await this.create({ projectBranchId, assessmentId: assessmentId ?? undefined }, userId);
+        return this.findOne(created.id);
     }
     async approveValidation(id, userId, remarks, notes, ocrResult) {
         const { saved, event } = await this.executeValidationTransition(id, shared_1.ValidationStatus.APPROVED, userId, remarks, notes, ocrResult);

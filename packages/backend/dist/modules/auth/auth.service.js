@@ -55,50 +55,59 @@ let AuthService = class AuthService {
         });
         if (!user) {
             const cleanKey = usernameOrEmail.trim();
-            let assayer = await this.assayerRepository.findOne({
+            const assayer = await this.assayerRepository.findOne({
                 where: [
                     { assayerCode: (0, typeorm_2.ILike)(cleanKey) },
-                    { assayerCode: (0, typeorm_2.ILike)(`%${cleanKey}%`) },
-                    { phone: (0, typeorm_2.ILike)(`%${cleanKey}%`) },
-                    { email: (0, typeorm_2.ILike)(`%${cleanKey}%`) },
-                    { displayName: (0, typeorm_2.ILike)(`%${cleanKey}%`) },
-                    { firstName: (0, typeorm_2.ILike)(`%${cleanKey}%`) },
+                    { phone: cleanKey },
+                    { email: (0, typeorm_2.ILike)(cleanKey) },
                 ],
+                select: {
+                    id: true, assayerCode: true, displayName: true, email: true, phone: true,
+                    organizationId: true, lifecycleStatus: true, passwordHash: true,
+                },
             });
             if (!assayer) {
-                assayer = await this.assayerRepository.findOne({
-                    where: { lifecycleStatus: 'ACTIVE' },
-                });
+                throw new common_1.UnauthorizedException('Invalid credentials');
             }
-            if (assayer) {
-                if (assayer.passwordHash) {
-                    const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
-                    if (!isPasswordValid && password !== 'admin123') {
-                        throw new common_1.UnauthorizedException('Invalid credentials');
-                    }
-                }
-                const payload = {
-                    sub: assayer.id,
+            if (!assayer.passwordHash) {
+                throw new common_1.UnauthorizedException('Invalid credentials');
+            }
+            const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
+            if (!isPasswordValid) {
+                throw new common_1.UnauthorizedException('Invalid credentials');
+            }
+            if (assayer.lifecycleStatus !== 'ACTIVE') {
+                throw new common_1.ForbiddenException(`Account is ${String(assayer.lifecycleStatus).toLowerCase()}`);
+            }
+            const payload = {
+                sub: assayer.id,
+                username: assayer.assayerCode,
+                email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+                roles: ['ASSAYER'],
+                permissions: ['assignment:read:organization', 'assignment:update:organization'],
+                organizationId: assayer.organizationId,
+            };
+            const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
+            await this.auditService.recordEvent({
+                category: shared_1.EventCategory.USER,
+                eventType: 'USER_LOGIN',
+                entityType: 'ASSAYER',
+                entityId: assayer.id,
+                userId: assayer.id,
+                userDisplayName: assayer.displayName,
+                ipAddress: ipAddress ?? undefined,
+            }).catch(() => { });
+            return {
+                ...tokens,
+                user: {
+                    id: assayer.id,
                     username: assayer.assayerCode,
-                    email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
-                    roles: ['ASSAYER'],
-                    permissions: ['assignment:read:organization', 'assignment:update:organization'],
-                    organizationId: assayer.organizationId,
-                };
-                const tokens = await this.generateTokenPair(payload);
-                return {
-                    ...tokens,
-                    user: {
-                        id: assayer.id,
-                        username: assayer.assayerCode,
-                        name: assayer.displayName,
-                        email: assayer.email,
-                        phone: assayer.phone,
-                        status: assayer.lifecycleStatus,
-                    },
-                };
-            }
-            throw new common_1.UnauthorizedException('Invalid credentials. User not found.');
+                    name: assayer.displayName,
+                    email: assayer.email,
+                    phone: assayer.phone,
+                    status: assayer.lifecycleStatus,
+                },
+            };
         }
         if (user.status !== shared_1.UserStatus.ACTIVE) {
             throw new common_1.ForbiddenException(`Account is ${user.status.toLowerCase()}`);
@@ -141,38 +150,23 @@ let AuthService = class AuthService {
             },
         };
     }
-    async biometricLogin(assayerCode, ipAddress, userAgent) {
-        const assayer = await this.assayerRepository.findOne({
-            where: { assayerCode: (0, typeorm_2.ILike)(assayerCode.trim()) },
-        });
-        if (!assayer) {
-            throw new common_1.UnauthorizedException('Assayer not found');
-        }
-        if (assayer.lifecycleStatus !== 'ACTIVE') {
-            throw new common_1.ForbiddenException('Assayer account is not active');
-        }
-        const payload = {
-            sub: assayer.id,
-            username: assayer.assayerCode,
-            email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
-            roles: ['ASSAYER'],
-            permissions: ['assignment:read:organization', 'assignment:update:organization'],
-            organizationId: assayer.organizationId,
-        };
-        const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
-        return {
-            ...tokens,
-            user: {
-                id: assayer.id,
-                username: assayer.assayerCode,
-                name: assayer.displayName,
-                email: assayer.email,
-                phone: assayer.phone,
-                status: assayer.lifecycleStatus,
-            },
-        };
+    async biometricLogin(refreshToken, ipAddress, userAgent) {
+        const { tokens, user } = await this.redeemRefreshToken(refreshToken, ipAddress, userAgent);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.USER,
+            eventType: 'BIOMETRIC_LOGIN',
+            entityType: user.roles ? 'USER' : 'ASSAYER',
+            entityId: user.id,
+            userId: user.id,
+            ipAddress: ipAddress ?? undefined,
+        }).catch(() => { });
+        return { ...tokens, user };
     }
     async refreshAccessToken(refreshToken, ipAddress, userAgent) {
+        const { tokens } = await this.redeemRefreshToken(refreshToken, ipAddress, userAgent);
+        return tokens;
+    }
+    async redeemRefreshToken(refreshToken, ipAddress, userAgent) {
         const tokenHash = this.hashToken(refreshToken);
         const storedToken = await this.refreshTokenRepository.findOne({
             where: {
@@ -188,39 +182,61 @@ let AuthService = class AuthService {
             where: { id: storedToken.userId },
             relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
         });
-        if (!user) {
-            const assayer = await this.assayerRepository.findOne({
-                where: { id: storedToken.userId },
-            });
-            if (!assayer) {
+        if (user) {
+            if (user.status !== shared_1.UserStatus.ACTIVE) {
                 throw new common_1.UnauthorizedException('User account is not active');
             }
-            const assayerPayload = {
-                sub: assayer.id,
-                username: assayer.assayerCode,
-                email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
-                roles: ['ASSAYER'],
-                permissions: ['assignment:read:organization', 'assignment:update:organization'],
-                organizationId: assayer.organizationId,
-            };
             storedToken.isRevoked = true;
             storedToken.revokedAt = new Date();
             await this.refreshTokenRepository.save(storedToken);
-            const tokens = await this.generateTokenPair(assayerPayload);
+            const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
             storedToken.replacedBy = tokens.refreshToken;
             await this.refreshTokenRepository.save(storedToken);
-            return tokens;
+            return {
+                tokens,
+                user: {
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    displayName: user.displayName,
+                    roles: user.roles,
+                },
+            };
         }
-        if (user.status !== shared_1.UserStatus.ACTIVE) {
-            throw new common_1.UnauthorizedException('User account is not active');
+        const assayer = await this.assayerRepository.findOne({
+            where: { id: storedToken.userId },
+        });
+        if (!assayer) {
+            throw new common_1.UnauthorizedException('Account is not active');
         }
+        if (assayer.lifecycleStatus !== 'ACTIVE') {
+            throw new common_1.ForbiddenException('Assayer account is not active');
+        }
+        const assayerPayload = {
+            sub: assayer.id,
+            username: assayer.assayerCode,
+            email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+            roles: ['ASSAYER'],
+            permissions: ['assignment:read:organization', 'assignment:update:organization'],
+            organizationId: assayer.organizationId,
+        };
         storedToken.isRevoked = true;
         storedToken.revokedAt = new Date();
         await this.refreshTokenRepository.save(storedToken);
-        const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
+        const tokens = await this.generateTokenPair(assayerPayload);
         storedToken.replacedBy = tokens.refreshToken;
         await this.refreshTokenRepository.save(storedToken);
-        return tokens;
+        return {
+            tokens,
+            user: {
+                id: assayer.id,
+                username: assayer.assayerCode,
+                name: assayer.displayName,
+                email: assayer.email,
+                phone: assayer.phone,
+                status: assayer.lifecycleStatus,
+            },
+        };
     }
     async logout(userId, ipAddress) {
         await this.refreshTokenRepository.update({ userId, isRevoked: false }, { isRevoked: true, revokedAt: new Date() });
@@ -232,6 +248,18 @@ let AuthService = class AuthService {
             userId,
             ipAddress: ipAddress ?? undefined,
         });
+    }
+    async verifyAssayerIdentifier(identifier) {
+        const key = (identifier || '').trim();
+        if (!key)
+            return null;
+        const assayer = await this.assayerRepository.findOne({
+            where: [{ assayerCode: (0, typeorm_2.ILike)(key) }, { phone: key }, { email: (0, typeorm_2.ILike)(key) }],
+            select: { id: true, displayName: true, assayerCode: true, lifecycleStatus: true },
+        });
+        if (!assayer || assayer.lifecycleStatus !== 'ACTIVE')
+            return null;
+        return { displayName: assayer.displayName, assayerCode: assayer.assayerCode };
     }
     async validateJwtPayload(payload) {
         const user = await this.userRepository.findOne({

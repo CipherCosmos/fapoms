@@ -15,9 +15,12 @@ const base_entity_1 = require("../../core/entities/base.entity");
 let ClientBillingEntity = class ClientBillingEntity extends base_entity_1.BaseEntity {
     clientId;
     client;
+    status;
     paymentTerms;
     currency;
     taxIdentifier;
+    gstRate;
+    tdsRate;
     invoiceCycle;
     billingAddress;
     bankAccount;
@@ -36,6 +39,10 @@ __decorate([
     __metadata("design:type", Function)
 ], ClientBillingEntity.prototype, "client", void 0);
 __decorate([
+    (0, typeorm_1.Column)({ name: 'status', length: 20, default: 'DRAFT' }),
+    __metadata("design:type", String)
+], ClientBillingEntity.prototype, "status", void 0);
+__decorate([
     (0, typeorm_1.Column)({ name: 'payment_terms', length: 200 }),
     __metadata("design:type", String)
 ], ClientBillingEntity.prototype, "paymentTerms", void 0);
@@ -47,6 +54,14 @@ __decorate([
     (0, typeorm_1.Column)({ name: 'tax_identifier', type: 'varchar', length: 100, nullable: true }),
     __metadata("design:type", Object)
 ], ClientBillingEntity.prototype, "taxIdentifier", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'gst_rate', type: 'decimal', precision: 6, scale: 2, default: 18 }),
+    __metadata("design:type", Number)
+], ClientBillingEntity.prototype, "gstRate", void 0);
+__decorate([
+    (0, typeorm_1.Column)({ name: 'tds_rate', type: 'decimal', precision: 6, scale: 2, default: 10 }),
+    __metadata("design:type", Number)
+], ClientBillingEntity.prototype, "tdsRate", void 0);
 __decorate([
     (0, typeorm_1.Column)({ name: 'invoice_cycle', length: 50 }),
     __metadata("design:type", String)

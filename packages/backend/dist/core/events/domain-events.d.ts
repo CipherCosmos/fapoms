@@ -19,6 +19,10 @@ export declare class ProjectCompletedEvent extends DomainEvent {
 }
 export declare class ProjectCancelledEvent extends DomainEvent {
 }
+export declare class ProjectOnHoldEvent extends DomainEvent {
+}
+export declare class ProjectArchivedEvent extends DomainEvent {
+}
 export declare class ProjectBranchPlanningStartedEvent extends DomainEvent {
 }
 export declare class ProjectBranchAssignmentConfirmedEvent extends DomainEvent {
@@ -54,6 +58,8 @@ export declare class ValidationApprovedEvent extends DomainEvent {
 export declare class ValidationCorrectionRequestedEvent extends DomainEvent {
 }
 export declare class ValidationSubmittedEvent extends DomainEvent {
+}
+export declare class ValidationMovedToReviewEvent extends DomainEvent {
 }
 export declare class AssayerDocumentVerificationStartedEvent extends DomainEvent {
 }

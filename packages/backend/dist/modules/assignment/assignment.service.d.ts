@@ -3,6 +3,7 @@ import { AssignmentEntity } from './assignment.entity';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
@@ -20,6 +21,7 @@ export interface CreateAssignmentDto {
     proposedFee?: number;
     scheduledDate?: string;
     remarks?: string;
+    autoSchedule?: boolean;
 }
 export interface UpdateAssignmentDetailsDto {
     proposedFee?: number;
@@ -41,6 +43,7 @@ export declare class AssignmentService {
     private readonly projectService;
     private readonly assayerService;
     private readonly notificationService;
+    private readonly notificationDispatch;
     private readonly pushNotificationService;
     private readonly holidayService;
     private readonly auditService;
@@ -49,7 +52,7 @@ export declare class AssignmentService {
     private readonly routingService;
     private readonly validationService;
     private readonly dataSource;
-    constructor(assignmentRepository: Repository<AssignmentEntity>, assessmentRepository: Repository<AssessmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, routingService: RoutingService, validationService: ValidationService, dataSource: DataSource);
+    constructor(assignmentRepository: Repository<AssignmentEntity>, assessmentRepository: Repository<AssessmentEntity>, projectQueryService: ProjectQueryService, projectService: ProjectService, assayerService: AssayerService, notificationService: NotificationService, notificationDispatch: NotificationDispatchService, pushNotificationService: PushNotificationService, holidayService: HolidayService, auditService: AuditService, eventPublisher: DomainEventPublisher, constraintEvaluator: ConstraintEvaluator, routingService: RoutingService, validationService: ValidationService, dataSource: DataSource);
     private syncAssessmentStatus;
     create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity>;
     findOne(id: string): Promise<AssignmentEntity>;
@@ -59,9 +62,11 @@ export declare class AssignmentService {
     acceptOffer(id: string, userId: string, fee?: number, reason?: string): Promise<AssignmentEntity>;
     rejectOffer(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
     cancelAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
+    completeAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
+    escalate(id: string, userId: string, reason?: string): Promise<AssignmentEntity>;
     scheduleAudit(id: string, userId: string, scheduledDate: string, remarks?: string): Promise<AssignmentEntity>;
     private publishAssignmentEvent;
-    findAll(page?: number, limit?: number, status?: string, projectBranchStatus?: string, assessmentStatus?: string): Promise<{
+    findAll(page?: number, limit?: number, status?: string, projectBranchStatus?: string, assessmentStatus?: string, unscheduledOnly?: boolean, priority?: string): Promise<{
         assignments: AssignmentEntity[];
         total: number;
     }>;
@@ -69,6 +74,7 @@ export declare class AssignmentService {
     addComment(assignmentId: string, comment: string, userId: string, userName: string): Promise<AssignmentCommentEntity>;
     getTimeline(assignmentId: string): Promise<any[]>;
     checkSlaBreaches(): Promise<number>;
+    autoDeclineExpiredOffers(): Promise<number>;
     getDashboardSummary(): Promise<any>;
     recordCheckIn(id: string, lat: number, lng: number, syncToken?: string, userId?: string): Promise<{
         success: boolean;

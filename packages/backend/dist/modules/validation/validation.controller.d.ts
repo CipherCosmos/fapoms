@@ -20,7 +20,7 @@ export declare class ValidationController {
         success: boolean;
         data: import("./validation-case.entity").ValidationCaseEntity;
     }>;
-    findAll(page?: number, limit?: number): Promise<{
+    findAll(page?: number, limit?: number, projectBranchId?: string): Promise<{
         success: boolean;
         data: import("./validation-case.entity").ValidationCaseEntity[];
         meta: {

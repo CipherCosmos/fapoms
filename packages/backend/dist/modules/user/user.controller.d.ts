@@ -1,4 +1,5 @@
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
+import { UserStatus } from '@fapoms/shared';
 declare class CreateUserRequestDto implements CreateUserDto {
     username: string;
     email: string;
@@ -11,6 +12,16 @@ declare class CreateUserRequestDto implements CreateUserDto {
 }
 declare class AssignRolesDto {
     roleIds: string[];
+}
+declare class UpdateUserRequestDto implements UpdateUserDto {
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+    departmentId?: string;
+    status?: UserStatus;
+}
+declare class ResetPasswordRequestDto {
+    newPassword: string;
 }
 export declare class UserController {
     private readonly userService;
@@ -45,13 +56,23 @@ export declare class UserController {
         success: boolean;
         data: any;
     }>;
-    update(id: string, dto: UpdateUserDto, req: any): Promise<{
+    update(id: string, dto: UpdateUserRequestDto, req: any): Promise<{
         success: boolean;
         data: any;
     }>;
     assignRoles(id: string, dto: AssignRolesDto, req: any): Promise<{
         success: boolean;
         data: any;
+    }>;
+    unlockAccount(id: string, req: any): Promise<{
+        success: boolean;
+        data: any;
+    }>;
+    resetPassword(id: string, dto: ResetPasswordRequestDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            message: string;
+        };
     }>;
     private sanitizeUser;
 }

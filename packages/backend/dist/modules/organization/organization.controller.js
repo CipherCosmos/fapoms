@@ -18,6 +18,7 @@ const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 const organization_service_1 = require("./organization.service");
 const guards_1 = require("../auth/guards");
+const staff_roles_1 = require("../auth/staff-roles");
 const shared_1 = require("@fapoms/shared");
 class CreateOrganizationRequestDto {
     code;
@@ -171,7 +172,7 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
-    (0, guards_1.RequirePermissions)('organization:update:organization'),
+    (0, guards_1.RequirePermissions)('organization:edit:organization'),
     (0, swagger_1.ApiOperation)({ summary: 'Update an organization' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __param(1, (0, common_1.Body)()),
@@ -196,6 +197,7 @@ exports.OrganizationController = OrganizationController = __decorate([
     (0, swagger_1.ApiTags)('Organizations'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)(guards_1.JwtAuthGuard, guards_1.RolesGuard, guards_1.PermissionsGuard),
+    (0, guards_1.Roles)(...staff_roles_1.STAFF_ROLES),
     (0, common_1.Controller)('organizations'),
     __metadata("design:paramtypes", [organization_service_1.OrganizationService])
 ], OrganizationController);

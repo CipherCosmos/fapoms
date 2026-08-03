@@ -41,6 +41,9 @@ export interface DayPlanCandidate {
     dayStartTime: string;
     dayEndTime: string;
     utilizationPercent: number;
+    totalPackets: number;
+    costPerPacket: number | null;
+    idleHours: number;
     stops: DayPlanStop[];
     clientPreferencesMatch: {
         skillsMatch: boolean;
@@ -61,26 +64,49 @@ export interface BranchCluster {
         branchCode: string;
         latitude: number;
         longitude: number;
+        packetCount: number | null;
         estimatedDurationHours: number;
+        durationFromStaticFallback: boolean;
         district: string;
         city: string;
     }>;
+    totalPackets: number;
     totalEstimatedAuditHours: number;
     feasibleForOneDay: boolean;
+}
+export interface ExcludedDayPlanCandidate {
+    assayerId: string;
+    displayName: string;
+    reason: string;
+    detail?: string;
 }
 export interface ProjectDayPlan {
     projectId: string;
     projectName: string;
     targetDate: string;
+    effectiveMinDistanceKm: number | null;
+    dateAdjustment: {
+        requestedDate: string;
+        reason: string;
+    } | null;
     clusters: Array<{
         cluster: BranchCluster;
         dayPlans: DayPlanCandidate[];
         bestPlan: DayPlanCandidate | null;
+        excludedAssayers: ExcludedDayPlanCandidate[];
     }>;
     unclusteredBranches: Array<{
         branchId: string;
         branchName: string;
         reason: string;
+    }>;
+    underutilizedBranches: Array<{
+        branchId: string;
+        branchName: string;
+        packetCount: number | null;
+        auditHours: number;
+        idleHours: number;
+        note: string;
     }>;
     summary: {
         totalClusters: number;
@@ -88,6 +114,9 @@ export interface ProjectDayPlan {
         totalAssayersNeeded: number;
         estimatedTotalCost: number;
         averageUtilization: number;
+        totalPackets: number;
+        averagePacketsPerDay: number;
+        averageCostPerPacket: number | null;
     };
 }
 export declare class DayPlannerService {
@@ -103,10 +132,14 @@ export declare class DayPlannerService {
     private readonly assayerService;
     private readonly logger;
     constructor(projectBranchRepository: Repository<ProjectBranchEntity>, projectRepository: Repository<ProjectEntity>, branchRepository: Repository<BranchEntity>, assayerRepository: Repository<AssayerEntity>, clientRepository: Repository<ClientEntity>, commercialRepository: Repository<AssayerCommercialProfileEntity>, routingService: RoutingService, recommendationEngine: RecommendationEngine, constraintEvaluator: ConstraintEvaluator, assayerService: AssayerService);
-    generateDayPlans(projectId: string, targetDate?: string): Promise<ProjectDayPlan>;
+    generateDayPlans(projectId: string, targetDate?: string, manualMinDistanceKm?: number): Promise<ProjectDayPlan>;
+    private resolveWorkingDate;
+    private describeDateBlocker;
+    private resolveAuditHours;
     private clusterBranches;
     private buildCluster;
     private splitInfeasibleCluster;
+    private resolveMinDistanceKm;
     private generateClusterDayPlans;
     private globalOptimizeAssignments;
     private minutesToTime;

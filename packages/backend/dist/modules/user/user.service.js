@@ -109,6 +109,12 @@ let UserService = class UserService {
     async updateUser(id, dto, updatedById) {
         const user = await this.findById(id);
         const previousStatus = user.status;
+        if (dto.status && dto.status !== shared_1.UserStatus.ACTIVE && previousStatus === shared_1.UserStatus.ACTIVE) {
+            if (id === updatedById) {
+                throw new common_1.ForbiddenException('You cannot deactivate your own account.');
+            }
+            await this.assertNotLastActiveSuperAdmin(id);
+        }
         if (dto.firstName !== undefined)
             user.firstName = dto.firstName;
         if (dto.lastName !== undefined)
@@ -150,11 +156,69 @@ let UserService = class UserService {
         }
         return saved;
     }
+    async assertNotLastActiveSuperAdmin(excludingUserId) {
+        const count = await this.userRepository
+            .createQueryBuilder('u')
+            .innerJoin('u.roles', 'r')
+            .where('r.name = :name', { name: 'SUPER_ADMINISTRATOR' })
+            .andWhere('u.status = :status', { status: shared_1.UserStatus.ACTIVE })
+            .andWhere('u.id != :id', { id: excludingUserId })
+            .getCount();
+        if (count === 0) {
+            throw new common_1.BadRequestException('At least one active SUPER_ADMINISTRATOR must remain.');
+        }
+    }
+    async unlockAccount(id, actorId) {
+        const user = await this.findById(id);
+        user.failedLoginAttempts = 0;
+        user.lockedUntil = null;
+        if (user.status === shared_1.UserStatus.LOCKED) {
+            user.status = shared_1.UserStatus.ACTIVE;
+        }
+        user.updatedBy = actorId;
+        const saved = await this.userRepository.save(user);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.USER,
+            eventType: 'USER_UNLOCKED',
+            entityType: 'USER',
+            entityId: id,
+            userId: actorId,
+            remarks: `${user.username} unlocked by an administrator`,
+        });
+        return saved;
+    }
+    async resetPassword(id, newPassword, actorId) {
+        const user = await this.findById(id);
+        user.passwordHash = await bcrypt.hash(newPassword, 12);
+        user.failedLoginAttempts = 0;
+        user.lockedUntil = null;
+        if (user.status === shared_1.UserStatus.LOCKED) {
+            user.status = shared_1.UserStatus.ACTIVE;
+        }
+        user.updatedBy = actorId;
+        await this.userRepository.save(user);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.USER,
+            eventType: 'USER_PASSWORD_RESET',
+            entityType: 'USER',
+            entityId: id,
+            userId: actorId,
+            remarks: `Password reset for ${user.username} by an administrator`,
+        });
+    }
     async assignRoles(userId, roleIds, assignedById) {
         const user = await this.findById(userId);
         const roles = await this.roleRepository.find({
             where: { id: (0, typeorm_2.In)(roleIds) }
         });
+        const hadSuperAdmin = user.roles?.some((r) => r.name === 'SUPER_ADMINISTRATOR');
+        const keepsSuperAdmin = roles.some((r) => r.name === 'SUPER_ADMINISTRATOR');
+        if (hadSuperAdmin && !keepsSuperAdmin) {
+            if (userId === assignedById) {
+                throw new common_1.ForbiddenException('You cannot remove your own SUPER_ADMINISTRATOR role.');
+            }
+            await this.assertNotLastActiveSuperAdmin(userId);
+        }
         user.roles = roles;
         user.updatedBy = assignedById;
         const saved = await this.userRepository.save(user);
@@ -181,7 +245,10 @@ let UserService = class UserService {
         return saved;
     }
     async findAllRoles() {
-        return this.roleRepository.find();
+        return this.roleRepository.find({
+            relations: ['permissions'],
+            order: { name: 'ASC' },
+        });
     }
 };
 exports.UserService = UserService;

@@ -11,6 +11,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
+var RecommendationEngine_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RecommendationEngine = exports.RiskScoreCalculator = exports.ProfitabilityScoreCalculator = exports.CustomerDensityScoreCalculator = exports.SLAComplianceScoreCalculator = exports.BranchFamiliarityScoreCalculator = exports.ClientPreferenceScoreCalculator = exports.CostScoreCalculator = exports.ExperienceScoreCalculator = exports.QueryVolumeScoreCalculator = exports.DeliverySpeedScoreCalculator = exports.RejectionAcceptanceScoreCalculator = exports.PerformanceScoreCalculator = exports.WorkloadScoreCalculator = exports.TravelTimeScoreCalculator = exports.DistanceScoreCalculator = exports.RequiredSkillsFilter = exports.RuleEngineEligibilityFilter = exports.ClientEligibilityFilter = exports.ClientRestrictionFilter = exports.ConsecutiveBranchAuditFilter = exports.AvailabilityFilter = void 0;
 const common_1 = require("@nestjs/common");
@@ -28,6 +29,14 @@ const configuration_resolver_1 = require("../platform/configuration/configuratio
 const project_branch_entity_1 = require("../project/project-branch.entity");
 const validation_query_entity_1 = require("../validation-query/validation-query.entity");
 const constraint_evaluator_1 = require("./constraint.evaluator");
+const EXCLUSION_REASONS = {
+    availability: 'Unavailable on this date (already booked, on leave, or inactive)',
+    consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
+    clientRestriction: 'Restricted by this client',
+    clientEligibility: 'Not approved to work for this client',
+    ruleEngineEligibility: 'Blocked by a business rule',
+    requiredSkills: 'Missing a skill or certification this project requires',
+};
 let AvailabilityFilter = class AvailabilityFilter {
     constraintEvaluator;
     name = 'availability';
@@ -73,7 +82,8 @@ let ConsecutiveBranchAuditFilter = class ConsecutiveBranchAuditFilter {
         });
         if (!lastAssignment)
             return true;
-        if (lastAssignment.assayerId === assayer.id) {
+        const locksOutCandidate = [shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.COMPLETED].includes(lastAssignment.status);
+        if (lastAssignment.assayerId === assayer.id && locksOutCandidate) {
             return false;
         }
         return true;
@@ -116,32 +126,70 @@ exports.ClientEligibilityFilter = ClientEligibilityFilter = __decorate([
 ], ClientEligibilityFilter);
 let RuleEngineEligibilityFilter = class RuleEngineEligibilityFilter {
     ruleEngine;
+    assignmentRepository;
     name = 'ruleEngineEligibility';
-    constructor(ruleEngine) {
+    constructor(ruleEngine, assignmentRepository) {
         this.ruleEngine = ruleEngine;
+        this.assignmentRepository = assignmentRepository;
     }
-    async evaluate(assayer, context) {
+    async evaluate(assayerEntity, context) {
+        const assayer = assayerEntity;
+        const activeWorkload = await this.assignmentRepository.count({
+            where: {
+                assayerId: assayer.id,
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.CHECKED_IN, shared_1.AssignmentStatus.IN_PROGRESS]),
+                isActive: true,
+            },
+        });
         const results = await this.ruleEngine.evaluate({
             subject: {
                 id: assayer.id,
                 state: assayer.state,
                 skills: assayer.skills || [],
-                certifications: assayer.certifications || [],
+                certifications: (assayer.certifications || []).map((c) => ({ name: c.name, expiryDate: c.expiryDate ?? undefined })),
             },
             target: {
                 id: context.branch.id,
                 clientId: context.branch.clientId,
             },
             scheduledDate: context.scheduledDate,
+            activeWorkload,
             restrictedAssayers: context.client?.restrictedAssayers,
         });
         return !results.some((r) => !r.passed && r.actionType === 'BLOCK');
+    }
+    async explain(assayerEntity, context) {
+        const assayer = assayerEntity;
+        const activeWorkload = await this.assignmentRepository.count({
+            where: {
+                assayerId: assayer.id,
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.CHECKED_IN, shared_1.AssignmentStatus.IN_PROGRESS]),
+                isActive: true,
+            },
+        });
+        const results = await this.ruleEngine.evaluate({
+            subject: {
+                id: assayer.id,
+                state: assayer.state,
+                skills: assayer.skills || [],
+                certifications: (assayer.certifications || []).map((c) => ({ name: c.name, expiryDate: c.expiryDate ?? undefined })),
+            },
+            target: { id: context.branch.id, clientId: context.branch.clientId },
+            scheduledDate: context.scheduledDate,
+            activeWorkload,
+            restrictedAssayers: context.client?.restrictedAssayers,
+        });
+        return results
+            .filter((r) => !r.passed && r.actionType === 'BLOCK')
+            .map((r) => r.message || 'Blocked by a business rule');
     }
 };
 exports.RuleEngineEligibilityFilter = RuleEngineEligibilityFilter;
 exports.RuleEngineEligibilityFilter = RuleEngineEligibilityFilter = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [rule_engine_1.RuleEngine])
+    __param(1, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
+    __metadata("design:paramtypes", [rule_engine_1.RuleEngine,
+        typeorm_2.Repository])
 ], RuleEngineEligibilityFilter);
 let RequiredSkillsFilter = class RequiredSkillsFilter {
     projectBranchRepository;
@@ -395,7 +443,8 @@ exports.CostScoreCalculator = CostScoreCalculator = __decorate([
 ], CostScoreCalculator);
 let ClientPreferenceScoreCalculator = class ClientPreferenceScoreCalculator {
     name = 'clientPreference';
-    async calculate(assayer, context) {
+    async calculate(assayerEntity, context) {
+        const assayer = assayerEntity;
         let score = 50;
         const isPreferred = context.client?.preferredAssayers?.includes(assayer.id);
         if (isPreferred) {
@@ -462,15 +511,16 @@ let BranchFamiliarityScoreCalculator = class BranchFamiliarityScoreCalculator {
         this.assignmentRepository = assignmentRepository;
     }
     async calculate(assayer, context) {
-        const count = await this.assignmentRepository.count({
+        const priorVisits = await this.assignmentRepository.count({
             where: {
                 assayerId: assayer.id,
-                projectId: context.branch.clientId ? context.branch.clientId : undefined,
-                status: shared_1.AssignmentStatus.ACCEPTED,
+                projectBranch: { branchId: context.branch.id },
+                status: (0, typeorm_2.In)([shared_1.AssignmentStatus.ACCEPTED, shared_1.AssignmentStatus.COMPLETED]),
                 isActive: true,
             },
+            relations: ['projectBranch'],
         });
-        let score = 50 + count * 10;
+        let score = 50 + Math.min(priorVisits, 3) * 15;
         if (context.scheduledDate) {
             const sameDayAssignments = await this.assignmentRepository.find({
                 where: {
@@ -623,6 +673,7 @@ exports.RiskScoreCalculator = RiskScoreCalculator = __decorate([
     (0, common_1.Injectable)()
 ], RiskScoreCalculator);
 let RecommendationEngine = class RecommendationEngine {
+    static { RecommendationEngine_1 = this; }
     availabilityFilter;
     consecutiveBranchAuditFilter;
     clientRestrictionFilter;
@@ -647,11 +698,13 @@ let RecommendationEngine = class RecommendationEngine {
     configResolver;
     assayerRepository;
     clientRepository;
+    assignmentRepository;
     constraintEvaluator;
     assayerService;
+    static logger = new common_1.Logger(RecommendationEngine_1.name);
     filters = [];
     calculators = [];
-    constructor(availabilityFilter, consecutiveBranchAuditFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, rejectionAcceptanceCalculator, deliverySpeedCalculator, queryVolumeCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, customerDensityCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, constraintEvaluator, assayerService) {
+    constructor(availabilityFilter, consecutiveBranchAuditFilter, clientRestrictionFilter, clientEligibilityFilter, ruleEngineEligibilityFilter, requiredSkillsFilter, distanceCalculator, travelTimeCalculator, workloadCalculator, performanceCalculator, rejectionAcceptanceCalculator, deliverySpeedCalculator, queryVolumeCalculator, experienceCalculator, costCalculator, clientPreferenceCalculator, branchFamiliarityCalculator, slaComplianceCalculator, customerDensityCalculator, profitabilityCalculator, riskCalculator, configResolver, assayerRepository, clientRepository, assignmentRepository, constraintEvaluator, assayerService) {
         this.availabilityFilter = availabilityFilter;
         this.consecutiveBranchAuditFilter = consecutiveBranchAuditFilter;
         this.clientRestrictionFilter = clientRestrictionFilter;
@@ -676,10 +729,17 @@ let RecommendationEngine = class RecommendationEngine {
         this.configResolver = configResolver;
         this.assayerRepository = assayerRepository;
         this.clientRepository = clientRepository;
+        this.assignmentRepository = assignmentRepository;
         this.constraintEvaluator = constraintEvaluator;
         this.assayerService = assayerService;
         this.filters.push(this.availabilityFilter, this.consecutiveBranchAuditFilter, this.clientRestrictionFilter, this.clientEligibilityFilter, this.ruleEngineEligibilityFilter, this.requiredSkillsFilter);
         this.calculators.push(this.distanceCalculator, this.travelTimeCalculator, this.workloadCalculator, this.performanceCalculator, this.rejectionAcceptanceCalculator, this.deliverySpeedCalculator, this.queryVolumeCalculator, this.experienceCalculator, this.costCalculator, this.clientPreferenceCalculator, this.branchFamiliarityCalculator, this.slaComplianceCalculator, this.customerDensityCalculator, this.profitabilityCalculator, this.riskCalculator);
+        const unweighted = configuration_resolver_1.ConfigurationResolver.assertWeightsCoverAllCalculators(this.calculators.map((c) => c.name));
+        if (unweighted.length > 0) {
+            RecommendationEngine_1.logger.error(`Scoring calculators registered with no configured weight — they will run on every ` +
+                `recommendation and contribute nothing to the ranking: ${unweighted.join(', ')}. ` +
+                `Add them to DEFAULT_RECOMMENDATION_CONFIG.weights.`);
+        }
     }
     async recommend(branch, scheduledDate, weights = {}) {
         const client = branch.clientId
@@ -693,20 +753,40 @@ let RecommendationEngine = class RecommendationEngine {
             weights: resolvedConfig.weights,
         };
         const assayers = await this.assayerRepository.find({
-            where: { isActive: true, status: 'ACTIVE' },
+            where: { isActive: true, status: shared_1.AssayerStatus.ACTIVE },
         });
         await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+        const pendingOffer = await this.assignmentRepository.findOne({
+            where: {
+                projectBranch: { branchId: branch.id },
+                status: shared_1.AssignmentStatus.PENDING,
+                isActive: true,
+            },
+            relations: ['projectBranch'],
+        });
         const candidates = [];
+        const excluded = [];
         for (const assayer of assayers) {
-            let passed = true;
+            let blockedBy = null;
             for (const filter of this.filters) {
                 if (!(await filter.evaluate(assayer, context))) {
-                    passed = false;
+                    blockedBy = filter.name;
                     break;
                 }
             }
-            if (!passed)
+            if (blockedBy) {
+                let detail;
+                if (blockedBy === this.ruleEngineEligibilityFilter.name) {
+                    detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
+                }
+                excluded.push({
+                    assayerId: assayer.id,
+                    displayName: assayer.displayName,
+                    reason: EXCLUSION_REASONS[blockedBy] ?? blockedBy,
+                    detail,
+                });
                 continue;
+            }
             let weightedSum = 0;
             let totalWeight = 0;
             const scoreBreakdown = {};
@@ -722,16 +802,20 @@ let RecommendationEngine = class RecommendationEngine {
                 assayer,
                 score: parseFloat(finalScore.toFixed(2)),
                 breakdown: scoreBreakdown,
+                pendingOnThisBranch: pendingOffer?.assayerId === assayer.id,
             });
         }
-        return candidates.sort((a, b) => b.score - a.score);
+        const ranked = candidates.sort((a, b) => b.score - a.score);
+        ranked.excluded = excluded;
+        return ranked;
     }
 };
 exports.RecommendationEngine = RecommendationEngine;
-exports.RecommendationEngine = RecommendationEngine = __decorate([
+exports.RecommendationEngine = RecommendationEngine = RecommendationEngine_1 = __decorate([
     (0, common_1.Injectable)(),
     __param(22, (0, typeorm_1.InjectRepository)(assayer_entity_1.AssayerEntity)),
     __param(23, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(24, (0, typeorm_1.InjectRepository)(assignment_entity_1.AssignmentEntity)),
     __metadata("design:paramtypes", [AvailabilityFilter,
         ConsecutiveBranchAuditFilter,
         ClientRestrictionFilter,
@@ -754,6 +838,7 @@ exports.RecommendationEngine = RecommendationEngine = __decorate([
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
         configuration_resolver_1.ConfigurationResolver,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         constraint_evaluator_1.ConstraintEvaluator,

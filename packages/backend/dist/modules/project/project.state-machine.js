@@ -20,7 +20,7 @@ class ProjectStateMachine {
         if (!project.isActive) {
             throw new common_1.BadRequestException('Cannot start scheduling on inactive project.');
         }
-        if (project.status !== shared_1.ProjectStatus.PLANNING) {
+        if (project.status !== shared_1.ProjectStatus.PLANNING && project.status !== shared_1.ProjectStatus.ON_HOLD) {
             throw new common_1.BadRequestException(`Cannot transition project from ${project.status} to SCHEDULING.`);
         }
         const prev = project.status;
@@ -31,7 +31,7 @@ class ProjectStateMachine {
         if (!project.isActive) {
             throw new common_1.BadRequestException('Cannot start execution on inactive project.');
         }
-        if (project.status !== shared_1.ProjectStatus.SCHEDULING) {
+        if (project.status !== shared_1.ProjectStatus.SCHEDULING && project.status !== shared_1.ProjectStatus.ON_HOLD) {
             throw new common_1.BadRequestException(`Cannot transition project from ${project.status} to EXECUTION.`);
         }
         const prev = project.status;
@@ -67,9 +67,37 @@ class ProjectStateMachine {
         if (project.status === shared_1.ProjectStatus.COMPLETED) {
             throw new common_1.BadRequestException('Cannot cancel a completed project.');
         }
+        if (project.status === shared_1.ProjectStatus.ARCHIVED) {
+            throw new common_1.BadRequestException('Cannot cancel an archived project.');
+        }
+        if (project.status === shared_1.ProjectStatus.CANCELLED) {
+            throw new common_1.BadRequestException('Project is already cancelled.');
+        }
         const prev = project.status;
         project.status = shared_1.ProjectStatus.CANCELLED;
         return new domain_events_1.ProjectCancelledEvent(project.id, prev, project.status, userId);
+    }
+    static holdProject(project, userId) {
+        if (!project.isActive) {
+            throw new common_1.BadRequestException('Cannot put an inactive project on hold.');
+        }
+        if (project.status !== shared_1.ProjectStatus.SCHEDULING && project.status !== shared_1.ProjectStatus.EXECUTION) {
+            throw new common_1.BadRequestException(`Cannot transition project from ${project.status} to ON_HOLD.`);
+        }
+        const prev = project.status;
+        project.status = shared_1.ProjectStatus.ON_HOLD;
+        return new domain_events_1.ProjectOnHoldEvent(project.id, prev, project.status, userId);
+    }
+    static archiveProject(project, userId) {
+        if (!project.isActive) {
+            throw new common_1.BadRequestException('Cannot archive an inactive project.');
+        }
+        if (project.status !== shared_1.ProjectStatus.COMPLETED) {
+            throw new common_1.BadRequestException(`Cannot transition project from ${project.status} to ARCHIVED.`);
+        }
+        const prev = project.status;
+        project.status = shared_1.ProjectStatus.ARCHIVED;
+        return new domain_events_1.ProjectArchivedEvent(project.id, prev, project.status, userId);
     }
 }
 exports.ProjectStateMachine = ProjectStateMachine;

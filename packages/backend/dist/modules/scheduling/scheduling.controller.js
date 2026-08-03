@@ -134,7 +134,7 @@ __decorate([
 ], SchedulingController.prototype, "create", null);
 __decorate([
     (0, common_1.Get)(),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.DOCUMENT_EXECUTIVE),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.DOCUMENT_EXECUTIVE, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.READ_ONLY_AUDITOR),
     (0, swagger_1.ApiOperation)({ summary: 'List all active schedules' }),
     __param(0, (0, common_1.Query)('page')),
     __param(1, (0, common_1.Query)('limit')),
@@ -147,7 +147,7 @@ __decorate([
 ], SchedulingController.prototype, "findAll", null);
 __decorate([
     (0, common_1.Get)(':id'),
-    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.DOCUMENT_EXECUTIVE),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER, shared_1.SystemRole.OPERATIONS_EXECUTIVE, shared_1.SystemRole.DOCUMENT_EXECUTIVE, shared_1.SystemRole.HR_MANAGER, shared_1.SystemRole.READ_ONLY_AUDITOR),
     (0, swagger_1.ApiOperation)({ summary: 'Get details for a single schedule by ID' }),
     __param(0, (0, common_1.Param)('id', common_1.ParseUUIDPipe)),
     __metadata("design:type", Function),

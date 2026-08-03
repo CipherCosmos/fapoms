@@ -32,6 +32,14 @@ __decorate([
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
 ], LoginDto.prototype, "password", void 0);
+class VerifyAssayerDto {
+    identifier;
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], VerifyAssayerDto.prototype, "identifier", void 0);
 class RefreshDto {
     refreshToken;
 }
@@ -41,17 +49,24 @@ __decorate([
     __metadata("design:type", String)
 ], RefreshDto.prototype, "refreshToken", void 0);
 class BiometricLoginDto {
-    assayerCode;
+    refreshToken;
 }
 __decorate([
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
-], BiometricLoginDto.prototype, "assayerCode", void 0);
+], BiometricLoginDto.prototype, "refreshToken", void 0);
 let AuthController = class AuthController {
     authService;
     constructor(authService) {
         this.authService = authService;
+    }
+    async verifyAssayer(dto) {
+        const found = await this.authService.verifyAssayerIdentifier(dto.identifier);
+        return {
+            success: true,
+            data: found ? { verified: true, displayName: found.displayName, assayerCode: found.assayerCode } : { verified: false },
+        };
     }
     async status() {
         return {
@@ -85,7 +100,7 @@ let AuthController = class AuthController {
     async biometricLogin(dto, req) {
         const ipAddress = req.ip || req.connection?.remoteAddress;
         const userAgent = req.headers['user-agent'];
-        const result = await this.authService.biometricLogin(dto.assayerCode, ipAddress, userAgent);
+        const result = await this.authService.biometricLogin(dto.refreshToken, ipAddress, userAgent);
         return {
             success: true,
             data: {
@@ -123,6 +138,15 @@ let AuthController = class AuthController {
 };
 exports.AuthController = AuthController;
 __decorate([
+    (0, common_1.Post)('verify-assayer'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    (0, swagger_1.ApiOperation)({ summary: 'Check an assayer identifier exists (pre-login, no credentials returned)' }),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [VerifyAssayerDto]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "verifyAssayer", null);
+__decorate([
     (0, common_1.Get)('status'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     (0, swagger_1.ApiOperation)({ summary: 'Check API and database connectivity status' }),
@@ -143,7 +167,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('biometric-login'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, swagger_1.ApiOperation)({ summary: 'Biometric/assayer-code login without password (for mobile)' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Resume a session via biometric unlock — redeems a refresh token from a prior real login (for mobile)' }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __metadata("design:type", Function),

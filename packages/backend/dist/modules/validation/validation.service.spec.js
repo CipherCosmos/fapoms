@@ -95,5 +95,55 @@ describe('ValidationService', () => {
             await expect(service.assign('v-1', 'reviewer-1', 'user-1')).rejects.toThrow(common_1.BadRequestException);
         });
     });
+    describe('moveToReview', () => {
+        it('advances a fresh PENDING case to HUMAN_REVIEW', async () => {
+            const mockCase = { id: 'v-1', status: shared_1.ValidationStatus.PENDING, projectBranch: {}, assessment: null };
+            mockValidationCaseRepo.findOne.mockResolvedValue(mockCase);
+            mockValidationCaseRepo.save.mockImplementation(async (c) => c);
+            const result = await service.moveToReview('v-1', 'user-1', 'ready');
+            expect(result.status).toBe(shared_1.ValidationStatus.HUMAN_REVIEW);
+        });
+        it('advances CORRECTION_REQUIRED back to HUMAN_REVIEW — the loop that was previously dead', async () => {
+            const mockCase = { id: 'v-1', status: shared_1.ValidationStatus.CORRECTION_REQUIRED, projectBranch: {}, assessment: null };
+            mockValidationCaseRepo.findOne.mockResolvedValue(mockCase);
+            mockValidationCaseRepo.save.mockImplementation(async (c) => c);
+            const result = await service.moveToReview('v-1', 'user-1');
+            expect(result.status).toBe(shared_1.ValidationStatus.HUMAN_REVIEW);
+        });
+        it('refuses to move an already-terminal APPROVED case back to review', async () => {
+            const mockCase = { id: 'v-1', status: shared_1.ValidationStatus.APPROVED };
+            mockValidationCaseRepo.findOne.mockResolvedValue(mockCase);
+            await expect(service.moveToReview('v-1', 'user-1')).rejects.toThrow(common_1.BadRequestException);
+        });
+    });
+    describe('transition', () => {
+        it('routes a HUMAN_REVIEW target through moveToReview rather than rejecting it', async () => {
+            const mockCase = { id: 'v-1', status: shared_1.ValidationStatus.PENDING, projectBranch: {}, assessment: null };
+            mockValidationCaseRepo.findOne.mockResolvedValue(mockCase);
+            mockValidationCaseRepo.save.mockImplementation(async (c) => c);
+            const result = await service.transition('v-1', shared_1.ValidationStatus.HUMAN_REVIEW, 'user-1');
+            expect(result.status).toBe(shared_1.ValidationStatus.HUMAN_REVIEW);
+        });
+    });
+    describe('getOrAdvanceForHandBack', () => {
+        it('creates a case for a branch seeing its first hand-back, and moves it to HUMAN_REVIEW', async () => {
+            mockValidationCaseRepo.findOne
+                .mockResolvedValueOnce(null)
+                .mockResolvedValueOnce({ id: 'v-new', status: shared_1.ValidationStatus.PENDING, projectBranch: {}, assessment: null })
+                .mockResolvedValueOnce({ id: 'v-new', status: shared_1.ValidationStatus.PENDING, projectBranch: {}, assessment: null });
+            mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', projectId: 'proj-1', branchId: 'branch-1' });
+            mockValidationCaseRepo.create.mockImplementation((v) => v);
+            mockValidationCaseRepo.save.mockImplementation(async (c) => ({ id: 'v-new', ...c }));
+            const result = await service.getOrAdvanceForHandBack('pb-1', null, 'user-1');
+            expect(result.status).toBe(shared_1.ValidationStatus.HUMAN_REVIEW);
+        });
+        it('leaves an already-ASSIGNED case alone rather than forcing it back to review', async () => {
+            const existing = { id: 'v-1', projectBranchId: 'pb-1', status: shared_1.ValidationStatus.ASSIGNED };
+            mockValidationCaseRepo.findOne.mockResolvedValue(existing);
+            const result = await service.getOrAdvanceForHandBack('pb-1', null, 'user-1');
+            expect(result.status).toBe(shared_1.ValidationStatus.ASSIGNED);
+            expect(mockValidationCaseRepo.save).not.toHaveBeenCalled();
+        });
+    });
 });
 //# sourceMappingURL=validation.service.spec.js.map
