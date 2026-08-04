@@ -1,45 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
 import { Search } from 'lucide-react';
-import { api } from '../services/api';
-
-interface SearchResult {
-  branches: { id: string; name: string; code: string; city: string; state: string }[];
-  assayers: { id: string; name: string; code: string; phone: string }[];
-  projects: { id: string; name: string; projectNumber: string }[];
-  clients: { id: string; name: string; code: string }[];
-  assignments: { id: string; assignmentNumber: string; branchName: string; assayerName: string }[];
-}
+import { useGlobalSearch } from '../hooks/useGlobalSearch';
 
 export const GlobalSearch: React.FC = () => {
-  const navigate = useNavigate();
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult | null>(null);
+  const { query, setQuery, results, loading, navigateTo, totalCount } = useGlobalSearch();
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  const doSearch = useCallback(async (q: string) => {
-    if (!q || q.length < 1) { setResults(null); return; }
-    setLoading(true);
-    try {
-      const data = await api.request<any>(`/search?q=${encodeURIComponent(q)}`);
-      setResults(data);
-    } catch {}
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query) {
-      debounceRef.current = setTimeout(() => doSearch(query), 300);
-    } else {
-      setResults(null);
-    }
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query, doSearch]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -60,22 +26,8 @@ export const GlobalSearch: React.FC = () => {
 
   const handleSelect = (type: string, id: string) => {
     setOpen(false);
-    setQuery('');
-    setResults(null);
-    const paths: Record<string, string> = {
-      branches: `/branches?id=${id}`,
-      assayers: `/assayers/${id}`,
-      projects: `/projects?id=${id}`,
-      clients: `/clients?id=${id}`,
-      assignments: `/assignments?id=${id}`,
-    };
-    navigate(paths[type] || '/');
+    navigateTo(type, id);
   };
-
-  const totalCount = results
-    ? results.branches.length + results.assayers.length + results.projects.length +
-      results.clients.length + results.assignments.length
-    : 0;
 
   const section = (title: string, type: string, items: any[], render: (item: any) => string) => {
     if (!items.length) return null;
@@ -104,7 +56,6 @@ export const GlobalSearch: React.FC = () => {
       <div style={{ position: 'relative' }}>
         <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
         <input
-          ref={inputRef}
           type="text"
           placeholder="Search... (⌘K)"
           value={query}

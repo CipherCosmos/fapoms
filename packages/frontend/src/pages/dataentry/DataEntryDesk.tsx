@@ -8,6 +8,7 @@ import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { SystemRole } from '@fapoms/shared';
 import { CaseWorkspace } from './CaseWorkspace';
+import { userMessage } from '../../services/errors';
 
 /**
  * Data entry and validation, as one board.
@@ -46,8 +47,8 @@ type DocLane = 'unallocated' | 'working';
 type CaseLane = 'review' | 'approved' | 'submitted';
 
 const DOC_LANES: { key: DocLane; label: string; hint: string; tone: string }[] = [
-  { key: 'unallocated', label: 'Waiting to allocate', hint: 'Returned by the assayer, nobody working it yet', tone: 'var(--warning)' },
-  { key: 'working', label: 'Being worked', hint: 'Delegated and in progress', tone: 'var(--accent)' },
+  { key: 'unallocated', label: 'Waiting to assign', hint: 'Returned by the assayer, nobody working it yet', tone: 'var(--warning)' },
+  { key: 'working', label: 'Being worked', hint: 'Assigned and in progress', tone: 'var(--accent)' },
 ];
 const CASE_LANES: { key: CaseLane; label: string; hint: string; tone: string; statuses: string[] }[] = [
   { key: 'review', label: 'In review', hint: 'With the head — approve, or send back with a note', tone: 'var(--warning)', statuses: ['HUMAN_REVIEW', 'CORRECTION_REQUIRED'] },
@@ -80,13 +81,15 @@ export const DataEntryDesk: React.FC = () => {
   const [mineOnly, setMineOnly] = useState(!isHead);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [selCases, setSelCases] = useState<Set<string>>(new Set());
+  const [bulkMsg, setBulkMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const openBranchId = params.get('branch');
 
   const load = useCallback(() => {
     api.request<Queue>(mineOnly ? '/documents/data-entry/mine' : '/documents/data-entry/queue')
       .then(setQueue)
-      .catch((e) => setErr((e as Error).message));
+      .catch((e) => setErr(userMessage(e)));
     api.request<CaseRow[]>('/validation?limit=200')
       .then((r) => setCases(Array.isArray(r) ? r : []))
       .catch(() => setCases([]));
@@ -110,7 +113,7 @@ export const DataEntryDesk: React.FC = () => {
     try {
       await api.request(`/documents/${docId}/assign-data-entry`, { method: 'POST', body: JSON.stringify({ assigneeId }) });
       load();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(null);
   };
 
@@ -119,7 +122,7 @@ export const DataEntryDesk: React.FC = () => {
     try {
       await api.request(`/documents/${docId}/complete-data-entry`, { method: 'POST' });
       load();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(null);
   };
 
@@ -171,6 +174,41 @@ export const DataEntryDesk: React.FC = () => {
     if (d.projectBranchId) setParams({ branch: d.projectBranchId }, { replace: false });
   };
 
+  const toggleCase = (id: string) => setSelCases((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAllReview = () => setSelCases((prev) => {
+    const inReview = casesByLane.review.map((c) => c.id);
+    const allSelected = inReview.every((id) => prev.has(id));
+    const next = new Set(prev);
+    inReview.forEach((id) => (allSelected ? next.delete(id) : next.add(id)));
+    return next;
+  });
+
+  const bulkDecide = async (target: 'APPROVED' | 'CORRECTION_REQUIRED') => {
+    if (selCases.size === 0) return;
+    setBulkMsg(null);
+    setBusy('__bulk__');
+    try {
+      const res = await api.request<{ succeeded: number; failed: string[] }>('/validation/bulk/transition', {
+        method: 'POST',
+        body: JSON.stringify({ ids: Array.from(selCases), targetStatus: target }),
+      });
+      const s = res.succeeded ?? 0;
+      const f = res.failed ?? [];
+      setBulkMsg(f.length
+        ? { type: 'error', text: `${s} updated · ${f.length} failed: ${f.join('; ')}` }
+        : { type: 'success', text: `${s} ${target === 'APPROVED' ? 'approved' : 'sent back for rework'}` });
+      setSelCases(new Set());
+      load();
+    } catch (e) {
+      setBulkMsg({ type: 'error', text: userMessage(e) });
+    }
+    setBusy(null);
+  };
+
   if (openBranchId) {
     return (
       <div style={{ padding: '16px 20px' }}>
@@ -188,7 +226,7 @@ export const DataEntryDesk: React.FC = () => {
         <div>
           <h1 style={{ fontSize: '21px', fontWeight: 700, margin: 0 }}>Data entry &amp; validation</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '3px' }}>
-            Returned packets end to end: delegate, process, review, approve, submit.
+            Returned packets end to end: assign, process, review, approve, submit.
           </p>
         </div>
         {isHead && (
@@ -207,7 +245,7 @@ export const DataEntryDesk: React.FC = () => {
 
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', margin: '16px 0' }}>
         <Stat icon={<Inbox size={15} />} value={queue?.total ?? 0} caption="At the desk" />
-        <Stat icon={<UserPlus size={15} />} value={queue?.unassigned ?? 0} caption="Waiting to allocate" tone={(queue?.unassigned ?? 0) > 0 ? 'var(--warning)' : undefined} />
+        <Stat icon={<UserPlus size={15} />} value={queue?.unassigned ?? 0} caption="Waiting to assign" tone={(queue?.unassigned ?? 0) > 0 ? 'var(--warning)' : undefined} />
         <Stat icon={<FileText size={15} />} value={casesByLane.review.length} caption="In review" tone={casesByLane.review.length ? 'var(--warning)' : undefined} />
         <Stat icon={<CheckCircle2 size={15} />} value={casesByLane.approved.length} caption="Approved" tone={casesByLane.approved.length ? 'var(--success)' : undefined} />
         <Stat icon={<SubmitIcon size={15} />} value={casesByLane.submitted.length} caption="Submitted" />
@@ -246,7 +284,7 @@ export const DataEntryDesk: React.FC = () => {
                     {isHead && lane.key === 'unallocated' && (
                       <select defaultValue="" disabled={busy === d.id} onChange={(e) => assign(d.id, e.target.value)}
                         style={{ padding: '5px 8px', fontSize: '11.5px', borderRadius: '6px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                        <option value="">Delegate to…</option>
+                        <option value="">Assign to…</option>
                         {team.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                     )}
@@ -269,6 +307,26 @@ export const DataEntryDesk: React.FC = () => {
         {CASE_LANES.map((lane) => (
           <section key={lane.key} style={card}>
             <LaneHeader tone={lane.tone} label={lane.label} hint={lane.hint} count={casesByLane[lane.key].length} />
+            {lane.key === 'review' && isHead && casesByLane[lane.key].length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingBottom: '8px', borderBottom: '1px solid var(--border-hair)', marginBottom: '6px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={casesByLane.review.length > 0 && casesByLane.review.every((c) => selCases.has(c.id))} onChange={toggleAllReview} />
+                  Select all
+                </label>
+                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>{selCases.size} selected</span>
+                <button onClick={() => bulkDecide('APPROVED')} disabled={selCases.size === 0 || busy === '__bulk__'} className="btn btn-primary" style={{ fontSize: '11.5px', padding: '4px 10px' }}>
+                  {busy === '__bulk__' ? 'Saving…' : 'Approve selected'}
+                </button>
+                <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={selCases.size === 0 || busy === '__bulk__'} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '4px 10px' }}>
+                  Send back for rework
+                </button>
+              </div>
+            )}
+            {bulkMsg && (
+              <div style={{ marginBottom: '8px', padding: '7px 10px', borderRadius: '7px', fontSize: '12px', background: bulkMsg.type === 'success' ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)', color: bulkMsg.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>
+                {bulkMsg.text}
+              </div>
+            )}
             {casesByLane[lane.key].length === 0 ? (
               <Empty />
             ) : casesByLane[lane.key].map((c) => {
@@ -276,7 +334,12 @@ export const DataEntryDesk: React.FC = () => {
               const branch = c.projectBranch?.branch;
               return (
                 <div key={c.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border-hair)' }}>
-                  <div style={{ fontSize: '12.5px', fontWeight: 600 }}>{branch?.name ?? 'Branch'}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                    {lane.key === 'review' && isHead && (
+                      <input type="checkbox" checked={selCases.has(c.id)} onChange={() => toggleCase(c.id)} style={{ cursor: 'pointer' }} />
+                    )}
+                    <div style={{ fontSize: '12.5px', fontWeight: 600 }}>{branch?.name ?? 'Branch'}</div>
+                  </div>
                   <div style={{ ...label, marginTop: '2px' }}>{branch?.branchCode ?? '—'}</div>
                   {open.length > 0 && <OpenQueryChip count={open.length} onClick={() => openWorkspaceForCase(c)} />}
                   <div style={{ marginTop: '8px' }}>

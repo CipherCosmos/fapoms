@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
 import { Priority, ProjectBranchStatus } from '@fapoms/shared';
-import { branchStatusLabel } from '../utils/statusLabels';
+import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
@@ -10,7 +10,7 @@ import { useSocket } from '../hooks/useSocket';
 import { connectSocket } from '../services/socket';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
-import { useToast } from '../components/ui';
+import { useToast, Modal } from '../components/ui';
 
 interface ProjectOption {
   id: string;
@@ -710,7 +710,7 @@ export const PlanningWorkspace: React.FC = () => {
   const [scheduledAuditDate, setScheduledAuditDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    return localDateKey(d);
   });
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -745,7 +745,7 @@ export const PlanningWorkspace: React.FC = () => {
   const [dayPlanTargetDate, setDayPlanTargetDate] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    return localDateKey(d);
   });
   const [dayPlanAssigning, setDayPlanAssigning] = useState<string | null>(null);
 
@@ -1033,7 +1033,7 @@ export const PlanningWorkspace: React.FC = () => {
       'Priority': b.priority || '',
       'Zone ID': b.zoneId || '',
       'Status': b.status,
-      'Audit Coverage Possible': ['ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED'].includes(b.status) ? 'YES' : 'NO (Uncovered)',
+      'Audit Coverage Possible': BRANCH_COVERED_STATUSES.includes(b.status as ProjectBranchStatus) ? 'YES' : 'NO (Uncovered)',
       'Assigned Assayer': b.assignment?.assayer?.displayName || 'Unassigned',
       'Assignment Status': b.assignment?.status || '—',
       'Proposed Fee (₹)': b.assignment?.proposedFee ?? '—',
@@ -1065,7 +1065,7 @@ export const PlanningWorkspace: React.FC = () => {
   });
   const selectedPb = branches.find(b => b.id === selectedBranchId);
   const totalCount = branches.length;
-  const confirmedCount = branches.filter(b => b.status === 'ASSIGNMENT_CONFIRMED' || b.status === 'SCHEDULED').length;
+  const confirmedCount = branches.filter(b => BRANCH_COVERED_STATUSES.includes(b.status as ProjectBranchStatus)).length;
   const coveragePct = totalCount > 0 ? Number(((confirmedCount / totalCount) * 100).toFixed(1)) : 0;
 
   const layoutMode = localStorage.getItem('planning_layout') || 'default';
@@ -1657,14 +1657,14 @@ export const PlanningWorkspace: React.FC = () => {
 
       {/* ── Negotiation Modal ── */}
       {showNegotiationModal && selectedCandidate && selectedPb && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <form onSubmit={handleConfirmAssignment} className="glass-card" style={{ width: '580px', display: 'flex', flexDirection: 'column', gap: '20px', padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Confirm Assignment</h4>
-              <button type="button" onClick={() => setShowNegotiationModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={18} /></button>
-            </div>
-
-            {/* Assayer Summary */}
+        <Modal open onClose={() => setShowNegotiationModal(false)} title="Confirm Assignment" width="580px" asForm onSubmit={handleConfirmAssignment} bodyStyle={{ padding: '24px' }} footer={
+          <>
+            <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Check size={14} /> Confirm Commitment
+            </button>
+          </>
+        }>            {/* Assayer Summary */}
             <div style={{ display: 'flex', gap: '14px', padding: '14px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
               <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', fontSize: '17px', fontWeight: 700, flexShrink: 0 }}>
                 {selectedCandidate.displayName.charAt(0).toUpperCase()}
@@ -1758,29 +1758,13 @@ export const PlanningWorkspace: React.FC = () => {
                 </span>
               </label>
             </div>
-
-            {/* Action buttons */}
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-              <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
-              <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Check size={14} /> Confirm Commitment
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+          </Modal>
+        )}
 
       {/* ── Assayer Detail Modal ── */}
       {showAssayerDetailModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 101 }}>
-          <div className="glass-card" style={{ width: '800px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', padding: '24px', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexShrink: 0 }}>
-              <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Assayer Details</h4>
-              <button onClick={() => { setShowAssayerDetailModal(false); setDetailAssayer(null); setDetailRemarks([]); }}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={18} /></button>
-            </div>
-
-            <div style={{ overflowY: 'auto', flex: 1, paddingRight: '4px' }}>
+        <Modal open onClose={() => { setShowAssayerDetailModal(false); setDetailAssayer(null); setDetailRemarks([]); }} title="Assayer Details" width="800px" maxHeight="90vh" bodyStyle={{ padding: '0 4px 0 0' }}>
+            <div style={{ overflowY: 'auto', paddingRight: '4px' }}>
               {loadingDetail ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading assayer details...</div>
               ) : !detailAssayer ? (
@@ -1997,9 +1981,8 @@ export const PlanningWorkspace: React.FC = () => {
                 </>
               )}
             </div>
-          </div>
-        </div>
-      )}
+          </Modal>
+        )}
 
       {/* ── Layout: Day Plans (Multi-Branch Cluster View) ── */}
       {layout === 'day-plans' && (
@@ -2014,7 +1997,7 @@ export const PlanningWorkspace: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}>
                 <Calendar size={12} />
-                <input type="date" value={dayPlanTargetDate} min={new Date().toISOString().split('T')[0]}
+                <input type="date" value={dayPlanTargetDate} min={todayDateKey()}
                   onChange={(e) => setDayPlanTargetDate(e.target.value)}
                   style={{ padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontSize: '11px', outline: 'none' }} />
               </label>

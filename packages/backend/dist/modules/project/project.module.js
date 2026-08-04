@@ -18,6 +18,7 @@ const assessment_entity_1 = require("./assessment.entity");
 const call_log_entity_1 = require("./call-log.entity");
 const client_entity_1 = require("../client/client.entity");
 const user_entity_1 = require("../user/user.entity");
+const zone_entity_1 = require("../zone/zone.entity");
 const platform_module_1 = require("../platform/platform.module");
 const branch_module_1 = require("../branch/branch.module");
 let ProjectModule = class ProjectModule {
@@ -26,7 +27,7 @@ exports.ProjectModule = ProjectModule;
 exports.ProjectModule = ProjectModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            typeorm_1.TypeOrmModule.forFeature([project_entity_1.ProjectEntity, project_branch_entity_1.ProjectBranchEntity, assessment_entity_1.AssessmentEntity, call_log_entity_1.CallLogEntity, client_entity_1.ClientEntity, user_entity_1.UserEntity]),
+            typeorm_1.TypeOrmModule.forFeature([project_entity_1.ProjectEntity, project_branch_entity_1.ProjectBranchEntity, assessment_entity_1.AssessmentEntity, call_log_entity_1.CallLogEntity, client_entity_1.ClientEntity, user_entity_1.UserEntity, zone_entity_1.ZoneEntity]),
             platform_module_1.PlatformModule,
             branch_module_1.BranchModule,
         ],

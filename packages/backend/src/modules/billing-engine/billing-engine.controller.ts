@@ -45,6 +45,15 @@ class TransitionEntryDto {
   @IsOptional() @IsString() reason?: string;
 }
 
+class BulkTransitionEntriesDto {
+  @IsArray() @IsNotEmpty()
+  @IsUUID('4', { each: true })
+  entryIds: string[];
+
+  @IsEnum(BillingState) status: BillingState;
+  @IsOptional() @IsString() reason?: string;
+}
+
 class AdjustEntryDto {
   @IsNumber() delta: number;
   @IsString() @IsNotEmpty() reason: string;
@@ -190,6 +199,13 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'Get a billing entry' })
   async getEntry(@Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.service.getEntry(id) };
+  }
+
+  @Patch('entries/state')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Transition a batch of billing entries to a target state' })
+  async bulkTransitionEntries(@Body() dto: BulkTransitionEntriesDto, @Req() req: any) {
+    return { success: true, data: await this.service.bulkTransitionEntries(dto.entryIds, dto.status, req.user.id, dto.reason) };
   }
 
   @Patch('entries/:id/state')

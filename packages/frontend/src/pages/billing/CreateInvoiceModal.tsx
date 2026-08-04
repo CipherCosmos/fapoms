@@ -4,6 +4,7 @@ import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useCreateBillingInvoice } from '../../hooks/useBilling';
 import { useClientsList } from '../../hooks/useClients';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { InvoiceType } from '@fapoms/shared';
 
 const TYPES = Object.values(InvoiceType);
@@ -30,8 +31,8 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
     if (!cid) { setEntries([]); setSelectedIds([]); return; }
     setLoadingEntries(true);
     try {
-      const res = await api.request<{ data: ApprovedEntry[] }>(`/billing-engine/entries?clientId=${cid}&state=APPROVED`);
-      setEntries(res.data ?? []);
+      const res = await api.request<ApprovedEntry[]>(`/billing-engine/entries?clientId=${cid}&state=APPROVED`);
+      setEntries(res ?? []);
       setSelectedIds([]);
     } catch {
       setEntries([]); setSelectedIds([]);
@@ -54,7 +55,7 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
       });
       toast('success', 'Invoice created');
       onClose();
-    } catch (err: any) { toast('error', err?.message || 'Failed to create invoice'); }
+    } catch (err: any) { toast({ type: 'error', title: 'Failed to create invoice', message: userMessage(err) }); }
   };
 
   const selStyle: React.CSSProperties = {

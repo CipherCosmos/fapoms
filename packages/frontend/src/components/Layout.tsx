@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, CalendarDays, ClipboardList, Menu } from 'lucide-react';
+import { LayoutDashboard, Map, CalendarDays, ClipboardList } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { Sidebar } from './Sidebar';
 import { SearchOverlay } from './SearchOverlay';
 import { Header } from './Header';
+import { MenuToggle } from './ui/MenuToggle';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -15,6 +16,14 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+
+  const toggleSidebar = () => {
+    if (window.matchMedia('(max-width: 1024px)').matches) {
+      setMobileDrawerOpen((o) => !o);
+    } else {
+      setSidebarCollapsed((c) => !c);
+    }
+  };
 
   return (
     <div className="app-container" style={{ '--sidebar-width': sidebarCollapsed ? '64px' : '260px' } as React.CSSProperties}>
@@ -30,15 +39,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
         <Sidebar
           user={user}
           collapsed={sidebarCollapsed && !mobileDrawerOpen}
-          onToggle={() => setSidebarCollapsed((c) => !c)}
-          onLogout={onLogout}
         />
       </div>
 
       <div className="main-area" style={{ display: 'flex', flexDirection: 'column', padding: 0 }}>
         <Header
+          user={user}
           onLogout={onLogout}
-          onToggleSidebar={() => setMobileDrawerOpen((o) => !o)}
+          onToggleSidebar={toggleSidebar}
         />
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px', paddingBottom: '70px' }}>
           {children}
@@ -62,10 +70,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
             <ClipboardList size={18} />
             <span>Execution</span>
           </NavLink>
-          <button onClick={() => setMobileDrawerOpen(true)} className="mobile-nav-item" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <Menu size={18} />
-            <span>Menu</span>
-          </button>
+          <MenuToggle onClick={() => setMobileDrawerOpen(true)} label="Menu" className="mobile-nav-item" style={{ flex: 1 }} />
         </nav>
       </div>
       <SearchOverlay />

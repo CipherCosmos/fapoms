@@ -3,8 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, In } from 'typeorm';
 import * as xlsx from 'xlsx';
 import * as bcrypt from 'bcrypt';
-import * as fs from 'fs';
-import * as path from 'path';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
@@ -17,84 +15,116 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
-
-// Shared with the branch geocoder: one cache means a district or pincode looked up
-// for a branch is free when an assayer in the same place is imported.
-const GEO_CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
-let geoCache: Record<string, { lat: number; lng: number }> = {};
-try {
-  if (fs.existsSync(GEO_CACHE_FILE)) geoCache = JSON.parse(fs.readFileSync(GEO_CACHE_FILE, 'utf8'));
-} catch { /* start with an empty cache */ }
-function saveGeoCache() {
-  try { fs.writeFileSync(GEO_CACHE_FILE, JSON.stringify(geoCache, null, 2), 'utf8'); } catch { /* non-fatal */ }
-}
+import { geocodeIndia } from '../geo/india-geocoder';
 
 /**
- * Resolves an assayer's home coordinates.
- *
- * Previously this built a single hyper-specific query — the full door-number
- * street address plus city plus district plus state — which Nominatim cannot
- * match for a residential address, so it returned null for essentially every
- * assayer and the caller silently substituted a hardcoded Mumbai coordinate.
- * The result looked like real data: 25 assayers all sitting on one pin, every
- * distance calculation wrong, and every distance-based filter and score in the
- * recommendation engine operating on fiction.
- *
- * Now it narrows progressively, matching how the branch geocoder already works:
- * a 6-digit pincode is the most precise thing a residential address reliably
- * carries, then locality, then district, then state. The first hit wins, so a
- * pincode gives a genuinely pin-point location and the wider queries only act as
- * a floor. Results are cached on disk because Nominatim is rate-limited to
- * roughly one request per second.
- *
- * Returns null when nothing resolves. The caller must treat that as "unknown"
- * rather than inventing a location.
+ * Resolves an assayer's home coordinates, delegating to the shared robust
+ * geocoder: it tries many formulations of the address, ranks results by how
+ * spatially precise they are (buildings/roads over coarse region centroids),
+ * rejects out-of-state and absurdly-far-away hits using the pincode as an
+ * anchor (so a wrong or partially-typed address still lands in the right
+ * locality rather than on a ~30km-away landmark), and falls back to the
+ * pincode centroid. Returns null only when nothing resolves — the caller must
+ * treat that as "unknown" rather than inventing a location.
  */
 async function geocodeAddress(
   address: string,
   city: string,
   district: string,
   state: string,
-): Promise<{ lat: number; lng: number } | null> {
-  const pincode = (address || '').match(/\b\d{6}\b/)?.[0] ?? null;
+  pincode?: string | null,
+): Promise<{ lat: number; lng: number; accuracyMeters: number } | null> {
+  return geocodeIndia(address, city, district, state, pincode);
+}
 
-  const queries = [
-    pincode ? `${pincode}, India` : null,
-    city && district ? `${city}, ${district}, ${state}, India` : null,
-    city ? `${city}, ${state}, India` : null,
-    district ? `${district}, ${state}, India` : null,
-    state ? `${state}, India` : null,
-  ].filter((q): q is string => !!q && q.trim().length > 6);
-
-  for (const q of queries) {
-    const key = q.replace(/\s+/g, ' ').trim();
-    if (geoCache[key]) return geoCache[key];
-
-    // Nominatim's usage policy is ~1 req/sec; exceeding it gets the caller blocked.
-    await new Promise((r) => setTimeout(r, 1100));
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(key)}&format=json&limit=1&countrycodes=in`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)' },
-      });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const data = (await res.json()) as any[];
-        if (data?.[0]) {
-          const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-          geoCache[key] = coords;
-          saveGeoCache();
-          return coords;
-        }
-      }
-    } catch {
-      // Try the next, broader query rather than failing the whole import.
-    }
+/**
+ * Returns the authoritative state and district a 6-digit Indian pincode belongs
+ * to, asking the same geocoder the coordinates come from (so the validation and
+ * the pin always agree). Used to stop the classic silent mistake: an address
+ * that says one place while state/district/city/pincode say another.
+ *
+ * Returns null when the pincode can't be verified — the caller must then skip
+ * the check rather than invent one.
+ */
+async function fetchPincodeAuthority(
+  pincode: string,
+): Promise<{ state: string; district: string } | null> {
+  if (!/^\d{6}$/.test(pincode)) return null;
+  await new Promise((r) => setTimeout(r, 600));
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      `${pincode}, India`,
+    )}&format=json&limit=1&countrycodes=in&addressdetails=1`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)' },
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) return null;
+    const data = (await res.json()) as any[];
+    const a = data?.[0]?.address;
+    if (!a?.state) return null;
+    return {
+      state: a.state,
+      district: a.state_district || a.county || a.city || a.town || a.village || '',
+    };
+  } catch {
+    return null;
   }
-  return null;
+}
+
+/** Loose comparer for place names: case/space/punctuation-insensitive and blind
+ * to the common "Urban"/"Rural"/"District"/"City" suffixes so "Bengaluru Urban"
+ * and "Bengaluru" compare equal. */
+function normalizePlace(s?: string): string {
+  return (s || '')
+    .toLowerCase()
+    .replace(/\b(urban|rural|district|city|metro)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Enforces that an assayer's state, district and pincode all describe the same
+ * place, using the pincode as the anchor of truth. A mixed entry — a Bengaluru
+ * pincode with "Karnataka" in the state field but a Delhi district, or a Delhi
+ * address tagged as Karnataka — produces a clear, actionable error instead of a
+ * silently wrong map pin.
+ */
+async function assertAddressConsistent(dto: {
+  address?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pincode?: string | null;
+}): Promise<void> {
+  const pin = dto.pincode || (dto.address || '').match(/\b\d{6}\b/)?.[0] || '';
+  if (!/^\d{6}$/.test(pin)) return; // no pincode to anchor on — nothing to verify
+  const authority = await fetchPincodeAuthority(pin);
+  if (!authority) return; // couldn't verify — skip rather than block on a guess
+
+  const where = `${dto.state ?? 'unknown state'}, ${dto.district ?? 'unknown district'}`;
+  if (
+    dto.state &&
+    authority.state &&
+    normalizePlace(dto.state) !== normalizePlace(authority.state)
+  ) {
+    throw new BadRequestException(
+      `Pincode ${pin} is in ${authority.state}, but the entered state is "${dto.state}". ` +
+        `State, district, city, address and pincode must all describe the same place (got ${where}).`,
+    );
+  }
+  if (
+    dto.district &&
+    authority.district &&
+    normalizePlace(dto.district) !== normalizePlace(authority.district)
+  ) {
+    throw new BadRequestException(
+      `Pincode ${pin} is in ${authority.district} district (${authority.state}), but the entered district is "${dto.district}". ` +
+        `State, district, city, address and pincode must all describe the same place (got ${where}).`,
+    );
+  }
 }
 
 const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
@@ -401,10 +431,12 @@ export class AssayerService implements OnModuleInit {
     const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
     if (existing) throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
 
+    await assertAddressConsistent(dto);
+
     let lat = dto.latitude;
     let lng = dto.longitude;
     if (!lat || !lng) {
-      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
       // Left null when nothing resolves. This used to fall back to a hardcoded
       // Mumbai coordinate, which is worse than no location at all: the assayer
       // appears on the map somewhere they have never been, and every distance
@@ -412,6 +444,12 @@ export class AssayerService implements OnModuleInit {
       // location is visible and fixable; a plausible wrong one is neither.
       lat = coords?.lat ?? undefined;
       lng = coords?.lng ?? undefined;
+      if (coords && coords.accuracyMeters > 0) {
+        this.logger.log(
+          `Assayer ${dto.assayerCode}: pinned at ±${coords.accuracyMeters}m ` +
+          `(${lat}, ${lng}) from "${dto.address}"`,
+        );
+      }
       if (!coords) {
         this.logger.warn(
           `Assayer ${dto.assayerCode}: could not resolve coordinates from "${dto.address}" ` +
@@ -460,6 +498,13 @@ export class AssayerService implements OnModuleInit {
 
   async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
     const assayer = await this.findOne(id);
+    const orig = {
+      address: assayer.address,
+      city: assayer.city,
+      district: assayer.district,
+      state: assayer.state,
+      pincode: assayer.pincode,
+    };
     Object.keys(dto).forEach((key) => {
       if ((dto as any)[key] !== undefined) (assayer as any)[key] = (dto as any)[key];
     });
@@ -472,21 +517,35 @@ export class AssayerService implements OnModuleInit {
     let lat = dto.latitude !== undefined ? dto.latitude : assayer.latitude;
     let lng = dto.longitude !== undefined ? dto.longitude : assayer.longitude;
 
-    const addressChanged = dto.address !== undefined && dto.address !== assayer.address;
-    const cityChanged = dto.city !== undefined && dto.city !== assayer.city;
-    const districtChanged = dto.district !== undefined && dto.district !== assayer.district;
-    const stateChanged = dto.state !== undefined && dto.state !== assayer.state;
+    const addressChanged = dto.address !== undefined && dto.address !== orig.address;
+    const cityChanged = dto.city !== undefined && dto.city !== orig.city;
+    const districtChanged = dto.district !== undefined && dto.district !== orig.district;
+    const stateChanged = dto.state !== undefined && dto.state !== orig.state;
+
+    if (addressChanged || cityChanged || districtChanged || stateChanged) {
+      await assertAddressConsistent({
+        address: dto.address ?? orig.address,
+        city: dto.city ?? orig.city,
+        district: dto.district ?? orig.district,
+        state: dto.state ?? orig.state,
+        pincode: dto.pincode ?? orig.pincode,
+      });
+    }
 
     if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
       const coords = await geocodeAddress(
-        dto.address ?? assayer.address,
-        dto.city ?? assayer.city,
-        dto.district ?? assayer.district,
-        dto.state ?? assayer.state
+        dto.address ?? orig.address,
+        dto.city ?? orig.city,
+        dto.district ?? orig.district,
+        dto.state ?? orig.state,
+        dto.pincode ?? orig.pincode,
       );
       if (coords) {
         lat = coords.lat;
         lng = coords.lng;
+        if (coords.accuracyMeters > 0) {
+          this.logger.log(`Assayer ${assayer.assayerCode}: re-pinned at ±${coords.accuracyMeters}m`);
+        }
       }
     }
 
@@ -564,6 +623,62 @@ export class AssayerService implements OnModuleInit {
     } else {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
     }
+  }
+
+  /**
+   * Move a batch of assayers forward to a single target stage as one operation.
+   *
+   * Each row is advanced through the allowed state-machine path to the target
+   * (e.g. INVITED → DOCUMENT_VERIFICATION → BACKGROUND_VERIFICATION → TRAINING),
+   * so a mixed-stage batch can be onboarded together without invalid jumps.
+   * Every intermediate step still runs through the normal workflow command,
+   * activity log and audit trail. Rows that cannot reach the target are skipped,
+   * and per-row errors are isolated so one bad row never aborts the rest.
+   */
+  async bulkTransitionLifecycle(
+    ids: string[],
+    targetStatus: string,
+    userId: string,
+    reason?: string,
+  ): Promise<{
+    succeeded: { id: string; from: string; to: string }[];
+    skipped: { id: string; current: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    const validTargets = Object.values(AssayerLifecycleStatus);
+    if (!validTargets.includes(targetStatus as AssayerLifecycleStatus)) {
+      throw new BadRequestException(`Invalid target status: ${targetStatus}`);
+    }
+
+    const succeeded: { id: string; from: string; to: string }[] = [];
+    const skipped: { id: string; current: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        const assayer = await this.findOne(id);
+        const path = AssayerStateMachine.findPathTo(assayer.lifecycleStatus, targetStatus);
+        if (path === null) {
+          skipped.push({
+            id,
+            current: assayer.lifecycleStatus,
+            reason: `No valid path from ${assayer.lifecycleStatus} to ${targetStatus}`,
+          });
+          continue;
+        }
+        const from = assayer.lifecycleStatus;
+        for (const step of path) {
+          const { saved, event } = await this.doTransitionLifecycle(id, step as AssayerLifecycleStatus, userId, reason);
+          if (event) this.eventPublisher.publish(event.constructor.name, event);
+          void saved;
+        }
+        succeeded.push({ id, from, to: targetStatus });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+
+    return { succeeded, skipped, failed };
   }
 
   private async doTransitionLifecycle(

@@ -168,6 +168,60 @@ let UserService = class UserService {
             throw new common_1.BadRequestException('At least one active SUPER_ADMINISTRATOR must remain.');
         }
     }
+    async bulkSetStatus(ids, status, actorId) {
+        const succeeded = [];
+        const skipped = [];
+        const failed = [];
+        for (const id of ids) {
+            try {
+                const user = await this.findById(id);
+                const previousStatus = user.status;
+                if (previousStatus === status) {
+                    skipped.push({ id, current: previousStatus, reason: `Already ${status}` });
+                    continue;
+                }
+                if (status !== shared_1.UserStatus.ACTIVE && previousStatus === shared_1.UserStatus.ACTIVE) {
+                    if (id === actorId) {
+                        failed.push({ id, reason: 'You cannot deactivate your own account.' });
+                        continue;
+                    }
+                    await this.assertNotLastActiveSuperAdmin(id);
+                }
+                user.status = status;
+                user.isActive = status === shared_1.UserStatus.ACTIVE;
+                user.updatedBy = actorId;
+                const saved = await this.userRepository.save(user);
+                await this.auditService.recordEvent({
+                    category: shared_1.EventCategory.USER,
+                    eventType: 'USER_UPDATED',
+                    entityType: 'USER',
+                    entityId: id,
+                    previousState: previousStatus,
+                    newState: user.status,
+                    userId: actorId,
+                    remarks: `Bulk status change: ${previousStatus} → ${status}`,
+                });
+                try {
+                    this.eventPublisher.publish('user:updated', {
+                        eventType: 'user:updated',
+                        userId: saved.id,
+                        status: saved.status,
+                        previousStatus,
+                        updatedBy: actorId,
+                        timestamp: new Date(),
+                    });
+                }
+                catch (err) {
+                    console.error('Failed to publish user:updated event:', err);
+                }
+                succeeded.push({ id, from: previousStatus, to: status });
+            }
+            catch (e) {
+                failed.push({ id, reason: e.message });
+            }
+        }
+        return { succeeded, skipped, failed };
+    }
     async unlockAccount(id, actorId) {
         const user = await this.findById(id);
         user.failedLoginAttempts = 0;
@@ -204,6 +258,30 @@ let UserService = class UserService {
             entityId: id,
             userId: actorId,
             remarks: `Password reset for ${user.username} by an administrator`,
+        });
+    }
+    async changePassword(id, currentPassword, newPassword) {
+        const user = await this.userRepository.createQueryBuilder('u')
+            .addSelect('u.passwordHash')
+            .where('u.id = :id', { id })
+            .getOne();
+        if (!user) {
+            throw new common_1.NotFoundException(`User ${id} not found.`);
+        }
+        const match = await bcrypt.compare(currentPassword, user.passwordHash);
+        if (!match) {
+            throw new common_1.BadRequestException('Current password is incorrect.');
+        }
+        user.passwordHash = await bcrypt.hash(newPassword, 12);
+        user.updatedBy = id;
+        await this.userRepository.save(user);
+        await this.auditService.recordEvent({
+            category: shared_1.EventCategory.USER,
+            eventType: 'USER_PASSWORD_CHANGED',
+            entityType: 'USER',
+            entityId: id,
+            userId: id,
+            remarks: `Self-service password update for ${user.username}`,
         });
     }
     async assignRoles(userId, roleIds, assignedById) {

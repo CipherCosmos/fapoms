@@ -93,8 +93,11 @@ class ApiClient {
       if (response.status === 401) {
         localStorage.removeItem('fapoms_token');
         localStorage.removeItem('fapoms_refresh_token');
-        window.location.href = '/login';
-        throw new Error('Unauthorized');
+        localStorage.removeItem('fapoms_user_cache');
+        if (window.location.pathname !== '/login') {
+          window.location.replace('/login');
+        }
+        throw new Error('Unauthorized session expired');
       }
     }
 
@@ -144,8 +147,8 @@ class ApiClient {
 
   async getUnreadNotificationCount(): Promise<number> {
     try {
-      const res = await this.request<{ count: number }>('/notifications/unread-count');
-      return res.count ?? 0;
+      const res = await this.request<{ count: number } | { data: { count: number } }>('/notifications/unread-count');
+      return (res as any)?.count ?? (res as any)?.data?.count ?? 0;
     } catch {
       return 0;
     }
@@ -161,8 +164,8 @@ class ApiClient {
   }
 
   async markAllNotificationsRead(): Promise<number> {
-    const res = await this.request<{ updated: number }>('/notifications/read-all', { method: 'POST' });
-    return res.updated ?? 0;
+    const res = await this.request<{ updated: number } | { data: { updated: number } }>('/notifications/read-all', { method: 'POST' });
+    return (res as any)?.updated ?? (res as any)?.data?.updated ?? 0;
   }
 
   async getNotificationPreferences(): Promise<NotificationPreference[]> {

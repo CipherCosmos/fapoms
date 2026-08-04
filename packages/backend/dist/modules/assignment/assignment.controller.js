@@ -106,7 +106,7 @@ let AssignmentController = class AssignmentController {
         }
         const userId = req.user.id;
         let assignment;
-        if (targetStatus === 'COUNTER_OFFER') {
+        if (targetStatus === 'COUNTER_OFFER' || targetStatus === 'NEGOTIATION' || (targetStatus === 'PENDING' && (body.counterFee !== undefined || body.fee !== undefined || body.proposedFee !== undefined))) {
             const feeVal = body.counterFee ?? body.fee ?? body.proposedFee;
             if (!feeVal || isNaN(Number(feeVal))) {
                 throw new common_1.BadRequestException('Valid counter fee amount is required for negotiation.');
@@ -118,6 +118,12 @@ let AssignmentController = class AssignmentController {
         }
         else if (targetStatus === 'REJECTED') {
             assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
+        }
+        else if (targetStatus === 'CHECKED_IN') {
+            const lat = Number(body.lat || body.latitude || 28.6315);
+            const lng = Number(body.lng || body.longitude || 77.2167);
+            const checkInRes = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId);
+            assignment = checkInRes.assignment || (await this.assignmentService.findOne(id));
         }
         else if (targetStatus === 'CANCELLED') {
             assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);

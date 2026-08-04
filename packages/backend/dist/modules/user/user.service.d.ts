@@ -35,8 +35,25 @@ export declare class UserService {
     }>;
     updateUser(id: string, dto: UpdateUserDto, updatedById: string): Promise<UserEntity>;
     private assertNotLastActiveSuperAdmin;
+    bulkSetStatus(ids: string[], status: UserStatus, actorId: string): Promise<{
+        succeeded: {
+            id: string;
+            from: UserStatus;
+            to: UserStatus;
+        }[];
+        skipped: {
+            id: string;
+            current: UserStatus;
+            reason: string;
+        }[];
+        failed: {
+            id: string;
+            reason: string;
+        }[];
+    }>;
     unlockAccount(id: string, actorId: string): Promise<UserEntity>;
     resetPassword(id: string, newPassword: string, actorId: string): Promise<void>;
+    changePassword(id: string, currentPassword: string, newPassword: string): Promise<void>;
     assignRoles(userId: string, roleIds: string[], assignedById: string): Promise<UserEntity>;
     findAllRoles(): Promise<RoleEntity[]>;
 }

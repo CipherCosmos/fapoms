@@ -10,6 +10,7 @@ import { SystemRole } from '@fapoms/shared';
 import { PdfRegionViewer } from './PdfRegionViewer';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { ThreadPanel } from './ThreadPanel';
+import { userMessage } from '../../services/errors';
 
 /**
  * The merged workspace for one branch's returned packet: the PDF, the data
@@ -127,7 +128,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
       await loadCase();
       onChanged?.();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(userMessage(e));
     }
     setBusy(false);
   };
@@ -157,7 +158,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
       await loadQueries(caseId!);
       setSelectedQuery((created as any).id);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(userMessage(e));
     }
     setBusy(false);
   };

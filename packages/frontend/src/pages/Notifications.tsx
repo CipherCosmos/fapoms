@@ -5,6 +5,7 @@ import {
   Settings2, Smartphone, MonitorSmartphone, Mail,
 } from 'lucide-react';
 import { api, WebNotification, NotificationCategory, NotificationPreference } from '../services/api';
+import { userMessage } from '../services/errors';
 import { connectSocket, getSocket } from '../services/socket';
 import { useToast } from '../components/ui';
 
@@ -71,7 +72,7 @@ export const Notifications: React.FC = () => {
       setUnreadCount(page.unreadCount);
       setOffset(nextOffset);
     } catch (e: any) {
-      setError(e?.message || 'Failed to load notifications.');
+      setError(`Failed to load notifications. ${userMessage(e)}`);
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -305,7 +306,7 @@ const PreferencesPanel: React.FC = () => {
     } catch (e: any) {
       // Revert on failure — the toggle must reflect what actually saved.
       setPrefs((prev) => prev!.map((p) => (p.category === category ? { ...p, [key]: !value } : p)));
-      toast({ type: 'error', title: 'Could not save', message: e?.message || 'Please try again.' });
+      toast({ type: 'error', title: 'Could not save', message: userMessage(e) });
     } finally {
       setSaving(null);
     }

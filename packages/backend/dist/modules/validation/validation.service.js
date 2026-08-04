@@ -44,8 +44,10 @@ let ValidationService = class ValidationService {
     }
     onModuleInit() {
         this.workflowEngine.registerWorkflow('validation', [
-            { from: [shared_1.ValidationStatus.PENDING, shared_1.ValidationStatus.ASSIGNED], to: shared_1.ValidationStatus.HUMAN_REVIEW },
-            { from: [shared_1.ValidationStatus.HUMAN_REVIEW, shared_1.ValidationStatus.ASSIGNED, shared_1.ValidationStatus.PENDING], to: shared_1.ValidationStatus.APPROVED },
+            { from: [shared_1.ValidationStatus.PENDING], to: shared_1.ValidationStatus.ASSIGNED },
+            { from: [shared_1.ValidationStatus.ASSIGNED], to: shared_1.ValidationStatus.OCR_PROCESSING },
+            { from: [shared_1.ValidationStatus.OCR_PROCESSING], to: shared_1.ValidationStatus.HUMAN_REVIEW },
+            { from: [shared_1.ValidationStatus.HUMAN_REVIEW], to: shared_1.ValidationStatus.APPROVED },
             { from: [shared_1.ValidationStatus.HUMAN_REVIEW], to: shared_1.ValidationStatus.CORRECTION_REQUIRED },
             { from: [shared_1.ValidationStatus.CORRECTION_REQUIRED], to: shared_1.ValidationStatus.HUMAN_REVIEW },
             { from: [shared_1.ValidationStatus.APPROVED], to: shared_1.ValidationStatus.SUBMITTED },
@@ -213,6 +215,22 @@ let ValidationService = class ValidationService {
         else {
             throw new common_1.BadRequestException(`Invalid validation status transition to ${targetStatus}`);
         }
+    }
+    async bulkTransition(ids, targetStatus, userId, remarks) {
+        const succeeded = [];
+        const failed = [];
+        for (const id of ids) {
+            try {
+                const vCase = await this.findOne(id);
+                const from = vCase.status;
+                await this.transition(id, targetStatus, userId, remarks);
+                succeeded.push({ id, from, to: targetStatus });
+            }
+            catch (e) {
+                failed.push({ id, reason: e.message });
+            }
+        }
+        return { succeeded, failed };
     }
     async moveToReview(id, userId, remarks) {
         const validationCase = await this.findOne(id);

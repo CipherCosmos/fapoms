@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { User, Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { UserActivityList } from './ActivityFeed';
@@ -91,6 +92,10 @@ export const DirectoryPanel: React.FC = () => {
   const [resetting, setResetting] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState<'ACTIVE' | 'SUSPENDED' | ''>('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
 
   useEffect(() => { loadUsers(); loadRoles(); }, []);
 
@@ -104,7 +109,7 @@ export const DirectoryPanel: React.FC = () => {
       // Keep the open edit panel in sync after an action (e.g. unlock) refetches.
       setEditingUser((prev) => (prev ? list.find((u: UserProfile) => u.id === prev.id) ?? null : prev));
     } catch (err: any) {
-      setError(err?.message || 'Failed to retrieve users');
+      setError(`Failed to retrieve users ${userMessage(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -132,7 +137,7 @@ export const DirectoryPanel: React.FC = () => {
       setUsername(''); setEmail(''); setPassword(''); setFirstName(''); setLastName(''); setSelectedRoleIds([]);
       loadUsers();
     } catch (err: any) {
-      setError(err?.message || 'Failed to create user');
+      setError(`Failed to create user ${userMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -158,14 +163,14 @@ export const DirectoryPanel: React.FC = () => {
         body: JSON.stringify({ firstName: editFirstName, lastName: editLastName, phone: editPhone || undefined }),
       });
     } catch (err: any) {
-      setError(err?.message || 'Failed to update the profile — roles were not touched.');
+      setError(`Failed to update the profile — roles were not touched. ${userMessage(err)}`);
       setSubmitting(false);
       return;
     }
     try {
       await api.request(`/users/${editingUser.id}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds: editRoleIds }) });
     } catch (err: any) {
-      setError(`Profile saved, but role changes failed: ${err?.message || 'unknown error'}`);
+      setError(`Profile saved, but role changes failed: ${userMessage(err)}`);
       setSubmitting(false);
       loadUsers();
       return;
@@ -184,9 +189,39 @@ export const DirectoryPanel: React.FC = () => {
       await api.request(`/users/${user.id}`, { method: 'PUT', body: JSON.stringify({ status: activating ? 'ACTIVE' : 'SUSPENDED' }) });
       loadUsers();
     } catch (err: any) {
-      setError(err?.message || 'Failed to change account status');
+      setError(`Failed to change account status ${userMessage(err)}`);
     }
   };
+
+  const runBulkStatus = async () => {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    setBulkReport(null);
+    setError(null);
+    try {
+      const res = await api.request<{ succeeded: { id: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>('/users/bulk/status', {
+        method: 'POST',
+        body: JSON.stringify({ ids: [...selectedIds], status: bulkStatus }),
+      });
+      const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
+      setBulkReport({ target: bulkStatus, succeeded: succeeded.length, skipped, failed });
+      setNotice(`${succeeded.length} user(s) ${bulkStatus === 'ACTIVE' ? 'activated' : 'suspended'}.`);
+    } catch (err: any) {
+      setError(`Bulk status change failed ${userMessage(err)}`);
+    } finally {
+      setBulkBusy(false);
+      setBulkStatus('');
+      setSelectedIds(new Set());
+      loadUsers();
+    }
+  };
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const handleResetPassword = async () => {
     if (!editingUser || newPassword.length < 8) return;
@@ -199,7 +234,7 @@ export const DirectoryPanel: React.FC = () => {
       setNotice(`Password reset for ${editingUser.displayName}.`);
       loadUsers();
     } catch (err: any) {
-      setError(err?.message || 'Failed to reset password');
+      setError(`Failed to reset password ${userMessage(err)}`);
     } finally {
       setResetting(false);
     }
@@ -214,7 +249,7 @@ export const DirectoryPanel: React.FC = () => {
       setNotice(`${editingUser.displayName}'s account unlocked — password unchanged.`);
       loadUsers();
     } catch (err: any) {
-      setError(err?.message || 'Failed to unlock account');
+      setError(`Failed to unlock account ${userMessage(err)}`);
     } finally {
       setUnlocking(false);
     }
@@ -260,22 +295,78 @@ export const DirectoryPanel: React.FC = () => {
             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length}</span>
           </div>
 
+          {selectedIds.size > 0 && (
+            <div style={{
+              display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+              padding: '10px 24px', borderBottom: '1px solid var(--border-color)',
+              background: 'var(--status-pending-bg)',
+            }}>
+              <strong style={{ fontSize: '13px' }}>{selectedIds.size} selected</strong>
+              <ToggleRight size={13} style={{ color: 'var(--text-muted)' }} />
+              <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value as any)}
+                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
+                <option value="">Set status…</option>
+                <option value="ACTIVE">Activate</option>
+                <option value="SUSPENDED">Suspend</option>
+              </select>
+              <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                {bulkBusy ? 'Applying…' : 'Apply'}
+              </button>
+              <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+            </div>
+          )}
+
+          {bulkReport && (
+            <div style={{ margin: '10px 24px 0', padding: '12px 14px', borderRadius: '8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
+                <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
+                <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
+                {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
+                <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+              </div>
+              {bulkReport.skipped.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Already at {bulkReport.target}:</div>
+                  {bulkReport.skipped.map((s) => (
+                    <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                      <span>{s.current}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {bulkReport.failed.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
+                  {bulkReport.failed.map((f) => (
+                    <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                      <span>{f.id.slice(0, 8)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {isLoading ? (
             <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading users list...</div>
           ) : (
             <table className="planning-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
-                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>User</th>
+                  <th style={{ padding: '12px 6px 12px 24px', width: '28px' }}>
+                    <input type="checkbox" checked={selectedIds.size > 0 && selectedIds.size === filteredUsers.length}
+                      onChange={(e) => setSelectedIds(e.target.checked ? new Set(filteredUsers.map((u) => u.id)) : new Set())} style={{ cursor: 'pointer' }} />
+                  </th>
+                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>User</th>
                   <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>Roles</th>
                   <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>Last Login</th>
                   <th style={{ padding: '12px 24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>Status</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'right', fontSize: '12px', color: 'var(--text-muted)' }}>Actions</th>
+                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'right', fontSize: '12px', color: 'var(--text-muted)' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredUsers.length === 0 ? (
-                  <tr><td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <tr><td colSpan={6} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                       <UsersIcon size={30} style={{ opacity: 0.4 }} />
                       <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{searchText || filterStatus !== 'ALL' ? 'No users match your filters' : 'No users yet'}</span>
@@ -291,7 +382,12 @@ export const DirectoryPanel: React.FC = () => {
                   const locked = isLocked(u);
                   return (
                     <tr key={u.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <td style={{ padding: '14px 24px' }}>
+                      <td style={{ padding: '14px 6px 14px 24px' }}>
+                        <input type="checkbox" checked={selectedIds.has(u.id)} disabled={self}
+                          onChange={() => toggleSelect(u.id)} title={self ? 'You cannot change your own account status' : undefined}
+                          style={{ cursor: self ? 'not-allowed' : 'pointer' }} />
+                      </td>
+                      <td style={{ padding: '14px 24px 14px 6px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)', fontWeight: 600, flexShrink: 0 }}>
                             {u.firstName[0]}{u.lastName[0]}

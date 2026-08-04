@@ -6,6 +6,7 @@ import {
   BillingConflictSeverity, BillingConflictStatus, BillingConflictAction,
   BillingEntityType,
 } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const SEVERITIES = Object.values(BillingConflictSeverity);
 const ENTITY_TYPES = Object.values(BillingEntityType);
@@ -44,7 +45,7 @@ export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose 
     try {
       await raise.mutateAsync({ severity, entityType, entryIds: selectedIds, description, reason: reason || undefined });
       toast('success', 'Conflict raised'); onClose();
-    } catch (err: any) { toast('error', err?.message || 'Failed to raise conflict'); }
+    } catch (err: any) { toast({ type: 'error', title: 'Failed to raise conflict', message: userMessage(err) }); }
   };
 
   const selStyle: React.CSSProperties = {
@@ -106,7 +107,7 @@ export const ConflictDetailDrawer: React.FC<{ conflictId: string; onClose: () =>
     try {
       await resolve.mutateAsync({ id: c.id, status, action, note });
       toast('success', 'Conflict resolved'); onClose();
-    } catch (err: any) { toast('error', err?.message || 'Resolve failed'); }
+    } catch (err: any) { toast({ type: 'error', title: 'Resolve failed', message: userMessage(err) }); }
   };
 
   const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (

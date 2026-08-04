@@ -12,35 +12,12 @@ import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory } from '@fapoms/shared';
+import { autocompleteIndia } from '../geo/india-autocomplete.helper';
+import { geocodeIndia } from '../geo/india-geocoder';
 
-async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
-  const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
-    .replace(/\s+/g, ' ')
-    .trim();
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-      }
-    });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = await res.json() as any[];
-      if (data && data[0]) {
-        return {
-          lat: parseFloat(data[0].lat),
-          lng: parseFloat(data[0].lon)
-        };
-      }
-    }
-  } catch (err) {
-    console.error(`Error geocoding inside service: ${cleanQ}`, err);
-  }
-  return null;
+async function geocodeAddress(address: string, city: string, district: string, state: string, pincode?: string | null): Promise<{ lat: number; lng: number } | null> {
+  const res = await geocodeIndia(address, city, district, state, pincode);
+  return res ? { lat: res.lat, lng: res.lng } : null;
 }
 
 export interface CreateBranchDto {
@@ -170,13 +147,10 @@ export class BranchService {
     let lat = dto.latitude;
     let lng = dto.longitude;
     if (!lat || !lng) {
-      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
       if (coords) {
         lat = coords.lat;
         lng = coords.lng;
-      } else {
-        lat = 19.076;
-        lng = 72.8777;
       }
     }
     const location = { type: 'Point', coordinates: [lng, lat] };
@@ -286,7 +260,8 @@ export class BranchService {
         dto.address ?? branch.address,
         dto.city ?? branch.city,
         dto.district ?? branch.district,
-        dto.state ?? branch.state
+        dto.state ?? branch.state,
+        dto.pincode ?? branch.pincode,
       );
       if (coords) {
         lat = coords.lat;
@@ -615,20 +590,34 @@ export class BranchService {
 
   private async validateGeography(state: string, district: string, city: string): Promise<void> {
     const stateEntity = await this.stateRepository.findOne({ where: { name: state } });
-    if (!stateEntity) {
-      throw new BadRequestException(`State '${state}' not found in master reference data.`);
-    }
-    const districtEntity = await this.districtRepository.findOne({
-      where: { name: district, stateId: stateEntity.id },
-    });
-    if (!districtEntity) {
-      throw new BadRequestException(`District '${district}' not found under state '${state}'.`);
-    }
-    const cityEntity = await this.cityRepository.findOne({
-      where: { name: city, districtId: districtEntity.id },
-    });
+    const districtEntity = stateEntity
+      ? await this.districtRepository.findOne({ where: { name: district, stateId: stateEntity.id } })
+      : null;
+    const cityEntity = districtEntity
+      ? await this.cityRepository.findOne({ where: { name: city, districtId: districtEntity.id } })
+      : null;
+
+    // The curated reference tables only cover a handful of states. If a real
+    // place is not in them, confirm it exists via live geo search rather than
+    // rejecting a legitimate branch — a hard-coded map can't know every district.
     if (!cityEntity) {
-      throw new BadRequestException(`City '${city}' not found under district '${district}'.`);
+      const live = await autocompleteIndia(city);
+      const found = live.some(
+        (p) =>
+          p.district &&
+          p.state &&
+          p.district.toLowerCase() === district.toLowerCase() &&
+          p.state.toLowerCase() === state.toLowerCase(),
+      );
+      const stateLive = await autocompleteIndia(state);
+      const stateExists = stateLive.some(
+        (p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase(),
+      );
+      if (!found && !stateExists) {
+        throw new BadRequestException(
+          `Could not verify '${city}, ${district}, ${state}' as a real place. Check the spelling of the state, district and city.`,
+        );
+      }
     }
   }
 

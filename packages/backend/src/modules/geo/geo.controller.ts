@@ -6,6 +6,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
+import { autocompleteIndia } from './india-autocomplete.helper';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
@@ -60,6 +61,13 @@ export class GeoController {
     @InjectRepository(GeoCityEntity)
     private readonly cityRepo: Repository<GeoCityEntity>,
   ) {}
+
+  @Get('autocomplete')
+  @ApiOperation({ summary: 'Live whole-India place search (state/district/city/town/pincode) for type-ahead' })
+  async autocomplete(@Query('q') q?: string) {
+    const results = await autocompleteIndia((q || '').trim());
+    return { success: true, data: results };
+  }
 
   @Get('states')
   @ApiOperation({ summary: 'List all states in geographic reference data' })

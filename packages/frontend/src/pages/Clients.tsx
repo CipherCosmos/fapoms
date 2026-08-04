@@ -5,6 +5,10 @@ import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
 import type { Client } from '@fapoms/shared';
+import { ClientLifecycleStatus } from '@fapoms/shared';
+import { api } from '../services/api';
+import { userMessage } from '../services/errors';
+import { useToast } from '../components/ui';
 import { clientLifecycleLabel, clientTypeLabel } from '../utils/statusLabels';
 import { CreateClientModal } from './clients/CreateClientModal';
 import { EditClientModal } from './clients/EditClientModal';
@@ -36,6 +40,35 @@ const LIFECYCLE_FILTERS = ['PROSPECT', 'ONBOARDING', 'ACTIVE', 'SUSPENDED', 'UND
 const CLIENT_TYPE_FILTERS = ['BANK', 'NBFC', 'MICROFINANCE', 'INSURANCE', 'CORPORATE', 'GOVERNMENT', 'OTHER'];
 const PRIORITY_FILTERS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
+/** Legal next lifecycle steps per stage, mirroring the backend state machine. */
+const CLIENT_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
+  [ClientLifecycleStatus.PROSPECT]: [ClientLifecycleStatus.ONBOARDING, ClientLifecycleStatus.ARCHIVED],
+  [ClientLifecycleStatus.ONBOARDING]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.INACTIVE],
+  [ClientLifecycleStatus.ACTIVE]: [ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.INACTIVE],
+  [ClientLifecycleStatus.SUSPENDED]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.TERMINATED],
+  [ClientLifecycleStatus.UNDER_REVIEW]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.TERMINATED],
+  [ClientLifecycleStatus.INACTIVE]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.ARCHIVED],
+  [ClientLifecycleStatus.TERMINATED]: [ClientLifecycleStatus.ARCHIVED],
+  [ClientLifecycleStatus.ARCHIVED]: [],
+};
+
+function findPathTo(from: string, target: string): string[] | null {
+  if (from === target) return [];
+  const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
+  const visited = new Set<string>([from]);
+  while (queue.length) {
+    const { stage, path } = queue.shift()!;
+    for (const next of CLIENT_LIFECYCLE_TRANSITIONS[stage] ?? []) {
+      if (next === target) return [...path, next];
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push({ stage: next, path: [...path, next] });
+      }
+    }
+  }
+  return null;
+}
+
 const Clients: React.FC = () => {
   useSocketInvalidation();
   const [search, setSearch] = useState('');
@@ -52,6 +85,11 @@ const Clients: React.FC = () => {
   const [showLifecycle, setShowLifecycle] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [tab, setTab] = useState<'contacts' | 'contracts' | 'billing' | 'config'>('contacts');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkTarget, setBulkTarget] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 350);
@@ -80,6 +118,48 @@ const Clients: React.FC = () => {
   };
 
   const selectedClient = data?.items.find((c) => c.id === selectedId) ?? null;
+
+  const selectedClients = data?.items.filter((c) => selectedIds.has(c.id)) ?? [];
+  const bulkTargets = (() => {
+    if (selectedClients.length === 0) return [] as string[];
+    const reachable = new Set<string>();
+    for (const c of selectedClients) {
+      for (const s of Object.values(ClientLifecycleStatus)) {
+        if (s === c.lifecycleStatus) continue;
+        if (findPathTo(c.lifecycleStatus, s) !== null) reachable.add(s);
+      }
+    }
+    return Object.values(ClientLifecycleStatus).filter((s) => reachable.has(s));
+  })();
+
+  const runBulkTransition = async () => {
+    if (!bulkTarget || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    setBulkReport(null);
+    try {
+      const res = await api.request<{ succeeded: { id: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>('/clients/bulk/lifecycle', {
+        method: 'PATCH',
+        body: JSON.stringify({ ids: [...selectedIds], status: bulkTarget }),
+      });
+      const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
+      setBulkReport({ target: bulkTarget, succeeded: succeeded.length, skipped, failed });
+      toast('success', `${succeeded.length} client(s) moved to ${clientLifecycleLabel(bulkTarget)}.`);
+    } catch (err: any) {
+      toast({ type: 'error', title: 'Bulk lifecycle change failed', message: userMessage(err) });
+    } finally {
+      setBulkBusy(false);
+      setBulkTarget('');
+      setSelectedIds(new Set());
+      refetch();
+    }
+  };
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const columns: Column<Client>[] = [
     {
@@ -163,6 +243,63 @@ const Clients: React.FC = () => {
         )}
       </div>
 
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+          padding: '10px 14px', borderRadius: '8px',
+          background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
+        }}>
+          <strong style={{ fontSize: '13px' }}>{selectedIds.size} selected</strong>
+          {bulkTargets.length > 0 ? (
+            <>
+              <ArrowLeftRight size={13} style={{ color: 'var(--text-muted)' }} />
+              <select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value)}
+                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
+                <option value="">Move all to…</option>
+                {bulkTargets.map((t) => <option key={t} value={t}>{clientLifecycleLabel(t)}</option>)}
+              </select>
+              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                {bulkBusy ? 'Applying…' : 'Apply'}
+              </button>
+            </>
+          ) : (
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No stage is reachable from the selected clients.</span>
+          )}
+          <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+        </div>
+      )}
+
+      {bulkReport && (
+        <div style={{ padding: '12px 14px', borderRadius: '8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
+          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
+            <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
+            <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
+            {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
+            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+          </div>
+          {bulkReport.skipped.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {clientLifecycleLabel(bulkReport.target)}:</div>
+              {bulkReport.skipped.map((s) => (
+                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span>{s.current}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {bulkReport.failed.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
+              {bulkReport.failed.map((f) => (
+                <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span>{f.id.slice(0, 8)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <DataTable
         columns={columns}
         rows={data?.items ?? []}
@@ -172,6 +309,10 @@ const Clients: React.FC = () => {
         sortKey={sortBy}
         sortOrder={sortOrder}
         onSort={handleSort}
+        selectable
+        selected={selectedIds}
+        onToggleSelect={toggleSelect}
+        onSelectAll={(checked) => setSelectedIds(checked ? new Set((data?.items ?? []).map((c) => c.id)) : new Set())}
         emptyState={
           <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <Building2 size={34} style={{ color: 'var(--text-muted)', opacity: 0.4 }} />

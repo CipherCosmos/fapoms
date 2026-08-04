@@ -55,6 +55,26 @@ const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
   [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
 };
 
+/** Ordered path from `from` to `target` walking only legal transitions; [] if
+ *  already there, null if unreachable. Mirrors the backend state machine so the
+ *  roster can offer the same destinations the API will accept. */
+function findPathTo(from: string, target: string): string[] | null {
+  if (from === target) return [];
+  const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
+  const visited = new Set<string>([from]);
+  while (queue.length) {
+    const { stage, path } = queue.shift()!;
+    for (const next of LIFECYCLE_TRANSITIONS[stage] ?? []) {
+      if (next === target) return [...path, next];
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push({ stage: next, path: [...path, next] });
+      }
+    }
+  }
+  return null;
+}
+
 /** One-click views onto the questions HR ask most. */
 const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[] = [
   { key: 'all', label: 'Everyone', match: () => true },
@@ -113,6 +133,7 @@ export const AssayerRoster: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
   const [busy, setBusy] = useState(false);
+  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: string[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
   const RENDER_CHUNK = 200;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
 
@@ -180,11 +201,19 @@ export const AssayerRoster: React.FC = () => {
   const allShownSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
   const selected = useMemo(() => assayers.filter((a) => selectedIds.has(a.id)), [assayers, selectedIds]);
 
-  /** Transitions legal for *every* selected row, so a bulk action can never half-apply. */
+  /** Every target stage reachable from *any* selected row (walking forward through
+   *  the state machine). Unlike a strict intersection this works for mixed-stage
+   *  batches — the backend skips rows that can't reach the chosen target. */
   const bulkOptions = useMemo(() => {
     if (selected.length === 0) return [];
-    const sets = selected.map((a) => new Set(LIFECYCLE_TRANSITIONS[a.lifecycleStatus] ?? []));
-    return [...(sets[0] ?? [])].filter((t) => sets.every((s) => s.has(t)));
+    const reachable = new Set<string>();
+    for (const a of selected) {
+      for (const s of Object.values(AssayerLifecycleStatus)) {
+        if (s === a.lifecycleStatus) continue;
+        if (findPathTo(a.lifecycleStatus, s) !== null) reachable.add(s);
+      }
+    }
+    return Object.values(AssayerLifecycleStatus).filter((s) => reachable.has(s));
   }, [selected]);
 
   const toggle = (id: string) =>
@@ -200,24 +229,35 @@ export const AssayerRoster: React.FC = () => {
   const runBulkTransition = async () => {
     if (!bulkTarget || selected.length === 0) return;
     setBusy(true);
-    const results = await Promise.allSettled(
-      selected.map((a) =>
-        api.request(`/assayers/${a.id}/lifecycle`, {
+    setBulkReport(null);
+    const ids = selected.map((a) => a.id);
+    try {
+      const res = await api.request<{ succeeded: { id: string; from: string; to: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>(
+        '/assayers/bulk/lifecycle',
+        {
           method: 'POST',
-          body: JSON.stringify({ targetStatus: bulkTarget, reason: `Bulk transition to ${bulkTarget}` }),
-        }),
-      ),
-    );
-    const failed = results.filter((r) => r.status === 'rejected').length;
-    setNotice(
-      failed
-        ? { tone: 'err', text: `${results.length - failed} moved to ${bulkTarget}, ${failed} failed.` }
-        : { tone: 'ok', text: `${results.length} assayer(s) moved to ${bulkTarget}.` },
-    );
-    setBulkTarget('');
-    setSelectedIds(new Set());
-    setBusy(false);
-    load();
+          body: JSON.stringify({ ids, targetStatus: bulkTarget, reason: `Bulk transition to ${bulkTarget}` }),
+        },
+      );
+      const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
+      setBulkReport({ target: bulkTarget, succeeded: succeeded.map((s) => s.id), skipped, failed });
+      const moved = succeeded.length;
+      setNotice(
+        failed.length || skipped.length
+          ? {
+              tone: 'err',
+              text: `${moved} moved to ${bulkTarget.replace(/_/g, ' ')}, ${skipped.length} skipped, ${failed.length} failed.`,
+            }
+          : { tone: 'ok', text: `${moved} assayer(s) moved to ${bulkTarget.replace(/_/g, ' ')}.` },
+      );
+    } catch (e) {
+      setNotice({ tone: 'err', text: `Bulk move failed: ${(e as Error).message}` });
+    } finally {
+      setBusy(false);
+      setBulkTarget('');
+      setSelectedIds(new Set());
+      load();
+    }
   };
 
   const remove = async (a: Assayer) => {
@@ -362,29 +402,65 @@ export const AssayerRoster: React.FC = () => {
           background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
         }}>
           <strong style={{ fontSize: '13px' }}>{selected.length} selected</strong>
+          <ArrowRightLeft size={13} style={{ color: 'var(--text-muted)' }} />
           {bulkOptions.length > 0 ? (
-            <>
-              <ArrowRightLeft size={13} style={{ color: 'var(--text-muted)' }} />
-              <select
-                value={bulkTarget}
-                onChange={(e) => setBulkTarget(e.target.value)}
-                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}
-              >
-                <option value="">Move all to…</option>
-                {bulkOptions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-              </select>
-              <button onClick={runBulkTransition} disabled={!bulkTarget || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                {busy ? 'Applying…' : 'Apply'}
-              </button>
-            </>
+            <select
+              value={bulkTarget}
+              onChange={(e) => setBulkTarget(e.target.value)}
+              style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}
+            >
+              <option value="">Move all to…</option>
+              {bulkOptions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+            </select>
           ) : (
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              These rows are at different stages — no single next step applies to all of them.
+              No stage is reachable from the selected rows.
             </span>
           )}
+          <button onClick={runBulkTransition} disabled={!bulkTarget || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+            {busy ? 'Applying…' : 'Apply'}
+          </button>
           <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>
             Clear selection
           </button>
+        </div>
+      )}
+
+      {/* Bulk result report — what actually moved, and which rows could not reach
+          the target, with per-row reasons. */}
+      {bulkReport && (
+        <div style={{
+          marginTop: '10px', padding: '12px 14px', borderRadius: '8px', fontSize: '12px',
+          background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
+        }}>
+          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
+            <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded.length} moved</span>
+            <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
+            {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
+            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+          </div>
+          {bulkReport.skipped.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {bulkReport.target.replace(/_/g, ' ')}:</div>
+              {bulkReport.skipped.map((s) => (
+                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span style={{ color: 'inherit' }}>{s.current}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {bulkReport.failed.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
+              {bulkReport.failed.map((f) => (
+                <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span style={{ color: 'inherit' }}>{f.id.slice(0, 8)}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

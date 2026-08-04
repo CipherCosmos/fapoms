@@ -3,6 +3,7 @@ import { Save, ShieldCheck, SlidersHorizontal, Upload, UserCheck, UserX } from '
 import { useToast } from '../../components/ui';
 import { useClientDetail, useUpdateClient } from '../../hooks/useClients';
 import { AssayerMultiSelect } from './AssayerMultiSelect';
+import { userMessage } from '../../services/errors';
 
 const WORKING_DAY_OPTIONS = [
   { value: 0, label: 'Sun' },
@@ -129,7 +130,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
       });
       toast('success', 'Configuration saved');
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to save configuration');
+      toast({ type: 'error', title: 'Failed to save configuration', message: userMessage(err) });
     }
   };
 

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Calendar, Plus, Trash2, Edit2, ShieldAlert, X, ChevronLeft, ChevronRight, List, Grid3x3, Info } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
+import { userMessage } from '../services/errors';
 import { StatusBadge, Modal, AlertBanner } from '../components/ui';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 
@@ -140,7 +141,7 @@ export const Holidays: React.FC = () => {
       setShowModal(false);
       refetch();
     } catch (err: any) {
-      setError(err?.message || 'Operation failed');
+      setError(`Operation failed ${userMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -153,7 +154,7 @@ export const Holidays: React.FC = () => {
       setSuccess('Holiday deleted.');
       refetch();
     } catch (err: any) {
-      setError(err?.message || 'Delete failed');
+      setError(`Delete failed ${userMessage(err)}`);
     }
   };
 

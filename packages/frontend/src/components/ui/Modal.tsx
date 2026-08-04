@@ -16,6 +16,9 @@ export const Modal: React.FC<{
   onClose: () => void;
   title?: React.ReactNode;
   width?: number | string;
+  /** Fixed panel height. When set, the body scrolls internally so the dialog
+   *  never grows/shrinks with its content (e.g. tabbed forms that change height). */
+  height?: number | string;
   footer?: React.ReactNode;
   children: React.ReactNode;
   asForm?: boolean;
@@ -30,6 +33,7 @@ export const Modal: React.FC<{
   onClose,
   title,
   width = '460px',
+  height,
   footer,
   children,
   asForm = false,
@@ -102,7 +106,7 @@ export const Modal: React.FC<{
         tabIndex={-1}
         className="glass-card"
         onClick={(e) => e.stopPropagation()}
-        style={{ width, maxHeight, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
+        style={{ width, maxHeight, height, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
       >
         {title !== undefined && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
@@ -117,7 +121,7 @@ export const Modal: React.FC<{
             </button>
           </div>
         )}
-        <div className={bodyClassName} style={{ display: 'flex', flexDirection: 'column', gap: '14px', minHeight: 0, ...(bodyClassName ? {} : {}) }}>
+        <div className={bodyClassName} style={{ display: 'flex', flexDirection: 'column', gap: '14px', minHeight: 0, flex: 1, overflowY: 'auto' }}>
           {children}
         </div>
         {footer && (

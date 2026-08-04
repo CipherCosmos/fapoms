@@ -12,7 +12,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AssayerController = exports.UpdateAssayerDocumentRequestDto = exports.UpdateRemarkRequestDto = exports.CreateRemarkRequestDto = exports.CreateAssayerDocumentRequestDto = exports.UpdateGovernmentDocumentRequestDto = exports.CreateGovernmentDocumentRequestDto = exports.TransitionLifecycleDto = exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = void 0;
+exports.AssayerController = exports.UpdateAssayerDocumentRequestDto = exports.UpdateRemarkRequestDto = exports.CreateRemarkRequestDto = exports.CreateAssayerDocumentRequestDto = exports.UpdateGovernmentDocumentRequestDto = exports.CreateGovernmentDocumentRequestDto = exports.BulkTransitionLifecycleDto = exports.TransitionLifecycleDto = exports.UpdateCommercialProfileRequestDto = exports.CreateCommercialProfileRequestDto = exports.UpdateWorkforceAttributeRequestDto = exports.CreateWorkforceAttributeRequestDto = void 0;
 const common_1 = require("@nestjs/common");
 const platform_express_1 = require("@nestjs/platform-express");
 const swagger_1 = require("@nestjs/swagger");
@@ -710,6 +710,28 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], TransitionLifecycleDto.prototype, "reason", void 0);
+class BulkTransitionLifecycleDto {
+    ids;
+    targetStatus;
+    reason;
+}
+exports.BulkTransitionLifecycleDto = BulkTransitionLifecycleDto;
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsUUID)('4', { each: true }),
+    __metadata("design:type", Array)
+], BulkTransitionLifecycleDto.prototype, "ids", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], BulkTransitionLifecycleDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], BulkTransitionLifecycleDto.prototype, "reason", void 0);
 class CreateGovernmentDocumentRequestDto {
     documentType;
     documentNumber;
@@ -1057,6 +1079,10 @@ let AssayerController = class AssayerController {
             data: attrs,
         };
     }
+    async bulkTransitionLifecycle(dto, req) {
+        const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, dto.reason);
+        return { success: true, data: result };
+    }
     async transitionLifecycle(id, dto, req) {
         const assayer = await this.assayerService.transitionLifecycle(id, dto.targetStatus, req.user.id, dto.reason);
         return { success: true, data: assayer };
@@ -1311,6 +1337,18 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], AssayerController.prototype, "getWorkforceAttributes", null);
+__decorate([
+    (0, common_1.Post)('bulk/lifecycle'),
+    (0, common_1.HttpCode)(201),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.HR_MANAGER),
+    (0, guards_1.RequirePermissions)('assayer:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Transition a batch of assayers forward to a target lifecycle stage' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [BulkTransitionLifecycleDto, Object]),
+    __metadata("design:returntype", Promise)
+], AssayerController.prototype, "bulkTransitionLifecycle", null);
 __decorate([
     (0, common_1.Post)(':id/lifecycle'),
     (0, common_1.HttpCode)(201),

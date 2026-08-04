@@ -20,6 +20,7 @@ const project_entity_1 = require("./project.entity");
 const project_branch_entity_1 = require("./project-branch.entity");
 const assessment_entity_1 = require("./assessment.entity");
 const client_entity_1 = require("../client/client.entity");
+const zone_entity_1 = require("../zone/zone.entity");
 const project_state_machine_1 = require("./project.state-machine");
 const branch_service_1 = require("../branch/branch.service");
 const project_query_service_1 = require("./project-query.service");
@@ -29,70 +30,12 @@ const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
 const xlsx = require("xlsx");
-const fs = require("fs");
-const path = require("path");
-const CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
-let cache = {};
-if (fs.existsSync(CACHE_FILE)) {
-    try {
-        cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-    }
-    catch (e) {
-        console.error('Failed to read cache file, starting fresh', e);
-    }
-}
-function saveCache() {
-    try {
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
-    }
-    catch (e) {
-        console.error('Failed to save geocoding cache', e);
-    }
-}
+const india_geocoder_1 = require("../geo/india-geocoder");
 async function getRealCoordinates(address, name, district, state) {
     const pinMatch = address.match(/\b\d{6}\b/);
-    const pincode = pinMatch ? pinMatch[0] : null;
-    const queries = [];
-    if (pincode) {
-        queries.push(`${pincode}, India`);
-    }
-    queries.push(`${name}, ${district}, ${state}, India`);
-    queries.push(`${district}, ${state}, India`);
-    queries.push(`${state}, India`);
-    for (const q of queries) {
-        const cleanQ = q.trim();
-        if (cache[cleanQ]) {
-            return cache[cleanQ];
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        try {
-            const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2000);
-            const res = await fetch(url, {
-                signal: controller.signal,
-                headers: {
-                    'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-                }
-            });
-            clearTimeout(timeoutId);
-            if (res.ok) {
-                const data = await res.json();
-                if (data && data[0]) {
-                    const coords = {
-                        lat: parseFloat(data[0].lat),
-                        lng: parseFloat(data[0].lon)
-                    };
-                    cache[cleanQ] = coords;
-                    saveCache();
-                    return coords;
-                }
-            }
-        }
-        catch (err) {
-            console.error(`Error geocoding: ${cleanQ}`, err);
-        }
-    }
+    const coords = await (0, india_geocoder_1.geocodeIndia)(address, name, district, state, pinMatch ? pinMatch[0] : null);
+    if (coords)
+        return { lat: coords.lat, lng: coords.lng };
     throw new common_1.NotFoundException(`Geocoding failed: could not locate coordinates for address: "${address}" (District: ${district}, State: ${state}).`);
 }
 function getStateZone(stateName) {
@@ -113,23 +56,44 @@ let ProjectService = class ProjectService {
     projectBranchRepository;
     assessmentRepository;
     clientRepository;
+    zoneRepository;
     branchQueryService;
     branchService;
     auditService;
     workflowEngine;
     eventPublisher;
     projectQueryService;
-    constructor(projectRepository, projectBranchRepository, assessmentRepository, clientRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
+    constructor(projectRepository, projectBranchRepository, assessmentRepository, clientRepository, zoneRepository, branchQueryService, branchService, auditService, workflowEngine, eventPublisher, projectQueryService) {
         this.projectRepository = projectRepository;
         this.projectBranchRepository = projectBranchRepository;
         this.assessmentRepository = assessmentRepository;
         this.clientRepository = clientRepository;
+        this.zoneRepository = zoneRepository;
         this.branchQueryService = branchQueryService;
         this.branchService = branchService;
         this.auditService = auditService;
         this.workflowEngine = workflowEngine;
         this.eventPublisher = eventPublisher;
         this.projectQueryService = projectQueryService;
+    }
+    async resolveZoneName(stateName, clientId) {
+        if (stateName) {
+            const stateUpper = stateName.toUpperCase();
+            const query = this.zoneRepository.createQueryBuilder('zone')
+                .where('zone.isActive = true');
+            if (clientId) {
+                query.andWhere('(zone.clientId = :clientId OR zone.clientId IS NULL)', { clientId });
+            }
+            const zones = await query.getMany();
+            for (const z of zones) {
+                if (z.states && Array.isArray(z.states)) {
+                    if (z.states.some((s) => s.toUpperCase() === stateUpper)) {
+                        return z.name;
+                    }
+                }
+            }
+        }
+        return getStateZone(stateName);
     }
     onModuleInit() {
         this.workflowEngine.registerWorkflow('project', [
@@ -507,7 +471,7 @@ let ProjectService = class ProjectService {
             let branch = await this.branchQueryService.findOneByCode(branchCode);
             if (!branch) {
                 const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
-                const zoneName = getStateZone(state);
+                const zoneName = await this.resolveZoneName(state, project.clientId);
                 const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
                 const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
                 const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
@@ -875,7 +839,9 @@ exports.ProjectService = ProjectService = __decorate([
     __param(1, (0, typeorm_1.InjectRepository)(project_branch_entity_1.ProjectBranchEntity)),
     __param(2, (0, typeorm_1.InjectRepository)(assessment_entity_1.AssessmentEntity)),
     __param(3, (0, typeorm_1.InjectRepository)(client_entity_1.ClientEntity)),
+    __param(4, (0, typeorm_1.InjectRepository)(zone_entity_1.ZoneEntity)),
     __metadata("design:paramtypes", [typeorm_2.Repository,
+        typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,
         typeorm_2.Repository,

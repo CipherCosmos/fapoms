@@ -164,6 +164,25 @@ export const NotificationDropdown: React.FC = () => {
 
   const rect = ref.current?.getBoundingClientRect();
 
+  const getCategoryFallback = (category?: NotificationCategory): string => {
+    switch (category) {
+      case 'ASSIGNMENT':
+        return '/assignments';
+      case 'VALIDATION':
+        return '/data-entry';
+      case 'DOCUMENT':
+        return '/documents';
+      case 'PLANNING':
+        return '/planning';
+      case 'WORKFORCE':
+        return '/hr';
+      case 'BILLING':
+        return '/billing';
+      default:
+        return '/notifications';
+    }
+  };
+
   const handleOpen = async (n: WebNotification) => {
     if (!n.isRead) {
       setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, isRead: true } : x)));
@@ -171,8 +190,15 @@ export const NotificationDropdown: React.FC = () => {
       api.markNotificationRead(n.id).catch(() => {});
     }
     setOpen(false);
-    if (n.link) {
-      navigate(n.link);
+
+    let targetPath = n.link;
+    if (targetPath === '/validation') targetPath = '/data-entry';
+    if (targetPath === '/workforce') targetPath = '/hr';
+
+    if (targetPath && targetPath !== '/dashboard') {
+      navigate(targetPath);
+    } else {
+      navigate(getCategoryFallback(n.category));
     }
   };
 
@@ -188,40 +214,43 @@ export const NotificationDropdown: React.FC = () => {
         onClick={() => setOpen(!open)}
         aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
         style={{
-          background: 'none',
-          border: 'none',
-          color: 'var(--text-secondary)',
+          background: open ? 'var(--bg-tertiary)' : 'var(--bg-primary)',
+          border: '1px solid var(--border-color)',
+          color: unreadCount > 0 ? 'var(--accent-primary)' : 'var(--text-secondary)',
           cursor: 'pointer',
           position: 'relative',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '6px',
-          borderRadius: 'var(--radius-sm)',
-          transition: 'background var(--transition-fast)',
+          width: '36px',
+          height: '36px',
+          borderRadius: 'var(--radius-full)',
+          transition: 'all var(--transition-fast)',
+          boxShadow: unreadCount > 0 ? '0 0 12px rgba(216, 174, 71, 0.2)' : 'none',
         }}
         onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = open ? 'var(--bg-tertiary)' : 'var(--bg-primary)')}
       >
-        <Bell size={18} />
+        <Bell size={16} />
         {unreadCount > 0 && (
           <span
             style={{
               position: 'absolute',
-              top: '2px',
-              right: '2px',
-              minWidth: '16px',
-              height: '16px',
-              backgroundColor: 'var(--danger)',
-              borderRadius: '8px',
+              top: '-2px',
+              right: '-2px',
+              minWidth: '18px',
+              height: '18px',
+              backgroundColor: '#ef4444',
+              borderRadius: '9px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               padding: '0 4px',
-              fontSize: '9px',
+              fontSize: '10px',
               fontWeight: 800,
               color: '#FFFFFF',
               border: '2px solid var(--bg-secondary)',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
             }}
           >
             {unreadCount > 99 ? '99+' : unreadCount}
@@ -235,16 +264,16 @@ export const NotificationDropdown: React.FC = () => {
             ref={panelRef}
             style={{
               position: 'fixed',
-              top: Math.min(rect.bottom + 8, window.innerHeight - 540),
-              left: Math.max(16, rect.right - 380),
-              width: '380px',
-              maxHeight: '520px',
-              backgroundColor: 'var(--bg-surface)',
+              top: Math.min(rect.bottom + 10, window.innerHeight - 540),
+              left: Math.max(16, rect.right - 400),
+              width: '400px',
+              maxHeight: '540px',
+              backgroundColor: 'var(--bg-surface-2)',
               backdropFilter: 'blur(24px)',
               WebkitBackdropFilter: 'blur(24px)',
               border: '1px solid var(--border-color)',
               borderRadius: 'var(--radius-lg)',
-              boxShadow: 'var(--shadow-lg), 0 20px 45px rgba(0,0,0,0.35)',
+              boxShadow: 'var(--shadow-lg), 0 24px 50px rgba(0,0,0,0.4)',
               overflow: 'hidden',
               zIndex: 999999,
               display: 'flex',

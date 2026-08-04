@@ -27,35 +27,11 @@ const audit_service_1 = require("../../core/audit/audit.service");
 const branch_query_service_1 = require("./branch-query.service");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const shared_1 = require("@fapoms/shared");
-async function geocodeAddress(address, city, district, state) {
-    const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
-        .replace(/\s+/g, ' ')
-        .trim();
-    try {
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-            }
-        });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-            const data = await res.json();
-            if (data && data[0]) {
-                return {
-                    lat: parseFloat(data[0].lat),
-                    lng: parseFloat(data[0].lon)
-                };
-            }
-        }
-    }
-    catch (err) {
-        console.error(`Error geocoding inside service: ${cleanQ}`, err);
-    }
-    return null;
+const india_autocomplete_helper_1 = require("../geo/india-autocomplete.helper");
+const india_geocoder_1 = require("../geo/india-geocoder");
+async function geocodeAddress(address, city, district, state, pincode) {
+    const res = await (0, india_geocoder_1.geocodeIndia)(address, city, district, state, pincode);
+    return res ? { lat: res.lat, lng: res.lng } : null;
 }
 let BranchService = class BranchService {
     branchRepository;
@@ -93,14 +69,10 @@ let BranchService = class BranchService {
         let lat = dto.latitude;
         let lng = dto.longitude;
         if (!lat || !lng) {
-            const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+            const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
             if (coords) {
                 lat = coords.lat;
                 lng = coords.lng;
-            }
-            else {
-                lat = 19.076;
-                lng = 72.8777;
             }
         }
         const location = { type: 'Point', coordinates: [lng, lat] };
@@ -185,7 +157,7 @@ let BranchService = class BranchService {
         const districtChanged = dto.district !== undefined && dto.district !== branch.district;
         const stateChanged = dto.state !== undefined && dto.state !== branch.state;
         if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
-            const coords = await geocodeAddress(dto.address ?? branch.address, dto.city ?? branch.city, dto.district ?? branch.district, dto.state ?? branch.state);
+            const coords = await geocodeAddress(dto.address ?? branch.address, dto.city ?? branch.city, dto.district ?? branch.district, dto.state ?? branch.state, dto.pincode ?? branch.pincode);
             if (coords) {
                 lat = coords.lat;
                 lng = coords.lng;
@@ -487,20 +459,23 @@ let BranchService = class BranchService {
     }
     async validateGeography(state, district, city) {
         const stateEntity = await this.stateRepository.findOne({ where: { name: state } });
-        if (!stateEntity) {
-            throw new common_1.BadRequestException(`State '${state}' not found in master reference data.`);
-        }
-        const districtEntity = await this.districtRepository.findOne({
-            where: { name: district, stateId: stateEntity.id },
-        });
-        if (!districtEntity) {
-            throw new common_1.BadRequestException(`District '${district}' not found under state '${state}'.`);
-        }
-        const cityEntity = await this.cityRepository.findOne({
-            where: { name: city, districtId: districtEntity.id },
-        });
+        const districtEntity = stateEntity
+            ? await this.districtRepository.findOne({ where: { name: district, stateId: stateEntity.id } })
+            : null;
+        const cityEntity = districtEntity
+            ? await this.cityRepository.findOne({ where: { name: city, districtId: districtEntity.id } })
+            : null;
         if (!cityEntity) {
-            throw new common_1.BadRequestException(`City '${city}' not found under district '${district}'.`);
+            const live = await (0, india_autocomplete_helper_1.autocompleteIndia)(city);
+            const found = live.some((p) => p.district &&
+                p.state &&
+                p.district.toLowerCase() === district.toLowerCase() &&
+                p.state.toLowerCase() === state.toLowerCase());
+            const stateLive = await (0, india_autocomplete_helper_1.autocompleteIndia)(state);
+            const stateExists = stateLive.some((p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase());
+            if (!found && !stateExists) {
+                throw new common_1.BadRequestException(`Could not verify '${city}, ${district}, ${state}' as a real place. Check the spelling of the state, district and city.`);
+            }
         }
     }
     async registerImportedBranch(dto, userId) {

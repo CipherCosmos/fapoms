@@ -4,12 +4,10 @@ export class TaskId {
   }
 }
 
-export enum TaskPriority {
-  LOW = 'LOW',
-  MEDIUM = 'MEDIUM',
-  HIGH = 'HIGH',
-  CRITICAL = 'CRITICAL',
-}
+import { Priority } from '@fapoms/shared';
+
+export type TaskPriority = Priority;
+export const TaskPriority = Priority;
 
 export enum TaskStatus {
   OPEN = 'OPEN',

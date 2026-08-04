@@ -585,6 +585,37 @@ const UtilisationTab: React.FC<{ d: HrWorkforceOverview; navigate: (p: string) =
       </div>
 
       <section style={card}>
+        <div style={{ ...label, marginBottom: '10px' }}>Who is under or over-utilised ({d.utilisation.utilizationCounts.underUtilized + d.utilisation.utilizationCounts.idle} under / {d.utilisation.utilizationCounts.overUtilized} over)</div>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+          <Stat value={d.utilisation.utilizationCounts.overUtilized} caption="Over capacity" tone={d.utilisation.utilizationCounts.overUtilized ? 'var(--danger)' : undefined} />
+          <Stat value={d.utilisation.utilizationCounts.balanced} caption="Balanced" tone='var(--success)' />
+          <Stat value={d.utilisation.utilizationCounts.underUtilized} caption="Under-utilised" tone={d.utilisation.utilizationCounts.underUtilized ? 'var(--warning)' : undefined} />
+          <Stat value={d.utilisation.utilizationCounts.idle} caption="Idle (no work)" tone={d.utilisation.utilizationCounts.idle ? 'var(--warning)' : undefined} />
+        </div>
+        {d.utilisation.utilization.length === 0 ? (
+          <Empty>No active assayers to measure utilisation for.</Empty>
+        ) : (
+          <Table
+            head={['Assayer', 'Location', 'Loaded', 'Capacity', 'Util %', 'Status', '']}
+            rows={d.utilisation.utilization.map((r) => {
+              const tone =
+                r.posture === 'OVER_UTILIZED' ? 'var(--danger)' :
+                r.posture === 'UNDER_UTILIZED' || r.posture === 'IDLE' ? 'var(--warning)' : 'var(--success)';
+              return [
+                <strong>{r.displayName}</strong>,
+                [r.district, r.state].filter(Boolean).join(', ') || '—',
+                `${r.currentAllocation} / ${r.weeklyCapacity}`,
+                r.remainingCapacity > 0 ? `${r.remainingCapacity} free` : 'at limit',
+                <strong style={{ color: tone }}>{r.utilizationPercentage}%</strong>,
+                <span style={{ color: tone, fontSize: '11px', fontWeight: 600 }}>{r.posture.replace('_', ' ')}</span>,
+                <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} />,
+              ];
+            })}
+          />
+        )}
+      </section>
+
+      <section style={card}>
         <div style={{ ...label, marginBottom: '10px' }}>Idle and never-deployed ({d.utilisation.idle.length})</div>
         {d.utilisation.idle.length === 0 ? (
           <Empty>Everyone active has had work in the last {d.utilisation.idleAfterDays} days.</Empty>

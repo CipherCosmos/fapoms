@@ -34,6 +34,27 @@ function mapLifecycleToOperationalStatus(lifecycle: string): AssayerStatus {
 }
 
 export class AssayerStateMachine {
+  /** Ordered path of lifecycle states from `from` to `target`, walking only
+   *  allowed transitions (BFS). Returns [] when already there, or null when the
+   *  target is unreachable through the state machine — used by bulk operations
+   *  to walk a batch forward to a single destination without invalid jumps. */
+  static findPathTo(from: string, target: string): string[] | null {
+    if (from === target) return [];
+    const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
+    const visited = new Set<string>([from]);
+    while (queue.length) {
+      const { stage, path } = queue.shift()!;
+      for (const next of LIFECYCLE_TRANSITIONS[stage] ?? []) {
+        if (next === target) return [...path, next];
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push({ stage: next, path: [...path, next] });
+        }
+      }
+    }
+    return null;
+  }
+
   private static validateTransition(assayer: AssayerEntity, targetStatus: AssayerLifecycleStatus) {
     const currentStatus = assayer.lifecycleStatus;
     const allowed = LIFECYCLE_TRANSITIONS[currentStatus];

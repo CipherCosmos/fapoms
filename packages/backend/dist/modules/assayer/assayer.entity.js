@@ -141,11 +141,20 @@ __decorate([
     __metadata("design:type", Object)
 ], AssayerEntity.prototype, "location", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ type: 'varchar', length: 50, default: shared_1.AssayerStatus.ACTIVE }),
+    (0, typeorm_1.Column)({
+        type: 'enum',
+        enum: shared_1.AssayerStatus,
+        default: shared_1.AssayerStatus.ACTIVE,
+    }),
     __metadata("design:type", String)
 ], AssayerEntity.prototype, "status", void 0);
 __decorate([
-    (0, typeorm_1.Column)({ name: 'lifecycle_status', type: 'varchar', length: 50, default: shared_1.AssayerLifecycleStatus.INVITED }),
+    (0, typeorm_1.Column)({
+        name: 'lifecycle_status',
+        type: 'enum',
+        enum: shared_1.AssayerLifecycleStatus,
+        default: shared_1.AssayerLifecycleStatus.INVITED,
+    }),
     __metadata("design:type", String)
 ], AssayerEntity.prototype, "lifecycleStatus", void 0);
 __decorate([

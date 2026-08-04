@@ -3,8 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { api } from '../services/api';
+import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
 import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
+import { localDateKey } from '../utils/statusLabels';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 
 interface ClientOption {
@@ -139,7 +141,7 @@ const getInitialProjectForm = (clientId = ''): FormData => {
   const today = new Date();
   const nextMonth = new Date();
   nextMonth.setDate(today.getDate() + 30);
-  const formatDate = (d: Date) => d.toISOString().split('T')[0];
+  const formatDate = (d: Date) => localDateKey(d);
   const rand = Math.floor(1000 + Math.random() * 9000);
   return {
     name: '',
@@ -272,7 +274,7 @@ export const Projects: React.FC = () => {
       setTotalProjects(response.meta?.pagination?.total ?? totalProjects);
       setLoadedPage(next);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to load more projects.' });
+      setMessage({ type: 'error', text: `Failed to load more projects. ${userMessage(err)}` });
     } finally {
       setIsLoadingMore(false);
     }
@@ -331,7 +333,7 @@ export const Projects: React.FC = () => {
       setMessage({ type: 'success', text: 'Branch associated successfully!' });
       loadDetail(detail.id);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to add branch.' });
+      setMessage({ type: 'error', text: `Failed to add branch. ${userMessage(err)}` });
     } finally {
       setIsSaving(false);
     }
@@ -349,7 +351,7 @@ export const Projects: React.FC = () => {
       setMessage({ type: 'success', text: 'Branch removed successfully!' });
       loadDetail(detail.id);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to remove branch.' });
+      setMessage({ type: 'error', text: `Failed to remove branch. ${userMessage(err)}` });
     } finally {
       setIsSaving(false);
     }
@@ -385,7 +387,7 @@ export const Projects: React.FC = () => {
       setForm(getInitialProjectForm());
       loadProjects();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to create project.' });
+      setMessage({ type: 'error', text: `Failed to create project. ${userMessage(err)}` });
     } finally {
       setIsSaving(false);
     }
@@ -436,7 +438,7 @@ export const Projects: React.FC = () => {
       loadProjects();
       if (selectedId) loadDetail(selectedId);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to update project.' });
+      setMessage({ type: 'error', text: `Failed to update project. ${userMessage(err)}` });
     } finally {
       setIsSaving(false);
     }
@@ -452,7 +454,7 @@ export const Projects: React.FC = () => {
       setSelectedId(null);
       loadProjects();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to delete project.' });
+      setMessage({ type: 'error', text: `Failed to delete project. ${userMessage(err)}` });
     }
   };
 
@@ -473,7 +475,7 @@ export const Projects: React.FC = () => {
       loadProjects();
       if (selectedId) loadDetail(selectedId);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Transition failed.' });
+      setMessage({ type: 'error', text: `Transition failed. ${userMessage(err)}` });
     }
   };
 
@@ -491,7 +493,7 @@ export const Projects: React.FC = () => {
       setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
       loadDetail(detail.id);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to upload branches.' });
+      setMessage({ type: 'error', text: `Failed to upload branches. ${userMessage(err)}` });
     } finally {
       setIsSaving(false);
     }
@@ -508,7 +510,7 @@ export const Projects: React.FC = () => {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to download template.' });
+      setMessage({ type: 'error', text: `Failed to download template. ${userMessage(err)}` });
     }
   };
 

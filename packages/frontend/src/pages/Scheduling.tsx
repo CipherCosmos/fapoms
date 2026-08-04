@@ -6,8 +6,9 @@ import {
   X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight
 } from 'lucide-react';
 import { ScheduleStatus } from '@fapoms/shared';
-import { scheduleStatusLabel } from '../utils/statusLabels';
+import { scheduleStatusLabel, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
+import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
@@ -73,11 +74,11 @@ export const Scheduling: React.FC = () => {
   const today = new Date();
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
-  const [selectedDate, setSelectedDate] = useState<string>(today.toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState<string>(todayDateKey());
   const [viewMode, setViewMode] = useState<'calendar' | 'timeline'>('calendar');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
-  const [scheduleDate, setScheduleDate] = useState(today.toISOString().split('T')[0]);
+  const [scheduleDate, setScheduleDate] = useState(todayDateKey());
   const [scheduleRemarks, setScheduleRemarks] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +87,7 @@ export const Scheduling: React.FC = () => {
   const [selectedSchId, setSelectedSchId] = useState<string | null>(null);
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [rescheduleSchId, setRescheduleSchId] = useState<string | null>(null);
-  const [rescheduleNewDate, setRescheduleNewDate] = useState(today.toISOString().split('T')[0]);
+  const [rescheduleNewDate, setRescheduleNewDate] = useState(todayDateKey());
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -200,13 +201,13 @@ export const Scheduling: React.FC = () => {
       setScheduleRemarks('');
       invalidateAll();
     } catch (err: any) {
-      setError(err?.message || 'Failed to create schedule');
+      setError(`Failed to create schedule ${userMessage(err)}`);
     } finally { setIsCreating(false); }
   };
 
   const handleQuickScheduleFromQueue = (assignmentId: string) => {
     setSelectedAssignmentId(assignmentId);
-    setScheduleDate(selectedDate || today.toISOString().split('T')[0]);
+    setScheduleDate(selectedDate || todayDateKey());
     setShowCreateModal(true);
     const sel = scopedAssignments.find(a => a.id === assignmentId);
     if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, selectedDate);
@@ -215,7 +216,7 @@ export const Scheduling: React.FC = () => {
   const handleTransition = async (id: string, targetStatus: ScheduleStatus) => {
     if (targetStatus === ScheduleStatus.RESCHEDULED) {
       setRescheduleSchId(id);
-      setRescheduleNewDate(today.toISOString().split('T')[0]);
+      setRescheduleNewDate(todayDateKey());
       setShowRescheduleModal(true);
       return;
     }
@@ -232,7 +233,7 @@ export const Scheduling: React.FC = () => {
       setSuccessMsg(`Schedule status set to ${scheduleStatusLabel(targetStatus)}`);
       invalidateAll();
     } catch (err: any) {
-      setError(err?.message || 'Failed to update schedule');
+      setError(`Failed to update schedule ${userMessage(err)}`);
     }
   };
 
@@ -254,16 +255,16 @@ export const Scheduling: React.FC = () => {
       setSuccessMsg(`Schedule rescheduled to ${rescheduleNewDate}`);
       invalidateAll();
     } catch (err: any) {
-      setError(err?.message || 'Failed to reschedule');
+      setError(`Failed to reschedule ${userMessage(err)}`);
     } finally {
       setIsRescheduling(false);
     }
   };
 
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = todayDateKey();
 
   const filteredSchedules = scopedSchedules.filter(s => {
-    const schDateStr = new Date(s.scheduledDate).toISOString().split('T')[0];
+    const schDateStr = localDateKey(s.scheduledDate);
     if (statusFilter === 'ALL') return true;
     if (statusFilter === 'ONGOING') return schDateStr === todayStr && s.status !== ScheduleStatus.COMPLETED;
     if (statusFilter === 'UPCOMING') return schDateStr > todayStr && s.status !== ScheduleStatus.COMPLETED;
@@ -272,7 +273,7 @@ export const Scheduling: React.FC = () => {
   });
 
   const getSchedulesForDate = (dateStr: string) => filteredSchedules.filter(s => {
-    const sd = new Date(s.scheduledDate).toISOString().split('T')[0];
+    const sd = localDateKey(s.scheduledDate);
     return sd === dateStr;
   });
 
@@ -307,6 +308,7 @@ export const Scheduling: React.FC = () => {
             { value: 'ONGOING', label: '⚡ Ongoing (Today)' },
             { value: 'UPCOMING', label: '📅 Upcoming' },
             { value: 'COMPLETED', label: '✓ Completed' },
+            { value: 'CONFIRMED', label: '✅ Confirmed' },
             { value: 'RESCHEDULED', label: '🔄 Rescheduled' },
             { value: 'TENTATIVE', label: '⏳ Tentative' },
             { value: 'HISTORICAL', label: '📜 History Log' },
@@ -322,7 +324,7 @@ export const Scheduling: React.FC = () => {
             </button>
           </div>
 
-          <button onClick={() => { setShowCreateModal(true); setScheduleDate(today.toISOString().split('T')[0]); setAssayerWorkload(null); }}
+          <button onClick={() => { setShowCreateModal(true); setScheduleDate(todayDateKey()); setAssayerWorkload(null); }}
             className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
             <Plus size={13} /> + Schedule Audit
           </button>
@@ -428,7 +430,7 @@ export const Scheduling: React.FC = () => {
                     const hd = typeof h.date === 'string' ? h.date.slice(0, 10) : new Date(h.date).toISOString().slice(0, 10);
                     return hd === dateStr;
                   });
-                  const isToday = dateStr === today.toISOString().split('T')[0];
+                  const isToday = dateStr === todayDateKey();
                   const isSelected = dateStr === selectedDate;
                   const hasSchedules = daySchedules.length > 0;
                   const isHoliday = dayHolidays.length > 0 || isSunday || isAltSaturday;
@@ -477,7 +479,7 @@ export const Scheduling: React.FC = () => {
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No schedules match the status filter.</div>
               ) : (
                 filteredSchedules.map(sch => (
-                  <div key={sch.id} onClick={() => { setSelectedSchId(sch.id); setSelectedDate(new Date(sch.scheduledDate).toISOString().split('T')[0]); }}
+                  <div key={sch.id} onClick={() => { setSelectedSchId(sch.id); setSelectedDate(localDateKey(sch.scheduledDate)); }}
                     style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '6px', background: selectedSchId === sch.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-surface-2)', border: selectedSchId === sch.id ? '1px solid var(--accent)' : '1px solid var(--border-hair)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                       <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{sch.assignment?.projectBranch?.branch?.name || 'Branch Audit'}</div>
@@ -649,7 +651,7 @@ export const Scheduling: React.FC = () => {
                     <div key={doc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 6px', background: 'var(--bg-surface-2)', borderRadius: '4px', fontSize: '10px', marginBottom: '3px' }}>
                       <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{doc.fileName}</span>
                       <button type="button" aria-label={`Download ${doc.fileName}`} title="Download"
-                        onClick={() => openDocumentDownload(doc.id).catch((e: any) => setError(e?.message || 'Failed to open download.'))}
+                        onClick={() => openDocumentDownload(doc.id).catch((e: any) => setError(`Failed to open download. ${userMessage(e)}`))}
                         style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
                         <Download size={11} />
                       </button>

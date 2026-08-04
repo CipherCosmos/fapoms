@@ -107,7 +107,7 @@ export class HrWorkforceService {
 
   private async headcount() {
     const byLifecycle = await this.dataSource.query(`
-      SELECT COALESCE(lifecycle_status, 'UNKNOWN') AS stage, COUNT(*)::int AS count
+      SELECT COALESCE(lifecycle_status::text, 'UNKNOWN') AS stage, COUNT(*)::int AS count
       FROM assayers GROUP BY 1 ORDER BY 2 DESC
     `);
     const byEmployment = await this.dataSource.query(`
@@ -128,7 +128,7 @@ export class HrWorkforceService {
       SELECT
         COUNT(*)::int                                                              AS total,
         COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int                   AS active,
-        COUNT(*) FILTER (WHERE lifecycle_status NOT IN ('ACTIVE','EXITED','TERMINATED')
+        COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
                            AND exit_date IS NULL AND termination_date IS NULL)::int AS onboarding,
         COUNT(*) FILTER (WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
       FROM assayers
@@ -160,7 +160,7 @@ export class HrWorkforceService {
                  u.username
                ) AS performed_by_name
         FROM assayer_activities act
-        LEFT JOIN users u ON u.id = act.performed_by
+        LEFT JOIN users u ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND u.id = act.performed_by::uuid
         WHERE act.event_type = 'LIFECYCLE_TRANSITION'
         ORDER BY act.assayer_id, act.occurred_at DESC
       )
@@ -448,6 +448,57 @@ export class HrWorkforceService {
     `);
 
     const completed = HrWorkforceService.num(performance.completedAssignments);
+
+    // Live per-assayer utilisation: committed work vs weekly capacity. This is
+    // the "who is over-worked / who is idle" read, distinct from the "how old is
+    // the last job" idle query above — one is capacity pressure, the other is
+    // engagement. Capacity comes from the assayer's own max_weekly_workload
+    // (defaulting to 15 like the planning engines) so the numbers agree with
+    // what planning will actually assign.
+    const utilizationRows = await this.dataSource.query(`
+      SELECT a.id, a.assayer_code AS "assayerCode", a.display_name AS "displayName",
+             a.state, a.district, a.max_weekly_workload AS "maxWeeklyWorkload",
+             a.last_assignment_date AS "lastAssignmentDate",
+             (SELECT COUNT(*) FROM assignments asg
+               WHERE asg.assayer_id = a.id AND asg.is_active = true
+                 AND asg.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')
+             ) AS "currentAllocation"
+      FROM assayers a
+      WHERE a.lifecycle_status = 'ACTIVE' AND a.exit_date IS NULL AND a.termination_date IS NULL
+      ORDER BY a.display_name ASC
+    `);
+    const DEFAULT_WEEKLY = 15;
+    const utilization = (utilizationRows ?? []).map((r: any) => {
+      const weeklyCapacity = r.maxWeeklyWorkload || DEFAULT_WEEKLY;
+      const allocation = HrWorkforceService.num(r.currentAllocation);
+      const pct = weeklyCapacity > 0 ? Math.round((allocation / weeklyCapacity) * 100) : 0;
+      let posture: 'IDLE' | 'UNDER_UTILIZED' | 'BALANCED' | 'OVER_UTILIZED';
+      if (allocation === 0) posture = 'IDLE';
+      else if (allocation >= weeklyCapacity) posture = 'OVER_UTILIZED';
+      else if (pct >= 60) posture = 'BALANCED';
+      else posture = 'UNDER_UTILIZED';
+      return {
+        id: r.id,
+        assayerCode: r.assayerCode,
+        displayName: r.displayName,
+        state: r.state,
+        district: r.district,
+        weeklyCapacity,
+        currentAllocation: allocation,
+        remainingCapacity: Math.max(0, weeklyCapacity - allocation),
+        utilizationPercentage: pct,
+        posture,
+      };
+    });
+    const count = (p: string) => utilization.filter((u: any) => u.posture === p).length;
+    const utilizationCounts = {
+      idle: count('IDLE'),
+      underUtilized: count('UNDER_UTILIZED'),
+      balanced: count('BALANCED'),
+      overUtilized: count('OVER_UTILIZED'),
+      total: utilization.length,
+    };
+
     return {
       idleAfterDays: IDLE_AFTER_DAYS,
       idle,
@@ -455,6 +506,8 @@ export class HrWorkforceService {
       // "Never assigned" is a different problem from "went quiet": one is an
       // onboarding failure, the other is a deployment or retention issue.
       neverAssigned: idle.filter((r: any) => r.lastAssignmentDate === null).length,
+      utilization,
+      utilizationCounts,
       performance: {
         ...performance,
         onTimeRate: completed
@@ -523,8 +576,8 @@ export class HrWorkforceService {
              a.id AS "assayerId", a.assayer_code AS "assayerCode", a.display_name AS "displayName"
       FROM assayer_activities act
       JOIN assayers a ON a.id = act.assayer_id
-      LEFT JOIN users u ON u.id = act.performed_by
-      LEFT JOIN assayers actor ON actor.id = act.performed_by
+      LEFT JOIN users u ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND u.id = act.performed_by::uuid
+      LEFT JOIN assayers actor ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND actor.id = act.performed_by::uuid
       ORDER BY act.occurred_at DESC
       LIMIT 40
     `);

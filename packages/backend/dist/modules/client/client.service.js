@@ -35,6 +35,24 @@ const VALID_LIFECYCLE_TRANSITIONS = {
     [shared_1.ClientLifecycleStatus.TERMINATED]: [shared_1.ClientLifecycleStatus.ARCHIVED],
     [shared_1.ClientLifecycleStatus.ARCHIVED]: [],
 };
+function findLifecyclePathTo(from, target) {
+    if (from === target)
+        return [];
+    const queue = [{ stage: from, path: [] }];
+    const visited = new Set([from]);
+    while (queue.length) {
+        const { stage, path } = queue.shift();
+        for (const next of VALID_LIFECYCLE_TRANSITIONS[stage] ?? []) {
+            if (next === target)
+                return [...path, next];
+            if (!visited.has(next)) {
+                visited.add(next);
+                queue.push({ stage: next, path: [...path, next] });
+            }
+        }
+    }
+    return null;
+}
 const VALID_BILLING_TRANSITIONS = {
     [shared_1.ClientBillingStatus.DRAFT]: [shared_1.ClientBillingStatus.ACTIVE, shared_1.ClientBillingStatus.INACTIVE],
     [shared_1.ClientBillingStatus.ACTIVE]: [shared_1.ClientBillingStatus.SUSPENDED, shared_1.ClientBillingStatus.INACTIVE],
@@ -298,6 +316,34 @@ let ClientService = class ClientService {
             console.error('Failed to publish client:status-changed event:', err);
         }
         return saved;
+    }
+    async bulkTransitionLifecycle(ids, newStatus, userId, reason) {
+        const validTargets = Object.values(shared_1.ClientLifecycleStatus);
+        if (!validTargets.includes(newStatus)) {
+            throw new common_1.BadRequestException(`Invalid target status: ${newStatus}`);
+        }
+        const succeeded = [];
+        const skipped = [];
+        const failed = [];
+        for (const id of ids) {
+            try {
+                const client = await this.findOne(id);
+                const from = client.lifecycleStatus;
+                const path = findLifecyclePathTo(from, newStatus);
+                if (path === null) {
+                    skipped.push({ id, current: from, reason: `No valid path from ${from} to ${newStatus}` });
+                    continue;
+                }
+                for (const step of path) {
+                    await this.transitionLifecycle(id, step, userId, reason);
+                }
+                succeeded.push({ id, from, to: newStatus });
+            }
+            catch (e) {
+                failed.push({ id, reason: e.message });
+            }
+        }
+        return { succeeded, skipped, failed };
     }
     async findContacts(clientId) {
         await this.findOne(clientId);

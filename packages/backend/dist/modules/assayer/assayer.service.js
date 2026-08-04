@@ -19,8 +19,6 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const xlsx = require("xlsx");
 const bcrypt = require("bcrypt");
-const fs = require("fs");
-const path = require("path");
 const assayer_entity_1 = require("./assayer.entity");
 const assayer_commercial_profile_entity_1 = require("./assayer-commercial-profile.entity");
 const workforce_attribute_entity_1 = require("./workforce-attribute.entity");
@@ -33,56 +31,64 @@ const assayer_state_machine_1 = require("./assayer.state-machine");
 const domain_event_publisher_1 = require("../../core/events/domain-event.publisher");
 const workflow_engine_1 = require("../platform/workflow/workflow.engine");
 const shared_1 = require("@fapoms/shared");
-const GEO_CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
-let geoCache = {};
-try {
-    if (fs.existsSync(GEO_CACHE_FILE))
-        geoCache = JSON.parse(fs.readFileSync(GEO_CACHE_FILE, 'utf8'));
+const india_geocoder_1 = require("../geo/india-geocoder");
+async function geocodeAddress(address, city, district, state, pincode) {
+    return (0, india_geocoder_1.geocodeIndia)(address, city, district, state, pincode);
 }
-catch { }
-function saveGeoCache() {
+async function fetchPincodeAuthority(pincode) {
+    if (!/^\d{6}$/.test(pincode))
+        return null;
+    await new Promise((r) => setTimeout(r, 600));
     try {
-        fs.writeFileSync(GEO_CACHE_FILE, JSON.stringify(geoCache, null, 2), 'utf8');
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(`${pincode}, India`)}&format=json&limit=1&countrycodes=in&addressdetails=1`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(url, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)' },
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok)
+            return null;
+        const data = (await res.json());
+        const a = data?.[0]?.address;
+        if (!a?.state)
+            return null;
+        return {
+            state: a.state,
+            district: a.state_district || a.county || a.city || a.town || a.village || '',
+        };
     }
-    catch { }
+    catch {
+        return null;
+    }
 }
-async function geocodeAddress(address, city, district, state) {
-    const pincode = (address || '').match(/\b\d{6}\b/)?.[0] ?? null;
-    const queries = [
-        pincode ? `${pincode}, India` : null,
-        city && district ? `${city}, ${district}, ${state}, India` : null,
-        city ? `${city}, ${state}, India` : null,
-        district ? `${district}, ${state}, India` : null,
-        state ? `${state}, India` : null,
-    ].filter((q) => !!q && q.trim().length > 6);
-    for (const q of queries) {
-        const key = q.replace(/\s+/g, ' ').trim();
-        if (geoCache[key])
-            return geoCache[key];
-        await new Promise((r) => setTimeout(r, 1100));
-        try {
-            const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(key)}&format=json&limit=1&countrycodes=in`;
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
-            const res = await fetch(url, {
-                signal: controller.signal,
-                headers: { 'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)' },
-            });
-            clearTimeout(timeoutId);
-            if (res.ok) {
-                const data = (await res.json());
-                if (data?.[0]) {
-                    const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-                    geoCache[key] = coords;
-                    saveGeoCache();
-                    return coords;
-                }
-            }
-        }
-        catch {
-        }
+function normalizePlace(s) {
+    return (s || '')
+        .toLowerCase()
+        .replace(/\b(urban|rural|district|city|metro)\b/g, '')
+        .replace(/[^a-z0-9]/g, '');
+}
+async function assertAddressConsistent(dto) {
+    const pin = dto.pincode || (dto.address || '').match(/\b\d{6}\b/)?.[0] || '';
+    if (!/^\d{6}$/.test(pin))
+        return;
+    const authority = await fetchPincodeAuthority(pin);
+    if (!authority)
+        return;
+    const where = `${dto.state ?? 'unknown state'}, ${dto.district ?? 'unknown district'}`;
+    if (dto.state &&
+        authority.state &&
+        normalizePlace(dto.state) !== normalizePlace(authority.state)) {
+        throw new common_1.BadRequestException(`Pincode ${pin} is in ${authority.state}, but the entered state is "${dto.state}". ` +
+            `State, district, city, address and pincode must all describe the same place (got ${where}).`);
     }
-    return null;
+    if (dto.district &&
+        authority.district &&
+        normalizePlace(dto.district) !== normalizePlace(authority.district)) {
+        throw new common_1.BadRequestException(`Pincode ${pin} is in ${authority.district} district (${authority.state}), but the entered district is "${dto.district}". ` +
+            `State, district, city, address and pincode must all describe the same place (got ${where}).`);
+    }
 }
 const LIFECYCLE_TRANSITIONS = {
     [shared_1.AssayerLifecycleStatus.INVITED]: [shared_1.AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
@@ -245,12 +251,17 @@ let AssayerService = AssayerService_1 = class AssayerService {
         const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
         if (existing)
             throw new common_1.ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
+        await assertAddressConsistent(dto);
         let lat = dto.latitude;
         let lng = dto.longitude;
         if (!lat || !lng) {
-            const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+            const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
             lat = coords?.lat ?? undefined;
             lng = coords?.lng ?? undefined;
+            if (coords && coords.accuracyMeters > 0) {
+                this.logger.log(`Assayer ${dto.assayerCode}: pinned at ±${coords.accuracyMeters}m ` +
+                    `(${lat}, ${lng}) from "${dto.address}"`);
+            }
             if (!coords) {
                 this.logger.warn(`Assayer ${dto.assayerCode}: could not resolve coordinates from "${dto.address}" ` +
                     `(${dto.city}, ${dto.district}, ${dto.state}). Saved without a location — ` +
@@ -294,6 +305,13 @@ let AssayerService = AssayerService_1 = class AssayerService {
     }
     async update(id, dto, userId) {
         const assayer = await this.findOne(id);
+        const orig = {
+            address: assayer.address,
+            city: assayer.city,
+            district: assayer.district,
+            state: assayer.state,
+            pincode: assayer.pincode,
+        };
         Object.keys(dto).forEach((key) => {
             if (dto[key] !== undefined)
                 assayer[key] = dto[key];
@@ -309,15 +327,27 @@ let AssayerService = AssayerService_1 = class AssayerService {
             assayer.terminationDate = new Date(dto.terminationDate);
         let lat = dto.latitude !== undefined ? dto.latitude : assayer.latitude;
         let lng = dto.longitude !== undefined ? dto.longitude : assayer.longitude;
-        const addressChanged = dto.address !== undefined && dto.address !== assayer.address;
-        const cityChanged = dto.city !== undefined && dto.city !== assayer.city;
-        const districtChanged = dto.district !== undefined && dto.district !== assayer.district;
-        const stateChanged = dto.state !== undefined && dto.state !== assayer.state;
+        const addressChanged = dto.address !== undefined && dto.address !== orig.address;
+        const cityChanged = dto.city !== undefined && dto.city !== orig.city;
+        const districtChanged = dto.district !== undefined && dto.district !== orig.district;
+        const stateChanged = dto.state !== undefined && dto.state !== orig.state;
+        if (addressChanged || cityChanged || districtChanged || stateChanged) {
+            await assertAddressConsistent({
+                address: dto.address ?? orig.address,
+                city: dto.city ?? orig.city,
+                district: dto.district ?? orig.district,
+                state: dto.state ?? orig.state,
+                pincode: dto.pincode ?? orig.pincode,
+            });
+        }
         if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
-            const coords = await geocodeAddress(dto.address ?? assayer.address, dto.city ?? assayer.city, dto.district ?? assayer.district, dto.state ?? assayer.state);
+            const coords = await geocodeAddress(dto.address ?? orig.address, dto.city ?? orig.city, dto.district ?? orig.district, dto.state ?? orig.state, dto.pincode ?? orig.pincode);
             if (coords) {
                 lat = coords.lat;
                 lng = coords.lng;
+                if (coords.accuracyMeters > 0) {
+                    this.logger.log(`Assayer ${assayer.assayerCode}: re-pinned at ±${coords.accuracyMeters}m`);
+                }
             }
         }
         if (lat && lng) {
@@ -402,6 +432,41 @@ let AssayerService = AssayerService_1 = class AssayerService {
         else {
             throw new common_1.BadRequestException(`Invalid target status: ${targetStatus}`);
         }
+    }
+    async bulkTransitionLifecycle(ids, targetStatus, userId, reason) {
+        const validTargets = Object.values(shared_1.AssayerLifecycleStatus);
+        if (!validTargets.includes(targetStatus)) {
+            throw new common_1.BadRequestException(`Invalid target status: ${targetStatus}`);
+        }
+        const succeeded = [];
+        const skipped = [];
+        const failed = [];
+        for (const id of ids) {
+            try {
+                const assayer = await this.findOne(id);
+                const path = assayer_state_machine_1.AssayerStateMachine.findPathTo(assayer.lifecycleStatus, targetStatus);
+                if (path === null) {
+                    skipped.push({
+                        id,
+                        current: assayer.lifecycleStatus,
+                        reason: `No valid path from ${assayer.lifecycleStatus} to ${targetStatus}`,
+                    });
+                    continue;
+                }
+                const from = assayer.lifecycleStatus;
+                for (const step of path) {
+                    const { saved, event } = await this.doTransitionLifecycle(id, step, userId, reason);
+                    if (event)
+                        this.eventPublisher.publish(event.constructor.name, event);
+                    void saved;
+                }
+                succeeded.push({ id, from, to: targetStatus });
+            }
+            catch (e) {
+                failed.push({ id, reason: e.message });
+            }
+        }
+        return { succeeded, skipped, failed };
     }
     async doTransitionLifecycle(id, targetStatus, userId, reason, role = shared_1.SystemRole.SUPER_ADMINISTRATOR) {
         const assayer = await this.findOne(id);

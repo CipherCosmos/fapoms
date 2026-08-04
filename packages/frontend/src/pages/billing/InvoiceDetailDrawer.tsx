@@ -3,6 +3,7 @@ import { DetailDrawer, StyledInput, useToast } from '../../components/ui';
 import { useBillingInvoice, useTransitionBillingInvoice, useRecordBillingPayment } from '../../hooks/useBilling';
 import { INVOICE_TRANSITIONS, PaymentMethod } from '@fapoms/shared';
 import type { InvoiceStatus } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 const METHODS = Object.values(PaymentMethod);
@@ -44,7 +45,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
     try {
       await transition.mutateAsync({ id: invoice.id, status: nextStatus, reason: reason || undefined });
       toast('success', `Invoice → ${nextStatus}`); setNextStatus(''); setReason('');
-    } catch (e: any) { toast('error', e?.message || 'Transition failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Transition failed', message: userMessage(e) }); }
   };
 
   const doPay = async () => {
@@ -56,7 +57,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         receivedDate: receivedDate || undefined, notes: payNote || undefined,
       });
       toast('success', 'Payment recorded'); setPayOpen(false); setReference(''); setAmount(''); setPayNote(''); setReceivedDate('');
-    } catch (e: any) { toast('error', e?.message || 'Payment failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Payment failed', message: userMessage(e) }); }
   };
 
   return (

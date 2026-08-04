@@ -7,6 +7,7 @@ import {
   ShieldAlert, RefreshCw, AlertTriangle, Users, Building2, Clock, IndianRupee, MapPin,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { userMessage } from '../services/errors';
 
 interface BranchPoint {
   id: string; projectBranchId: string; name: string; branchCode: string | null;
@@ -68,7 +69,7 @@ export const ExecutiveMap: React.FC = () => {
       const q = clientId ? `?clientId=${clientId}` : '';
       setData(await api.request<CommandCenter>(`/planning/command-center${q}`));
     } catch (e: any) {
-      setError(e?.message || 'Failed to load command centre.');
+      setError(`Failed to load command centre. ${userMessage(e)}`);
     } finally {
       setLoading(false);
     }

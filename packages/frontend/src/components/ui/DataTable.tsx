@@ -20,6 +20,10 @@ export const DataTable = <T,>({
   sortKey,
   sortOrder,
   onSort,
+  selectable,
+  selected,
+  onToggleSelect,
+  onSelectAll,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -31,12 +35,23 @@ export const DataTable = <T,>({
   sortKey?: string;
   sortOrder?: 'asc' | 'desc';
   onSort?: (key: string) => void;
+  selectable?: boolean;
+  selected?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onSelectAll?: (checked: boolean) => void;
 }) => {
+  const colSpan = columns.length + (selectable ? 1 : 0);
+  const allSelected = selectable && rows.length > 0 && rows.every((r) => selected?.has(rowKey(r)));
   return (
     <div className="table-container" style={{ overflow: 'auto' }}>
       <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
         <thead>
           <tr>
+            {selectable && (
+              <th style={{ width: 32, whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={allSelected} onChange={(e) => onSelectAll?.(e.target.checked)} style={{ cursor: 'pointer' }} />
+              </th>
+            )}
             {columns.map((c) => (
               <th
                 key={c.key}
@@ -63,30 +78,39 @@ export const DataTable = <T,>({
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={columns.length} style={{ textAlign: 'center', padding: '28px' }}>
+              <td colSpan={colSpan} style={{ textAlign: 'center', padding: '28px' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</span>
               </td>
             </tr>
           ) : rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} style={{ textAlign: 'center', padding: '32px' }}>
+              <td colSpan={colSpan} style={{ textAlign: 'center', padding: '32px' }}>
                 {emptyState ?? <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{emptyMessage}</span>}
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
-              <tr
-                key={rowKey(row)}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                style={{ cursor: onRowClick ? 'pointer' : 'default' }}
-              >
-                {columns.map((c) => (
-                  <td key={c.key} style={{ textAlign: c.align ?? 'left', whiteSpace: 'nowrap' }}>
-                    {c.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))
+            rows.map((row) => {
+              const id = rowKey(row);
+              const isSel = selected?.has(id) ?? false;
+              return (
+                <tr
+                  key={id}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  style={{ cursor: onRowClick ? 'pointer' : 'default', background: isSel ? 'var(--status-pending-bg)' : undefined }}
+                >
+                  {selectable && (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={isSel} onChange={() => onToggleSelect?.(id)} style={{ cursor: 'pointer' }} />
+                    </td>
+                  )}
+                  {columns.map((c) => (
+                    <td key={c.key} style={{ textAlign: c.align ?? 'left', whiteSpace: 'nowrap' }}>
+                      {c.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>

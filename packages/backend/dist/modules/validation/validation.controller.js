@@ -65,6 +65,26 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     __metadata("design:type", Object)
 ], TransitionValidationCaseDto.prototype, "ocrResult", void 0);
+class BulkTransitionValidationCaseDto {
+    ids;
+    targetStatus;
+    remarks;
+}
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsUUID)('4', { each: true }),
+    __metadata("design:type", Array)
+], BulkTransitionValidationCaseDto.prototype, "ids", void 0);
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.ValidationStatus),
+    __metadata("design:type", String)
+], BulkTransitionValidationCaseDto.prototype, "targetStatus", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], BulkTransitionValidationCaseDto.prototype, "remarks", void 0);
 let ValidationController = class ValidationController {
     validationService;
     constructor(validationService) {
@@ -104,6 +124,10 @@ let ValidationController = class ValidationController {
             success: true,
             data: vCase,
         };
+    }
+    async bulkTransition(dto, req) {
+        const result = await this.validationService.bulkTransition(dto.ids, dto.targetStatus, req.user.id, dto.remarks);
+        return { success: true, data: result };
     }
     async transition(id, dto, req) {
         const vCase = await this.validationService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.notes, dto.ocrResult);
@@ -154,6 +178,16 @@ __decorate([
     __metadata("design:paramtypes", [String, AssignReviewerDto, Object]),
     __metadata("design:returntype", Promise)
 ], ValidationController.prototype, "assign", null);
+__decorate([
+    (0, common_1.Post)('bulk/transition'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR, shared_1.SystemRole.DATA_ENTRY_HEAD),
+    (0, swagger_1.ApiOperation)({ summary: 'Transition a batch of validation cases to a target status' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [BulkTransitionValidationCaseDto, Object]),
+    __metadata("design:returntype", Promise)
+], ValidationController.prototype, "bulkTransition", null);
 __decorate([
     (0, common_1.Post)(':id/transition'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.VALIDATION_MANAGER, shared_1.SystemRole.VALIDATOR, shared_1.SystemRole.DATA_ENTRY_HEAD),

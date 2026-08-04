@@ -55,9 +55,6 @@ let DocumentController = class DocumentController {
         const savedPath = await this.localStorageService.saveFile(file.originalname, file.buffer);
         const validTypes = Object.values(shared_1.DocumentType);
         const targetType = validTypes.includes(type) ? type : shared_1.DocumentType.PRE_FIELD_AUDIT_PDF;
-        if (targetType === shared_1.DocumentType.CUSTOMER_MASTER_DATA) {
-            throw new common_1.BadRequestException('Customer master data is a multi-branch batch for one audit date — upload it via /customer-master/upload, not as a per-branch document.');
-        }
         const doc = await this.documentService.create({
             assessmentId,
             fileName: file.originalname,
@@ -233,7 +230,7 @@ let DocumentController = class DocumentController {
         const branchCodesSeen = new Set();
         for (const row of rows) {
             const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
-            const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim();
+            const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || row['BRANCH'] || row.Branch || '').trim();
             if (acc) {
                 if (accountNumbersSeen.has(acc))
                     duplicateAccountsCount++;

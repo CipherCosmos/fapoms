@@ -12,6 +12,7 @@ import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
+import { ZoneEntity } from '../zone/zone.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
 import { BranchService } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
@@ -21,78 +22,12 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
-import * as fs from 'fs';
-import * as path from 'path';
-
-const CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
-
-let cache: Record<string, { lat: number; lng: number }> = {};
-if (fs.existsSync(CACHE_FILE)) {
-  try {
-    cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-  } catch (e) {
-    console.error('Failed to read cache file, starting fresh', e);
-  }
-}
-
-function saveCache() {
-  try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to save geocoding cache', e);
-  }
-}
+import { geocodeIndia } from '../geo/india-geocoder';
 
 async function getRealCoordinates(address: string, name: string, district: string, state: string): Promise<{ lat: number; lng: number }> {
   const pinMatch = address.match(/\b\d{6}\b/);
-  const pincode = pinMatch ? pinMatch[0] : null;
-
-  const queries: string[] = [];
-  if (pincode) {
-    queries.push(`${pincode}, India`);
-  }
-  queries.push(`${name}, ${district}, ${state}, India`);
-  queries.push(`${district}, ${state}, India`);
-  queries.push(`${state}, India`);
-
-  for (const q of queries) {
-    const cleanQ = q.trim();
-    if (cache[cleanQ]) {
-      return cache[cleanQ];
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-        }
-      });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json() as any[];
-        if (data && data[0]) {
-          const coords = {
-            lat: parseFloat(data[0].lat),
-            lng: parseFloat(data[0].lon)
-          };
-          cache[cleanQ] = coords;
-          saveCache();
-          return coords;
-        }
-      }
-    } catch (err) {
-      console.error(`Error geocoding: ${cleanQ}`, err);
-    }
-  }
-
+  const coords = await geocodeIndia(address, name, district, state, pinMatch ? pinMatch[0] : null);
+  if (coords) return { lat: coords.lat, lng: coords.lng };
   throw new NotFoundException(`Geocoding failed: could not locate coordinates for address: "${address}" (District: ${district}, State: ${state}).`);
 }
 
@@ -143,13 +78,35 @@ export class ProjectService implements OnModuleInit {
       private readonly assessmentRepository: Repository<AssessmentEntity>,
       @InjectRepository(ClientEntity)
       private readonly clientRepository: Repository<ClientEntity>,
-     private readonly branchQueryService: BranchQueryService,
-     private readonly branchService: BranchService,
-     private readonly auditService: AuditService,
-     private readonly workflowEngine: WorkflowEngine,
-     private readonly eventPublisher: DomainEventPublisher,
-     private readonly projectQueryService: ProjectQueryService,
+      @InjectRepository(ZoneEntity)
+      private readonly zoneRepository: Repository<ZoneEntity>,
+      private readonly branchQueryService: BranchQueryService,
+      private readonly branchService: BranchService,
+      private readonly auditService: AuditService,
+      private readonly workflowEngine: WorkflowEngine,
+      private readonly eventPublisher: DomainEventPublisher,
+      private readonly projectQueryService: ProjectQueryService,
    ) {}
+
+  private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
+    if (stateName) {
+      const stateUpper = stateName.toUpperCase();
+      const query = this.zoneRepository.createQueryBuilder('zone')
+        .where('zone.isActive = true');
+      if (clientId) {
+        query.andWhere('(zone.clientId = :clientId OR zone.clientId IS NULL)', { clientId });
+      }
+      const zones = await query.getMany();
+      for (const z of zones) {
+        if (z.states && Array.isArray(z.states)) {
+          if (z.states.some((s) => s.toUpperCase() === stateUpper)) {
+            return z.name;
+          }
+        }
+      }
+    }
+    return getStateZone(stateName);
+  }
 
   onModuleInit() {
     this.workflowEngine.registerWorkflow('project', [
@@ -569,7 +526,7 @@ export class ProjectService implements OnModuleInit {
       let branch = await this.branchQueryService.findOneByCode(branchCode);
       if (!branch) {
         const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
-        const zoneName = getStateZone(state);
+        const zoneName = await this.resolveZoneName(state, project.clientId);
         
         const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
 

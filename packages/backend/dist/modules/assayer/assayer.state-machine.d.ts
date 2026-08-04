@@ -1,6 +1,7 @@
 import { AssayerEntity } from './assayer.entity';
 import { AssayerDocumentVerificationStartedEvent, AssayerBackgroundCheckInitiatedEvent, AssayerTrainingStartedEvent, AssayerActivatedEvent, AssayerOnLeaveEvent, AssayerSuspendedEvent, AssayerDeactivatedEvent, AssayerResignedEvent, AssayerTerminatedEvent, AssayerArchivedEvent } from '../../core/events/domain-events';
 export declare class AssayerStateMachine {
+    static findPathTo(from: string, target: string): string[] | null;
     private static validateTransition;
     private static applyTransition;
     static verifyDocuments(assayer: AssayerEntity, userId: string): AssayerDocumentVerificationStartedEvent;

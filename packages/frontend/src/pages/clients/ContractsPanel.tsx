@@ -5,6 +5,7 @@ import { useClientContracts, useAddContract, useDeleteContract } from '../../hoo
 import { contractStatusLabel } from '../../utils/statusLabels';
 import type { ClientContract } from '@fapoms/shared';
 import { ContractStatus } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const CONTRACT_STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   [ContractStatus.DRAFT]: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -42,7 +43,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
       setShowForm(false);
       setForm({ contractNumber: '', title: '', description: '', effectiveFrom: '', effectiveTo: '', value: '' });
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to add contract');
+      toast({ type: 'error', title: 'Failed to add contract', message: userMessage(err) });
     }
   };
 
@@ -52,7 +53,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
       await del.mutateAsync({ clientId, contractId: contract.id });
       toast('success', 'Contract removed');
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to remove contract');
+      toast({ type: 'error', title: 'Failed to remove contract', message: userMessage(err) });
     }
   };
 

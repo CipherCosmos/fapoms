@@ -146,8 +146,9 @@ let DocumentService = class DocumentService {
         let assessment = await this.assessmentRepository.findOne({
             where: { id: dto.assessmentId, isActive: true },
         }).catch(() => null);
+        let pb = null;
         if (!assessment) {
-            let pb = await this.projectBranchRepository.findOne({ where: { id: dto.assessmentId } }).catch(() => null);
+            pb = await this.projectBranchRepository.findOne({ where: { id: dto.assessmentId } }).catch(() => null);
             if (!pb) {
                 const asn = await this.assignmentRepository.findOne({ where: { id: dto.assessmentId } }).catch(() => null);
                 if (asn?.projectBranchId) {
@@ -172,8 +173,14 @@ let DocumentService = class DocumentService {
         if (!assessment) {
             throw new common_1.NotFoundException(`Assessment, ProjectBranch or Assignment ${dto.assessmentId} not found.`);
         }
+        if (!pb) {
+            pb = await this.projectBranchRepository
+                .findOne({ where: { projectId: assessment.projectId, branchId: assessment.branchId } })
+                .catch(() => null);
+        }
         const doc = this.documentRepository.create({
             assessmentId: assessment.id,
+            projectBranchId: pb?.id ?? null,
             fileName: dto.fileName,
             filePath: dto.filePath,
             fileSize: dto.fileSize,

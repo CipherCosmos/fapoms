@@ -4,6 +4,7 @@ import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useUpdateClient } from '../../hooks/useClients';
 import type { Client } from '@fapoms/shared';
 import { ClientType, Priority } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
@@ -54,7 +55,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
       toast('success', 'Client updated');
       onClose();
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to update client');
+      toast({ type: 'error', title: 'Failed to update client', message: userMessage(err) });
     }
   };
 

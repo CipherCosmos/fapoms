@@ -13,6 +13,10 @@ declare class CreateUserRequestDto implements CreateUserDto {
 declare class AssignRolesDto {
     roleIds: string[];
 }
+declare class BulkSetStatusDto {
+    ids: string[];
+    status: UserStatus;
+}
 declare class UpdateUserRequestDto implements UpdateUserDto {
     firstName?: string;
     lastName?: string;
@@ -23,12 +27,50 @@ declare class UpdateUserRequestDto implements UpdateUserDto {
 declare class ResetPasswordRequestDto {
     newPassword: string;
 }
+declare class SelfUpdateProfileDto {
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+}
+declare class SelfChangePasswordDto {
+    currentPassword: string;
+    newPassword: string;
+}
 export declare class UserController {
     private readonly userService;
     constructor(userService: UserService);
     getMe(req: any): Promise<{
         success: boolean;
         data: any;
+    }>;
+    updateMe(dto: SelfUpdateProfileDto, req: any): Promise<{
+        success: boolean;
+        data: any;
+    }>;
+    changePassword(dto: SelfChangePasswordDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            message: string;
+        };
+    }>;
+    bulkSetStatus(dto: BulkSetStatusDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            succeeded: {
+                id: string;
+                from: UserStatus;
+                to: UserStatus;
+            }[];
+            skipped: {
+                id: string;
+                current: UserStatus;
+                reason: string;
+            }[];
+            failed: {
+                id: string;
+                reason: string;
+            }[];
+        };
     }>;
     create(dto: CreateUserRequestDto, req: any): Promise<{
         success: boolean;

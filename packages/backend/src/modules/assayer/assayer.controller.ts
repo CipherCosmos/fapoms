@@ -24,7 +24,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID } from 'class-validator';
 
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
@@ -393,6 +393,18 @@ export class TransitionLifecycleDto {
   reason?: string;
 }
 
+export class BulkTransitionLifecycleDto {
+  @IsArray() @IsNotEmpty()
+  @IsUUID('4', { each: true })
+  ids: string[];
+
+  @IsString() @IsNotEmpty()
+  targetStatus: string;
+
+  @IsOptional() @IsString()
+  reason?: string;
+}
+
 export class CreateGovernmentDocumentRequestDto {
   @IsString() @IsNotEmpty()
   documentType: string;
@@ -749,6 +761,19 @@ export class AssayerController {
   }
 
   // Lifecycle management
+  @Post('bulk/lifecycle')
+  @HttpCode(201)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Transition a batch of assayers forward to a target lifecycle stage' })
+  async bulkTransitionLifecycle(
+    @Body() dto: BulkTransitionLifecycleDto,
+    @Req() req: any,
+  ) {
+    const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, dto.reason);
+    return { success: true, data: result };
+  }
+
   @Post(':id/lifecycle')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)

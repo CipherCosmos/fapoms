@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Plus, AlertTriangle, Banknote, FileText, RefreshCw } from 'lucide-react';
 import {
   useBillingDashboard,
@@ -10,6 +10,7 @@ import {
   useSyncFromAssignments,
   useBillingClients,
 } from '../hooks/useBilling';
+import { billingApi } from '../services/billing';
 import { ClientHierarchyPanel } from './billing/ClientHierarchyPanel';
 import { FinanceDashboard } from './billing/FinanceDashboard';
 import type {
@@ -25,6 +26,7 @@ import {
   AssayerPayableStatus,
   BillingConflictSeverity,
   BillingConflictStatus,
+  BILLING_STATE_TRANSITIONS,
 } from '@fapoms/shared';
 import { CreateBillingEntryModal } from './billing/CreateBillingEntryModal';
 import { EntryDetailDrawer } from './billing/EntryDetailDrawer';
@@ -33,6 +35,7 @@ import { InvoiceDetailDrawer } from './billing/InvoiceDetailDrawer';
 import { CreatePayableModal, PayableDetailDrawer } from './billing/PayableModals';
 import { RaiseConflictModal, ConflictDetailDrawer } from './billing/ConflictModals';
 import { useToast } from '../components/ui';
+import { userMessage } from '../services/errors';
 
 const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
@@ -142,6 +145,10 @@ export const Billing: React.FC = () => {
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   const [openPayableId, setOpenPayableId] = useState<string | null>(null);
   const [openConflictId, setOpenConflictId] = useState<string | null>(null);
+  const [selectedEntryIds, setSelectedEntryIds] = useState<Set<string>>(new Set());
+  const [bulkTarget, setBulkTarget] = useState<BillingState | ''>('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: number; failed: { id: string; reason: string }[] } | null>(null);
 
   const { toast } = useToast();
   const sync = useSyncFromAssignments();
@@ -154,7 +161,7 @@ export const Billing: React.FC = () => {
       if (res.skipped) parts.push(`${res.skipped} already billed`);
       toast('success', `Synced from assignments: ${parts.join(', ')}`);
     } catch (err: any) {
-      toast('error', err?.message || 'Sync failed');
+      toast({ type: 'error', title: 'Sync failed', message: userMessage(err) });
     }
   };
 
@@ -176,6 +183,44 @@ export const Billing: React.FC = () => {
     FLAT_RATE: 'Flat', PER_ASSIGNMENT: 'Per Assignment', PER_BRANCH: 'Per Branch',
     PER_PACKET: 'Per Packet', HOURLY: 'Hourly', RETAINER: 'Retainer',
   };
+
+  const selectedEntries = entries.data?.filter((e) => selectedEntryIds.has(e.id)) ?? [];
+  /** Target states reachable from any selected entry (union, mirrors the backend
+   *  state machine) — so a mixed-state batch can all move to a common goal. */
+  const bulkTargets = useMemo(() => {
+    if (selectedEntries.length === 0) return [] as BillingState[];
+    const reachable = new Set<BillingState>();
+    for (const e of selectedEntries) {
+      for (const s of BILLING_STATE_TRANSITIONS[e.state] ?? []) reachable.add(s);
+    }
+    return [...reachable];
+  }, [selectedEntries]);
+
+  const runBulkTransition = async () => {
+    if (!bulkTarget || selectedEntryIds.size === 0) return;
+    setBulkBusy(true);
+    setBulkReport(null);
+    try {
+      const res = await billingApi.bulkTransitionEntries([...selectedEntryIds], bulkTarget);
+      const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
+      setBulkReport({ target: bulkTarget, succeeded: succeeded.length, skipped: skipped.length, failed });
+      toast('success', `${succeeded.length} entry(ies) moved to ${bulkTarget.replace(/_/g, ' ')}.`);
+    } catch (err: any) {
+      toast({ type: 'error', title: 'Bulk transition failed', message: userMessage(err) });
+    } finally {
+      setBulkBusy(false);
+      setBulkTarget('');
+      setSelectedEntryIds(new Set());
+      entries.refetch();
+    }
+  };
+
+  const toggleEntrySelect = (id: string) =>
+    setSelectedEntryIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   return (
     <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -315,10 +360,57 @@ export const Billing: React.FC = () => {
           </div>
           {/* "Billed for" replaces a column set that showed no client, project or
               branch at all — the first thing anyone needs to identify a money line. */}
+          {selectedEntryIds.size > 0 && (
+            <div style={{
+              display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+              padding: '10px 14px', borderRadius: '8px',
+              background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
+            }}>
+              <strong style={{ fontSize: '13px' }}>{selectedEntryIds.size} selected</strong>
+              {bulkTargets.length > 0 ? (
+                <>
+                  <select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value as BillingState | '')}
+                    style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
+                    <option value="">Move all to…</option>
+                    {bulkTargets.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                  </select>
+                  <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                    {bulkBusy ? 'Applying…' : 'Apply'}
+                  </button>
+                </>
+              ) : (
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No state is reachable from the selected entries.</span>
+              )}
+              <button onClick={() => setSelectedEntryIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+            </div>
+          )}
+          {bulkReport && (
+            <div style={{ padding: '12px 14px', borderRadius: '8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
+                <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
+                <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped} skipped</span>
+                {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
+                <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+              </div>
+              {bulkReport.failed.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  {bulkReport.failed.map((f) => (
+                    <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                      <span>{f.id.slice(0, 8)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <Table
             columns={['Number', 'Billed For', 'Level', 'State', 'Net', 'GST', 'TDS', 'Total', 'Outstanding']}
             rowIds={entries.data?.map((e) => e.id)}
             onRowClick={(id) => setOpenEntryId(id)}
+            selectable
+            selected={selectedEntryIds}
+            onToggleSelect={toggleEntrySelect}
+            onSelectAll={(checked) => setSelectedEntryIds(checked ? new Set(entries.data?.map((e) => e.id)) : new Set())}
             rows={entries.data?.map((e) => [
               <span key={e.id}><strong>{e.entryNumber}</strong><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{pricingModel[e.pricingModel]}</div></span>,
               <span key={e.id} style={{ fontSize: '12px' }}>
@@ -438,7 +530,11 @@ const Table: React.FC<{
   onRowClick?: (id: string) => void;
   empty?: boolean;
   loading?: boolean;
-}> = ({ columns, rows, rowIds, onRowClick, empty, loading }) => (
+  selectable?: boolean;
+  selected?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onSelectAll?: (checked: boolean) => void;
+}> = ({ columns, rows, rowIds, onRowClick, empty, loading, selectable, selected, onToggleSelect, onSelectAll }) => (
   <Card>
     {loading && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
     {!loading && empty && (
@@ -452,6 +548,16 @@ const Table: React.FC<{
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
         <thead>
           <tr>
+            {selectable && (
+              <th style={{ width: '34px', padding: '8px 10px' }}>
+                <input
+                  type="checkbox"
+                  checked={selected ? selected.size > 0 && selected.size === (rows ?? []).length : false}
+                  onChange={(e) => onSelectAll?.(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+              </th>
+            )}
             {columns.map((c) => (
               <th key={c} style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 {c}
@@ -467,11 +573,17 @@ const Table: React.FC<{
               style={{
                 borderBottom: '1px solid var(--border-color)',
                 cursor: onRowClick ? 'pointer' : 'default',
+                background: selectable && selected?.has(rowIds?.[i] ?? '') ? 'var(--status-pending-bg)' : undefined,
                 transition: 'background var(--transition-fast)',
               }}
-              onMouseEnter={(e) => { if (onRowClick) e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-              onMouseLeave={(e) => { if (onRowClick) e.currentTarget.style.background = 'transparent'; }}
+              onMouseEnter={(e) => { if (onRowClick) e.currentTarget.style.background = selectable && selected?.has(rowIds?.[i] ?? '') ? 'var(--status-pending-bg)' : 'var(--bg-tertiary)'; }}
+              onMouseLeave={(e) => { if (onRowClick) e.currentTarget.style.background = selectable && selected?.has(rowIds?.[i] ?? '') ? 'var(--status-pending-bg)' : 'transparent'; }}
             >
+              {selectable && rowIds && (
+                <td style={{ padding: '10px', verticalAlign: 'middle' }} onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={selected?.has(rowIds[i]) ?? false} onChange={() => onToggleSelect?.(rowIds[i])} style={{ cursor: 'pointer' }} />
+                </td>
+              )}
               {r.map((cell, j) => (
                 <td key={j} style={{ padding: '10px', verticalAlign: 'middle' }}>{cell}</td>
               ))}

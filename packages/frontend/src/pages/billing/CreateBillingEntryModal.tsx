@@ -4,6 +4,7 @@ import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useCreateBillingEntry } from '../../hooks/useBilling';
 import { useClientsList } from '../../hooks/useClients';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { BillingLevel, BillingPricingModel, BillingState } from '@fapoms/shared';
 
 const LEVELS = Object.values(BillingLevel);
@@ -51,16 +52,16 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
   useEffect(() => {
     if (!form.clientId) { setProjects([]); return; }
     let active = true;
-    api.request<{ data: ProjectOption[] }>(`/projects?clientId=${form.clientId}&limit=1000`)
-      .then((res) => { if (active) setProjects(res.data ?? []); })
+    api.request<ProjectOption[]>(`/projects?clientId=${form.clientId}&limit=1000`)
+      .then((res) => { if (active) setProjects(res ?? []); })
       .catch(() => { if (active) setProjects([]); });
     return () => { active = false; };
   }, [form.clientId]);
 
   useEffect(() => {
     let active = true;
-    api.request<{ data: AssayerOption[] }>('/assayers?limit=1000')
-      .then((res) => { if (active) setAssayers(res.data ?? []); })
+    api.request<AssayerOption[]>('/assayers?limit=1000')
+      .then((res) => { if (active) setAssayers(res ?? []); })
       .catch(() => { if (active) setAssayers([]); });
     return () => { active = false; };
   }, []);
@@ -99,7 +100,7 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
       toast('success', 'Billing entry created');
       onClose();
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to create entry');
+      toast({ type: 'error', title: 'Failed to create entry', message: userMessage(err) });
     }
   };
 

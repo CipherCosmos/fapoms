@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
 import { StatusBadge, KpiCard, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
 import { ProjectBranchStatus } from '@fapoms/shared';
-import { anyStatusLabel, branchStatusLabel, assessmentStatusLabel } from '../utils/statusLabels';
+import { anyStatusLabel, branchStatusLabel, branchStatusTone, assessmentStatusLabel } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
@@ -63,17 +63,16 @@ const PAGE_SIZE = 25;
 
 // ── Shared status badge — single source of truth, used by both the list rows
 // and the detail panel header (previously duplicated as two separate inline IIFEs).
+// Colours come from the canonical branch-status tone in statusLabels, so this badge
+// agrees with the planning map and every other page for the same branch status.
 function getStatusBadgeProps(status: string): { bg: string; color: string; icon: React.ReactNode } {
   const isCheckedIn = status === 'SCHEDULED';
-  const isAccepted = status === 'ACCEPTED' || status === 'ASSIGNMENT_CONFIRMED';
-  const isClosed = status === 'CLOSED';
-  const isCancelled = status === 'CANCELLED';
   const isDone = status === 'AUDIT_COMPLETED' || status === 'VALIDATION_COMPLETED';
+  const isClosed = status === 'CLOSED';
 
-  const bg = isCheckedIn ? 'rgba(216,174,71,0.15)' : isAccepted ? 'var(--status-active-bg)' : isClosed ? 'var(--status-active-bg)' : isDone ? 'rgba(216,174,71,0.15)' : isCancelled ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)';
-  const color = isCheckedIn ? 'var(--accent)' : isAccepted ? 'var(--success)' : isClosed ? 'var(--success)' : isDone ? 'var(--accent)' : isCancelled ? 'var(--danger)' : 'var(--warning)';
+  const tone = branchStatusTone(status);
   const icon = isCheckedIn ? <MapPin size={13} /> : isDone ? <FileText size={13} /> : isClosed ? <Lock size={13} /> : null;
-  return { bg, color, icon };
+  return { bg: tone.bg, color: tone.color, icon };
 }
 
 function AssignmentStatusBadge({ status, size = 'md' }: { status: string; size?: 'sm' | 'md' }) {

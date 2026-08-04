@@ -13,6 +13,7 @@ import { useCurrentRoles, canManageAssayers } from '../hooks/useCurrentRoles';
 import { EditAssayerModal } from './hr/AssayerForms';
 import { STATUS_COLORS } from './hr/assayer-shared';
 import type { Assayer } from './hr/assayer-shared';
+import { userMessage } from '../services/errors';
 
 /**
  * The full record for one assayer.
@@ -115,7 +116,7 @@ export const AssayerProfile: React.FC = () => {
       setP(await api.request<ProfileData>(`/assayers/${id}/profile`));
       setErr(null);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(userMessage(e));
     } finally {
       setLoading(false);
     }
@@ -171,7 +172,7 @@ export const AssayerProfile: React.FC = () => {
       setTarget('');
       setSide((s) => ({ ...s, activity: undefined }));
       await loadProfile();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(false);
   };
 
@@ -185,7 +186,7 @@ export const AssayerProfile: React.FC = () => {
       });
       setRemarkText('');
       setSide((s) => ({ ...s, remarks: undefined }));
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(false);
   };
 

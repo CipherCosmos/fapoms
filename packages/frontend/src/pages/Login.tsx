@@ -7,6 +7,7 @@ interface LoginProps {
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -16,24 +17,29 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setError('');
 
     try {
-      // Live request
       const response = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      const resData = await response.json();
+      const resData = await response.json().catch(() => ({}));
 
       if (response.ok && resData.success) {
         onLoginSuccess(resData.data.accessToken, resData.data.refreshToken);
       } else {
-        setError(resData.message || resData.error?.message || 'Invalid credentials');
+        setError(resData.message || resData.error?.message || 'Invalid username or password');
       }
     } catch (err) {
-      setError('Authentication server connection failed.');
+      setError('Unable to connect to authentication server. Please check your network connection.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const setDemoAccount = (user: string, pass: string) => {
+    setUsername(user);
+    setPassword(pass);
+    setError('');
   };
 
   return (
@@ -72,18 +78,18 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         <div style={{ position: 'relative', zIndex: 1 }}>
           
           {/* Logo Header */}
-          <div style={{ textAlign: 'center', marginBottom: '36px' }}>
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
             <div style={{
               background: 'var(--gradient-neon)',
-              width: '48px',
-              height: '48px',
+              width: '52px',
+              height: '52px',
               borderRadius: 'var(--radius-md)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               color: 'var(--on-gradient)',
               fontWeight: 800,
-              fontSize: '24px',
+              fontSize: '26px',
               fontFamily: 'var(--font-display)',
               margin: '0 auto 16px auto',
               boxShadow: '0 0 20px rgba(216,174,71,0.4), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
@@ -92,8 +98,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               <span style={{ position: 'relative', zIndex: 1 }}>S</span>
               <span style={{ position: 'absolute', inset: '5px', borderRadius: '8px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
             </div>
-            <h1 style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)', marginBottom: '6px' }}>Sumeru Audit Suite</h1>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Field Audit Planning & Operations</p>
+            <h1 style={{ fontSize: '24px', fontWeight: 800, fontFamily: 'var(--font-display)', marginBottom: '6px', color: 'var(--text-primary)' }}>Sumeru Audit Suite</h1>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Field Audit Planning & Operations Management</p>
           </div>
 
           {/* Form */}
@@ -101,15 +107,19 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             
             {error && (
               <div style={{
-                background: 'var(--status-cancelled-bg)',
-                border: '1px solid var(--status-cancelled-bg)',
-                color: 'var(--status-cancelled)',
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#ef4444',
                 padding: '12px 16px',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '13px',
-                lineHeight: 1.4
+                lineHeight: 1.4,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
               }}>
-                {error}
+                <span style={{ fontWeight: 700 }}>⚠️</span>
+                <span>{error}</span>
               </div>
             )}
 
@@ -118,9 +128,11 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               <input 
                 type="text"
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter admin or email"
+                placeholder="Enter username or email"
                 style={{
                   padding: '12px 16px',
                   background: 'var(--bg-secondary)',
@@ -137,26 +149,51 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>Password</label>
-              <input 
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
-                style={{
-                  padding: '12px 16px',
-                  background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '14px',
-                  outline: 'none',
-                  transition: 'border var(--transition-fast)'
-                }}
-                onFocus={(e) => e.target.style.borderColor = 'var(--accent-primary)'}
-                onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
-              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>Password</label>
+              </div>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input 
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter password"
+                  style={{
+                    width: '100%',
+                    padding: '12px 42px 12px 16px',
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-md)',
+                    color: 'var(--text-primary)',
+                    fontSize: '14px',
+                    outline: 'none',
+                    transition: 'border var(--transition-fast)'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = 'var(--accent-primary)'}
+                  onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? '👁️' : '🙈'}
+                </button>
+              </div>
             </div>
 
             <button 
@@ -169,13 +206,64 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 fontSize: '15px',
                 marginTop: '10px',
                 width: '100%',
-                display: 'block'
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
               }}
             >
-              {isLoading ? 'Authenticating...' : 'Sign In'}
+              {isLoading ? (
+                <>
+                  <span style={{
+                    display: 'inline-block',
+                    width: '16px',
+                    height: '16px',
+                    border: '2px solid currentColor',
+                    borderRightColor: 'transparent',
+                    borderRadius: '50%',
+                    animation: 'spin 0.75s linear infinite'
+                  }} />
+                  <span>Authenticating...</span>
+                </>
+              ) : (
+                'Sign In'
+              )}
             </button>
 
           </form>
+
+          {/* Quick Demo Login Selector */}
+          <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px dashed var(--border-color)' }}>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', textAlign: 'center' }}>
+              Quick Demo Login:
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setDemoAccount('admin', 'admin123')}
+                style={{ fontSize: '11px', padding: '4px 10px' }}
+              >
+                Super Admin
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setDemoAccount('ops_manager', 'ops123')}
+                style={{ fontSize: '11px', padding: '4px 10px' }}
+              >
+                Ops Manager
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setDemoAccount('hr_manager', 'hr123')}
+                style={{ fontSize: '11px', padding: '4px 10px' }}
+              >
+                HR Manager
+              </button>
+            </div>
+          </div>
 
         </div>
       </div>

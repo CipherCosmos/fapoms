@@ -145,6 +145,22 @@ export declare class ClientService {
     update(id: string, dto: UpdateClientDto, userId: string): Promise<ClientEntity>;
     remove(id: string, userId: string): Promise<void>;
     transitionLifecycle(id: string, newStatus: string, userId: string, reason?: string): Promise<ClientEntity>;
+    bulkTransitionLifecycle(ids: string[], newStatus: string, userId: string, reason?: string): Promise<{
+        succeeded: {
+            id: string;
+            from: string;
+            to: string;
+        }[];
+        skipped: {
+            id: string;
+            current: string;
+            reason: string;
+        }[];
+        failed: {
+            id: string;
+            reason: string;
+        }[];
+    }>;
     findContacts(clientId: string): Promise<ClientContactEntity[]>;
     addContact(clientId: string, dto: CreateContactDto, userId: string): Promise<ClientContactEntity>;
     updateContact(contactId: string, dto: UpdateContactDto, userId: string): Promise<ClientContactEntity>;

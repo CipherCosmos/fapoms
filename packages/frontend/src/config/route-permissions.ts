@@ -177,6 +177,10 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.ADMINISTRATOR,
     ],
   },
+  {
+    path: '/settings',
+    allowedRoles: Object.values(SystemRole),
+  },
 ];
 
 export function canAccessRoute(userRoles: SystemRole[], path: string): boolean {

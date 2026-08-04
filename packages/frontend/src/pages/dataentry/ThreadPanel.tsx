@@ -3,6 +3,7 @@ import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, Alert
 
 import { api } from '../../services/api';
 import type { RegionCapture, Region } from './PdfRegionViewer';
+import { userMessage } from '../../services/errors';
 
 /**
  * One clarification thread: messages, composer, resolve.
@@ -89,7 +90,7 @@ export const ThreadPanel: React.FC<Props> = ({
       load();
       onChanged?.();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(userMessage(e));
     }
     setBusy(false);
   };
@@ -100,7 +101,7 @@ export const ThreadPanel: React.FC<Props> = ({
       await api.request(`/validation-queries/${queryId}/resolve`, { method: 'POST' });
       onResolved?.();
       load();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(false);
   };
 

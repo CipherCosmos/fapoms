@@ -13,6 +13,11 @@ declare class TransitionValidationCaseDto {
     notes?: string;
     ocrResult?: any;
 }
+declare class BulkTransitionValidationCaseDto {
+    ids: string[];
+    targetStatus: ValidationStatus;
+    remarks?: string;
+}
 export declare class ValidationController {
     private readonly validationService;
     constructor(validationService: ValidationService);
@@ -38,6 +43,20 @@ export declare class ValidationController {
     assign(id: string, dto: AssignReviewerDto, req: any): Promise<{
         success: boolean;
         data: import("./validation-case.entity").ValidationCaseEntity;
+    }>;
+    bulkTransition(dto: BulkTransitionValidationCaseDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            succeeded: {
+                id: string;
+                from: string;
+                to: string;
+            }[];
+            failed: {
+                id: string;
+                reason: string;
+            }[];
+        };
     }>;
     transition(id: string, dto: TransitionValidationCaseDto, req: any): Promise<{
         success: boolean;

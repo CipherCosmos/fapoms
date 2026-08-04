@@ -49,6 +49,8 @@ export interface HrWorkforceOverview {
   utilisation: {
     idleAfterDays: number; idleCount: number; neverAssigned: number;
     idle: { id: string; assayerCode: string; displayName: string; state: string; lastAssignmentDate: string | null; daysIdle: number | null; totalAssignments: number }[];
+    utilization: { id: string; assayerCode: string; displayName: string; state: string; district: string; weeklyCapacity: number; currentAllocation: number; remainingCapacity: number; utilizationPercentage: number; posture: 'IDLE' | 'UNDER_UTILIZED' | 'BALANCED' | 'OVER_UTILIZED' }[];
+    utilizationCounts: { idle: number; underUtilized: number; balanced: number; overUtilized: number; total: number };
     performance: { avgRating: string | null; rated: number; belowPar: number; totalAssignments: number; completedAssignments: number; cancelledAssignments: number; onTimeCompletions: number; onTimeRate: number | null };
   };
   attrition: {

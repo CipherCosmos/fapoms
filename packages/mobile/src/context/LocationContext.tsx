@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import * as Location from 'expo-location';
+import { MobileApiService } from '../services/api.service';
 
 export interface LocationCoords {
   latitude: number;
@@ -73,6 +74,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
         setLocation(coords);
         setLoadingLocation(false);
+        MobileApiService.updateAssayerLocation(coords.latitude, coords.longitude).catch(() => {});
         return coords;
       } else {
         setLocation(DEFAULT_FALLBACK_LOCATION);

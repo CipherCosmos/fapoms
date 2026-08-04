@@ -21,6 +21,7 @@ const typeorm_1 = require("@nestjs/typeorm");
 const typeorm_2 = require("typeorm");
 const routing_provider_1 = require("./routing.provider");
 const geo_entities_1 = require("./geo.entities");
+const india_autocomplete_helper_1 = require("./india-autocomplete.helper");
 const guards_1 = require("../auth/guards");
 const shared_1 = require("@fapoms/shared");
 class CoordinateDto {
@@ -88,6 +89,10 @@ let GeoController = class GeoController {
         this.districtRepo = districtRepo;
         this.cityRepo = cityRepo;
     }
+    async autocomplete(q) {
+        const results = await (0, india_autocomplete_helper_1.autocompleteIndia)((q || '').trim());
+        return { success: true, data: results };
+    }
     async getStates() {
         const states = await this.stateRepo.find({ order: { name: 'ASC' } });
         return { success: true, data: states };
@@ -112,6 +117,14 @@ let GeoController = class GeoController {
     }
 };
 exports.GeoController = GeoController;
+__decorate([
+    (0, common_1.Get)('autocomplete'),
+    (0, swagger_1.ApiOperation)({ summary: 'Live whole-India place search (state/district/city/town/pincode) for type-ahead' }),
+    __param(0, (0, common_1.Query)('q')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], GeoController.prototype, "autocomplete", null);
 __decorate([
     (0, common_1.Get)('states'),
     (0, swagger_1.ApiOperation)({ summary: 'List all states in geographic reference data' }),

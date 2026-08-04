@@ -19,6 +19,7 @@ import { Billing } from './pages/Billing';
 import { Rules } from './pages/Rules';
 import { Notifications } from './pages/Notifications';
 import { Holidays } from './pages/Holidays';
+import Settings from './pages/Settings';
 import { api } from './services/api';
 import HrWorkspace from './pages/hr/HrWorkspace';
 import DataEntryDesk from './pages/dataentry/DataEntryDesk';
@@ -56,7 +57,8 @@ export const App: React.FC = () => {
             localStorage.setItem('fapoms_user_cache', JSON.stringify(user));
           } catch {}
         })
-        .catch(() => {
+        .catch((err) => {
+          console.warn('[App] User session validation failed:', err);
           handleLogout();
         })
         .finally(() => {
@@ -118,6 +120,7 @@ export const App: React.FC = () => {
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
         <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Settings /></ProtectedRoute>} />
         
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

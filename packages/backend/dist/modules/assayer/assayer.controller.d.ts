@@ -141,6 +141,11 @@ export declare class TransitionLifecycleDto {
     targetStatus: string;
     reason?: string;
 }
+export declare class BulkTransitionLifecycleDto {
+    ids: string[];
+    targetStatus: string;
+    reason?: string;
+}
 export declare class CreateGovernmentDocumentRequestDto {
     documentType: string;
     documentNumber: string;
@@ -254,6 +259,25 @@ export declare class AssayerController {
     getWorkforceAttributes(assayerId: string, type?: string): Promise<{
         success: boolean;
         data: import("./workforce-attribute.entity").WorkforceAttributeEntity[];
+    }>;
+    bulkTransitionLifecycle(dto: BulkTransitionLifecycleDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            succeeded: {
+                id: string;
+                from: string;
+                to: string;
+            }[];
+            skipped: {
+                id: string;
+                current: string;
+                reason: string;
+            }[];
+            failed: {
+                id: string;
+                reason: string;
+            }[];
+        };
     }>;
     transitionLifecycle(id: string, dto: TransitionLifecycleDto, req: any): Promise<{
         success: boolean;

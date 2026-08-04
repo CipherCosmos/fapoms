@@ -14,26 +14,15 @@ export const PrimaryButton: React.FC<{
   style?: React.CSSProperties;
   disabled?: boolean;
 }> = ({ onClick, children, icon = <Plus size={16} />, type = 'button', style, disabled }) => {
+  // Renders the shared `.btn .btn-primary` class (single source of truth for
+  // styling/hover) rather than duplicating the look with inline styles.
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        background: 'var(--btn-bg)',
-        border: 'none',
-        color: 'var(--btn-text)',
-        padding: '10px 18px',
-        borderRadius: 'var(--radius-md)',
-        fontWeight: 600,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        boxShadow: 'var(--shadow-sm)',
-        opacity: disabled ? 0.5 : 1,
-        ...style,
-      }}
+      className="btn btn-primary"
+      style={{ display: 'flex', alignItems: 'center', gap: '8px', ...style }}
     >
       {icon}
       {children}

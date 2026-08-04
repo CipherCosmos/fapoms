@@ -625,6 +625,48 @@ export class BillingEngineService implements OnModuleInit {
     return saved;
   }
 
+  /**
+   * Move a batch of billing entries to a target state as one operation. Each row
+   * runs through the normal transition rules (conflict freeze, valid transition)
+   * and is history-logged individually. Per-row errors are isolated so one bad
+   * entry never aborts the rest; rows already in the target state are skipped.
+   */
+  async bulkTransitionEntries(
+    entryIds: string[],
+    targetState: BillingState,
+    userId: string,
+    reason?: string,
+  ): Promise<{
+    succeeded: { id: string; from: BillingState; to: BillingState }[];
+    skipped: { id: string; current: BillingState; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    const succeeded: { id: string; from: BillingState; to: BillingState }[] = [];
+    const skipped: { id: string; current: BillingState; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const entryId of entryIds) {
+      const entry = await this.entryRepository.findOne({ where: { id: entryId } });
+      if (!entry) {
+        failed.push({ id: entryId, reason: `Billing entry ${entryId} not found.` });
+        continue;
+      }
+      if (entry.state === targetState) {
+        skipped.push({ id: entryId, current: entry.state, reason: `Already ${targetState}` });
+        continue;
+      }
+      try {
+        const from = entry.state;
+        await this.transitionEntry(entryId, targetState, userId, reason);
+        succeeded.push({ id: entryId, from, to: targetState });
+      } catch (e) {
+        failed.push({ id: entryId, reason: (e as Error).message });
+      }
+    }
+
+    return { succeeded, skipped, failed };
+  }
+
   async adjustEntry(entryId: string, delta: number, reason: string, userId: string): Promise<BillingEntryEntity> {
     const entry = await this.entryRepository.findOne({ where: { id: entryId } });
     if (!entry) throw new NotFoundException(`Billing entry ${entryId} not found.`);
@@ -873,11 +915,31 @@ export class BillingEngineService implements OnModuleInit {
     return saved;
   }
 
-  async findConflicts(status?: BillingConflictStatus): Promise<BillingConflictEntity[]> {
-    return this.conflictRepository.find({
+  async findConflicts(status?: BillingConflictStatus): Promise<any[]> {
+    const conflicts = await this.conflictRepository.find({
       where: status ? { status } : {},
       order: { createdAt: 'DESC' },
     });
+
+    const userIds = [...new Set([
+      ...conflicts.map((c) => c.createdById).filter(Boolean),
+      ...conflicts.map((c) => c.resolvedById).filter(Boolean),
+    ])];
+
+    const users = userIds.length
+      ? await this.conflictRepository.manager.query(
+          `SELECT id, display_name FROM users WHERE id = ANY($1)`,
+          [userIds],
+        )
+      : [];
+
+    const userNameById = new Map<string, string>(users.map((u: any) => [u.id, u.display_name]));
+
+    return conflicts.map((c) => ({
+      ...c,
+      createdByName: c.createdById ? userNameById.get(c.createdById) ?? null : null,
+      resolvedByName: c.resolvedById ? userNameById.get(c.resolvedById) ?? null : null,
+    }));
   }
 
   // -----------------------------------------------------------------------

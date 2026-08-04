@@ -54,6 +54,14 @@ class AssignRolesDto {
   roleIds: string[];
 }
 
+class BulkSetStatusDto {
+  @IsArray() @IsNotEmpty()
+  ids: string[];
+
+  @IsEnum(UserStatus)
+  status: UserStatus;
+}
+
 /**
  * The controller previously typed this body as the bare `UpdateUserDto`
  * interface, which class-validator cannot see — nothing about a PUT request
@@ -82,6 +90,25 @@ class ResetPasswordRequestDto {
   newPassword: string;
 }
 
+class SelfUpdateProfileDto {
+  @IsOptional() @IsString()
+  firstName?: string;
+
+  @IsOptional() @IsString()
+  lastName?: string;
+
+  @IsOptional() @IsString()
+  phone?: string;
+}
+
+class SelfChangePasswordDto {
+  @IsString() @IsNotEmpty()
+  currentPassword: string;
+
+  @IsString() @MinLength(8)
+  newPassword: string;
+}
+
 @ApiTags('Users')
 @ApiBearerAuth()
 @Controller('users')
@@ -96,6 +123,35 @@ export class UserController {
       success: true,
       data: this.sanitizeUser(req.user),
     };
+  }
+
+  @Put('me')
+  @ApiOperation({ summary: 'Self update personal details (first name, last name, phone)' })
+  async updateMe(@Body() dto: SelfUpdateProfileDto, @Req() req: any) {
+    const updated = await this.userService.updateUser(req.user.id, dto, req.user.id);
+    return {
+      success: true,
+      data: this.sanitizeUser(updated),
+    };
+  }
+
+  @Post('me/change-password')
+  @ApiOperation({ summary: 'Change current user password' })
+  async changePassword(@Body() dto: SelfChangePasswordDto, @Req() req: any) {
+    await this.userService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+    return {
+      success: true,
+      data: { message: 'Password changed successfully.' },
+    };
+  }
+
+  @Post('bulk/status')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('user:edit:organization')
+  @ApiOperation({ summary: 'Activate or suspend a batch of users in one operation' })
+  async bulkSetStatus(@Body() dto: BulkSetStatusDto, @Req() req: any) {
+    const result = await this.userService.bulkSetStatus(dto.ids, dto.status, req.user.id);
+    return { success: true, data: result };
   }
 
   @Post()

@@ -126,7 +126,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'Clarification answered',
     body: '${assayerName} responded on ${branchName}.',
-    link: '/validation',
+    link: '/data-entry',
     skipActor: true,
   },
   VALIDATION_COMPLETED: {
@@ -136,7 +136,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'Validation complete',
     body: '${branchName} has passed validation.',
-    link: '/validation',
+    link: '/data-entry',
     skipActor: true,
   },
 
@@ -183,7 +183,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'Assayer document expiring',
     body: "${assayerName}'s ${documentName} expires on ${expiryDate}.",
-    link: '/workforce',
+    link: '/hr',
   },
   ASSAYER_ONBOARDED: {
     category: NotificationCategory.WORKFORCE,
@@ -192,7 +192,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'New assayer onboarded',
     body: '${assayerName} is now active and available for assignment.',
-    link: '/workforce',
+    link: '/hr',
     skipActor: true,
   },
 };

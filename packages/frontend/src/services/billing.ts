@@ -300,6 +300,18 @@ async function transitionEntry(id: string, status: BillingState, reason?: string
     method: 'PATCH', body: JSON.stringify({ status, reason }),
   });
 }
+
+export interface BulkTransitionResult {
+  succeeded: { id: string; from: BillingState; to: BillingState }[];
+  skipped: { id: string; current: BillingState; reason: string }[];
+  failed: { id: string; reason: string }[];
+}
+
+async function bulkTransitionEntries(entryIds: string[], status: BillingState, reason?: string): Promise<BulkTransitionResult> {
+  return api.request<BulkTransitionResult>('/billing-engine/entries/state', {
+    method: 'PATCH', body: JSON.stringify({ entryIds, status, reason }),
+  });
+}
 async function adjustEntry(id: string, delta: number, reason: string): Promise<BillingEntry> {
   return api.request<BillingEntry>(`/billing-engine/entries/${id}/adjust`, {
     method: 'PATCH', body: JSON.stringify({ delta, reason }),
@@ -415,6 +427,7 @@ export const billingApi = {
   getEntry,
   createEntry,
   transitionEntry,
+  bulkTransitionEntries,
   adjustEntry,
   splitEntry,
   mergeEntries,

@@ -1665,3 +1665,13 @@ html, body {
     padding: 2px 6px;
   }
 }
+
+/* Tab-pane content transition — keyed on the active tab so each switch
+   fades/slides the pane in instead of snapping it into place. */
+@keyframes tabPaneIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.tab-pane {
+  animation: tabPaneIn 0.18s ease;
+}

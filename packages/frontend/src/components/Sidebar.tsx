@@ -14,9 +14,7 @@ import {
   Sliders,
   Building2,
   Receipt,
-  ChevronLeft,
-  ChevronRight,
-  LogOut, UserCog, Inbox } from 'lucide-react';
+  UserCog, Inbox } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { BrandLogo } from './BrandLogo';
@@ -24,11 +22,9 @@ import { BrandLogo } from './BrandLogo';
 interface SidebarProps {
   user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
   collapsed: boolean;
-  onToggle: () => void;
-  onLogout?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onLogout }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
   const location = useLocation();
   const userRoles = (user?.roles ?? []).map((r) => r.name);
 
@@ -121,31 +117,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
         background: 'rgba(0,0,0,0.2)',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: collapsed ? 'center' : 'space-between',
+        justifyContent: 'flex-start',
         gap: collapsed ? 0 : '12px',
         position: 'relative'
       }}>
         <BrandLogo size={collapsed ? 'sm' : 'md'} collapsed={collapsed} />
-
-        <button
-          onClick={onToggle}
-          style={{
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)',
-            color: 'var(--text-secondary)',
-            width: '26px',
-            height: '26px',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-          title={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-        >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-        </button>
       </div>
 
       {/* Global Search */}
@@ -168,51 +144,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle, onL
           </div>
         ))}
       </nav>
-
-      {/* User Status */}
-      <div style={{ 
-        padding: collapsed ? '14px 10px' : '20px', 
-        borderTop: '1px solid var(--border-color)',
-        background: 'rgba(0,0,0,0.1)',
-        display: 'flex',
-        flexDirection: collapsed ? 'column' : 'row',
-        alignItems: 'center',
-        justifyContent: collapsed ? 'center' : 'flex-start',
-        gap: collapsed ? '8px' : '12px',
-        position: 'relative',
-      }}>
-        <div style={{ 
-          width: '36px', 
-          height: '36px', 
-          borderRadius: 'var(--radius-full)', 
-          background: 'var(--bg-tertiary)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontWeight: 600,
-          color: 'var(--accent-secondary)',
-          flexShrink: 0
-        }}>
-          {(user?.displayName || 'SA').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-        </div>
-        {!collapsed && (
-          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: '1 1 auto', minWidth: 0 }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {user?.displayName || 'System Admin'}
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {user?.email || 'admin@fapoms.com'}
-            </span>
-          </div>
-        )}
-        {onLogout && (
-          <button onClick={onLogout} title="Logout"
-            style={{ position: collapsed ? 'static' : 'static', right: collapsed ? 'auto' : 'auto', top: collapsed ? 'auto' : 'auto', transform: 'none', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled)', borderRadius: 'var(--radius-sm)', color: 'var(--danger)', cursor: 'pointer', padding: collapsed ? '6px' : '6px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 500, marginLeft: collapsed ? 0 : 'auto', flexShrink: 0 }}>
-            <LogOut size={collapsed ? 14 : 12} />
-            {!collapsed && <span>Logout</span>}
-          </button>
-        )}
-      </div>
     </aside>
   );
 };

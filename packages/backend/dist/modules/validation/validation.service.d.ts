@@ -32,6 +32,17 @@ export declare class ValidationService implements OnModuleInit {
     autoBalanceUnassignedCases(availableValidatorIds: string[], userId: string): Promise<number>;
     private executeValidationTransition;
     transition(id: string, targetStatus: ValidationStatus, userId: string, remarks?: string, notes?: string, ocrResult?: any): Promise<ValidationCaseEntity>;
+    bulkTransition(ids: string[], targetStatus: ValidationStatus, userId: string, remarks?: string): Promise<{
+        succeeded: {
+            id: string;
+            from: string;
+            to: string;
+        }[];
+        failed: {
+            id: string;
+            reason: string;
+        }[];
+    }>;
     moveToReview(id: string, userId: string, remarks?: string): Promise<ValidationCaseEntity>;
     getOrAdvanceForHandBack(projectBranchId: string, assessmentId: string | null, userId: string): Promise<ValidationCaseEntity>;
     getOrCreateForBranch(projectBranchId: string, assessmentId: string | null, userId: string): Promise<ValidationCaseEntity>;

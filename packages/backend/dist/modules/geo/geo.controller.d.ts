@@ -20,6 +20,10 @@ export declare class GeoController {
     private readonly districtRepo;
     private readonly cityRepo;
     constructor(routingService: RoutingService, stateRepo: Repository<GeoStateEntity>, districtRepo: Repository<GeoDistrictEntity>, cityRepo: Repository<GeoCityEntity>);
+    autocomplete(q?: string): Promise<{
+        success: boolean;
+        data: import("./india-autocomplete.helper").IndiaPlaceResult[];
+    }>;
     getStates(): Promise<{
         success: boolean;
         data: GeoStateEntity[];

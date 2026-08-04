@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2 } from 'lucide-react';
+import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { Modal, useToast } from '../../components/ui';
+import { Autocomplete } from '../../components/ui/Autocomplete';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
 import { userMessage } from '../../services/errors';
@@ -80,6 +81,9 @@ const CREATE_FIELDS: FieldDef[] = [
   { key: 'ifscCode', label: 'IFSC Code' },
   { key: 'experienceYears', label: 'Experience (years)', type: 'number' },
   { key: 'notes', label: 'Notes', full: true },
+  { key: 'baseFee', label: 'Base Fee (₹/audit)', type: 'number' },
+  { key: 'hourlyRate', label: 'Hourly Rate (₹)', type: 'number' },
+  { key: 'dailyRate', label: 'Daily Rate (₹)', type: 'number' },
 ];
 
 const CREATE_FIELD_GROUPS: FieldGroup[] = [
@@ -87,6 +91,7 @@ const CREATE_FIELD_GROUPS: FieldGroup[] = [
   { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
   { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate'] },
   { title: 'Financial', icon: <CreditCard size={13} />, fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+  { title: 'Pay', icon: <CreditCard size={13} />, fields: ['baseFee', 'hourlyRate', 'dailyRate'] },
   { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears'] },
   { title: 'Other', icon: <Clock size={13} />, fields: ['notes'] },
 ];
@@ -126,6 +131,31 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'notes', label: 'Notes', full: true },
 ];
 
+const GEO_AUTO_FIELDS = new Set(['district', 'city', 'pincode']);
+
+/** Apply a selected real place to the whole address group so state/district/city/pincode stay consistent. */
+const applyPlace = (fieldKey: string, place: { label: string; state: string; district: string; pincode: string }, form: Record<string, string>, setForm: (v: Record<string, string>) => void) => {
+  const primary = (place.label || '').split(',')[0].trim();
+  const next = { ...form };
+  if (fieldKey === 'city' || fieldKey === 'pincode') {
+    if (place.district) next.district = place.district;
+    if (place.state) next.state = place.state;
+  }
+  if (fieldKey === 'city') next.city = primary;
+  if (fieldKey === 'district') {
+    next.district = place.district || primary;
+    if (place.state) next.state = place.state;
+    if (!next.city) next.city = primary;
+  }
+  if (fieldKey === 'pincode') {
+    if (place.pincode) next.pincode = place.pincode;
+    next.district = place.district || next.district;
+    next.state = place.state || next.state;
+    if (!next.city) next.city = primary;
+  }
+  setForm(next);
+};
+
 const renderFormField = (field: FieldDef, form: Record<string, string>, setForm: (v: Record<string, string>) => void) => {
   const val = form[field.key] || '';
   const isTextarea = FIELD_TEXTAREA.has(field.key);
@@ -152,6 +182,14 @@ const renderFormField = (field: FieldDef, form: Record<string, string>, setForm:
           <option value="">-- Select {field.label.replace(' *', '')} --</option>
           {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
+      ) : GEO_AUTO_FIELDS.has(field.key) ? (
+        <Autocomplete
+          value={val}
+          onChange={(v) => handleChange(v)}
+          onSelect={(place) => applyPlace(field.key, place, form, setForm)}
+          placeholder={field.placeholder || (field.key === 'pincode' ? 'Search pincode…' : `Type to search ${field.label.toLowerCase()}…`)}
+          filterType={(r) => field.key === 'pincode' ? !!r.pincode : true}
+        />
       ) : isTextarea ? (
         <textarea value={val} onChange={(e) => handleChange(e.target.value)} placeholder={field.placeholder || `Enter ${field.label.toLowerCase().replace(' *', '')}`}
           rows={3} style={{ ...formFieldStyle, resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }} />
@@ -204,28 +242,38 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
   const [activeTab, setActiveTab] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
-  const handlePincodeLookup = async (pincode: string) => {
-    if (pincode.length === 6 && /^\d+$/.test(pincode)) {
-      try {
-        const res = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
-        const data = await res.json();
-        if (data && data[0] && data[0].Status === 'Success' && data[0].PostOffice?.[0]) {
-          const po = data[0].PostOffice[0];
-          setForm(prev => ({
-            ...prev,
-            city: po.District || po.Block || prev.city,
-            district: po.District || prev.district,
-            state: po.State || prev.state,
-          }));
+  const [addrError, setAddrError] = useState<string | null>(null);
+
+  const checkAddressConsistency = async (pincode: string, state: string, district: string) => {
+    setAddrError(null);
+    if (!/^\d{6}$/.test(pincode || '')) return;
+    try {
+      const res = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
+      const data = await res.json();
+      const ok = data?.[0];
+      if (ok && ok.Status === 'Success' && ok.PostOffice?.[0]) {
+        const po = ok.PostOffice[0];
+        if (state && po.State && state.trim().toLowerCase() !== po.State.trim().toLowerCase()) {
+          setAddrError(`Pincode ${pincode} is in ${po.State}, but you selected state "${state}". State, district, city, address and pincode must match.`);
+          return;
         }
-      } catch (e) {}
-    }
+        if (district && po.District && district.trim().toLowerCase() !== po.District.trim().toLowerCase()) {
+          setAddrError(`Pincode ${pincode} is in ${po.District} district (${po.State}), but you entered district "${district}".`);
+        }
+      }
+    } catch { /* can't verify client-side; backend enforces */ }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     try {
+      await checkAddressConsistency(form.pincode || '', form.state || '', form.district || '');
+      if (addrError) {
+        setSubmitting(false);
+        toast({ type: 'error', title: 'Address looks inconsistent', message: addrError });
+        return;
+      }
       const firstName = form.firstName?.trim() || '';
       const lastName = form.lastName?.trim() || '';
       const autoCode = form.assayerCode?.trim() || `AS-${String(Math.floor(10 + Math.random() * 89))}`;
@@ -258,7 +306,24 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
         notes: form.notes?.trim() || null,
       };
 
-      await api.request('/assayers', { method: 'POST', body: JSON.stringify(body) });
+      const created = await api.request<any>('/assayers', { method: 'POST', body: JSON.stringify(body) });
+      const createdId = created?.id ?? (created?.data as any)?.id;
+      const baseFee = Number(form.baseFee) || 0;
+      const hourlyRate = Number(form.hourlyRate) || 0;
+      const dailyRate = Number(form.dailyRate) || 0;
+      if (createdId && (baseFee > 0 || hourlyRate > 0 || dailyRate > 0)) {
+        await api.request(`/assayers/${createdId}/commercial`, {
+          method: 'POST',
+          body: JSON.stringify({
+            baseFee, hourlyRate, dailyRate,
+            travelReimbursement: Number(form.travelReimbursement) || 0,
+            accommodationAllowance: Number(form.accommodationAllowance) || 0,
+            mealAllowance: Number(form.mealAllowance) || 0,
+            currency: 'INR',
+            effectiveStartDate: new Date().toISOString(),
+          }),
+        });
+      }
       onCreated();
     } catch (err) {
       toast({ type: 'error', title: 'Could not create assayer', message: userMessage(err) });
@@ -274,8 +339,8 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
     <Modal
       open
       onClose={onClose}
-      width="680px"
-      maxHeight="92vh"
+      width="720px"
+      height="min(680px, 85vh)"
       closeIcon={<X size={18} />}
       asForm
       onSubmit={handleSubmit}
@@ -436,32 +501,33 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
 
             <div>
               <label style={labelStyle}>Pincode (Auto-Fills City & State) <span style={{ color: 'var(--danger)' }}>*</span></label>
-              <input
-                type="text"
-                required
-                maxLength={6}
-                placeholder="e.g. 110001"
-                className="form-input"
-                style={{ ...formFieldStyle, fontFamily: 'monospace' }}
+              <Autocomplete
                 value={form.pincode || ''}
-                onChange={(e) => {
-                  const pin = e.target.value.replace(/\D/g, '');
-                  setForm({ ...form, pincode: pin });
-                  handlePincodeLookup(pin);
+                onChange={(v) => setForm({ ...form, pincode: v })}
+                onSelect={(place) => {
+                  const next: Record<string, string> = { ...form, pincode: place.pincode || form.pincode || '' };
+                  if (place.district) { next.district = place.district; }
+                  if (place.state) { next.state = place.state; }
+                  if (!next.city) next.city = (place.label || '').split(',')[0].trim();
+                  setForm(next);
                 }}
+                placeholder="Search pincode, e.g. 110001"
+                filterType={(r) => !!r.pincode}
               />
             </div>
 
             <div>
               <label style={labelStyle}>City / Base District <span style={{ color: 'var(--danger)' }}>*</span></label>
-              <input
-                type="text"
-                required
-                placeholder="New Delhi"
-                className="form-input"
-                style={formFieldStyle}
+              <Autocomplete
                 value={form.city || ''}
-                onChange={(e) => setForm({ ...form, city: e.target.value, district: e.target.value })}
+                onChange={(v) => setForm({ ...form, city: v, district: v })}
+                onSelect={(place) => {
+                  const next: Record<string, string> = { ...form, city: (place.label || '').split(',')[0].trim() };
+                  if (place.district) next.district = place.district;
+                  if (place.state) next.state = place.state;
+                  setForm(next);
+                }}
+                placeholder="Type to search city / district…"
               />
             </div>
 
@@ -469,12 +535,18 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
               <label style={labelStyle}>State <span style={{ color: 'var(--danger)' }}>*</span></label>
               <select
                 value={form.state || 'Delhi'}
-                onChange={(e) => setForm({ ...form, state: e.target.value })}
+                onChange={(e) => { setForm({ ...form, state: e.target.value }); checkAddressConsistency(form.pincode || '', e.target.value, form.district); }}
                 style={formSelectStyle}
               >
                 {INDIAN_STATES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
+
+            {addrError && (
+              <div style={{ gridColumn: '1 / -1', padding: '9px 12px', borderRadius: '8px', fontSize: '12.5px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', display: 'flex', gap: '7px', alignItems: 'center' }}>
+                <AlertTriangle size={14} /> {addrError}
+              </div>
+            )}
 
             <div>
               <label style={labelStyle}>Employment Type</label>
@@ -492,7 +564,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
         <>
           <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
             {CREATE_FIELD_GROUPS.map((group, i) => (
-              <button key={group.title} onClick={() => setActiveTab(i)}
+              <button key={group.title} type="button" onClick={() => setActiveTab(i)}
                 style={{
                   padding: '8px 14px', background: 'transparent', border: 'none',
                   borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
@@ -505,7 +577,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
               </button>
             ))}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div key={activeTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               {currentGroup.fields.map(key => {
@@ -583,8 +655,8 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
     <Modal
       open
       onClose={onClose}
-      width="680px"
-      maxHeight="90vh"
+      width="720px"
+      height="min(680px, 85vh)"
       closeIcon={<X size={18} />}
       asForm
       onSubmit={handleSubmit}
@@ -627,7 +699,7 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
       {/* Tab bar */}
       <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
         {EDIT_FIELD_GROUPS.map((group, i) => (
-          <button key={group.title} onClick={() => setActiveEditTab(i)}
+          <button key={group.title} type="button" onClick={() => setActiveEditTab(i)}
             style={{
               padding: '8px 14px', background: 'transparent', border: 'none',
               borderBottom: activeEditTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
@@ -642,7 +714,7 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
       </div>
 
       {/* Tab content */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div key={activeEditTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
           {currentGroup.fields.map(key => {

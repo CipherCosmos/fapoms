@@ -185,6 +185,22 @@ export declare class AssayerService implements OnModuleInit {
     update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity>;
     remove(id: string, userId: string): Promise<void>;
     transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity>;
+    bulkTransitionLifecycle(ids: string[], targetStatus: string, userId: string, reason?: string): Promise<{
+        succeeded: {
+            id: string;
+            from: string;
+            to: string;
+        }[];
+        skipped: {
+            id: string;
+            current: string;
+            reason: string;
+        }[];
+        failed: {
+            id: string;
+            reason: string;
+        }[];
+    }>;
     private doTransitionLifecycle;
     verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity>;
     initiateBackgroundCheck(id: string, userId: string, reason?: string): Promise<AssayerEntity>;

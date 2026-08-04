@@ -238,12 +238,9 @@ export class ValidationQueryService {
   }
 
   async findByAssayer(assayerId: string): Promise<ValidationQueryEntity[]> {
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assayerId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assayerId || '');
     if (!assayerId || !isUuid) {
-      return this.queryRepository.find({
-        where: { isActive: true },
-        order: { createdAt: 'DESC' },
-      });
+      throw new BadRequestException('A valid assayerId UUID is required to query validation queries.');
     }
     return this.queryRepository.find({
       where: { assayerId, isActive: true },

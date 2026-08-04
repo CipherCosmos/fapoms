@@ -136,6 +136,58 @@ export function branchStatusLabel(status?: string | null): string {
   return BRANCH_STATUS_LABELS[status as ProjectBranchStatus] ?? humanize(status);
 }
 
+/** Semantic tone for a branch status — single source of truth for badge colours. */
+export interface StatusTone { bg: string; color: string; }
+
+export function branchStatusTone(status?: string | null): StatusTone {
+  switch (status) {
+    case ProjectBranchStatus.CLOSED:
+    case ProjectBranchStatus.ASSIGNMENT_CONFIRMED:
+      return { bg: 'var(--status-active-bg)', color: 'var(--success)' };
+    case ProjectBranchStatus.SCHEDULED:
+    case ProjectBranchStatus.AUDIT_COMPLETED:
+    case ProjectBranchStatus.VALIDATION_COMPLETED:
+      return { bg: 'rgba(216,174,71,0.15)', color: 'var(--accent)' };
+    case ProjectBranchStatus.UNABLE_TO_COVER:
+    case ProjectBranchStatus.CANCELLED:
+      return { bg: 'var(--status-cancelled-bg)', color: 'var(--danger)' };
+    case ProjectBranchStatus.CANDIDATE_SEARCH:
+    case ProjectBranchStatus.CONTACT_INITIATED:
+    case ProjectBranchStatus.NEGOTIATION:
+      return { bg: 'var(--status-pending-bg)', color: 'var(--warning)' };
+    case ProjectBranchStatus.ON_HOLD:
+      return { bg: 'var(--border-hair)', color: 'var(--text-muted)' };
+    case ProjectBranchStatus.IMPORTED:
+    case ProjectBranchStatus.PLANNING:
+    default:
+      return { bg: 'var(--border-hair)', color: 'var(--text-muted)' };
+  }
+}
+
+/** Hex marker colour for the Leaflet map (SVG fill needs a raw colour, not a CSS var). */export function branchStatusColor(status?: string | null): string {
+  switch (status) {
+    case ProjectBranchStatus.CLOSED:
+    case ProjectBranchStatus.ASSIGNMENT_CONFIRMED:
+      return '#10b981';
+    case ProjectBranchStatus.SCHEDULED:
+    case ProjectBranchStatus.AUDIT_COMPLETED:
+    case ProjectBranchStatus.VALIDATION_COMPLETED:
+      return '#f59e0b';
+    case ProjectBranchStatus.UNABLE_TO_COVER:
+    case ProjectBranchStatus.CANCELLED:
+      return '#ef4444';
+    case ProjectBranchStatus.ON_HOLD:
+      return '#9ca3af';
+    case ProjectBranchStatus.IMPORTED:
+    case ProjectBranchStatus.PLANNING:
+    case ProjectBranchStatus.CANDIDATE_SEARCH:
+    case ProjectBranchStatus.CONTACT_INITIATED:
+    case ProjectBranchStatus.NEGOTIATION:
+    default:
+      return '#f59e0b';
+  }
+}
+
 export function assignmentStatusLabel(status?: string | null): string {
   if (!status) return '—';
   return ASSIGNMENT_STATUS_LABELS[status as AssignmentStatus] ?? humanize(status);
@@ -183,4 +235,58 @@ export function anyStatusLabel(status?: string | null): string {
     ASSIGNMENT_STATUS_LABELS[status as AssignmentStatus] ??
     humanize(status)
   );
+}
+
+/**
+ * Canonical branch-status sets used to compute coverage KPIs. These are the single
+ * source of truth so that the planning header ("X% covered"), the Excel export
+ * ("Audit Coverage Possible") and any per-branch "done" checks all agree on which
+ * statuses count as covered vs pending — previously each used a different subset.
+ */
+export const BRANCH_COVERED_STATUSES: readonly ProjectBranchStatus[] = [
+  ProjectBranchStatus.ASSIGNMENT_CONFIRMED,
+  ProjectBranchStatus.SCHEDULED,
+  ProjectBranchStatus.AUDIT_COMPLETED,
+  ProjectBranchStatus.VALIDATION_COMPLETED,
+  ProjectBranchStatus.CLOSED,
+];
+
+export const BRANCH_DONE_STATUSES: readonly ProjectBranchStatus[] = [
+  ProjectBranchStatus.AUDIT_COMPLETED,
+  ProjectBranchStatus.VALIDATION_COMPLETED,
+  ProjectBranchStatus.CLOSED,
+];
+
+export const BRANCH_PENDING_STATUSES: readonly ProjectBranchStatus[] = [
+  ProjectBranchStatus.IMPORTED,
+  ProjectBranchStatus.PLANNING,
+  ProjectBranchStatus.CANDIDATE_SEARCH,
+  ProjectBranchStatus.CONTACT_INITIATED,
+  ProjectBranchStatus.NEGOTIATION,
+  ProjectBranchStatus.ON_HOLD,
+];
+
+/** Statuses that represent a branch's audit being fully finished (for "done" badges). */
+export const BRANCH_ACTIVE_COVERED_STATUSES: readonly ProjectBranchStatus[] = [
+  ProjectBranchStatus.ASSIGNMENT_CONFIRMED,
+  ProjectBranchStatus.SCHEDULED,
+];
+
+/**
+ * Local-timezone `YYYY-MM-DD` key. Using `new Date().toISOString().split('T')[0]`
+ * returns the *UTC* date, which is a day behind the user's local "today" for any
+ * timezone ahead of UTC — so "today"'s schedules silently moved to the wrong day.
+ * Every date-only comparison in a calendar should use this.
+ */
+export function localDateKey(value?: string | number | Date | null): string {
+  if (value == null || value === '') return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+export function todayDateKey(): string {
+  return localDateKey(new Date());
 }

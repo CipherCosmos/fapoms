@@ -3,6 +3,7 @@ import { Plus, X, Mail, Phone } from 'lucide-react';
 import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useClientContacts, useAddContact, useDeleteContact } from '../../hooks/useClients';
 import type { ClientContact } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   const { data: contacts = [], isLoading } = useClientContacts(clientId);
@@ -24,7 +25,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       setShowForm(false);
       setForm({ name: '', email: '', phone: '', designation: '', department: '', isPrimary: false });
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to add contact');
+      toast({ type: 'error', title: 'Failed to add contact', message: userMessage(err) });
     }
   };
 
@@ -34,7 +35,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       await del.mutateAsync({ clientId, contactId: contact.id });
       toast('success', 'Contact removed');
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to remove contact');
+      toast({ type: 'error', title: 'Failed to remove contact', message: userMessage(err) });
     }
   };
 

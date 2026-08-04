@@ -3,6 +3,7 @@ import L from 'leaflet';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { api } from '../services/api';
 import { MapLayerControls } from './MapLayerControls';
+import { branchStatusColor } from '../utils/statusLabels';
 
 interface MapBranch {
   id: string;
@@ -303,11 +304,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           const lng = Number(b.longitude);
 
           const isSelected = b.id === selectedBranchId;
-          const color = isSelected
-            ? '#6366f1' // Selected Indigo
-            : b.status === 'ASSIGNMENT_CONFIRMED' || b.status === 'SCHEDULED'
-            ? '#10b981' // Green
-            : '#f59e0b'; // Amber
+          const color = isSelected ? '#6366f1' : branchStatusColor(b.status);
 
           const markerSvg = `
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="28px" height="28px" style="filter: drop-shadow(0 2px 5px rgba(0,0,0,0.4));">

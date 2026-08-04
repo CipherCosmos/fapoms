@@ -11,6 +11,7 @@ import {
 import { billingStatusLabel } from '../../utils/statusLabels';
 import { BILLING_TRANSITIONS } from '@fapoms/shared';
 import type { ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   DRAFT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -85,7 +86,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       });
       toast('success', 'Billing profile updated');
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to update billing');
+      toast({ type: 'error', title: 'Failed to update billing', message: userMessage(err) });
     }
   };
 
@@ -98,7 +99,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       setTargetStatus('');
       setTransitionRemarks('');
     } catch (err: any) {
-      toast('error', err?.message || 'Status transition failed');
+      toast({ type: 'error', title: 'Status transition failed', message: userMessage(err) });
     }
   };
 
@@ -110,7 +111,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       toast('success', 'Remark added');
       setRemark('');
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to add remark');
+      toast({ type: 'error', title: 'Failed to add remark', message: userMessage(err) });
     }
   };
 

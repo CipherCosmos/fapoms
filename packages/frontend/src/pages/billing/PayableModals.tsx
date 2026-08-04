@@ -3,6 +3,7 @@ import { Banknote } from 'lucide-react';
 import { Modal, StyledInput, DetailDrawer, useToast } from '../../components/ui';
 import { useCreatePayable, useTransitionPayable, useBillingPayables, useDisbursePayable } from '../../hooks/useBilling';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { PAYABLE_TRANSITIONS, AssayerPayableStatus } from '@fapoms/shared';
 import type { PaymentMethod } from '@fapoms/shared';
 
@@ -29,8 +30,8 @@ export const CreatePayableModal: React.FC<{ onClose: () => void }> = ({ onClose 
 
   useEffect(() => {
     let active = true;
-    api.request<{ data: AssayerOption[] }>('/assayers?limit=1000')
-      .then((res) => { if (active) setAssayers(res.data ?? []); })
+    api.request<AssayerOption[]>('/assayers?limit=1000')
+      .then((res) => { if (active) setAssayers(res ?? []); })
       .catch(() => {});
     return () => { active = false; };
   }, []);
@@ -50,7 +51,7 @@ export const CreatePayableModal: React.FC<{ onClose: () => void }> = ({ onClose 
         remarks: form.remarks || undefined,
       });
       toast('success', 'Payable created'); onClose();
-    } catch (err: any) { toast('error', err?.message || 'Failed to create payable'); }
+    } catch (err: any) { toast({ type: 'error', title: 'Failed to create payable', message: userMessage(err) }); }
   };
 
   return (
@@ -108,7 +109,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
       });
       toast('success', `Disbursed to ${rec.assayerName ?? 'assayer'}`);
       setPayRef(''); setPayAmount('');
-    } catch (e: any) { toast('error', e?.message || 'Disbursement failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Disbursement failed', message: userMessage(e) }); }
   };
 
   const doTransition = async () => {
@@ -117,7 +118,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
     try {
       await transition.mutateAsync({ id: rec.id, status: next, reason: reason || undefined });
       toast('success', `Payable → ${next}`); setNext(''); setReason('');
-    } catch (e: any) { toast('error', e?.message || 'Transition failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Transition failed', message: userMessage(e) }); }
   };
 
   const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (

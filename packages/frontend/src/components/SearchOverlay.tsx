@@ -1,26 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Search, ArrowRight, Command } from 'lucide-react';
-import { api } from '../services/api';
-
-interface SearchResult {
-  branches: { id: string; name: string; code: string; city: string; state: string }[];
-  assayers: { id: string; name: string; code: string; phone: string }[];
-  projects: { id: string; name: string; projectNumber: string }[];
-  clients: { id: string; name: string; code: string }[];
-  assignments: { id: string; assignmentNumber: string; branchName: string; assayerName: string }[];
-}
+import { useGlobalSearch } from '../hooks/useGlobalSearch';
 
 export const SearchOverlay: React.FC = () => {
-  const navigate = useNavigate();
+  const { query, setQuery, results, loading, navigateTo, totalCount } = useGlobalSearch();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const flatItems = useCallback(() => {
     if (!results) return [];
@@ -33,42 +20,23 @@ export const SearchOverlay: React.FC = () => {
     return items;
   }, [results]);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q || q.length < 1) { setResults(null); return; }
-    setLoading(true);
-    try {
-      const data = await api.request<any>(`/search?q=${encodeURIComponent(q)}`);
-      setResults(data);
-    } catch {}
-    setLoading(false);
-  }, []);
-
   const openSearch = useCallback(() => {
     setOpen(true);
     setQuery('');
-    setResults(null);
     setSelectedIdx(-1);
     setTimeout(() => inputRef.current?.focus(), 50);
-  }, []);
+  }, [setQuery]);
 
   const closeSearch = useCallback(() => {
     setOpen(false);
     setQuery('');
-    setResults(null);
     setSelectedIdx(-1);
-  }, []);
+  }, [setQuery]);
 
-  const navigateTo = useCallback((type: string, id: string) => {
+  const handleSelect = useCallback((type: string, id: string) => {
     closeSearch();
-    const paths: Record<string, string> = {
-      branches: `/branches?id=${id}`,
-      assayers: `/assayers/${id}`,
-      projects: `/projects?id=${id}`,
-      clients: `/clients?id=${id}`,
-      assignments: `/assignments?id=${id}`,
-    };
-    navigate(paths[type] || '/');
-  }, [navigate, closeSearch]);
+    navigateTo(type, id);
+  }, [closeSearch, navigateTo]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -84,15 +52,8 @@ export const SearchOverlay: React.FC = () => {
   }, [open, openSearch, closeSearch]);
 
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query) {
-      debounceRef.current = setTimeout(() => doSearch(query), 200);
-      setSelectedIdx(-1);
-    } else {
-      setResults(null);
-    }
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query, doSearch]);
+    if (query) setSelectedIdx(-1);
+  }, [query]);
 
   useEffect(() => {
     if (!open) return;
@@ -101,12 +62,12 @@ export const SearchOverlay: React.FC = () => {
       if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIdx(i => Math.max(i - 1, 0)); }
       if (e.key === 'Enter' && selectedIdx >= 0) {
         const items = flatItems();
-        if (items[selectedIdx]) navigateTo(items[selectedIdx].type, items[selectedIdx].id);
+        if (items[selectedIdx]) handleSelect(items[selectedIdx].type, items[selectedIdx].id);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, selectedIdx, flatItems, navigateTo]);
+  }, [open, selectedIdx, flatItems, handleSelect]);
 
   useEffect(() => {
     if (selectedIdx >= 0 && listRef.current) {
@@ -114,11 +75,6 @@ export const SearchOverlay: React.FC = () => {
       if (el) el.scrollIntoView({ block: 'nearest' });
     }
   }, [selectedIdx]);
-
-  const totalCount = results
-    ? results.branches.length + results.assayers.length + results.projects.length +
-      results.clients.length + results.assignments.length
-    : 0;
 
   if (!open) return null;
 
@@ -180,11 +136,11 @@ export const SearchOverlay: React.FC = () => {
                 <div style={{ padding: '8px 20px 4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   {totalCount} result{totalCount !== 1 ? 's' : ''}
                 </div>
-                {renderGroup('Branches', 'branches', results.branches, (i) => i.name, (i) => `${i.city}, ${i.state}`, selectedIdx, flatItems, navigateTo)}
-                {renderGroup('Assayers', 'assayers', results.assayers, (i) => i.name, (i) => i.code, selectedIdx, flatItems, navigateTo)}
-                {renderGroup('Projects', 'projects', results.projects, (i) => i.name, (i) => i.projectNumber, selectedIdx, flatItems, navigateTo)}
-                {renderGroup('Clients', 'clients', results.clients, (i) => i.name, (i) => i.code, selectedIdx, flatItems, navigateTo)}
-                {renderAssignments(results.assignments, selectedIdx, flatItems, navigateTo)}
+                {renderGroup('Branches', 'branches', results.branches, (i) => i.name, (i) => `${i.city}, ${i.state}`, selectedIdx, flatItems, handleSelect)}
+                {renderGroup('Assayers', 'assayers', results.assayers, (i) => i.name, (i) => i.code, selectedIdx, flatItems, handleSelect)}
+                {renderGroup('Projects', 'projects', results.projects, (i) => i.name, (i) => i.projectNumber, selectedIdx, flatItems, handleSelect)}
+                {renderGroup('Clients', 'clients', results.clients, (i) => i.name, (i) => i.code, selectedIdx, flatItems, handleSelect)}
+                {renderAssignments(results.assignments, selectedIdx, flatItems, handleSelect)}
 
                 <div style={{ padding: '8px 20px', borderTop: '1px solid var(--border-hair)', display: 'flex', gap: '16px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   <span><kbd style={kbdStyle}>↑↓</kbd> navigate</span>

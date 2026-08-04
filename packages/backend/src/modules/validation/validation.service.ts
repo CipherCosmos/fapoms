@@ -33,11 +33,10 @@ export class ValidationService implements OnModuleInit {
 
   onModuleInit() {
     this.workflowEngine.registerWorkflow('validation', [
-      // Was missing entirely, so a fresh case could never be marked "ready to
-      // review" and the CORRECTION_REQUIRED loop below — which can only be
-      // entered from HUMAN_REVIEW — was unreachable dead code as a result.
-      { from: [ValidationStatus.PENDING, ValidationStatus.ASSIGNED], to: ValidationStatus.HUMAN_REVIEW },
-      { from: [ValidationStatus.HUMAN_REVIEW, ValidationStatus.ASSIGNED, ValidationStatus.PENDING], to: ValidationStatus.APPROVED },
+      { from: [ValidationStatus.PENDING], to: ValidationStatus.ASSIGNED },
+      { from: [ValidationStatus.ASSIGNED], to: ValidationStatus.OCR_PROCESSING },
+      { from: [ValidationStatus.OCR_PROCESSING], to: ValidationStatus.HUMAN_REVIEW },
+      { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.APPROVED },
       { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.CORRECTION_REQUIRED },
       { from: [ValidationStatus.CORRECTION_REQUIRED], to: ValidationStatus.HUMAN_REVIEW },
       { from: [ValidationStatus.APPROVED], to: ValidationStatus.SUBMITTED },
@@ -244,6 +243,36 @@ export class ValidationService implements OnModuleInit {
     } else {
       throw new BadRequestException(`Invalid validation status transition to ${targetStatus}`);
     }
+  }
+
+  /**
+   * Transition a batch of validation cases to a target status as one operation.
+   * Each row runs the normal per-case transition (state-machine validation,
+   * branch/assessment side-effects, workflow command, audit). Per-row errors are
+   * isolated so one bad case never aborts the rest.
+   */
+  async bulkTransition(
+    ids: string[],
+    targetStatus: ValidationStatus,
+    userId: string,
+    remarks?: string,
+  ): Promise<{
+    succeeded: { id: string; from: string; to: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    const succeeded: { id: string; from: string; to: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+    for (const id of ids) {
+      try {
+        const vCase = await this.findOne(id);
+        const from = vCase.status;
+        await this.transition(id, targetStatus, userId, remarks);
+        succeeded.push({ id, from, to: targetStatus });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+    return { succeeded, failed };
   }
 
   async moveToReview(id: string, userId: string, remarks?: string): Promise<ValidationCaseEntity> {

@@ -145,6 +145,26 @@ const VALID_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
   [ClientLifecycleStatus.ARCHIVED]: [],
 };
 
+/** Ordered path of client lifecycle states from `from` to `target`, walking only
+ *  allowed transitions (BFS). Returns [] when already there, or null when the
+ *  target is unreachable — used by bulk operations to walk a batch forward. */
+function findLifecyclePathTo(from: string, target: string): string[] | null {
+  if (from === target) return [];
+  const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
+  const visited = new Set<string>([from]);
+  while (queue.length) {
+    const { stage, path } = queue.shift()!;
+    for (const next of VALID_LIFECYCLE_TRANSITIONS[stage] ?? []) {
+      if (next === target) return [...path, next];
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push({ stage: next, path: [...path, next] });
+      }
+    }
+  }
+  return null;
+}
+
 const VALID_BILLING_TRANSITIONS: Record<string, string[]> = {
   [ClientBillingStatus.DRAFT]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
   [ClientBillingStatus.ACTIVE]: [ClientBillingStatus.SUSPENDED, ClientBillingStatus.INACTIVE],
@@ -430,9 +450,52 @@ export class ClientService {
     return saved;
   }
 
-  // -----------------------------------------------------------------------
-  // Contacts
-  // -----------------------------------------------------------------------
+  /**
+   * Migrate a batch of clients forward to a target lifecycle stage as one
+   * operation. Each row is walked through the allowed state-machine path to the
+   * target and every step runs the normal transition (validation, audit, domain
+   * event). Rows that cannot reach the target are skipped; per-row errors are
+   * isolated so one bad client never aborts the rest.
+   */
+  async bulkTransitionLifecycle(
+    ids: string[],
+    newStatus: string,
+    userId: string,
+    reason?: string,
+  ): Promise<{
+    succeeded: { id: string; from: string; to: string }[];
+    skipped: { id: string; current: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    const validTargets = Object.values(ClientLifecycleStatus);
+    if (!validTargets.includes(newStatus as ClientLifecycleStatus)) {
+      throw new BadRequestException(`Invalid target status: ${newStatus}`);
+    }
+
+    const succeeded: { id: string; from: string; to: string }[] = [];
+    const skipped: { id: string; current: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        const client = await this.findOne(id);
+        const from = client.lifecycleStatus;
+        const path = findLifecyclePathTo(from, newStatus);
+        if (path === null) {
+          skipped.push({ id, current: from, reason: `No valid path from ${from} to ${newStatus}` });
+          continue;
+        }
+        for (const step of path) {
+          await this.transitionLifecycle(id, step, userId, reason);
+        }
+        succeeded.push({ id, from, to: newStatus });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+
+    return { succeeded, skipped, failed };
+  }
 
   async findContacts(clientId: string): Promise<ClientContactEntity[]> {
     await this.findOne(clientId);

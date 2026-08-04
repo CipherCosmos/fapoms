@@ -564,6 +564,26 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], LifecycleTransitionDto.prototype, "reason", void 0);
+class BulkLifecycleTransitionDto {
+    ids;
+    status;
+    reason;
+}
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsUUID)('4', { each: true }),
+    __metadata("design:type", Array)
+], BulkLifecycleTransitionDto.prototype, "ids", void 0);
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.ClientLifecycleStatus),
+    __metadata("design:type", String)
+], BulkLifecycleTransitionDto.prototype, "status", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], BulkLifecycleTransitionDto.prototype, "reason", void 0);
 class BillingStatusTransitionDto {
     status;
     remarks;
@@ -627,6 +647,10 @@ let ClientController = class ClientController {
     async remove(id, req) {
         await this.clientService.remove(id, req.user.id);
         return { success: true, data: { message: 'Client deleted successfully' } };
+    }
+    async bulkTransitionLifecycle(dto, req) {
+        const result = await this.clientService.bulkTransitionLifecycle(dto.ids, dto.status, req.user.id, dto.reason);
+        return { success: true, data: result };
     }
     async transitionLifecycle(id, dto, req) {
         const client = await this.clientService.transitionLifecycle(id, dto.status, req.user.id, dto.reason);
@@ -743,6 +767,17 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], ClientController.prototype, "remove", null);
+__decorate([
+    (0, common_1.Patch)('bulk/lifecycle'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),
+    (0, guards_1.RequirePermissions)('client:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Migrate a batch of clients forward to a target lifecycle stage' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [BulkLifecycleTransitionDto, Object]),
+    __metadata("design:returntype", Promise)
+], ClientController.prototype, "bulkTransitionLifecycle", null);
 __decorate([
     (0, common_1.Patch)(':id/lifecycle'),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR, shared_1.SystemRole.OPERATIONS_MANAGER),

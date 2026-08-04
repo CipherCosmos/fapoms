@@ -4,6 +4,7 @@ import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
+import { ZoneEntity } from '../zone/zone.entity';
 import { BranchService } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
 import { BranchQueryService } from '../branch/branch-query.service';
@@ -35,13 +36,15 @@ export declare class ProjectService implements OnModuleInit {
     private readonly projectBranchRepository;
     private readonly assessmentRepository;
     private readonly clientRepository;
+    private readonly zoneRepository;
     private readonly branchQueryService;
     private readonly branchService;
     private readonly auditService;
     private readonly workflowEngine;
     private readonly eventPublisher;
     private readonly projectQueryService;
-    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, assessmentRepository: Repository<AssessmentEntity>, clientRepository: Repository<ClientEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
+    constructor(projectRepository: Repository<ProjectEntity>, projectBranchRepository: Repository<ProjectBranchEntity>, assessmentRepository: Repository<AssessmentEntity>, clientRepository: Repository<ClientEntity>, zoneRepository: Repository<ZoneEntity>, branchQueryService: BranchQueryService, branchService: BranchService, auditService: AuditService, workflowEngine: WorkflowEngine, eventPublisher: DomainEventPublisher, projectQueryService: ProjectQueryService);
+    private resolveZoneName;
     onModuleInit(): void;
     create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity>;
     findAll(page?: number, limit?: number): Promise<{

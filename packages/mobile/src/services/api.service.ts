@@ -27,7 +27,7 @@ const BACKEND_TO_MOBILE_STATUS: Record<string, string> = {
   IN_PROGRESS: 'IN_PROGRESS',
   COMPLETED: 'COMPLETED',
   REJECTED: 'REJECTED',
-  CANCELLED: 'REJECTED',
+  CANCELLED: 'CANCELLED',
 };
 
 const MOBILE_TO_BACKEND_STATUS: Record<string, string> = {
@@ -536,6 +536,20 @@ export class MobileApiService {
       success: response.ok && resData.success !== false,
       error: resData.error,
     };
+  }
+
+  static async updateAssayerLocation(lat: number, lng: number): Promise<boolean> {
+    const id = this.currentUserId;
+    if (!id) return false;
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ latitude: lat, longitude: lng }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
   }
 
   /**

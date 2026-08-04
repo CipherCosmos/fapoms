@@ -72,10 +72,19 @@ export class AssayerEntity extends BaseEntity {
   @Index({ spatial: true })
   location: any | null;
 
-  @Column({ type: 'varchar', length: 50, default: AssayerStatus.ACTIVE })
+  @Column({
+    type: 'enum',
+    enum: AssayerStatus,
+    default: AssayerStatus.ACTIVE,
+  })
   status: AssayerStatus;
 
-  @Column({ name: 'lifecycle_status', type: 'varchar', length: 50, default: AssayerLifecycleStatus.INVITED })
+  @Column({
+    name: 'lifecycle_status',
+    type: 'enum',
+    enum: AssayerLifecycleStatus,
+    default: AssayerLifecycleStatus.INVITED,
+  })
   lifecycleStatus: AssayerLifecycleStatus;
 
   @Column({ name: 'organization_id', type: 'uuid', nullable: true })

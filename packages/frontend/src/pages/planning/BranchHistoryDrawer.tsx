@@ -1,6 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Clock, ClipboardList, FileText, ShieldCheck, GitBranch } from 'lucide-react';
+import { Clock, ClipboardList, FileText, ShieldCheck, GitBranch } from 'lucide-react';
+import { DetailDrawer } from '../../components/ui';
 import { api } from '../../services/api';
 
 /**
@@ -56,95 +57,74 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
     queryFn: () => api.request<BranchHistory>(`/projects/branches/${projectBranchId}/history`),
   });
 
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const h = data as BranchHistory | undefined;
 
   return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(3,7,18,0.6)', zIndex: 60 }} />
-      <aside
-        role="dialog"
-        aria-label="Branch history"
-        style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(520px, 100vw)', zIndex: 61,
-          background: 'var(--bg-surface)', borderLeft: '1px solid var(--border-color)',
-          display: 'flex', flexDirection: 'column', boxShadow: '-16px 0 40px rgba(0,0,0,0.35)',
-        }}
-      >
-        <header style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-color)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
-            <div style={{ minWidth: 0 }}>
-              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700 }}>{h?.branchName ?? 'Branch history'}</h3>
-              <div style={{ ...label, marginTop: '4px' }}>
-                {h?.branchCode ?? '—'}{h?.projectName ? ` · ${h.projectName}` : ''}
-              </div>
-            </div>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-              <X size={18} />
-            </button>
+    <DetailDrawer
+      open
+      onClose={onClose}
+      width={520}
+      title={
+        <>
+          <div style={{ fontSize: 17, fontWeight: 700 }}>{h?.branchName ?? 'Branch history'}</div>
+          <div style={{ ...label, marginTop: 4 }}>
+            {h?.branchCode ?? '—'}{h?.projectName ? ` · ${h.projectName}` : ''}
           </div>
-          {h && (
-            <div style={{ display: 'flex', gap: '16px', marginTop: '12px', flexWrap: 'wrap' }}>
-              <Fact label="Current status" value={h.currentStatus.replace(/_/g, ' ')} />
-              <Fact label="Scheduled" value={h.scheduledDate ? new Date(h.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not set'} />
-              <Fact label="Packets" value={h.packetCount != null ? String(h.packetCount) : '—'} />
-            </div>
-          )}
-        </header>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
-          {isLoading && <Muted>Loading history…</Muted>}
-          {error && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{(error as Error).message}</div>}
-          {h && h.timeline.length === 0 && (
-            <Muted>
-              Nothing has happened to this branch yet — it has been imported but no assignment,
-              paperwork or validation has been recorded against it.
-            </Muted>
-          )}
-          {h?.timeline.map((e, i) => {
-            const meta = KIND_META[e.kind] ?? KIND_META.STATUS;
-            return (
-              <div key={i} style={{ display: 'flex', gap: '12px', paddingBottom: '16px' }}>
-                {/* rail */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <div style={{
-                    width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
-                    background: 'var(--bg-page)', border: `1px solid ${meta.tone}`,
-                    color: meta.tone, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    {meta.icon}
-                  </div>
-                  {i < h.timeline.length - 1 && (
-                    <div style={{ width: 1, flex: 1, background: 'var(--border-color)', marginTop: 4 }} />
-                  )}
-                </div>
-                <div style={{ flex: 1, minWidth: 0, paddingTop: '2px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600 }}>
-                    {e.title?.replace(/_/g, ' ')}
-                  </div>
-                  {e.from && e.to && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {e.from} → <strong style={{ color: 'var(--text-primary)' }}>{e.to}</strong>
-                    </div>
-                  )}
-                  {e.detail && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{e.detail}</div>
-                  )}
-                  <div style={{ ...label, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <Clock size={10} /> {fmtWhen(e.at)} · {e.actor ?? 'system'} · {meta.label}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        </>
+      }
+    >
+      {isLoading && <Muted>Loading history…</Muted>}
+      {error && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{(error as Error).message}</div>}
+      {h && (
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', paddingBottom: 4 }}>
+          <Fact label="Current status" value={h.currentStatus.replace(/_/g, ' ')} />
+          <Fact label="Scheduled" value={h.scheduledDate ? new Date(h.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not set'} />
+          <Fact label="Packets" value={h.packetCount != null ? String(h.packetCount) : '—'} />
         </div>
-      </aside>
-    </>
+      )}
+      {h && h.timeline.length === 0 && (
+        <Muted>
+          Nothing has happened to this branch yet — it has been imported but no assignment,
+          paperwork or validation has been recorded against it.
+        </Muted>
+      )}
+      {h?.timeline.map((e, i) => {
+        const meta = KIND_META[e.kind] ?? KIND_META.STATUS;
+        return (
+          <div key={i} style={{ display: 'flex', gap: '12px', paddingBottom: '16px' }}>
+            {/* rail */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={{
+                width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+                background: 'var(--bg-page)', border: `1px solid ${meta.tone}`,
+                color: meta.tone, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {meta.icon}
+              </div>
+              {i < h.timeline.length - 1 && (
+                <div style={{ width: 1, flex: 1, background: 'var(--border-color)', marginTop: 4 }} />
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0, paddingTop: '2px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600 }}>
+                {e.title?.replace(/_/g, ' ')}
+              </div>
+              {e.from && e.to && (
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {e.from} → <strong style={{ color: 'var(--text-primary)' }}>{e.to}</strong>
+                </div>
+              )}
+              {e.detail && (
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{e.detail}</div>
+              )}
+              <div style={{ ...label, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <Clock size={10} /> {fmtWhen(e.at)} · {e.actor ?? 'system'} · {meta.label}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </DetailDrawer>
   );
 };
 

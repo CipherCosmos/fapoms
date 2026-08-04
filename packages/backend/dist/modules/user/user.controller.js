@@ -75,6 +75,19 @@ __decorate([
     (0, class_validator_1.IsArray)(),
     __metadata("design:type", Array)
 ], AssignRolesDto.prototype, "roleIds", void 0);
+class BulkSetStatusDto {
+    ids;
+    status;
+}
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Array)
+], BulkSetStatusDto.prototype, "ids", void 0);
+__decorate([
+    (0, class_validator_1.IsEnum)(shared_1.UserStatus),
+    __metadata("design:type", String)
+], BulkSetStatusDto.prototype, "status", void 0);
 class UpdateUserRequestDto {
     firstName;
     lastName;
@@ -115,6 +128,40 @@ __decorate([
     (0, class_validator_1.MinLength)(8),
     __metadata("design:type", String)
 ], ResetPasswordRequestDto.prototype, "newPassword", void 0);
+class SelfUpdateProfileDto {
+    firstName;
+    lastName;
+    phone;
+}
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SelfUpdateProfileDto.prototype, "firstName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SelfUpdateProfileDto.prototype, "lastName", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], SelfUpdateProfileDto.prototype, "phone", void 0);
+class SelfChangePasswordDto {
+    currentPassword;
+    newPassword;
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], SelfChangePasswordDto.prototype, "currentPassword", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(8),
+    __metadata("design:type", String)
+], SelfChangePasswordDto.prototype, "newPassword", void 0);
 let UserController = class UserController {
     userService;
     constructor(userService) {
@@ -125,6 +172,24 @@ let UserController = class UserController {
             success: true,
             data: this.sanitizeUser(req.user),
         };
+    }
+    async updateMe(dto, req) {
+        const updated = await this.userService.updateUser(req.user.id, dto, req.user.id);
+        return {
+            success: true,
+            data: this.sanitizeUser(updated),
+        };
+    }
+    async changePassword(dto, req) {
+        await this.userService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+        return {
+            success: true,
+            data: { message: 'Password changed successfully.' },
+        };
+    }
+    async bulkSetStatus(dto, req) {
+        const result = await this.userService.bulkSetStatus(dto.ids, dto.status, req.user.id);
+        return { success: true, data: result };
     }
     async create(dto, req) {
         const user = await this.userService.createUser(dto, req.user.id);
@@ -200,6 +265,35 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], UserController.prototype, "getMe", null);
+__decorate([
+    (0, common_1.Put)('me'),
+    (0, swagger_1.ApiOperation)({ summary: 'Self update personal details (first name, last name, phone)' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [SelfUpdateProfileDto, Object]),
+    __metadata("design:returntype", Promise)
+], UserController.prototype, "updateMe", null);
+__decorate([
+    (0, common_1.Post)('me/change-password'),
+    (0, swagger_1.ApiOperation)({ summary: 'Change current user password' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [SelfChangePasswordDto, Object]),
+    __metadata("design:returntype", Promise)
+], UserController.prototype, "changePassword", null);
+__decorate([
+    (0, common_1.Post)('bulk/status'),
+    (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),
+    (0, guards_1.RequirePermissions)('user:edit:organization'),
+    (0, swagger_1.ApiOperation)({ summary: 'Activate or suspend a batch of users in one operation' }),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [BulkSetStatusDto, Object]),
+    __metadata("design:returntype", Promise)
+], UserController.prototype, "bulkSetStatus", null);
 __decorate([
     (0, common_1.Post)(),
     (0, guards_1.Roles)(shared_1.SystemRole.SUPER_ADMINISTRATOR, shared_1.SystemRole.ADMINISTRATOR),

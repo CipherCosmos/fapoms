@@ -5,7 +5,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions }
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ValidationStatus } from '@fapoms/shared';
 
-import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString, IsArray } from 'class-validator';
 
 class CreateValidationCaseRequestDto implements CreateValidationCaseDto {
   @IsUUID()
@@ -36,6 +36,20 @@ class TransitionValidationCaseDto {
 
   @IsOptional()
   ocrResult?: any;
+}
+
+class BulkTransitionValidationCaseDto {
+  @IsArray()
+  @IsNotEmpty()
+  @IsUUID('4', { each: true })
+  ids: string[];
+
+  @IsEnum(ValidationStatus)
+  targetStatus: ValidationStatus;
+
+  @IsOptional()
+  @IsString()
+  remarks?: string;
 }
 
 @ApiTags('Validation')
@@ -102,6 +116,17 @@ export class ValidationController {
       success: true,
       data: vCase,
     };
+  }
+
+  @Post('bulk/transition')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'Transition a batch of validation cases to a target status' })
+  async bulkTransition(
+    @Body() dto: BulkTransitionValidationCaseDto,
+    @Req() req: any,
+  ) {
+    const result = await this.validationService.bulkTransition(dto.ids, dto.targetStatus, req.user.id, dto.remarks);
+    return { success: true, data: result };
   }
 
   @Post(':id/transition')

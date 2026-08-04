@@ -2,12 +2,9 @@ export declare class TaskId {
     readonly value: string;
     constructor(value: string);
 }
-export declare enum TaskPriority {
-    LOW = "LOW",
-    MEDIUM = "MEDIUM",
-    HIGH = "HIGH",
-    CRITICAL = "CRITICAL"
-}
+import { Priority } from '@fapoms/shared';
+export type TaskPriority = Priority;
+export declare const TaskPriority: typeof Priority;
 export declare enum TaskStatus {
     OPEN = "OPEN",
     IN_PROGRESS = "IN_PROGRESS",

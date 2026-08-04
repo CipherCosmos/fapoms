@@ -3,6 +3,7 @@ import { Building2 } from 'lucide-react';
 import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useCreateClient } from '../../hooks/useClients';
 import { ClientType, Priority } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
@@ -46,7 +47,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
       toast('success', 'Client created');
       onClose();
     } catch (err: any) {
-      toast('error', err?.message || 'Failed to create client');
+      toast({ type: 'error', title: 'Failed to create client', message: userMessage(err) });
     }
   };
 

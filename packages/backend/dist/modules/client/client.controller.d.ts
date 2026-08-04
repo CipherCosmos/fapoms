@@ -105,6 +105,11 @@ declare class LifecycleTransitionDto {
     status: string;
     reason?: string;
 }
+declare class BulkLifecycleTransitionDto {
+    ids: string[];
+    status: string;
+    reason?: string;
+}
 declare class BillingStatusTransitionDto {
     status: string;
     remarks?: string;
@@ -145,6 +150,25 @@ export declare class ClientController {
         success: boolean;
         data: {
             message: string;
+        };
+    }>;
+    bulkTransitionLifecycle(dto: BulkLifecycleTransitionDto, req: any): Promise<{
+        success: boolean;
+        data: {
+            succeeded: {
+                id: string;
+                from: string;
+                to: string;
+            }[];
+            skipped: {
+                id: string;
+                current: string;
+                reason: string;
+            }[];
+            failed: {
+                id: string;
+                reason: string;
+            }[];
         };
     }>;
     transitionLifecycle(id: string, dto: LifecycleTransitionDto, req: any): Promise<{

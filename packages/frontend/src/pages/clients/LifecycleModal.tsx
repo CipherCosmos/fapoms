@@ -3,6 +3,7 @@ import { Modal, useToast } from '../../components/ui';
 import { useTransitionLifecycle } from '../../hooks/useClients';
 import { clientLifecycleLabel } from '../../utils/statusLabels';
 import { ClientLifecycleStatus } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const LIFECYCLE_OPTIONS: Record<string, string[]> = {
   [ClientLifecycleStatus.PROSPECT]: [ClientLifecycleStatus.ONBOARDING, ClientLifecycleStatus.ARCHIVED],
@@ -49,7 +50,7 @@ export const LifecycleModal: React.FC<{
       setReason('');
       onClose();
     } catch (err: any) {
-      toast('error', err?.message || 'Transition failed');
+      toast({ type: 'error', title: 'Transition failed', message: userMessage(err) });
     }
   };
 

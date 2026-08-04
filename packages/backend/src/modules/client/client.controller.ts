@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
-  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min,
+  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, IsUUID,
 } from 'class-validator';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
@@ -139,6 +139,18 @@ class LifecycleTransitionDto {
   reason?: string;
 }
 
+class BulkLifecycleTransitionDto {
+  @IsArray() @IsNotEmpty()
+  @IsUUID('4', { each: true })
+  ids: string[];
+
+  @IsEnum(ClientLifecycleStatus)
+  status: string;
+
+  @IsOptional() @IsString()
+  reason?: string;
+}
+
 class BillingStatusTransitionDto {
   @IsEnum(ClientBillingStatus)
   status: string;
@@ -236,6 +248,18 @@ export class ClientController {
   // -----------------------------------------------------------------------
   // Lifecycle
   // -----------------------------------------------------------------------
+
+  @Patch('bulk/lifecycle')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:edit:organization')
+  @ApiOperation({ summary: 'Migrate a batch of clients forward to a target lifecycle stage' })
+  async bulkTransitionLifecycle(
+    @Body() dto: BulkLifecycleTransitionDto,
+    @Req() req: any,
+  ) {
+    const result = await this.clientService.bulkTransitionLifecycle(dto.ids, dto.status, req.user.id, dto.reason);
+    return { success: true, data: result };
+  }
 
   @Patch(':id/lifecycle')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)

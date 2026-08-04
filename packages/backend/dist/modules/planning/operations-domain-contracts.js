@@ -10,13 +10,8 @@ class TaskId {
     }
 }
 exports.TaskId = TaskId;
-var TaskPriority;
-(function (TaskPriority) {
-    TaskPriority["LOW"] = "LOW";
-    TaskPriority["MEDIUM"] = "MEDIUM";
-    TaskPriority["HIGH"] = "HIGH";
-    TaskPriority["CRITICAL"] = "CRITICAL";
-})(TaskPriority || (exports.TaskPriority = TaskPriority = {}));
+const shared_1 = require("@fapoms/shared");
+exports.TaskPriority = shared_1.Priority;
 var TaskStatus;
 (function (TaskStatus) {
     TaskStatus["OPEN"] = "OPEN";

@@ -395,7 +395,7 @@ export class DocumentController {
 
     for (const row of rows) {
       const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
-      const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim();
+      const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || row['BRANCH'] || row.Branch || '').trim();
       if (acc) {
         if (accountNumbersSeen.has(acc)) duplicateAccountsCount++;
         else accountNumbersSeen.add(acc);

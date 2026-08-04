@@ -9,6 +9,8 @@ import { AssayerLifecycleStatus } from '@fapoms/shared';
 import { api } from '../../services/api';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
+import { userMessage } from '../../services/errors';
+import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 
 /**
  * Everything about one person, in a slide-over.
@@ -75,11 +77,12 @@ export const AssayerDetailDrawer: React.FC<{
   const [reason, setReason] = useState('');
   const [remark, setRemark] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
 
   useEffect(() => {
     api.request<Assayer>(`/assayers/${assayerId}`)
       .then(setA)
-      .catch((e) => setErr((e as Error).message));
+      .catch((e) => setErr(userMessage(e)));
   }, [assayerId]);
 
   // Escape closes, matching every other overlay in the app.
@@ -123,7 +126,7 @@ export const AssayerDetailDrawer: React.FC<{
       setTarget(''); setReason('');
       setLoaded((p) => ({ ...p, history: undefined }));
       onChanged();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(false);
   };
 
@@ -138,7 +141,7 @@ export const AssayerDetailDrawer: React.FC<{
       setRemark('');
       const fresh = await api.request<any[]>(`/assayers/${assayerId}/remark`);
       setLoaded((p) => ({ ...p, remarks: Array.isArray(fresh) ? fresh : [] }));
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(userMessage(e)); }
     setBusy(false);
   };
 
@@ -278,23 +281,44 @@ export const AssayerDetailDrawer: React.FC<{
               )}
 
               {tab === 'commercial' && (
-                <List
-                  rows={loaded.commercial}
-                  empty="No pay structure recorded — this assayer cannot be billed or paid until one exists."
-                  render={(c: any) => (
-                    <div key={c.id} style={{ padding: '11px 0', borderBottom: '1px solid var(--border-hair)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px' }}>
-                        <strong>{money(c.baseFee)} base</strong>
-                        <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
-                          {fmtDate(c.startDate)} → {c.endDate ? fmtDate(c.endDate) : 'open'}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                        {money(c.hourlyRate)}/hr · {money(c.dailyRate)}/day · travel {money(c.travelReimbursement)}
-                      </div>
-                    </div>
+                <div>
+                  {canManage && (
+                    <button onClick={() => setPayModal({ open: true, profile: null })}
+                      className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <CreditCard size={13} /> Add pay structure
+                    </button>
                   )}
-                />
+                  <List
+                    rows={loaded.commercial}
+                    empty="No pay structure recorded — this assayer cannot be billed or paid until one exists."
+                    render={(c: any) => (
+                      <div key={c.id} style={{ padding: '11px 0', borderBottom: '1px solid var(--border-hair)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
+                          <div>
+                            <strong>{money(c.baseFee)} base</strong>
+                            {c.currency && <span style={{ color: 'var(--text-muted)', marginLeft: '5px' }}>{c.currency}</span>}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
+                              {fmtDate(c.effectiveStartDate || c.startDate)} → {c.effectiveEndDate ? fmtDate(c.effectiveEndDate) : 'open'}
+                            </span>
+                            {canManage && (
+                              <button onClick={() => setPayModal({ open: true, profile: c })}
+                                style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                                <Edit2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                          {money(c.hourlyRate)}/hr · {money(c.dailyRate)}/day · travel {money(c.travelReimbursement)}
+                          {Number(c.accommodationAllowance) > 0 && <> · stay {money(c.accommodationAllowance)}</>}
+                          {Number(c.mealAllowance) > 0 && <> · meals {money(c.mealAllowance)}</>}
+                        </div>
+                      </div>
+                    )}
+                  />
+                </div>
               )}
 
               {tab === 'skills' && (
@@ -364,6 +388,18 @@ export const AssayerDetailDrawer: React.FC<{
           </>
         )}
       </aside>
+      <CommercialProfileModal
+        open={payModal.open}
+        onClose={() => setPayModal({ open: false, profile: null })}
+        assayerId={assayerId}
+        profile={payModal.profile}
+        onSaved={() => {
+          setLoaded((p) => ({ ...p, commercial: undefined }));
+          api.request<any[]>(`/assayers/${assayerId}/commercial`)
+            .then((d) => setLoaded((p) => ({ ...p, commercial: Array.isArray(d) ? d : [] })))
+            .catch(() => setLoaded((p) => ({ ...p, commercial: [] })));
+        }}
+      />
     </>
   );
 };

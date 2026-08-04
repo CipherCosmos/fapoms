@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
+import { branchStatusLabel } from '../utils/statusLabels';
 
 interface MapLayerControlsProps {
   showBranches: boolean;
@@ -47,7 +48,11 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
   const [collapsed, setCollapsed] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const BRANCH_STATUSES = ['PLANNING', 'ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED', 'CLOSED', 'IMPORTED'];
+  const BRANCH_STATUSES = [
+    'IMPORTED', 'PLANNING', 'CANDIDATE_SEARCH', 'CONTACT_INITIATED', 'NEGOTIATION',
+    'ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED',
+    'CLOSED', 'UNABLE_TO_COVER', 'ON_HOLD', 'CANCELLED',
+  ];
 
   const toggleStatus = (status: string) => {
     setBranchStatusFilter(
@@ -127,7 +132,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
                       borderRadius: 'var(--radius-xs)', cursor: 'pointer',
                     }}
                   >
-                    {s.replace(/_/g, ' ')}
+                    {branchStatusLabel(s)}
                   </button>
                 );
               })}

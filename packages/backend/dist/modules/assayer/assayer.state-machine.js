@@ -24,6 +24,24 @@ function mapLifecycleToOperationalStatus(lifecycle) {
     return shared_1.AssayerStatus.INACTIVE;
 }
 class AssayerStateMachine {
+    static findPathTo(from, target) {
+        if (from === target)
+            return [];
+        const queue = [{ stage: from, path: [] }];
+        const visited = new Set([from]);
+        while (queue.length) {
+            const { stage, path } = queue.shift();
+            for (const next of LIFECYCLE_TRANSITIONS[stage] ?? []) {
+                if (next === target)
+                    return [...path, next];
+                if (!visited.has(next)) {
+                    visited.add(next);
+                    queue.push({ stage: next, path: [...path, next] });
+                }
+            }
+        }
+        return null;
+    }
     static validateTransition(assayer, targetStatus) {
         const currentStatus = assayer.lifecycleStatus;
         const allowed = LIFECYCLE_TRANSITIONS[currentStatus];

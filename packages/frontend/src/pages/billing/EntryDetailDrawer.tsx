@@ -4,6 +4,7 @@ import { useBillingEntry, useTransitionBillingEntry, useAdjustBillingEntry, useS
 import { BILLING_STATE_TRANSITIONS } from '@fapoms/shared';
 import type { BillingState } from '@fapoms/shared';
 import { BillingEntityType } from '@fapoms/shared';
+import { userMessage } from '../../services/errors';
 
 const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
@@ -50,7 +51,7 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
       await transition.mutateAsync({ id: entry.id, status: selectedNext, reason: reason || undefined });
       toast('success', `Moved to ${selectedNext}`);
       setSelectedNext(''); setReason('');
-    } catch (e: any) { toast('error', e?.message || 'Transition failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Transition failed', message: userMessage(e) }); }
   };
 
   const doAdjust = async () => {
@@ -59,7 +60,7 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
     try {
       await adjust.mutateAsync({ id: entry.id, delta, reason: adjustReason });
       toast('success', 'Entry adjusted'); setAdjustOpen(false); setAdjustDelta(''); setAdjustReason('');
-    } catch (e: any) { toast('error', e?.message || 'Adjust failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Adjust failed', message: userMessage(e) }); }
   };
 
   const doSplit = async () => {
@@ -68,7 +69,7 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
     try {
       await split.mutateAsync({ id: entry.id, amounts });
       toast('success', 'Entry split'); setSplitOpen(false); setSplitAmounts('');
-    } catch (e: any) { toast('error', e?.message || 'Split failed'); }
+    } catch (e: any) { toast({ type: 'error', title: 'Split failed', message: userMessage(e) }); }
   };
 
   return (
