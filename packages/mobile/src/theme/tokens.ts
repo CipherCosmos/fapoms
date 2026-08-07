@@ -8,8 +8,8 @@ import { Platform } from 'react-native';
  * own padding, radius and type size inline. This replaces that with one source
  * of truth: two full palettes (dual tone), and scales everything else keys off.
  *
- * The identity is deliberately a *pair*: a cool teal primary carries structure
- * and navigation, a warm amber accent carries money and attention. Nothing in
+ * The identity is the Sumeru flame: the primary is the logo's own orange, and the
+ * accent its amber, so the app and the mark are one family. Nothing in
  * here resembles the previous indigo-on-black.
  */
 
@@ -55,67 +55,79 @@ export interface Palette {
 }
 
 const dark: Palette = {
-  bg: '#0A101C',
-  surface: '#121C2C',
-  surfaceAlt: '#1A2740',
-  surfacePress: 'rgba(148,163,184,0.10)',
-  border: 'rgba(148,163,184,0.13)',
-  borderStrong: 'rgba(148,163,184,0.26)',
+  /* Warm near-black carrying a trace of the flame's red rather than the previous
+     blue-slate (#0A101C). The Sumeru mark is a warm orange flame; on a cool navy
+     ground it read as a sticker rather than part of the product. Every value below
+     is contrast-checked against this bg — the dimmest tier still measures 4.6:1. */
+  bg: '#14100C',
+  surface: '#1F1813',
+  surfaceAlt: '#2A211A',
+  surfacePress: 'rgba(255,236,220,0.08)',
+  border: 'rgba(255,236,220,0.12)',
+  borderStrong: 'rgba(255,236,220,0.24)',
 
-  text: '#F1F5F9',
-  textMuted: '#94A3B8',
-  textFaint: '#64748B',
+  text: '#F7EFE7',
+  textMuted: '#B8A493',
+  textFaint: '#8C7A6B',
 
-  primary: '#2DD4BF',
-  primarySoft: 'rgba(45,212,191,0.14)',
-  onPrimary: '#03302C',
+  /* The logo's own orange, used unmodified — on this ground it measures 7.8:1,
+     so dark mode needs none of the deepening light mode requires. */
+  primary: '#FF8534',
+  primarySoft: 'rgba(255,133,52,0.15)',
+  onPrimary: '#1C1207',
 
-  accent: '#FBA94C',
-  accentSoft: 'rgba(251,169,76,0.15)',
-  onAccent: '#3A2206',
+  accent: '#FF9E00',
+  accentSoft: 'rgba(255,158,0,0.15)',
+  onAccent: '#1C1207',
 
-  success: '#34D399',
-  successSoft: 'rgba(52,211,153,0.14)',
-  warning: '#FBBF24',
-  warningSoft: 'rgba(251,191,36,0.14)',
-  danger: '#FB7185',
-  dangerSoft: 'rgba(251,113,133,0.14)',
-  info: '#60A5FA',
-  infoSoft: 'rgba(96,165,250,0.14)',
+  success: '#6FBE86',
+  successSoft: 'rgba(111,190,134,0.15)',
+  /* Held at gold, distinct from the orange primary — a warning the same colour as
+     every button stops functioning as a warning. */
+  warning: '#E8B93C',
+  warningSoft: 'rgba(232,185,60,0.15)',
+  danger: '#E5675E',
+  dangerSoft: 'rgba(229,103,94,0.15)',
+  info: '#7FB2E8',
+  infoSoft: 'rgba(127,178,232,0.15)',
 
-  scrim: 'rgba(3,7,18,0.72)',
+  scrim: 'rgba(12,9,6,0.74)',
 };
 
 const light: Palette = {
-  bg: '#F5F7FA',
+  /* Warm off-white, matching the web app's --flame-cream. */
+  bg: '#FFFAF5',
   surface: '#FFFFFF',
   surfaceAlt: '#FFFFFF',
-  surfacePress: 'rgba(15,23,42,0.05)',
-  border: 'rgba(15,23,42,0.09)',
-  borderStrong: 'rgba(15,23,42,0.18)',
+  surfacePress: 'rgba(28,18,7,0.05)',
+  border: 'rgba(28,18,7,0.10)',
+  borderStrong: 'rgba(28,18,7,0.20)',
 
-  text: '#0F172A',
-  textMuted: '#64748B',
-  textFaint: '#94A3B8',
+  text: '#1C1207',
+  textMuted: '#6B5648',
+  textFaint: '#7A6657',
 
-  primary: '#0D9488',
-  primarySoft: 'rgba(13,148,136,0.11)',
+  /* Deepened flame. The logo's #FF6B00 is only 2.9:1 on white — fine for the mark,
+     unreadable as a label or a link, so light mode carries the same hue further
+     down the ramp to reach 5.0:1. */
+  primary: '#C2410C',
+  primarySoft: 'rgba(194,65,12,0.10)',
   onPrimary: '#FFFFFF',
 
-  accent: '#D97706',
-  accentSoft: 'rgba(217,119,6,0.11)',
+  accent: '#B45309',
+  accentSoft: 'rgba(180,83,9,0.10)',
   onAccent: '#FFFFFF',
 
-  success: '#059669',
-  successSoft: 'rgba(5,150,105,0.11)',
-  warning: '#D97706',
-  warningSoft: 'rgba(217,119,6,0.11)',
-  danger: '#E11D48',
-  dangerSoft: 'rgba(225,29,72,0.10)',
-  info: '#2563EB',
-  infoSoft: 'rgba(37,99,235,0.10)',
+  success: '#2F7D4F',
+  successSoft: 'rgba(47,125,79,0.10)',
+  warning: '#8A5A00',
+  warningSoft: 'rgba(138,90,0,0.12)',
+  danger: '#B3261E',
+  dangerSoft: 'rgba(179,38,30,0.10)',
+  info: '#1D4ED8',
+  infoSoft: 'rgba(29,78,216,0.10)',
 
-  scrim: 'rgba(15,23,42,0.45)',
+  scrim: 'rgba(28,18,7,0.45)',
 };
 
 export const palettes: Record<Mode, Palette> = { light, dark };

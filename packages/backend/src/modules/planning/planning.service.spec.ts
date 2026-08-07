@@ -103,6 +103,10 @@ describe('PlanningService', () => {
       city: 'Mumbai',
       latitude: 19.082,
       longitude: 72.882,
+      // Mirrors the AssayerEntity getters the service now reads. A plain fixture object
+      // doesn't inherit them, so without these the assayer maps to 0,0.
+      effectiveLatitude: 19.082,
+      effectiveLongitude: 72.882,
     };
     mockRecommendationEngine.recommend.mockResolvedValue([
       {

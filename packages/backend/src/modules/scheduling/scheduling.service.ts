@@ -157,27 +157,19 @@ export class SchedulingService {
       skip: (page - 1) * limit,
     });
 
-    // Dynamic State Reconciliation Mechanism:
-    // If the parent assignment or project branch has completed the audit workflow,
-    // dynamically elevate the schedule's display status to COMPLETED so UI views never see stale states.
-    const reconciledSchedules = schedules.map((sch) => {
-      const asnStatus = sch.assignment?.status;
-      const pbStatus = sch.assignment?.projectBranch?.status;
-      const isParentCompleted =
-        asnStatus === 'COMPLETED' ||
-        ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(pbStatus as string);
-
-      if (isParentCompleted && sch.status !== ScheduleStatus.COMPLETED) {
-        return {
-          ...sch,
-          status: ScheduleStatus.COMPLETED,
-          completedAt: sch.completedAt || sch.updatedAt,
-        };
-      }
-      return sch;
-    });
-
-    return { schedules: reconciledSchedules, total };
+    // Schedules are returned exactly as stored.
+    //
+    // This used to rewrite the status to COMPLETED in the response whenever the parent
+    // assignment or branch had completed, without persisting anything — a read-time patch over
+    // a write-time bug. That bug is fixed at its source: AssignmentService now brings the
+    // schedule to COMPLETED inside the same transaction that completes the assignment, so the
+    // two cannot drift apart in the first place (it previously ran as raw SQL outside the
+    // transaction, with failures swallowed by a console.error).
+    //
+    // Reporting a status the database does not hold is worse than showing a stale one: it
+    // makes a genuine divergence invisible precisely when someone needs to see it, and the
+    // figure on screen stops matching the figure in any export or query.
+    return { schedules, total };
   }
 
   async transition(id: string, targetStatus: ScheduleStatus, userId: string, remarks?: string, newScheduledDate?: string): Promise<ScheduleEntity> {

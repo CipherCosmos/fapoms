@@ -1,11 +1,18 @@
 import { io, Socket } from 'socket.io-client';
-import { Platform } from 'react-native';
 import { MobileApiService } from './api.service';
 
 let socket: Socket | null = null;
 
-const API_BASE = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
-const WS_URL = `${API_BASE}/events`;
+/**
+ * Derived from the same origin the REST client uses, never hardcoded.
+ *
+ * This was pinned to `10.0.2.2` (the Android *emulator's* alias for the host loopback) and
+ * ignored EXPO_PUBLIC_API_URL entirely — even though this file already imports
+ * MobileApiService. On a real handset that address is unroutable, so the socket could never
+ * connect from the field. Nothing surfaced the failure: the app silently fell back to its
+ * 30-second poll, so "real-time" was permanently off for every physical device.
+ */
+const WS_URL = `${MobileApiService.getApiOrigin()}/events`;
 
 export function connectMobileSocket(): Socket | null {
   if (socket) return socket;

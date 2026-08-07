@@ -1,138 +1,96 @@
 import React from 'react';
 
+/**
+ * The Sumeru Global mark.
+ *
+ * This renders the real supplied asset (`public/logo.avif`, with a PNG fallback for
+ * browsers without AVIF support). It previously drew a hand-authored SVG described in its
+ * own comment as "matching user reference image" — a traced approximation that was visibly
+ * not the same mark, alongside two other unrelated logos in `public/` for a different
+ * product ("Gold Audit Pro"). Substituting a lookalike for a company's actual logo is not a
+ * detail to get approximately right, so nothing here redraws it.
+ *
+ * The artwork is entirely orange on transparency — flame *and* wordmark — so one file works
+ * on both the light and dark themes with no separate dark variant.
+ */
+
 interface BrandLogoProps {
   size?: 'sm' | 'md' | 'lg';
+  /** Show the "Field Audit Operations" support line under the mark. */
   showSubtext?: boolean;
+  /** Sidebar collapsed: render the mark alone. */
   collapsed?: boolean;
-  variant?: 'light' | 'dark' | 'auto';
 }
+
+/* The asset is 104x80 (13:10). Heights are derived from that ratio so it is never stretched. */
+const LOGO_RATIO = 104 / 80;
+
+const HEIGHTS: Record<NonNullable<BrandLogoProps['size']>, number> = {
+  sm: 30,
+  md: 40,
+  lg: 60,
+};
+
+const SUB_SIZES: Record<NonNullable<BrandLogoProps['size']>, string> = {
+  sm: '8.5px',
+  md: '9.5px',
+  lg: '11px',
+};
 
 export const BrandLogo: React.FC<BrandLogoProps> = ({
   size = 'md',
   showSubtext = true,
   collapsed = false,
 }) => {
-  const iconSizes = {
-    sm: 36,
-    md: 48,
-    lg: 64,
-  };
+  const h = HEIGHTS[size];
+  const w = Math.round(h * LOGO_RATIO);
 
-  const titleSizes = {
-    sm: '15px',
-    md: '19px',
-    lg: '26px',
-  };
-
-  const subSizes = {
-    sm: '9.5px',
-    md: '10.5px',
-    lg: '12px',
-  };
-
-  const iconDim = iconSizes[size];
-
-  // Exact 5-Flame Lotus Mark matching user reference image
-  const FlameLotusSVG = (
-    <svg
-      width={iconDim}
-      height={iconDim * 0.85}
-      viewBox="0 0 400 320"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      style={{
-        flexShrink: 0,
-        filter: 'drop-shadow(0 2px 8px rgba(255, 85, 0, 0.4))',
-      }}
-    >
-      <defs>
-        <linearGradient id="exactFlameGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#F24E00" />
-          <stop offset="35%" stopColor="#FF6B00" />
-          <stop offset="70%" stopColor="#FF9E00" />
-          <stop offset="100%" stopColor="#EAA627" />
-        </linearGradient>
-      </defs>
-
-      {/* 1. Central Teardrop Flame */}
-      <path
-        d="M200 120 C182 170 135 198 135 240 C135 274 165 295 200 295 C235 295 265 274 265 240 C265 198 218 170 200 120 Z"
-        fill="url(#exactFlameGrad)"
+  const mark = (
+    /* <picture> serves the original AVIF where supported and the PNG conversion
+       everywhere else — both are the same artwork, so there is no visual fork. */
+    <picture style={{ display: 'inline-flex', flexShrink: 0 }}>
+      <source srcSet="/logo.avif" type="image/avif" />
+      <img
+        src="/sumeru-logo.png"
+        srcSet="/sumeru-logo.png 1x, /sumeru-logo@2x.png 2x"
+        width={w}
+        height={h}
+        alt="Sumeru Global"
+        style={{ display: 'block', width: w, height: h, objectFit: 'contain' }}
       />
-
-      {/* 2. Inner Left Flame Petal */}
-      <path
-        d="M140 58 C144 125 112 185 84 235 C112 268 144 262 160 220 C175 175 166 102 140 58 Z"
-        fill="url(#exactFlameGrad)"
-      />
-
-      {/* 3. Inner Right Flame Petal */}
-      <path
-        d="M260 58 C256 125 288 185 316 235 C288 268 256 262 240 220 C225 175 234 102 260 58 Z"
-        fill="url(#exactFlameGrad)"
-      />
-
-      {/* 4. Outer Left Wing Flame */}
-      <path
-        d="M42 16 C48 95 18 165 22 278 C60 285 96 220 74 156 C61 118 52 58 42 16 Z"
-        fill="url(#exactFlameGrad)"
-      />
-
-      {/* 5. Outer Right Wing Flame */}
-      <path
-        d="M358 16 C352 95 382 165 378 278 C340 285 304 220 326 156 C339 118 348 58 358 16 Z"
-        fill="url(#exactFlameGrad)"
-      />
-    </svg>
+    </picture>
   );
 
   if (collapsed) {
-    return (
-      <div
-        title="Gold Audit Pro — by Sumeru Global"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      >
-        {FlameLotusSVG}
-      </div>
-    );
+    return <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }} title="Sumeru Global">{mark}</div>;
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', overflow: 'hidden' }}>
-      {FlameLotusSVG}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }} title="Sumeru Global">
+      {mark}
+      {showSubtext && (
+        /* The wordmark is part of the artwork, so only the support line is set in type —
+           adding a second "Sumeru Global" in a system font beside the real one would read
+           as a duplicate. */
         <span
           style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontWeight: 700,
-            fontSize: titleSizes[size],
-            lineHeight: 1.1,
-            background: 'linear-gradient(180deg, #F3D98A 0%, #D8AE47 55%, #A8791F 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            letterSpacing: '0.01em',
+            fontFamily: "'Manrope', sans-serif",
+            fontSize: SUB_SIZES[size],
+            fontWeight: 600,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            color: 'var(--text-muted)',
             whiteSpace: 'nowrap',
+            lineHeight: 1.2,
           }}
         >
-          Gold Audit Pro
+          Field Audit
+          <br />
+          Operations
         </span>
-        {showSubtext && (
-          <span
-            style={{
-              fontFamily: "'Manrope', sans-serif",
-              fontSize: subSizes[size],
-              fontWeight: 600,
-              letterSpacing: '0.12em',
-              textTransform: 'uppercase',
-              color: 'var(--text-muted)',
-              marginTop: '2px',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            by Sumeru Global
-          </span>
-        )}
-      </div>
+      )}
     </div>
   );
 };
+
+export default BrandLogo;

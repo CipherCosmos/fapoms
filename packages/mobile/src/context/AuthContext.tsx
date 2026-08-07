@@ -97,28 +97,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsAuthenticated(true);
         setUser({
           id: res.user.id || MobileApiService.getCurrentUserId() || '',
-          name: res.user.name || res.user.displayName || res.user.username || 'Belekar Satish Shankarrao',
-          assayerCode: res.user.assayerCode || 'AS0127',
+          // No hardcoded identity fallback: if the server did not tell us who this is,
+          // we must not decide on its behalf. Showing a name the session does not own is
+          // how every action ends up attributed to the wrong person.
+          name: res.user.name || res.user.displayName || res.user.username || 'Assayer',
+          assayerCode: res.user.assayerCode || '',
         });
         setAuthenticating(false);
         return { success: true };
       }
 
-      // Fallback: Login with default credentials if no stored refresh token exists yet
-      const fallbackLogin = await MobileApiService.login('AS0127', 'Password@123');
-      if (fallbackLogin.success && fallbackLogin.user) {
-        setIsAuthenticated(true);
-        setUser({
-          id: fallbackLogin.user.id || MobileApiService.getCurrentUserId() || '',
-          name: fallbackLogin.user.name || fallbackLogin.user.displayName || fallbackLogin.user.username || 'Belekar Satish Shankarrao',
-          assayerCode: fallbackLogin.user.assayerCode || 'AS0127',
-        });
-        setAuthenticating(false);
-        return { success: true };
-      }
-
+      /**
+       * A failed biometric login means "sign in with your password", never "sign in as
+       * somebody else".
+       *
+       * This previously fell through to `MobileApiService.login('AS0127', 'Password@123')` —
+       * a real, active assayer account (Belekar Satish Shankarrao, 8 assignments, ₹14,571.90
+       * earned). And it was the *normal* path, not an edge case: `getRefreshToken()` reads
+       * `globalThis.localStorage`, which does not exist in React Native, so it always returned
+       * null, so biometric login always failed, so this always fired. On a handset with no
+       * enrolled fingerprint the biometric prompt is skipped entirely — one tap and you were
+       * inside as a named field worker.
+       *
+       * The consequence was not "wrong screen": every GPS check-in, uploaded audit packet,
+       * expense claim and query answer from any device holding the APK was recorded against
+       * that person. For evidence in a bank collateral audit, that destroys chain of custody.
+       */
       setAuthenticating(false);
-      return { success: false, error: res.error || 'Biometric authentication failed.' };
+      return { success: false, error: res.error || 'Please sign in with your Assayer Code and password.' };
     } catch (err: any) {
       setAuthenticating(false);
       return { success: false, error: err?.message || 'Biometric login failed.' };

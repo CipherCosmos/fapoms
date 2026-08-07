@@ -25,6 +25,7 @@ import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-pr
 import { RoutingService, DestinationCoords } from '../geo/routing.provider';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 import { calculateHaversineDistance, AssayerStatus } from '@fapoms/shared';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
@@ -177,7 +178,7 @@ export interface ProjectDayPlan {
 const MAX_DAILY_WORK_HOURS = 10;
 const DAY_START_HOUR = 9; // 9:00 AM
 const CLUSTER_RADIUS_KM = 80; // branches within 80km are candidates for bundling; feasibility filters (total day hours, utilization, client max distance) determine if bundling actually works
-const TRAVEL_FEE_PER_KM = 8; // ₹8 per km
+// Travel and base-fee rates resolve per client contract via FeePolicyService.
 /** Matches the import-time default in project.service.ts so estimates stay consistent. */
 const DEFAULT_MINUTES_PER_PACKET = 15;
 /** Used only when a branch has neither a packet count for this cycle nor a stored estimate. */
@@ -210,6 +211,7 @@ export class DayPlannerService {
     private readonly recommendationEngine: RecommendationEngine,
     private readonly constraintEvaluator: ConstraintEvaluator,
     private readonly assayerService: AssayerService,
+    private readonly feePolicyService: FeePolicyService,
   ) {}
 
   /**
@@ -786,14 +788,23 @@ export class DayPlannerService {
       const dayEndTime = this.minutesToTime(dayEndMinutes);
 
       // ─── Cost Calculation ──────────────────────────────────────────────
-      const profile = await this.commercialRepository.findOne({
-        where: { assayerId: assayer.id, isActive: true },
-        order: { effectiveStartDate: 'DESC' },
+      // Quoted through the same calculator the assign path prices with, so the figure ops
+      // sees on this screen is the figure that reaches the database. This previously used a
+      // local `TRAVEL_FEE_PER_KM`, a 1500 base-fee default, and charged travel from the first
+      // kilometre — none of which matched assignment.service.ts, so the day plan advertised
+      // a price the server then declined to store.
+      const quote = await this.feePolicyService.quote({
+        assayerId: assayer.id,
+        clientId: client?.id ?? null,
+        configuration: client?.configuration ?? undefined,
+        distanceKm: totalTravelKm,
+        branchCount: cluster.branches.length,
+        onDate: scheduledDate,
       });
 
-      const baseFee = profile ? Number(profile.baseFee) || 1500 : 1500;
-      const travelFee = parseFloat((totalTravelKm * TRAVEL_FEE_PER_KM).toFixed(0));
-      const totalCost = baseFee * cluster.branches.length + travelFee;
+      const baseFee = quote.baseFee;
+      const travelFee = quote.travelFee;
+      const totalCost = quote.total;
 
       // ─── Score: recommendation engine scores averaged across branches, from the
       // per-branch cache built above — no longer re-invoking the engine here. ───

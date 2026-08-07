@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Loader, MapPin, AlertTriangle } from 'lucide-react';
 import { api } from '../../services/api';
 
-/** A real, whole-India place returned by GET /geo/autocomplete (live Nominatim). */
+/** A real, whole-India place returned by GET /geo/autocomplete (live Google Places). */
 export interface IndiaPlaceResult {
   label: string;
   type: string;

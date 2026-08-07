@@ -9,7 +9,7 @@ module.exports = {
     splash: {
       image: './assets/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#0A101C',
+      backgroundColor: '#14100C',
     },
     assetBundlePatterns: ['**/*'],
     extra: {
@@ -57,7 +57,7 @@ module.exports = {
       },
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon.png',
-        backgroundColor: '#0A101C',
+        backgroundColor: '#14100C',
       },
     },
     plugins: [

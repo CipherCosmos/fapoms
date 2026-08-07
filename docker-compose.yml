@@ -55,6 +55,28 @@ services:
       retries: 10
 
   # ---------------------------------------------------------------------------
+  # MinIO — S3-compatible object storage for all binary files
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: fapoms-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: fapoms_minio
+      MINIO_ROOT_PASSWORD: fapoms_minio_secret
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO Console UI (http://localhost:9001)
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
   # Backend (NestJS) — Hot Reload via nest start --watch
   # ---------------------------------------------------------------------------
   backend:
@@ -77,8 +99,7 @@ services:
       - ./packages/shared/dist:/app/packages/shared/dist
       # Firebase service account (for FCM push notifications)
       - ./fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json:/app/packages/backend/fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json
-      # Persist uploads
-      - ./packages/uploads:/app/packages/backend/uploads
+      # NOTE: No uploads bind-mount — all files are stored in MinIO (fapoms-minio)
       # Anonymous volume: keep container's node_modules (don't clobber with host)
       - /app/node_modules
       - /app/packages/backend/node_modules
@@ -87,6 +108,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
   # ---------------------------------------------------------------------------
@@ -105,6 +128,11 @@ services:
     volumes:
       # Bind-mount source code for hot reload
       - ./packages/frontend/src:/app/packages/frontend/src
+      # Static assets (logo, favicon). Without this the container keeps whatever
+      # public/ was baked into the image at build time, so any new or replaced
+      # asset 404s — and Vite's SPA fallback answers with index.html and HTTP 200,
+      # which makes the failure look like a success in curl.
+      - ./packages/frontend/public:/app/packages/frontend/public
       - ./packages/frontend/index.html:/app/packages/frontend/index.html
       - ./packages/frontend/vite.config.ts:/app/packages/frontend/vite.config.ts
       - ./packages/frontend/tsconfig.json:/app/packages/frontend/tsconfig.json
@@ -159,4 +187,6 @@ volumes:
   pgdata:
     driver: local
   redisdata:
+    driver: local
+  miniodata:
     driver: local

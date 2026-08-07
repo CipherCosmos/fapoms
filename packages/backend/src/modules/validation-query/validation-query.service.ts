@@ -11,6 +11,8 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 
 import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
+import { QueryMessageAuthor } from './validation-query-message.entity';
+import { QueryThreadService } from './query-thread.service';
 
 export interface CreateValidationQueryDto {
   validationCaseId: string;
@@ -34,6 +36,7 @@ export class ValidationQueryService {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly notificationService: NotificationService,
     private readonly pushNotificationService: PushNotificationService,
+    private readonly threadService: QueryThreadService,
   ) {}
 
   async createQuery(dto: CreateValidationQueryDto, userId: string): Promise<ValidationQueryEntity> {
@@ -156,6 +159,39 @@ export class ValidationQueryService {
 
     const saved = await this.queryRepository.save(query);
 
+    /**
+     * Mirror the reply into the message thread, which is the channel the web actually reads.
+     *
+     * The clarification loop ran on two channels that never met. The desk posts into
+     * `validation_query_messages` (and `QueryThreadService` mirrors that back onto
+     * `assayer_response`), and every web screen — CaseWorkspace, ThreadPanel — renders that
+     * table. But this route, the one the mobile app calls, wrote *only* to the
+     * `assayer_response` column, which no frontend reads anywhere.
+     *
+     * The live data shows the consequence exactly: 4 clarifications exist, all 4 have thread
+     * messages, and 0 have an `assayer_response`. Every answer an assayer typed went into a
+     * column nobody displays. The validator saw silence and the assayer saw their message
+     * accepted — the correction loop had no path back.
+     */
+    try {
+      await this.threadService.postMessage(
+        saved.id,
+        QueryMessageAuthor.ASSAYER,
+        userId,
+        null,
+        {
+          body: assayerResponse?.trim() || undefined,
+          attachments: attachments?.flat(Infinity).filter((a: any) => a && a.url) ?? undefined,
+        } as any,
+      );
+    } catch (err: any) {
+      // Never lose the answer itself over a thread write — but say so loudly, because a
+      // silent failure here is precisely the bug being fixed.
+      console.error(
+        `Query ${saved.id}: assayer reply saved, but it did NOT reach the message thread the desk reads: ${err?.message}`,
+      );
+    }
+
     await this.auditService.recordEvent({
       category: EventCategory.WORKFLOW,
       eventType: 'VALIDATION_QUERY_RESPONDED',
@@ -237,6 +273,13 @@ export class ValidationQueryService {
     });
   }
 
+  async findAllQueries(): Promise<ValidationQueryEntity[]> {
+    return this.queryRepository.find({
+      where: { isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
   async findByAssayer(assayerId: string): Promise<ValidationQueryEntity[]> {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assayerId || '');
     if (!assayerId || !isUuid) {
@@ -244,6 +287,7 @@ export class ValidationQueryService {
     }
     return this.queryRepository.find({
       where: { assayerId, isActive: true },
+      relations: ['validationCase'],
       order: { createdAt: 'DESC' },
     });
   }

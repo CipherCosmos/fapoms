@@ -20,7 +20,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum } from 'class-validator';
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
 
 class CreateUserRequestDto implements CreateUserDto {
@@ -117,6 +117,7 @@ export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Get('me')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Get current user profile' })
   async getMe(@Req() req: any) {
     return {
@@ -126,6 +127,7 @@ export class UserController {
   }
 
   @Put('me')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Self update personal details (first name, last name, phone)' })
   async updateMe(@Body() dto: SelfUpdateProfileDto, @Req() req: any) {
     const updated = await this.userService.updateUser(req.user.id, dto, req.user.id);
@@ -136,6 +138,7 @@ export class UserController {
   }
 
   @Post('me/change-password')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Change current user password' })
   async changePassword(@Body() dto: SelfChangePasswordDto, @Req() req: any) {
     await this.userService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
@@ -202,6 +205,7 @@ export class UserController {
   }
 
   @Get(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
   @ApiOperation({ summary: 'Get user by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const user = await this.userService.findById(id);

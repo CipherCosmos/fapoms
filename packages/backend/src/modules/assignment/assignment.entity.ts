@@ -49,6 +49,32 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'agreed_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
   agreedFee: number | null;
 
+  // ── Check-in evidence ───────────────────────────────────────────────────
+  /**
+   * Where the assayer actually was when they checked in.
+   *
+   * This was previously appended to `remarks` as free text, which made the single most
+   * important fact in a collateral audit — was the worker physically at the branch —
+   * unqueryable and unusable as evidence. Declared as real columns here (not only in a
+   * migration) because DB_SYNCHRONIZE=true drops anything it cannot see in the decorators.
+   */
+  @Column({ name: 'check_in_latitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  checkInLatitude: number | null;
+
+  @Column({ name: 'check_in_longitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  checkInLongitude: number | null;
+
+  /** GPS uncertainty radius reported by the device. A 5 m fix and a 2 km fix are not equal evidence. */
+  @Column({ name: 'check_in_accuracy_meters', type: 'integer', nullable: true })
+  checkInAccuracyMeters: number | null;
+
+  /** Distance from the branch's own coordinates, so an out-of-geofence check-in is discoverable. */
+  @Column({ name: 'check_in_distance_meters', type: 'integer', nullable: true })
+  checkInDistanceMeters: number | null;
+
+  @Column({ name: 'checked_in_at', type: 'timestamptz', nullable: true })
+  checkedInAt: Date | null;
+
   @Column({ name: 'scheduled_date', type: 'date', nullable: true })
   scheduledDate: Date | null;
 

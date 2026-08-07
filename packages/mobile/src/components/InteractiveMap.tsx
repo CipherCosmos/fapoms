@@ -58,7 +58,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       }).addTo(map);
 
       const markerIcon = L.divIcon({
-        html: '<div style="width:24px;height:24px;background:#6366f1;border:3px solid #818cf8;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3)"></div>',
+        html: '<div style="width:24px;height:24px;background:#FF6B00;border:3px solid #FF9E00;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3)"></div>',
         iconSize: [24, 24],
         iconAnchor: [12, 12],
       });
@@ -75,8 +75,8 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
       const circle = L.circle([latitude, longitude], {
         radius: radiusKm * 1000,
-        color: '#6366f1',
-        fillColor: '#6366f1',
+        color: '#FF6B00',
+        fillColor: '#FF6B00',
         fillOpacity: 0.1,
         weight: 2,
         dashArray: '8 4',

@@ -4,6 +4,8 @@ import {
 } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
+import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
+import { probeServerUrl, normaliseServerUrl } from '../services/server-config';
 
 interface LoginScreenProps {
   loginUsername?: string;
@@ -37,8 +39,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onBiometricLogin,
 }) => {
   const t = useTheme();
-  const [internalUsername, setInternalUsername] = useState('AS0127');
-  const [internalPassword, setInternalPassword] = useState('Password@123');
+  const [internalUsername, setInternalUsername] = useState('');
+  const [internalPassword, setInternalPassword] = useState('');
   const [internalLoading, setInternalLoading] = useState(false);
 
   const username = controlledUsername || internalUsername;
@@ -96,7 +98,50 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   const [showPassword, setShowPassword] = useState(false);
-  const [focused, setFocused] = useState<'user' | 'pass' | null>(null);
+  const [focused, setFocused] = useState<'user' | 'pass' | 'server' | null>(null);
+
+  // ── Server address ──────────────────────────────────────────────────────────
+  const [showServerSettings, setShowServerSettings] = useState(false);
+  const [serverUrl, setServerUrl] = useState('');
+  const [testingServer, setTestingServer] = useState(false);
+  const [probeResult, setProbeResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    // Shown as the plain host the operator typed, not the internal `/api/v1` form.
+    setServerUrl(getApiBaseUrl().replace(/\/api\/v1$/, ''));
+  }, []);
+
+  const handleTestServer = async () => {
+    setProbeResult(null);
+    setTestingServer(true);
+    try {
+      const result = await probeServerUrl(normaliseServerUrl(serverUrl));
+      setProbeResult(
+        result.ok
+          ? { ok: true, message: 'Server reachable.' }
+          : { ok: false, message: result.error || 'Could not reach that address.' },
+      );
+    } finally {
+      setTestingServer(false);
+    }
+  };
+
+  const handleSaveServer = async () => {
+    try {
+      const saved = await setApiBaseUrl(serverUrl);
+      setServerUrl(saved.replace(/\/api\/v1$/, ''));
+      setProbeResult({ ok: true, message: 'Saved. Sign in to continue.' });
+      setErrorMsg(null);
+    } catch {
+      setProbeResult({ ok: false, message: 'Could not save that address.' });
+    }
+  };
+
+  const handleResetServer = async () => {
+    const restored = await resetApiBaseUrl();
+    setServerUrl(restored.replace(/\/api\/v1$/, ''));
+    setProbeResult({ ok: true, message: 'Reset to the built-in default.' });
+  };
 
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -139,16 +184,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           gap: t.space['2xl'],
         }}>
           <View style={{ alignItems: 'center', gap: t.space.md }}>
+            {/* The real Sumeru Global mark. This pointed at assets/logo.png, which is a
+                different product's logo ("Gold Audit Pro" flame-lotus). The artwork already
+                contains the wordmark, so no company name is set in type beside it — only the
+                product line below. 130x100 preserves the asset's 13:10 ratio exactly. */}
             <Image
-              source={(() => {
-                const img = require('../../assets/logo.png');
-                return typeof img === 'object' && img?.default ? img.default : img;
-              })()}
-              style={{ width: 84, height: 68, resizeMode: 'contain' }}
+              source={require('../../assets/sumeru-logo.png')}
+              style={{ width: 130, height: 100, resizeMode: 'contain' }}
+              accessibilityLabel="Sumeru Global"
             />
             <View style={{ alignItems: 'center', gap: 2 }}>
-              <AppText variant="h1" style={{ color: t.colors.primary, fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontWeight: '700' }}>Gold Audit Pro</AppText>
-              <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>BY SUMERU GLOBAL</AppText>
+              <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>FIELD AUDIT OPERATIONS</AppText>
             </View>
           </View>
 
@@ -219,6 +265,62 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               </View>
             </Tappable>
           </Card>
+
+          {/* Server address.
+              Reachable from the sign-in screen deliberately: if the app is pointed at the wrong
+              backend, this is the only screen the user can get to, so anywhere else would be
+              unreachable exactly when it is needed. The address used to be fixed at build time,
+              defaulting to an Android-emulator-only alias that no real handset can resolve. */}
+          <View style={{ alignItems: 'center', gap: t.space.sm }}>
+            <Tappable onPress={() => { setShowServerSettings((v) => !v); setProbeResult(null); }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: t.space.xs }}>
+                <Icon name="server-outline" size={14} color={t.colors.textFaint} />
+                <AppText variant="caption" tone="faint">
+                  {showServerSettings ? 'Hide server settings' : 'Server settings'}
+                </AppText>
+              </View>
+            </Tappable>
+
+            {showServerSettings && (
+              <Card level={1} style={{ gap: t.space.md, padding: t.space.lg, width: '100%' }}>
+                <AppText variant="overline" tone="faint">BACKEND ADDRESS</AppText>
+                <View style={inputWrap(focused === 'server')}>
+                  <Icon name="globe-outline" size={16} color={focused === 'server' ? t.colors.primary : t.colors.textFaint} />
+                  <TextInput
+                    value={serverUrl}
+                    onChangeText={setServerUrl}
+                    onFocus={() => setFocused('server')}
+                    onBlur={() => setFocused(null)}
+                    placeholder="http://192.168.1.10:3000"
+                    placeholderTextColor={t.colors.textFaint}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    style={inputStyle}
+                  />
+                </View>
+
+                {probeResult && (
+                  <AppText
+                    variant="caption"
+                    style={{ color: probeResult.ok ? (t.colors.success || t.colors.primary) : t.colors.danger }}>
+                    {probeResult.message}
+                  </AppText>
+                )}
+
+                <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                  <Button label="Test" variant="neutral" onPress={handleTestServer} loading={testingServer} style={{ flex: 1 }} />
+                  <Button label="Save" onPress={handleSaveServer} style={{ flex: 1 }} />
+                </View>
+
+                <Tappable onPress={handleResetServer}>
+                  <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+                    Reset to default
+                  </AppText>
+                </Tappable>
+              </Card>
+            )}
+          </View>
 
           <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
             Authorised field personnel only

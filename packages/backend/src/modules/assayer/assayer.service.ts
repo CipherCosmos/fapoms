@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, In } from 'typeorm';
 import * as xlsx from 'xlsx';
@@ -15,17 +15,12 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
-import { geocodeIndia } from '../geo/india-geocoder';
+import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 
 /**
- * Resolves an assayer's home coordinates, delegating to the shared robust
- * geocoder: it tries many formulations of the address, ranks results by how
- * spatially precise they are (buildings/roads over coarse region centroids),
- * rejects out-of-state and absurdly-far-away hits using the pincode as an
- * anchor (so a wrong or partially-typed address still lands in the right
- * locality rather than on a ~30km-away landmark), and falls back to the
- * pincode centroid. Returns null only when nothing resolves — the caller must
- * treat that as "unknown" rather than inventing a location.
+ * Resolves an assayer's home coordinates using ONLY the shared Google geocoder.
+ * Returns null when nothing resolves (no key, error, or no sane in-state hit) —
+ * the caller must treat that as "unknown" rather than inventing a location.
  */
 async function geocodeAddress(
   address: string,
@@ -39,9 +34,10 @@ async function geocodeAddress(
 
 /**
  * Returns the authoritative state and district a 6-digit Indian pincode belongs
- * to, asking the same geocoder the coordinates come from (so the validation and
- * the pin always agree). Used to stop the classic silent mistake: an address
- * that says one place while state/district/city/pincode say another.
+ * to, asking the same Google geocoder the coordinates come from (so the
+ * validation and the pin always agree). Used to stop the classic silent
+ * mistake: an address that says one place while state/district/city/pincode say
+ * another.
  *
  * Returns null when the pincode can't be verified — the caller must then skip
  * the check rather than invent one.
@@ -49,30 +45,7 @@ async function geocodeAddress(
 async function fetchPincodeAuthority(
   pincode: string,
 ): Promise<{ state: string; district: string } | null> {
-  if (!/^\d{6}$/.test(pincode)) return null;
-  await new Promise((r) => setTimeout(r, 600));
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-      `${pincode}, India`,
-    )}&format=json&limit=1&countrycodes=in&addressdetails=1`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)' },
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) return null;
-    const data = (await res.json()) as any[];
-    const a = data?.[0]?.address;
-    if (!a?.state) return null;
-    return {
-      state: a.state,
-      district: a.state_district || a.county || a.city || a.town || a.village || '',
-    };
-  } catch {
-    return null;
-  }
+  return pincodeAuthority(pincode);
 }
 
 /** Loose comparer for place names: case/space/punctuation-insensitive and blind
@@ -575,6 +548,34 @@ export class AssayerService implements OnModuleInit {
     });
     await this.hydrateWorkforceAttributes(saved);
     return saved;
+  }
+
+  /**
+   * Records the assayer's live position WITHOUT touching their home address
+   * (`latitude`/`longitude`). Live coordinates only feed the recommendation
+   * engine when the assayer has also opted in (`isLiveEnabled === true`).
+   */
+  async updateLiveLocation(id: string, latitude: number, longitude: number, userId?: string): Promise<AssayerEntity> {
+    const assayer = await this.findOne(id);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      throw new BadRequestException('Invalid live coordinates');
+    }
+    assayer.liveLatitude = latitude;
+    assayer.liveLongitude = longitude;
+    assayer.liveLocation = { type: 'Point', coordinates: [longitude, latitude] };
+    assayer.updatedBy = userId ?? id;
+    return this.assayerRepository.save(assayer);
+  }
+
+  /**
+   * Turns live sharing on/off for an assayer. Off by default; turning it off
+   * keeps any last live coordinate but the engine no longer uses it.
+   */
+  async setLiveTracking(id: string, enabled: boolean, userId?: string): Promise<AssayerEntity> {
+    const assayer = await this.findOne(id);
+    assayer.isLiveEnabled = !!enabled;
+    assayer.updatedBy = userId ?? id;
+    return this.assayerRepository.save(assayer);
   }
 
   async remove(id: string, userId: string): Promise<void> {
@@ -1689,4 +1690,72 @@ export class AssayerService implements OnModuleInit {
 
     return { importedCount, errors };
   }
+
+  /**
+   * Lets an assayer change their own password.
+   *
+   * Until now there was no route anywhere that wrote `assayers.password_hash` outside bulk
+   * import, and that write is guarded by `if (!existing)`. `POST /users/me/change-password`
+   * queries the `users` repository, and assayers have no `users` row, so it 404s for them.
+   * The practical effect: a field worker could never change the password they were issued,
+   * and 24 of 25 live accounts were still on the importer's documented default.
+   *
+   * This is also the precondition for rotating that default — without a way for people to set
+   * a new password, rotating it just locks 25 workers out of their jobs.
+   */
+  async changeOwnPassword(assayerId: string, currentPassword: string, newPassword: string): Promise<void> {
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: assayerId },
+      select: { id: true, passwordHash: true },
+    });
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+    if (!assayer.passwordHash) {
+      throw new BadRequestException('This account has no password set. Ask your HR contact to set one for you.');
+    }
+
+    const ok = await bcrypt.compare(currentPassword, assayer.passwordHash);
+    if (!ok) throw new UnauthorizedException('Your current password is not correct.');
+
+    this.assertPasswordAcceptable(newPassword);
+
+    await this.assayerRepository.update(assayerId, {
+      passwordHash: await bcrypt.hash(newPassword, 12),
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      updatedBy: assayerId,
+    });
+  }
+
+  /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
+  async resetPasswordByStaff(assayerId: string, newPassword: string, actorId: string): Promise<void> {
+    const assayer = await this.assayerRepository.findOne({ where: { id: assayerId }, select: { id: true } });
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+
+    this.assertPasswordAcceptable(newPassword);
+
+    await this.assayerRepository.update(assayerId, {
+      passwordHash: await bcrypt.hash(newPassword, 12),
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      updatedBy: actorId,
+    });
+  }
+
+  /**
+   * Deliberately modest rules. These users are field workers on cheap handsets, often typing
+   * with one thumb in bad light — a complexity policy they cannot satisfy produces written-down
+   * passwords, which is worse than a simple one they can remember. What it does refuse is the
+   * shared defaults, because those are known to anyone holding the roster spreadsheet.
+   */
+  private assertPasswordAcceptable(password: string): void {
+    const pw = (password ?? '').trim();
+    if (pw.length < 8) {
+      throw new BadRequestException('Please choose a password of at least 8 characters.');
+    }
+    const BANNED = ['assayer123', 'password@123', 'password', '12345678'];
+    if (BANNED.includes(pw.toLowerCase())) {
+      throw new BadRequestException('That password is too easy to guess. Please choose a different one.');
+    }
+  }
+
 }

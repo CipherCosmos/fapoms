@@ -271,12 +271,16 @@ export const Rules: React.FC = () => {
       </div>
 
       {showModal && canManage && (
-        <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Business Rule' : 'Create Business Rule'} width="520px" asForm onSubmit={handleSubmit}
+        <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Business Rule' : 'Create Business Rule'} width="540px" asForm onSubmit={handleSubmit}
           footer={
-            <>
-              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
-              <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save Rule'}</button>
-            </>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', width: '100%' }}>
+              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 600 }}>
+                Cancel
+              </button>
+              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 20px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+                {submitting ? 'Saving Rule...' : '✓ Save Rule'}
+              </button>
+            </div>
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>

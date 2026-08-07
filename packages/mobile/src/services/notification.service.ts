@@ -90,7 +90,7 @@ export function triggerAlertNotification(title: string, body: string, data?: any
     try {
       new g.Notification(title, {
         body,
-        icon: '/logo.png',
+        icon: '/sumeru-logo.png',
         tag: data?.assignmentId || 'fapoms-alert',
         renotify: true,
       });
@@ -184,7 +184,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
         name: 'default',
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#6366f1',
+        lightColor: '#FF6B00',
       });
     }
 

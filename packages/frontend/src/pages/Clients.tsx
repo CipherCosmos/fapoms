@@ -223,12 +223,12 @@ const Clients: React.FC = () => {
           </h2>
           <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>Manage client records, lifecycle, contacts, contracts and billing.</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <RefreshCw size={14} className={isFetching ? 'spin' : ''} /> Refresh
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+            <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Plus size={14} /> Add Client
+          <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+            <Plus size={15} /> Add Client
           </button>
         </div>
       </div>

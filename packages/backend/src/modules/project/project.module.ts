@@ -17,12 +17,14 @@ import { UserEntity } from '../user/user.entity';
 import { ZoneEntity } from '../zone/zone.entity';
 import { PlatformModule } from '../platform/platform.module';
 import { BranchModule } from '../branch/branch.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([ProjectEntity, ProjectBranchEntity, AssessmentEntity, CallLogEntity, ClientEntity, UserEntity, ZoneEntity]),
     PlatformModule,
     BranchModule,
+    NotificationsModule,
   ],
   controllers: [ProjectController],
   providers: [ProjectService, ProjectQueryService],

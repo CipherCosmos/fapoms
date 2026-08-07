@@ -230,23 +230,23 @@ export const AssayerProfile: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            {p.phone && <a href={`tel:${p.phone}`} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}><Phone size={12} /> {p.phone}</a>}
-            {p.email && <a href={`mailto:${p.email}`} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}><Mail size={12} /> Email</a>}
-            {canManage && <button onClick={() => setEditing(true)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Edit2 size={12} /> Edit</button>}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            {p.phone && <a href={`tel:${p.phone}`} className="btn btn-secondary" style={{ fontSize: '13px', fontWeight: 700, padding: '8px 14px', minHeight: '38px', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}><Phone size={14} /> {p.phone}</a>}
+            {p.email && <a href={`mailto:${p.email}`} className="btn btn-secondary" style={{ fontSize: '13px', fontWeight: 700, padding: '8px 14px', minHeight: '38px', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}><Mail size={14} /> Email</a>}
+            {canManage && <button onClick={() => setEditing(true)} className="btn btn-secondary" style={{ fontSize: '13px', fontWeight: 700, padding: '8px 14px', minHeight: '38px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Edit2 size={14} /> Edit Profile</button>}
           </div>
         </div>
 
         {canManage && transitions.length > 0 && (
-          <div style={{ display: 'flex', gap: '7px', alignItems: 'center', marginTop: '14px', paddingTop: '13px', borderTop: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
-            <span style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: '5px' }}><ArrowRightLeft size={11} /> Lifecycle</span>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '14px', paddingTop: '13px', borderTop: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+            <span style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: '5px' }}><ArrowRightLeft size={12} /> Lifecycle</span>
             <select value={target} onChange={(e) => setTarget(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-              <option value="">Move to…</option>
+              style={{ padding: '8px 12px', minHeight: '38px', fontSize: '13px', fontWeight: 600, borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
+              <option value="">Move to stage…</option>
               {transitions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
             </select>
-            <button onClick={move} disabled={!target || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-              {busy ? 'Moving…' : 'Apply'}
+            <button onClick={move} disabled={!target || busy} className="btn btn-primary" style={{ fontSize: '13px', fontWeight: 700, padding: '8px 16px', minHeight: '38px' }}>
+              {busy ? 'Moving…' : '✓ Apply Transition'}
             </button>
           </div>
         )}

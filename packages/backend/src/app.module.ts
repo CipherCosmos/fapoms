@@ -47,6 +47,8 @@ import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module'
 import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
+import { RedisClientModule } from './infrastructure/redis/redis-client.module';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
@@ -75,6 +77,10 @@ import { BillingEngineModule } from './modules/billing-engine/billing-engine.mod
         },
       }),
     }),
+
+    // Global Redis client (ioredis) — used by ChunkedUploadService for
+    // multipart upload session state and any other direct Redis consumers.
+    RedisClientModule,
 
     // Core modules
     AuditModule,
@@ -114,6 +120,7 @@ import { BillingEngineModule } from './modules/billing-engine/billing-engine.mod
     // Real-time events
     RealtimeModule,
   ],
+  controllers: [HealthController],
   providers: [],
 })
 export class AppModule {}

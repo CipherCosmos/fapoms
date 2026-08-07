@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, RefreshCw } from 'lucide-react';
-import { Priority, ProjectBranchStatus } from '@fapoms/shared';
+import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
+import { ProjectBranchStatus } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
@@ -11,6 +11,27 @@ import { connectSocket } from '../services/socket';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
+import { ScoreBreakdown } from './planning/ScoreBreakdown';
+import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
+import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
+
+/** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
+interface FeeQuote {
+  baseFee: number;
+  branchCount: number;
+  baseComponent: number;
+  distanceKm: number;
+  chargeableKm: number;
+  travelFee: number;
+  total: number;
+  usedFallbackBaseFee: boolean;
+  rates: {
+    travelFeePerKm: number;
+    freeTravelAllowanceKm: number;
+    defaultBaseFee: number;
+    clientConfigured: boolean;
+  };
+}
 
 interface ProjectOption {
   id: string;
@@ -18,43 +39,7 @@ interface ProjectOption {
   projectNumber: string;
 }
 
-interface ProjectBranch {
-  id: string;
-  projectId: string;
-  branchId: string;
-  status: string;
-  priority: Priority;
-  zoneId: string | null;
-  scheduledDate: string | null;
-  remarks: string | null;
-  branch: {
-    id: string;
-    branchCode: string;
-    solId: string | null;
-    name: string;
-    state: string;
-    district: string;
-    city: string;
-    latitude: number | null;
-    longitude: number | null;
-  };
-  assignment: {
-    id: string;
-    status: string;
-    proposedFee: number;
-    agreedFee: number | null;
-    scheduledDate: string | null;
-    remarks?: string | null;
-    /** The ops user who created this offer — i.e. who owns this negotiation. */
-    negotiatedByName?: string | null;
-    /** Counter-offer rounds so far; proposeCounterFee() auto-declines at 3. */
-    negotiationCount?: number;
-    assayer?: { id: string; displayName: string; assayerCode?: string };
-  } | null;
-}
 
-/** Hard limit enforced by AssignmentService.proposeCounterFee() — kept in sync here for display. */
-const MAX_NEGOTIATION_ROUNDS = 3;
 
 interface Candidate {
   id: string;
@@ -263,24 +248,7 @@ const STATUS_OPTIONS = [
 ];
 
 
-/** Friendly names for the engine's scoring dimensions. */
-const SCORE_DIMENSION_LABELS: Record<string, string> = {
-  slaCompliance: 'SLA compliance',
-  acceptanceRate: 'Accepts offers',
-  workload: 'Spare capacity',
-  distance: 'Proximity',
-  travelTime: 'Travel time',
-  performance: 'Performance rating',
-  queryVolume: 'Clean paperwork',
-  deliverySpeed: 'Turnaround speed',
-  branchFamiliarity: 'Knows this branch',
-  experience: 'Experience',
-  cost: 'Cost',
-  clientPreference: 'Client fit',
-  customerDensity: 'Capacity vs branch size',
-  profitability: 'Budget fit',
-  riskScore: 'Risk suitability',
-};
+
 
 /**
  * Shows the strongest and weakest dimensions behind a candidate's score.
@@ -290,389 +258,15 @@ const SCORE_DIMENSION_LABELS: Record<string, string> = {
  * (there are fifteen). Ops had no way to tell a candidate who is close-but-unreliable from
  * one who is distant-but-excellent.
  */
-const ScoreBreakdown: React.FC<{ breakdown?: Record<string, number> }> = ({ breakdown }) => {
-  if (!breakdown || Object.keys(breakdown).length === 0) return null;
-  const entries = Object.entries(breakdown)
-    .filter(([k]) => SCORE_DIMENSION_LABELS[k])
-    .sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return null;
-  const strengths = entries.slice(0, 3);
-  const weakest = entries[entries.length - 1];
 
-  const pill = (k: string, v: number, good: boolean) => (
-    <span key={k} title={`${SCORE_DIMENSION_LABELS[k]}: ${Math.round(v)}/100`}
-      style={{ fontSize: '9.5px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', whiteSpace: 'nowrap',
-        background: good ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
-        color: good ? 'var(--success)' : 'var(--danger)' }}>
-      {SCORE_DIMENSION_LABELS[k]} {Math.round(v)}
-    </span>
-  );
 
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-      {strengths.map(([k, v]) => pill(k, v, true))}
-      {weakest[1] < 50 && pill(weakest[0], weakest[1], false)}
-    </div>
-  );
-};
 
-/**
- * Candidates the engine filtered out, and why.
- *
- * Excluded assayers used to disappear with no explanation, so "my best assayer isn't in the
- * list" was unanswerable — and genuine data problems (an expired certification, a full diary)
- * looked identical to a normal short list.
- */
-const ExcludedCandidatesPanel: React.FC<{ excluded: ExcludedCandidate[] }> = ({ excluded }) => {
-  const [open, setOpen] = useState(false);
-  if (excluded.length === 0) return null;
-  return (
-    <div style={{ marginTop: '10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface-2)' }}>
-      <button onClick={() => setOpen(!open)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer' }}>
-        <span>{excluded.length} assayer{excluded.length > 1 ? 's' : ''} not shown — why?</span>
-        <span>{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div style={{ padding: '0 10px 10px' }}>
-          {excluded.map(e => (
-            <div key={e.assayerId} style={{ padding: '6px 0', borderTop: '1px solid var(--border-color)' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{e.displayName}</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{e.reason}</div>
-              {e.detail && <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '2px' }}>└─ {e.detail}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
 
-/**
- * The active counter-offer banner — an assayer has proposed a different fee and ops needs to
- * accept, counter, or decline it.
- *
- * Single shared definition, used in every layout that shows a branch's negotiation state.
- * This used to be two near-identical blocks of inline JSX hand-copied into the "default" and
- * "three-col" layouts — already drifted apart in wording — and was missing entirely from
- * "two-col-branch-recom", so a counter-offer arriving while an operator had that layout open
- * was completely invisible to them until they happened to switch layouts.
- *
- * Also surfaces two things the old inline version never showed: who on the team is already
- * handling this negotiation (`negotiatedByName` — see project.controller.ts), and how many
- * counter-offer rounds remain before AssignmentService.proposeCounterFee() auto-declines it.
- */
-const NegotiationBanner: React.FC<{
-  assignment: NonNullable<ProjectBranch['assignment']>;
-  onAccept: () => void;
-  onCounter: () => void;
-  onDecline: () => void;
-}> = ({ assignment, onAccept, onCounter, onDecline }) => {
-  const round = Math.max(1, assignment.negotiationCount ?? 1);
-  const roundsLeft = Math.max(0, MAX_NEGOTIATION_ROUNDS - (assignment.negotiationCount ?? 0));
 
-  return (
-    <div style={{
-      padding: '12px 14px',
-      background: 'linear-gradient(135deg, var(--status-pending-bg), var(--status-pending-bg))',
-      borderBottom: '1px solid var(--status-pending-bg)',
-      borderLeft: '3px solid var(--warning)',
-      display: 'flex', flexDirection: 'column', gap: '10px',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-        <div style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'var(--status-pending-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '14px' }}>
-          💬
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--warning)' }}>
-              Counter offer from {assignment.assayer?.displayName || 'assayer'}
-            </span>
-            <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)', whiteSpace: 'nowrap' }}>
-              Round {round} of {MAX_NEGOTIATION_ROUNDS}
-            </span>
-          </div>
-          <div style={{ fontSize: '19px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '3px' }}>
-            ₹{assignment.proposedFee?.toLocaleString()}
-          </div>
-          {assignment.remarks && (
-            <div style={{ fontSize: '11px', color: 'var(--warning)', marginTop: '3px', fontStyle: 'italic' }}>
-              "{assignment.remarks}"
-            </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '5px' }}>
-            {assignment.negotiatedByName && (
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Users size={10} /> Handled by <b style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{assignment.negotiatedByName}</b>
-              </span>
-            )}
-            {roundsLeft <= 1 && (
-              <span style={{ fontSize: '10px', color: 'var(--danger)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '3px' }}>
-                <AlertTriangle size={10} />
-                {roundsLeft === 0 ? 'Next counter auto-declines this offer' : 'Last round before auto-decline'}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: '6px' }}>
-        <button type="button" onClick={onAccept} className="btn btn-primary"
-          style={{ flex: 1.3, padding: '7px 10px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)', color: 'var(--text-primary)', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-          <Check size={13} /> Accept
-        </button>
-        <button type="button" onClick={onCounter} className="btn btn-secondary"
-          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: 'var(--accent)', borderColor: 'rgba(216,174,71,0.4)', background: 'rgba(216,174,71,0.1)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-          <RefreshCw size={12} /> Counter
-        </button>
-        <button type="button" onClick={onDecline} className="btn btn-secondary"
-          style={{ flex: 1, padding: '7px 10px', fontSize: '11.5px', color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)', background: 'var(--status-cancelled-bg)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-          <X size={13} /> Decline
-        </button>
-      </div>
-    </div>
-  );
-};
 
-/**
- * Shared, single definition of the branch queue panel.
- *
- * This used to be the same markup hand-copied into four separate layouts ("default",
- * "two-col-branch-recom", "two-col-branch-map", "three-col") with each copy drifting
- * further from the others (status wording, spacing, negotiation visibility). One component
- * now renders every layout's branch list so the queue looks and behaves identically
- * everywhere; only the width differs.
- */
-const BranchListPanel: React.FC<{
-  branches: ProjectBranch[];
-  selectedBranchId: string | null;
-  onSelectBranch: (id: string) => void;
-  searchTerm: string;
-  onSearchTermChange: (value: string) => void;
-  loading?: boolean;
-  width?: number;
-}> = ({ branches, selectedBranchId, onSelectBranch, searchTerm, onSearchTermChange, loading = false, width = 340 }) => {
-  return (
-    <div style={{ width: `${width}px`, minWidth: `${width}px`, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)' }}>
-        <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => onSearchTermChange(e.target.value)}
-          style={{ flex: 1, background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
-      </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>
-            <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
-            <div>Loading branches…</div>
-          </div>
-        ) : branches.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>No branches in this project.</div>
-        ) : branches.map(pb => {
-          const isSelected = pb.id === selectedBranchId;
-          const isAssigned = !!pb.assignment;
-          const isDone = ['CLOSED'].includes(pb.status);
-          const isValidationPending = ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED'].includes(pb.status) || pb.assignment?.status === 'COMPLETED';
-          const isNegotiating = pb.status === 'NEGOTIATION' || pb.assignment?.status === 'COUNTER_OFFER';
 
-          const badgeBg = isDone ? 'var(--status-active-bg)' : isValidationPending ? 'var(--status-pending-bg)' : isAssigned ? 'rgba(216,174,71,0.15)' : isNegotiating ? 'rgba(216,174,71,0.2)' : 'var(--border-hair)';
-          const badgeColor = isDone ? 'var(--success)' : isValidationPending ? 'var(--warning)' : isAssigned ? 'var(--accent)' : isNegotiating ? 'var(--accent)' : 'var(--text-muted)';
-          // Wording comes from the shared status vocabulary so this badge matches
-          // Field Execution and Scheduling for the same branch.
-          const statusLabel = isDone
-            ? `✓ ${branchStatusLabel(pb.status)}`
-            : isValidationPending
-            ? `🔍 ${branchStatusLabel(pb.status)}`
-            : isNegotiating
-            ? `💬 ${branchStatusLabel(ProjectBranchStatus.NEGOTIATION)}`
-            : isAssigned
-            ? `✓ ${branchStatusLabel(ProjectBranchStatus.ASSIGNMENT_CONFIRMED)}`
-            : `⏳ ${branchStatusLabel(pb.status)}`;
 
-          return (
-            <div key={pb.id} onClick={() => onSelectBranch(pb.id)}
-              style={{
-                padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
-                background: isSelected ? 'rgba(216,174,71,0.25)' : isDone ? 'var(--status-active-bg)' : isAssigned ? 'rgba(216,174,71,0.06)' : 'var(--bg-surface-2)',
-                borderLeft: isSelected ? '4px solid var(--accent)' : isDone ? '4px solid var(--success)' : isAssigned ? '4px solid var(--accent)' : isNegotiating ? '4px solid var(--warning)' : '4px solid transparent',
-                border: isSelected ? '1px solid rgba(216,174,71,0.5)' : '1px solid var(--border-hair)',
-              }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
-                <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                  {statusLabel}
-                </span>
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{pb.branch.city}, {pb.branch.state}</span>
-                {pb.assignment?.assayer?.displayName && (
-                  <span style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
-                )}
-              </div>
-              {/* Operators previously had no way to tell, from the queue, whether a
-                  colleague was already negotiating this branch — risking duplicate
-                  outreach to the same assayer. */}
-              {isNegotiating && pb.assignment?.negotiatedByName && (
-                <div style={{ fontSize: '9.5px', color: 'var(--warning)', marginTop: '2px' }}>
-                  💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
 
-/**
- * Shared, single definition of the "recommended assayers" panel (header + SLA controls +
- * candidate list + negotiation banner + completion summary).
- *
- * The candidate list markup is produced by the caller's `renderCandidatesList(horizontal)`
- * closure, but the surrounding panel — the header, the "Show Distant / Min Radius Filter"
- * controls, the read-only completion summary for done branches, and the counter-offer
- * banner — used to be hand-copied into three layouts ("two-col-branch-recom", "default"
- * drawer, "three-col") and had already drifted in wording and behavior. One component now
- * renders every layout's recommendation panel for a consistent design.
- */
-const RecommendationPanel: React.FC<{
-  selectedPb: ProjectBranch | null | undefined;
-  renderCandidatesList: (horizontal: boolean) => React.ReactNode;
-  /** Fixed pixel width (three-col inspector). Omit and set flex to fill remaining space. */
-  width?: number;
-  /** Fill remaining horizontal space instead of a fixed width (two-col / drawer). */
-  flex?: boolean;
-  horizontal?: boolean;
-  showAllCandidates: boolean;
-  onToggleShowAll: (v: boolean) => void;
-  slaEnabled: boolean;
-  onToggleSla: (v: boolean) => void;
-  slaRadius: number;
-  onSlaRadiusChange: (v: number) => void;
-  onRefresh: () => void;
-  onAccept: (assignmentId: string, proposedFee: number) => void;
-  onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
-  onDecline: (assignmentId: string) => void;
-  /** Opens the branch's full timeline — the completed/closed panel is otherwise a dead end. */
-  onViewHistory: (projectBranchId: string) => void;
-}> = ({
-  selectedPb, renderCandidatesList, width = 380, flex = false, horizontal = false,
-  showAllCandidates, onToggleShowAll, slaEnabled, onToggleSla, slaRadius, onSlaRadiusChange,
-  onRefresh, onAccept, onCounter, onDecline, onViewHistory,
-}) => {
-  const isDone = selectedPb && (
-    ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(selectedPb.status) ||
-    selectedPb.assignment?.status === 'COMPLETED'
-  );
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden', ...(flex ? { flex: 1, minWidth: 0 } : { width: `${width}px`, minWidth: `${width}px` }) }}>
-      {selectedPb ? (
-        isDone ? (
-          /* Read-only Completion Summary for completed/under-validation branches */
-          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '24px' }}>{selectedPb.status === 'CLOSED' ? '✅' : '🔍'}</span>
-              <div>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: selectedPb.status === 'CLOSED' ? 'var(--success)' : 'var(--warning)' }}>
-                  {selectedPb.status === 'CLOSED' ? 'Audit Closed & Finalized' : 'Audit Completed — Under Validation'}
-                </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                  {selectedPb.branch.name} • {selectedPb.branch.city}, {selectedPb.branch.state}
-                </div>
-              </div>
-            </div>
-            {selectedPb.assignment && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: 'var(--bg-surface-2)', borderRadius: '8px', border: '1px solid var(--border-hair)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>ASSAYER</div>
-                    <div style={{ fontSize: '13px', color: 'var(--accent)', fontWeight: 600 }}>👤 {selectedPb.assignment.assayer?.displayName}</div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>AGREED FEE</div>
-                    <div style={{ fontSize: '13px', color: 'var(--success)', fontWeight: 700 }}>₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee ?? '—'}</div>
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>BRANCH STATUS</div>
-                  <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '4px', background: selectedPb.status === 'CLOSED' ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: selectedPb.status === 'CLOSED' ? 'var(--success)' : 'var(--warning)', fontWeight: 700 }}>
-                    {selectedPb.status.replace(/_/g, ' ')}
-                  </span>
-                </div>
-              </div>
-            )}
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', lineHeight: 1.5 }}>
-              This branch audit is {selectedPb.status === 'CLOSED' ? 'closed and finalized' : 'completed and currently under validator review'}. No further scheduling or reassignment actions are available.
-            </div>
-            <button
-              onClick={() => onViewHistory(selectedPb.id)}
-              style={{
-                marginTop: '10px', padding: '8px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                background: 'var(--bg-page)', border: '1px solid var(--border-color)',
-                color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600,
-                display: 'flex', alignItems: 'center', gap: '6px', width: '100%', justifyContent: 'center',
-              }}
-            >
-              View full branch history
-            </button>
-          </div>
-        ) : (
-          <>
-            {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
-              <NegotiationBanner
-                assignment={selectedPb.assignment}
-                onAccept={() => onAccept(selectedPb.assignment!.id, selectedPb.assignment!.proposedFee)}
-                onCounter={() => onCounter(selectedPb.assignment!)}
-                onDecline={() => onDecline(selectedPb.assignment!.id)}
-              />
-            )}
-
-            {/* Branch Header & SLA Controls Bar */}
-            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>MATCHING INSPECTOR</span>
-                  <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '1px' }}>{selectedPb.branch.name}</div>
-                </div>
-                <button onClick={onRefresh}
-                  className="btn btn-secondary" title="Refresh candidates"
-                  style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <RefreshCw size={11} /> Refresh
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                  <input type="checkbox" checked={showAllCandidates} onChange={(e) => onToggleShowAll(e.target.checked)} />
-                  Show Distant (&gt;700km)
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                  <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
-                  Min Radius Filter
-                </label>
-                {slaEnabled && (
-                  <select value={slaRadius} onChange={e => onSlaRadiusChange(Number(e.target.value))}
-                    style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none', cursor: 'pointer' }}>
-                    {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
-                  </select>
-                )}
-              </div>
-            </div>
-
-            {/* Scored Candidate Cards Container */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
-              {renderCandidatesList(horizontal)}
-            </div>
-          </>
-        )
-      ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-          👈 Select a branch from the left queue or click a map marker to inspect candidate matches.
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const PlanningWorkspace: React.FC = () => {
   const { toast } = useToast();
@@ -703,7 +297,18 @@ export const PlanningWorkspace: React.FC = () => {
   const [showNegotiationModal, setShowNegotiationModal] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [selectedCandidateForMap, setSelectedCandidateForMap] = useState<Candidate | null>(null);
-  const [negotiatingFee, setNegotiatingFee] = useState('1500');
+  // The server's quote for the currently selected candidate, so every fee figure on this
+  // page comes from one place instead of being recomputed inline in three of them.
+  const [feeQuote, setFeeQuote] = useState<FeeQuote | null>(null);
+  /** Failed day-plan legs, keyed by `clusterId:assayerId`, so they can be retried on their own. */
+  /** Branches ticked for bulk assignment. Distinct from `selectedBranchId`, which is the one
+      branch whose candidates are shown. */
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [bulkScheduledDate, setBulkScheduledDate] = useState('');
+  const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
+  const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
+  const [negotiatingFee, setNegotiatingFee] = useState('');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
@@ -915,18 +520,36 @@ export const PlanningWorkspace: React.FC = () => {
    * assignment carries a real proposed fee (summing back to the plan's estimatedTotalCost)
    * rather than 0 or a guess.
    */
-  const handleAssignDayPlan = async (cluster: BranchCluster, plan: DayPlanCandidate) => {
+  /**
+   * Assign a day plan's stops to one assayer.
+   *
+   * `onlyBranchIds` re-runs just the legs that failed last time. A day plan is a single
+   * physical route, so a partial failure used to leave the assayer with a broken day and ops
+   * with nothing but an error string naming the branches — every retry meant re-assigning the
+   * whole route and hitting "Branch Busy" on the legs that had already succeeded.
+   *
+   * No `proposedFee` is sent: the server prices each branch from the client's contracted rate
+   * card for that specific assayer and distance. This used to divide the plan's total by the
+   * branch count and send that as an override, which is how the day-planner's figures reached
+   * the database in place of the assign path's.
+   */
+  const handleAssignDayPlan = async (
+    cluster: BranchCluster,
+    plan: DayPlanCandidate,
+    onlyBranchIds?: string[],
+  ) => {
     const key = `${cluster.clusterId}:${plan.assayerId}`;
     setDayPlanAssigning(key);
-    const perBranchFee = Math.round(
-      (plan.estimatedBaseFee + plan.estimatedTravelFee) / Math.max(1, plan.totalBranches),
-    );
 
-    const results: { branchName: string; ok: boolean; error?: string }[] = [];
-    for (const stop of plan.stops) {
+    const stops = onlyBranchIds
+      ? plan.stops.filter((s) => onlyBranchIds.includes(s.branchId))
+      : plan.stops;
+
+    const results: { branchId: string; branchName: string; ok: boolean; error?: string }[] = [];
+    for (const stop of stops) {
       const branchMeta = cluster.branches.find((b) => b.branchId === stop.branchId);
       if (!branchMeta) {
-        results.push({ branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' });
+        results.push({ branchId: stop.branchId, branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' });
         continue;
       }
       try {
@@ -935,22 +558,38 @@ export const PlanningWorkspace: React.FC = () => {
           body: JSON.stringify({
             projectBranchId: branchMeta.id,
             assayerId: plan.assayerId,
-            proposedFee: perBranchFee,
             scheduledDate: dayPlanTargetDate,
             remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
           }),
         });
-        results.push({ branchName: stop.branchName, ok: true });
+        results.push({ branchId: stop.branchId, branchName: stop.branchName, ok: true });
       } catch (err: any) {
-        results.push({ branchName: stop.branchName, ok: false, error: err?.message || 'Failed' });
+        results.push({ branchId: stop.branchId, branchName: stop.branchName, ok: false, error: err?.message || 'Failed' });
       }
     }
 
     setDayPlanAssigning(null);
     const failed = results.filter((r) => !r.ok);
+
     if (failed.length === 0) {
-      setMessage({ type: 'success', text: `Assigned all ${results.length} branch(es) in ${cluster.clusterId} to ${plan.assayerName}.` });
+      setDayPlanFailures((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setMessage({
+        type: 'success',
+        text: onlyBranchIds
+          ? `Retry succeeded — all ${results.length} remaining branch(es) assigned to ${plan.assayerName}.`
+          : `Assigned all ${results.length} branch(es) in ${cluster.clusterId} to ${plan.assayerName}.`,
+      });
     } else {
+      // Held in state so the failures survive the next message and can be retried directly,
+      // rather than existing only inside a transient error string.
+      setDayPlanFailures((prev) => ({
+        ...prev,
+        [key]: failed.map((f) => ({ branchId: f.branchId, branchName: f.branchName, error: f.error || 'Failed' })),
+      }));
       setMessage({
         type: 'error',
         text: `${results.length - failed.length}/${results.length} branches assigned to ${plan.assayerName}. Failed: ${failed.map((f) => `${f.branchName} (${f.error})`).join('; ')}`,
@@ -958,6 +597,107 @@ export const PlanningWorkspace: React.FC = () => {
     }
     if (selectedProjectId) loadProjectBranches(selectedProjectId);
     loadDayPlans();
+  };
+
+  const toggleBulkSelect = (id: string) => {
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleBulkSelectAll = () => {
+    const selectable = filteredBranches.filter((b) => !b.assignment && b.status !== 'UNABLE_TO_COVER');
+    setBulkSelectedIds((prev) =>
+      selectable.length > 0 && selectable.every((b) => prev.has(b.id))
+        ? new Set()
+        : new Set(selectable.map((b) => b.id)),
+    );
+  };
+
+  /**
+   * Offer every ticked branch to one assayer.
+   *
+   * Each branch is still its own assignment — this is a batch of individual offers, not a
+   * routed day plan, so no travel is shared and the server prices each one independently
+   * against the assayer's real distance to that branch. Failures are collected rather than
+   * aborting the run: one "Branch Busy" collision shouldn't cost the other nine offers.
+   */
+  const handleBulkAssign = async (assayerId: string, assayerName: string) => {
+    const targets = filteredBranches.filter((b) => bulkSelectedIds.has(b.id));
+    if (targets.length === 0) return;
+
+    setBulkAssigning(true);
+    setBulkFailures([]);
+    const failures: Array<{ branchId: string; branchName: string; error: string }> = [];
+    let succeeded = 0;
+
+    for (const pb of targets) {
+      try {
+        await api.request('/assignments', {
+          method: 'POST',
+          body: JSON.stringify({
+            projectBranchId: pb.id,
+            assayerId,
+            scheduledDate: bulkScheduledDate || undefined,
+            remarks: `Bulk-assigned to ${assayerName} from the planning queue`,
+          }),
+        });
+        succeeded += 1;
+      } catch (err: any) {
+        failures.push({ branchId: pb.id, branchName: pb.branch?.name || pb.id, error: err?.message || 'Failed' });
+      }
+    }
+
+    setBulkAssigning(false);
+    setBulkFailures(failures);
+    // Only the branches that actually went through are cleared, so the selection still holds
+    // exactly what remains to be dealt with.
+    setBulkSelectedIds(new Set(failures.map((f) => f.branchId)));
+
+    setMessage(
+      failures.length === 0
+        ? { type: 'success', text: `Offered all ${succeeded} branch(es) to ${assayerName}.` }
+        : { type: 'error', text: `${succeeded}/${targets.length} offered to ${assayerName}. ${failures.length} failed — still selected for retry.` },
+    );
+    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+  };
+
+  /**
+   * Record that a branch cannot be staffed. Until now there was no way to say this: an
+   * unstaffable branch stayed in IMPORTED, indistinguishable from one nobody had looked at.
+   */
+  const handleMarkUnableToCover = async (projectBranchId: string, branchName: string) => {
+    const reason = window.prompt(
+      `Why can ${branchName} not be covered?\n\nThis is recorded against the branch and reported to the client, so be specific (e.g. "No certified assayer within 150km for the SLA window").`,
+    );
+    if (reason === null) return;
+    if (!reason.trim()) {
+      setMessage({ type: 'error', text: 'A reason is required to mark a branch unable to cover.' });
+      return;
+    }
+    try {
+      await api.request(`/projects/branches/${projectBranchId}/unable-to-cover`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      setMessage({ type: 'success', text: `${branchName} recorded as unable to cover.` });
+      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Could not record the coverage failure.' });
+    }
+  };
+
+  /** Put an uncoverable branch back into the planning pool. */
+  const handleReopenCoverage = async (projectBranchId: string, branchName: string) => {
+    try {
+      await api.request(`/projects/branches/${projectBranchId}/reopen-coverage`, { method: 'POST' });
+      setMessage({ type: 'success', text: `${branchName} returned to planning.` });
+      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Could not reopen this branch.' });
+    }
   };
 
   const loadCandidates = async (branchId: string) => {
@@ -1094,7 +834,9 @@ export const PlanningWorkspace: React.FC = () => {
   const handleOpenCounterProposal = (assignment: NonNullable<ProjectBranch['assignment']>) => {
     if (assignment.assayer) {
       setSelectedCandidate({ id: assignment.assayer.id, displayName: assignment.assayer.displayName } as any);
-      setNegotiatingFee(String(assignment.proposedFee || 1500));
+      // The fee already proposed on this assignment — no invented fallback. A blank field
+      // reads as "nothing proposed yet", where a hardcoded ₹1500 read as a real offer.
+      setNegotiatingFee(assignment.proposedFee != null ? String(assignment.proposedFee) : '');
       setShowNegotiationModal(true);
     }
   };
@@ -1148,6 +890,26 @@ export const PlanningWorkspace: React.FC = () => {
           {!slaEnabled && !showAllCandidates && candidates.length > 0 && (
             <button onClick={() => setShowAllCandidates(true)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '10px' }}>
               Show all ({candidates.length}) candidates
+            </button>
+          )}
+          {/* This is the moment ops actually learns a branch can't be staffed, so it's where
+              the decision belongs. Without it the only option was to leave the branch in
+              IMPORTED, where it looks identical to one nobody has opened yet — which is why
+              64 of 72 branches currently sit there with no way to tell the two apart. */}
+          {selectedPb && selectedPb.status !== 'UNABLE_TO_COVER' && (
+            <button
+              onClick={() => handleMarkUnableToCover(selectedPb.id, selectedPb.branch?.name || 'this branch')}
+              className="btn btn-secondary"
+              style={{ padding: '5px 10px', fontSize: '10.5px', fontWeight: 600, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
+              Mark unable to cover
+            </button>
+          )}
+          {selectedPb?.status === 'UNABLE_TO_COVER' && (
+            <button
+              onClick={() => handleReopenCoverage(selectedPb.id, selectedPb.branch?.name || 'this branch')}
+              className="btn btn-secondary"
+              style={{ padding: '5px 10px', fontSize: '10.5px', fontWeight: 600 }}>
+              Reopen for planning
             </button>
           )}
         </div>
@@ -1235,20 +997,28 @@ export const PlanningWorkspace: React.FC = () => {
                   setCommercialBaseFee(null);
                   setLoadingCommercial(true);
                   try {
-                    const profile = await api.request<{ baseFee: number } | null>(`/assayers/${c.id}/commercial/active`, { method: 'GET' });
-                    const baseFee = Number(profile?.baseFee ?? c.baseFee ?? 1200);
-                    const distanceKm = c.distanceKm || 0;
-                    const travelAllowance = Math.round(Math.max(0, distanceKm - 10) * 8);
-                    const recommendedFee = baseFee + travelAllowance;
-                    setCommercialBaseFee(baseFee);
-                    setNegotiatingFee(recommendedFee.toString());
+                    // Quoted by the server against the client's contracted rate card. This
+                    // used to recompute the fee here from a hardcoded ₹8/km and a ₹1200
+                    // fallback, which meant the recommended fee shown to ops could differ
+                    // from what the server actually stored on assign.
+                    const quote = await api.request<FeeQuote>('/pricing/quote', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        assayerId: c.id,
+                        projectId: selectedProjectId || undefined,
+                        distanceKm: c.distanceKm || 0,
+                      }),
+                    });
+                    setFeeQuote(quote);
+                    setCommercialBaseFee(Number(quote.baseFee));
+                    setNegotiatingFee(String(Math.round(Number(quote.total))));
                   } catch {
-                    const baseFee = Number(c.baseFee ?? 1200);
-                    const distanceKm = c.distanceKm || 0;
-                    const travelAllowance = Math.round(Math.max(0, distanceKm - 10) * 8);
-                    const recommendedFee = baseFee + travelAllowance;
-                    setCommercialBaseFee(baseFee);
-                    setNegotiatingFee(recommendedFee.toString());
+                    // No silent second formula: if the quote fails, show what we know rather
+                    // than inventing a number that the server would then reject or override.
+                    setFeeQuote(null);
+                    setCommercialBaseFee(null);
+                    setNegotiatingFee('');
+                    setMessage({ type: 'error', text: 'Could not retrieve the contracted fee for this assayer. Enter the agreed fee manually.' });
                   } finally {
                     setLoadingCommercial(false);
                     setShowNegotiationModal(true);
@@ -1286,7 +1056,15 @@ export const PlanningWorkspace: React.FC = () => {
                   <div><b>🗺️ Optimized Route Details:</b></div>
                   <div>• Distance: {optimizedSummary.totalDistanceKm} km</div>
                   <div>• Est. Travel Time: {optimizedSummary.totalDurationMinutes} minutes</div>
-                  <div>• Est. Travel Fee: ₹{(optimizedSummary.totalDistanceKm * 8).toFixed(0)} (₹8/km)</div>
+                  {/* Server-quoted, against this client's contracted rate. This line used to
+                      compute `distance * 8` inline — charging from the first kilometre, unlike
+                      every other fee path, which exempts the local-commute allowance. It could
+                      therefore show a travel fee that no part of the system would ever charge. */}
+                  <div>
+                    • Est. Travel Fee: {feeQuote
+                      ? `₹${feeQuote.travelFee} (₹${feeQuote.rates.travelFeePerKm}/km beyond ${feeQuote.rates.freeTravelAllowanceKm} km)`
+                      : '—'}
+                  </div>
                   <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Path covers multiple branch locations with TSP roundtrip routing optimization.</div>
                 </div>
               )}
@@ -1468,6 +1246,98 @@ export const PlanningWorkspace: React.FC = () => {
         </div>
       )}
 
+      {/* ── Bulk action bar ──
+          Rendered once here rather than per layout, so ticking branches behaves identically in
+          all three. Planning was strictly single-branch (`selectedBranchId` is one string), and
+          the only bulk path was the geographic Day Plan — which is the right tool for a routed
+          multi-branch day, but not for "offer these fourteen scattered branches to one person". */}
+      {bulkSelectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 16px', flexShrink: 0,
+          background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--accent)', flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent)' }}>
+            {bulkSelectedIds.size} branch{bulkSelectedIds.size === 1 ? '' : 'es'} selected
+          </span>
+
+          <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            Date
+            <input
+              type="date"
+              value={bulkScheduledDate}
+              onChange={(e) => setBulkScheduledDate(e.target.value)}
+              style={{ padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: '11px' }}
+            />
+          </label>
+
+          <button
+            onClick={() => selectedCandidate && handleBulkAssign(selectedCandidate.id, selectedCandidate.displayName)}
+            disabled={!selectedCandidate || bulkAssigning}
+            className="btn btn-primary"
+            style={{ padding: '5px 11px', fontSize: '11px', fontWeight: 700 }}
+            title={selectedCandidate
+              ? `Offer the selected branches to ${selectedCandidate.displayName}`
+              : 'Pick an assayer from the candidate list first'}>
+            {bulkAssigning
+              ? 'Offering…'
+              : selectedCandidate
+                ? `Offer all to ${selectedCandidate.displayName}`
+                : 'Pick an assayer to offer to'}
+          </button>
+
+          <button
+            onClick={async () => {
+              const reason = window.prompt(`Why can these ${bulkSelectedIds.size} branches not be covered?`);
+              if (reason === null) return;
+              if (!reason.trim()) {
+                setMessage({ type: 'error', text: 'A reason is required to mark branches unable to cover.' });
+                return;
+              }
+              const targets = filteredBranches.filter((b) => bulkSelectedIds.has(b.id));
+              let ok = 0;
+              const failed: string[] = [];
+              for (const pb of targets) {
+                try {
+                  await api.request(`/projects/branches/${pb.id}/unable-to-cover`, {
+                    method: 'POST',
+                    body: JSON.stringify({ reason: reason.trim() }),
+                  });
+                  ok += 1;
+                } catch { failed.push(pb.branch?.name || pb.id); }
+              }
+              setBulkSelectedIds(new Set());
+              setMessage(failed.length === 0
+                ? { type: 'success', text: `${ok} branch(es) recorded as unable to cover.` }
+                : { type: 'error', text: `${ok}/${targets.length} recorded. Failed: ${failed.join(', ')}` });
+              if (selectedProjectId) loadProjectBranches(selectedProjectId);
+            }}
+            disabled={bulkAssigning}
+            className="btn btn-secondary"
+            style={{ padding: '5px 11px', fontSize: '11px', fontWeight: 600, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
+            Mark unable to cover
+          </button>
+
+          <button onClick={() => { setBulkSelectedIds(new Set()); setBulkFailures([]); }}
+            className="btn btn-secondary" style={{ padding: '5px 11px', fontSize: '11px' }}>
+            Clear
+          </button>
+
+          {/* Suitability was scored against the focused branch only. Saying so matters: the
+              server re-checks every constraint per branch, so some offers may still bounce. */}
+          {selectedCandidate && (
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              Each branch is validated separately — distance, double-booking and holiday rules still apply.
+            </span>
+          )}
+
+          {bulkFailures.length > 0 && (
+            <span style={{ fontSize: '10.5px', color: 'var(--danger)', width: '100%' }}>
+              Still failing: {bulkFailures.map((f) => `${f.branchName} (${f.error})`).join('; ')}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Layout: 2-Column (Branch Queue + Assayer Recommendations Panel) ── */}
       {layout === 'two-col-branch-recom' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
@@ -1479,6 +1349,9 @@ export const PlanningWorkspace: React.FC = () => {
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
             onSearchTermChange={setSearchTerm}
+            bulkSelectedIds={bulkSelectedIds}
+            onToggleBulkSelect={toggleBulkSelect}
+            onToggleBulkSelectAll={toggleBulkSelectAll}
             width={340}
           />
 
@@ -1513,6 +1386,9 @@ export const PlanningWorkspace: React.FC = () => {
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
             onSearchTermChange={setSearchTerm}
+            bulkSelectedIds={bulkSelectedIds}
+            onToggleBulkSelect={toggleBulkSelect}
+            onToggleBulkSelectAll={toggleBulkSelectAll}
             width={340}
           />
 
@@ -1543,6 +1419,9 @@ export const PlanningWorkspace: React.FC = () => {
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
             onSearchTermChange={setSearchTerm}
+            bulkSelectedIds={bulkSelectedIds}
+            onToggleBulkSelect={toggleBulkSelect}
+            onToggleBulkSelectAll={toggleBulkSelectAll}
             width={280}
           />
 
@@ -1602,6 +1481,9 @@ export const PlanningWorkspace: React.FC = () => {
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
             onSearchTermChange={setSearchTerm}
+            bulkSelectedIds={bulkSelectedIds}
+            onToggleBulkSelect={toggleBulkSelect}
+            onToggleBulkSelectAll={toggleBulkSelectAll}
             width={320}
           />
 
@@ -2232,6 +2114,39 @@ export const PlanningWorkspace: React.FC = () => {
                                     </button>
                                   </div>
                                 </div>
+
+                                {/* A day plan is one physical route, so a half-assigned plan is a
+                                    broken day, not a partial success. The failed legs stay on
+                                    screen with their reasons and can be retried on their own —
+                                    re-running the whole plan would just collide with the legs
+                                    that already succeeded. */}
+                                {(dayPlanFailures[`${cluster.clusterId}:${plan.assayerId}`]?.length ?? 0) > 0 && (
+                                  <div style={{
+                                    marginBottom: '12px', padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                                    background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)',
+                                    display: 'flex', flexDirection: 'column', gap: '6px',
+                                  }}>
+                                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--danger)' }}>
+                                      {dayPlanFailures[`${cluster.clusterId}:${plan.assayerId}`].length} of {plan.totalBranches} branches could not be assigned
+                                    </div>
+                                    <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '10.5px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                      {dayPlanFailures[`${cluster.clusterId}:${plan.assayerId}`].map((f) => (
+                                        <li key={f.branchId}><b>{f.branchName}</b> — {f.error}</li>
+                                      ))}
+                                    </ul>
+                                    <button
+                                      onClick={() => handleAssignDayPlan(
+                                        cluster,
+                                        plan,
+                                        dayPlanFailures[`${cluster.clusterId}:${plan.assayerId}`].map((f) => f.branchId),
+                                      )}
+                                      disabled={dayPlanAssigning !== null}
+                                      className="btn btn-secondary"
+                                      style={{ padding: '5px 10px', fontSize: '10.5px', fontWeight: 700, alignSelf: 'flex-start' }}>
+                                      {dayPlanAssigning === `${cluster.clusterId}:${plan.assayerId}` ? 'Retrying…' : 'Retry failed branches'}
+                                    </button>
+                                  </div>
+                                )}
 
                                 {/* Metrics Grid */}
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>

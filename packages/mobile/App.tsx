@@ -3,7 +3,7 @@ import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, Re
 import * as DocumentPicker from 'expo-document-picker';
 import { registerRootComponent } from 'expo';
 import { AssayerAssignment, AppNotification } from './src/types/mobile-app';
-import { MobileApiService } from './src/services/api.service';
+import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import {
   registerForPushNotificationsAsync,
   setupNotificationListeners,
@@ -99,8 +99,11 @@ function AppMain() {
     state: '',
     district: '',
     pincode: '',
-    latitude: location?.latitude || 28.6315,
-    longitude: location?.longitude || 77.2167,
+    // Blank until the assayer's real address is geocoded or their device reports a fix.
+    // A New Delhi default here silently became the stored home location for workers who
+    // never edited the field, corrupting travel-distance and routing calculations.
+    latitude: location?.latitude ?? 0,
+    longitude: location?.longitude ?? 0,
     preferredRegions: '',
     preferredRadius: 10,
     languages: '',
@@ -298,14 +301,39 @@ function AppMain() {
   };
 
   const handleCheckIn = async (assignment: AssayerAssignment) => {
-    const lat = location?.latitude || assignment.latitude || 28.6315;
-    const lng = location?.longitude || assignment.longitude || 77.2167;
-    const res = await MobileApiService.checkInBranch(assignment.id, lat, lng);
+    /**
+     * Check-in is the record that proves an assayer physically stood inside the branch. It is
+     * evidence in a bank collateral audit.
+     *
+     * This previously fell back to `assignment.latitude` (the BRANCH's own coordinates — which
+     * would "prove" presence without the worker ever leaving home) and then to a hardcoded
+     * New Delhi point. Both produced a confident, entirely fabricated location that was
+     * indistinguishable from a genuine reading.
+     *
+     * A check-in without a real device fix is now refused. That is a worse experience and a
+     * far better record: the assayer is told exactly what to do, and nobody is ever falsely
+     * placed at — or falsely absent from — a branch.
+     */
+    let fix = location;
+    if (!fix) {
+      fix = await refreshLocation();
+    }
+
+    if (!fix) {
+      Alert.alert(
+        'Location needed to check in',
+        'We could not get your location. Turn on location for this app, step outside if you are indoors, then try again.',
+        [{ text: 'Try again', onPress: () => handleCheckIn(assignment) }, { text: 'Cancel', style: 'cancel' }],
+      );
+      return;
+    }
+
+    const res = await MobileApiService.checkInBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
     if (res.success) {
       await loadAssignments();
       Alert.alert('Checked In', `Checked in at ${assignment.branchName}`);
     } else {
-      Alert.alert('Error', res.error || 'Check-in failed');
+      Alert.alert('Could not check in', res.error || 'Check-in failed. Please try again.');
     }
   };
 
@@ -399,8 +427,13 @@ function AppMain() {
         <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
         <LoginScreen
           onLogin={async (u, p) => {
-            const finalU = (u || '').trim() || 'AS0127';
-            const finalP = (p || '').trim() || 'Password@123';
+            // An empty form is an empty form. This used to substitute a real assayer's
+            // credentials, so submitting a blank login signed you in as someone else.
+            const finalU = (u || '').trim();
+            const finalP = (p || '').trim();
+            if (!finalU || !finalP) {
+              return false;
+            }
             return await login(finalU, finalP);
           }}
           onVerifyIdentity={verifyIdentity}
@@ -557,7 +590,7 @@ function AppMain() {
             setScannerModalVisible(false);
             setActiveScannerAssignment(null);
           }}
-          onPdfGenerated={(pdfName, base64Pdf) => {
+          onPdfGenerated={async (baseName, pages, mimeType) => {
             const assignment = activeScannerAssignment;
             setScannerModalVisible(false);
             setActiveScannerAssignment(null);
@@ -565,21 +598,48 @@ function AppMain() {
               Alert.alert('Upload Failed', 'No assignment was selected for this upload.');
               return;
             }
-            Alert.alert('Scan Completed', `Document ${pdfName} captured. Uploading…`);
-            MobileApiService.uploadCompletedAuditPdf(
-              assignment.id,
-              pdfName,
-              { base64: base64Pdf },
-              assignment.id,
-            ).then((res) => {
-              if (res?.success) {
-                Alert.alert('Upload Complete', `${pdfName} was uploaded successfully.`);
-              } else {
-                Alert.alert('Upload Failed', res?.error || 'The document could not be uploaded.');
+            if (!pages?.length) {
+              Alert.alert('Nothing to upload', 'No pages were captured.');
+              return;
+            }
+
+            /**
+             * Uploads every captured page and reports honestly on partial failure.
+             *
+             * The old code uploaded one page and announced "uploaded successfully" regardless
+             * of how many were scanned. A partially-delivered evidence packet that reports
+             * complete is the worst outcome here — the desk has no way to know pages are
+             * missing, and the assayer has already left the branch.
+             */
+            const ext = mimeType === 'image/jpeg' ? 'jpg' : 'pdf';
+            const total = pages.length;
+            Alert.alert('Scan complete', `${total} page${total === 1 ? '' : 's'} captured. Uploading…`);
+
+            const failed: number[] = [];
+            for (const pg of pages) {
+              const name = total === 1 ? `${baseName}.${ext}` : `${baseName}_p${pg.pageNumber}of${total}.${ext}`;
+              try {
+                const res = await MobileApiService.uploadCompletedAuditPdf(
+                  assignment.id,
+                  name,
+                  { base64: pg.base64 },
+                  assignment.id,
+                );
+                if (!res?.success) failed.push(pg.pageNumber);
+              } catch {
+                failed.push(pg.pageNumber);
               }
-            }).catch(() => {
-              Alert.alert('Upload Failed', 'The document could not be uploaded. Please try again.');
-            });
+            }
+
+            if (failed.length === 0) {
+              Alert.alert('Upload complete', `All ${total} page${total === 1 ? '' : 's'} were uploaded.`);
+            } else {
+              Alert.alert(
+                'Some pages did not upload',
+                `${total - failed.length} of ${total} uploaded. Page${failed.length === 1 ? '' : 's'} ${failed.join(', ')} failed — please scan ${failed.length === 1 ? 'it' : 'them'} again before leaving the branch.`,
+              );
+            }
+            return;
           }}
         />
       )}
@@ -699,10 +759,10 @@ class AppErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#0A101C', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#14100C', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <StatusBar barStyle="light-content" />
           <View style={{ gap: 12, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color="#6366f1" />
+            <ActivityIndicator size="large" color="#FF6B00" />
             <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>FAPOMS Field Assayer</Text>
             <Text style={{ color: '#ef4444', textAlign: 'center', marginVertical: 10 }}>
               {String(this.state.error?.message || this.state.error || 'App encountered an error')}
@@ -717,6 +777,30 @@ class AppErrorBoundary extends React.Component<
 (AppErrorBoundary.prototype as any).isReactComponent = {};
 
 export default function App() {
+  /**
+   * The device's saved server address has to be applied before anything issues a request —
+   * AuthProvider restores the session on mount, so rendering it first would send that call to
+   * the build-time default and fail on any install pointed at a different backend. Reading a
+   * small file is fast; this gate is imperceptible in practice.
+   */
+  const [apiReady, setApiReady] = useState(false);
+
+  useEffect(() => {
+    initApiBaseUrl()
+      .catch(() => { /* falls back to the built-in default */ })
+      .finally(() => setApiReady(true));
+  }, []);
+
+  if (!apiReady) {
+    return (
+      <ThemeProvider>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#14100C' }}>
+          <ActivityIndicator color="#FF8534" />
+        </View>
+      </ThemeProvider>
+    );
+  }
+
   return (
     <ThemeProvider>
       <AppErrorBoundary>

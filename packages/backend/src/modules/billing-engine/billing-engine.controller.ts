@@ -182,6 +182,7 @@ export class BillingEngineController {
   }
 
   @Get('entries')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'List billing entries with filters, including client/project/assignment names' })
   async findEntries(
     @Query('clientId') clientId?: string,
@@ -196,6 +197,7 @@ export class BillingEngineController {
   }
 
   @Get('entries/:id')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get a billing entry' })
   async getEntry(@Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.service.getEntry(id) };
@@ -245,12 +247,14 @@ export class BillingEngineController {
   }
 
   @Get('invoices')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'List invoices' })
   async findInvoices(@Query('clientId') clientId?: string, @Query('projectId') projectId?: string, @Query('status') status?: InvoiceStatus) {
     return { success: true, data: await this.service.findInvoices({ clientId, projectId, status }) };
   }
 
   @Get('invoices/:id')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get an invoice with entries and payments' })
   async getInvoice(@Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.service.getInvoice(id) };
@@ -280,6 +284,7 @@ export class BillingEngineController {
   }
 
   @Get('payables')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'List assayer payables with assayer/project names' })
   async findPayables(@Query('assayerId') assayerId?: string, @Query('clientId') clientId?: string, @Query('status') status?: AssayerPayableStatus) {
     return { success: true, data: await this.service.findPayablesEnriched({ assayerId, clientId, status }) };
@@ -319,6 +324,7 @@ export class BillingEngineController {
   }
 
   @Get('conflicts')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'List conflicts' })
   async findConflicts(@Query('status') status?: BillingConflictStatus) {
     return { success: true, data: await this.service.findConflicts(status) };
@@ -333,6 +339,7 @@ export class BillingEngineController {
 
   // History
   @Get('history')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Billing history / audit trail' })
   async getHistory(
     @Query('clientId') clientId?: string,
@@ -346,6 +353,7 @@ export class BillingEngineController {
 
   // Dashboard & reports
   @Get('dashboard')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Billing dashboard summary (optionally per client)' })
   async dashboard(@Query('clientId') clientId?: string) {
     return { success: true, data: await this.service.dashboard(clientId) };
@@ -369,12 +377,14 @@ export class BillingEngineController {
   }
 
   @Get('clients')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Clients with billing activity, for scoping the billing workspace' })
   async clientsWithBilling() {
     return { success: true, data: await this.service.clientsWithBilling() };
   }
 
   @Get('reports/client/:clientId')
+  @Roles(...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Client → projects → assignments billing report with margin and ageing' })
   async clientReport(@Param('clientId', ParseUUIDPipe) clientId: string) {
     return { success: true, data: await this.service.clientReport(clientId) };

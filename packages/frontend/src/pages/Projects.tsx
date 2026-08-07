@@ -32,7 +32,7 @@ interface ProjectItem {
   createdAt: string;
   client?: { id: string; name: string; clientCode: string };
   /** Branch coverage, computed server-side in one grouped query. */
-  branchProgress?: { total: number; assigned: number; completed: number; uncovered: number };
+  branchProgress?: { total: number; assigned: number; completed: number; uncovered: number; unstaffed?: number };
 }
 
 interface ProjectDetail extends ProjectItem {
@@ -626,7 +626,7 @@ export const Projects: React.FC = () => {
               const a = document.createElement('a'); a.href = url; a.download = `projects_export_${new Date().toISOString().split('T')[0]}.csv`; a.click();
               URL.revokeObjectURL(url);
             } catch (e) { setMessage({ type: 'error', text: 'Export failed' }); }
-          }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
             <FileSpreadsheet size={15} /> Export
           </button>
           {canManage && (
@@ -777,7 +777,7 @@ export const Projects: React.FC = () => {
                           }
                           const pct = Math.round((bp.assigned / bp.total) * 100);
                           return (
-                            <div style={{ minWidth: '92px' }} title={`${bp.assigned} covered, ${bp.completed} done, ${bp.uncovered} unable to cover, of ${bp.total}`}>
+                            <div style={{ minWidth: '92px' }} title={`${bp.assigned} covered, ${bp.completed} done, ${bp.uncovered} unable to cover, ${bp.unstaffed ?? 0} still unstaffed, of ${bp.total}`}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
                                 <span>{bp.assigned}/{bp.total}</span>
                                 <span style={{ color: 'var(--text-muted)' }}>{pct}%</span>
@@ -785,6 +785,14 @@ export const Projects: React.FC = () => {
                               <div style={{ height: '4px', borderRadius: '2px', background: 'var(--border-hair)', overflow: 'hidden' }}>
                                 <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? 'var(--success)' : 'var(--accent)' }} />
                               </div>
+                              {/* The question ops actually opens this page with. A project can
+                                  sit at 11% covered with no visible signal that the other 89%
+                                  has had no decision taken on it at all. */}
+                              {(bp.unstaffed ?? 0) > 0 && (
+                                <div style={{ fontSize: '10px', color: 'var(--warning)', marginTop: '2px', fontWeight: 600 }}>
+                                  {bp.unstaffed} unstaffed
+                                </div>
+                              )}
                               {bp.uncovered > 0 && (
                                 <div style={{ fontSize: '10px', color: 'var(--danger)', marginTop: '2px' }}>{bp.uncovered} uncovered</div>
                               )}

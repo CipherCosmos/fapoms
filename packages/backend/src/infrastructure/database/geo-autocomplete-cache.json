@@ -1,0 +1,177 @@
+{
+  "560116": {
+    "time": 1785836301386,
+    "data": [
+      {
+        "label": "Somanahalli, Bengaluru Urban, Karnataka",
+        "type": "locality",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      },
+      {
+        "label": "Udayapura, Bengaluru Urban, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      },
+      {
+        "label": "Vasudevapura, Bengaluru Urban, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      },
+      {
+        "label": "Kaggalipura, Bengaluru Urban, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      },
+      {
+        "label": "Vaderahalli, Bengaluru South, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru South",
+        "pincode": "560116"
+      },
+      {
+        "label": "Sunkadakatte, Bengaluru Urban, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      },
+      {
+        "label": "Girigowdana Doddi, Bengaluru Urban, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      }
+    ]
+  },
+  "kaggalipura": {
+    "time": 1785836300596,
+    "data": [
+      {
+        "label": "Kaggalipura, Bengaluru Urban, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Bengaluru Urban",
+        "pincode": "560116"
+      },
+      {
+        "label": "Kaggalipura, Mysuru District, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Mysuru District",
+        "pincode": "571120"
+      },
+      {
+        "label": "Kaggalipura, Mandya, Karnataka",
+        "type": "city",
+        "state": "Karnataka",
+        "district": "Mandya",
+        "pincode": "571417"
+      }
+    ]
+  },
+  "kolhapur": {
+    "time": 1785836302207,
+    "data": [
+      {
+        "label": "Kolhapur, Karvir, Maharashtra",
+        "type": "city",
+        "state": "Maharashtra",
+        "district": "Karvir",
+        "pincode": "416003"
+      },
+      {
+        "label": "Kolhapur District, Maharashtra",
+        "type": "locality",
+        "state": "Maharashtra",
+        "district": "Kolhapur District",
+        "pincode": ""
+      },
+      {
+        "label": "Kolapur, Radhanpur Taluka, Gujarat",
+        "type": "city",
+        "state": "Gujarat",
+        "district": "Radhanpur Taluka",
+        "pincode": ""
+      },
+      {
+        "label": "Upsil, Pohri Tahsil, Madhya Pradesh",
+        "type": "city",
+        "state": "Madhya Pradesh",
+        "district": "Pohri Tahsil",
+        "pincode": ""
+      },
+      {
+        "label": "Kollapur, Kollapur mandal, Telangana",
+        "type": "city",
+        "state": "Telangana",
+        "district": "Kollapur mandal",
+        "pincode": "509102"
+      },
+      {
+        "label": "Kolsapur, Mulchera Taluka, Maharashtra",
+        "type": "city",
+        "state": "Maharashtra",
+        "district": "Mulchera Taluka",
+        "pincode": ""
+      },
+      {
+        "label": "Kondapur, Mirdoddi mandal, Telangana",
+        "type": "city",
+        "state": "Telangana",
+        "district": "Mirdoddi mandal",
+        "pincode": "502114"
+      },
+      {
+        "label": "Kohalpur, Banke, Lumbini Province",
+        "type": "city",
+        "state": "Lumbini Province",
+        "district": "Banke",
+        "pincode": "21900"
+      }
+    ]
+  },
+  "udhampur": {
+    "time": 1785836302920,
+    "data": [
+      {
+        "label": "Udhampur, Jammu and Kashmir",
+        "type": "city",
+        "state": "Jammu and Kashmir",
+        "district": "Udhampur",
+        "pincode": "182101"
+      },
+      {
+        "label": "Udhampura, Jhunjhunu, Rajasthan",
+        "type": "city",
+        "state": "Rajasthan",
+        "district": "Jhunjhunu",
+        "pincode": ""
+      },
+      {
+        "label": "Semra, Sheopur, Madhya Pradesh",
+        "type": "city",
+        "state": "Madhya Pradesh",
+        "district": "Sheopur",
+        "pincode": ""
+      }
+    ]
+  },
+  "c-1": {
+    "time": 1786110209920,
+    "data": []
+  },
+  "unknownstate": {
+    "time": 1786110209921,
+    "data": []
+  }
+}

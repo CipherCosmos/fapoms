@@ -4,6 +4,7 @@ import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, Divider, Icon, Section, StatStrip, StatTile, Tappable,
 } from '../components/ui/primitives';
+import { useLocation } from '../context/LocationContext';
 
 export interface ProfileDataState {
   phone: string;
@@ -81,6 +82,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const t = useTheme();
   const [tab, setTab] = useState<SectionKey>('PROFILE');
+  const { liveTrackingEnabled, liveTrackingReady, setLiveTrackingEnabled } = useLocation();
 
   const money = (n: number | string) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
@@ -327,6 +329,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </Card>
           </Section>
 
+          <Section title="Location & Recommendations">
+            <Card level={1}>
+              <Toggle
+                label="Share live location"
+                hint="Off by default. When on, your current position — not your home address — is used to rank you for nearby audits, like ride-hailing apps."
+                value={liveTrackingEnabled}
+                onChange={async (v) => { await setLiveTrackingEnabled(v); }}
+              />
+              {!liveTrackingReady && (
+                <AppText variant="caption" tone="faint" style={{ marginTop: 4 }}>Syncing your sharing preference…</AppText>
+              )}
+              {liveTrackingEnabled && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <Icon name="radio" size={13} color={t.colors.success} />
+                  <AppText variant="caption" tone="success">Live position active — recommendations use where you are now</AppText>
+                </View>
+              )}
+            </Card>
+          </Section>
+
           <Section title="Security & Biometrics">
             <Card level={1} style={{ gap: t.space.md }}>
               <Toggle
@@ -352,9 +374,18 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 <Icon name="ribbon-outline" size={28} color={t.colors.primary} />
                 <View style={{ flex: 1 }}>
                   <AppText variant="body" style={{ fontWeight: '700' }}>BIS / NABL Certified Assayer</AppText>
-                  <AppText variant="caption" tone="faint">License No: CERT-GOLD-AS0127-2026</AppText>
+                  {/*
+                    Shows the assayer's own licence number, or says it is missing.
+                    This was hardcoded to `CERT-GOLD-AS0127-2026` — one specific person's
+                    number, displayed to every user beside a green VERIFIED badge, while a
+                    real `licenseNo` field sat unused in profile state. Anyone without an
+                    accreditation on file appeared fully certified for bank collateral work.
+                  */}
+                  <AppText variant="caption" tone="faint">
+                    {profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
+                  </AppText>
                 </View>
-                <Badge label="VERIFIED" tone="success" />
+                {profile.licenseNo ? <Badge label="VERIFIED" tone="success" /> : <Badge label="NOT ON FILE" tone="warning" />}
               </View>
               <AppText variant="caption" tone="muted" style={{ marginTop: 4 }}>
                 Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits.

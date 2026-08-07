@@ -20,6 +20,7 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -97,6 +98,8 @@ const mockNotificationService = {
       save: jest.fn((arg) => Promise.resolve(arg)),
       getRepository: jest.fn().mockReturnValue({
         findOne: jest.fn(),
+        save: jest.fn((arg) => Promise.resolve(arg)),
+        create: jest.fn((arg) => arg),
       }),
     })),
     getRepository: jest.fn().mockReturnValue(mockUserRepoViaDataSource),
@@ -114,6 +117,22 @@ const mockNotificationService = {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AssignmentService,
+        {
+          provide: FeePolicyService,
+          useValue: {
+            quote: jest.fn().mockResolvedValue({
+              baseFee: 1200, branchCount: 1, baseComponent: 1200,
+              distanceKm: 0, chargeableKm: 0, travelFee: 0, total: 1200,
+              usedFallbackBaseFee: false,
+              rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
+            }),
+            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            ratesFromConfiguration: jest.fn().mockReturnValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1200, usedFallback: false }),
+            calculateTravelFee: jest.fn().mockReturnValue({ chargeableKm: 0, travelFee: 0 }),
+            resolveClientIdForProject: jest.fn().mockResolvedValue(null),
+          },
+        },
         { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
         { provide: getRepositoryToken(AssessmentEntity), useValue: { findOne: jest.fn(), save: jest.fn() } },
         { provide: ProjectQueryService, useValue: mockProjectQueryService },
@@ -384,6 +403,149 @@ const mockNotificationService = {
       });
 
       await expect(service.escalate('asn-1', 'ops-user-2')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('recordCheckIn — attendance evidence integrity', () => {
+    // Check-in is the record asserting a field worker physically stood inside a bank branch.
+    // It is evidence in a collateral audit, so each of these guards protects a real claim.
+
+    const acceptedAssignment = (over: any = {}) => ({
+      id: 'asn-1',
+      assayerId: 'assayer-1',
+      status: AssignmentStatus.ACCEPTED,
+      syncToken: null,
+      projectBranch: { branch: { latitude: '12.9716', longitude: '77.5946' } },
+      assessment: null,
+      ...over,
+    });
+
+    it('refuses a check-in from an assayer the assignment does not belong to', async () => {
+      // Previously any authenticated assayer could check in on ANY assignment id, recording
+      // attendance at a branch they were never assigned.
+      mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment());
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] });
+
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-2');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('NOT_YOUR_ASSIGNMENT');
+    });
+
+    it('refuses a check-in before the assignment has been accepted', async () => {
+      // Checking in straight from PENDING skipped acceptance entirely.
+      mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment({ status: AssignmentStatus.PENDING }));
+
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-1');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('INVALID_STATE_FOR_CHECK_IN');
+    });
+
+    it('lets an operations manager check in on an assayer behalf', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment());
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS_MANAGER' }] });
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'ops-1');
+
+      expect(res.success).toBe(true);
+    });
+
+    it('stores position in real columns and computes distance from the branch', async () => {
+      // This used to be concatenated into free-text `remarks`, making the single most
+      // important fact in the audit unqueryable and unusable as evidence.
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 12);
+
+      expect(assignment).toMatchObject({
+        checkInLatitude: 12.9716,
+        checkInLongitude: 77.5946,
+        checkInAccuracyMeters: 12,
+      });
+      expect(assignment.checkedInAt).toBeInstanceOf(Date);
+      // Same point as the branch => ~0 m away.
+      expect(assignment.checkInDistanceMeters).toBeLessThan(5);
+    });
+
+    it('records how far from the branch a distant check-in was, rather than hiding it', async () => {
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      // ~1,700 km away — the old New Delhi fallback would have looked exactly like this.
+      await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'assayer-1');
+
+      expect(assignment.checkInDistanceMeters).toBeGreaterThan(1_000_000);
+    });
+
+    it('leaves distance null when the branch itself has no coordinates', async () => {
+      const assignment = acceptedAssignment({ projectBranch: { branch: { latitude: null, longitude: null } } });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-1');
+
+      expect(assignment.checkInDistanceMeters).toBeNull();
+    });
+  });
+
+
+  describe('syncScheduleCompletion', () => {
+    /**
+     * The schedule row must be brought to COMPLETED through the caller's transaction manager.
+     * It used to be raw SQL on the DataSource, outside the transaction that saves the
+     * assignment and with failures swallowed — so a rollback left the schedule COMPLETED and
+     * the assignment not, with nothing reported.
+     */
+    const makeManager = (existing: any) => {
+      const repo = {
+        findOne: jest.fn().mockResolvedValue(existing),
+        save: jest.fn((arg: any) => Promise.resolve(arg)),
+        create: jest.fn((arg: any) => arg),
+      };
+      return { manager: { getRepository: jest.fn().mockReturnValue(repo) } as any, repo };
+    };
+
+    const assignment: any = {
+      id: 'asn-1', projectId: 'proj-1', assayerId: 'asr-1', scheduledDate: new Date('2026-06-01'),
+    };
+
+    it('completes the existing schedule through the transaction manager', async () => {
+      const { manager, repo } = makeManager({ id: 'sch-1', status: 'CONFIRMED', completedAt: null });
+      await (service as any).syncScheduleCompletion(assignment, 'user-1', manager);
+
+      expect(manager.getRepository).toHaveBeenCalled();
+      const saved = repo.save.mock.calls[0][0];
+      expect(saved.status).toBe('COMPLETED');
+      expect(saved.completedAt).toBeInstanceOf(Date);
+      expect(saved.updatedBy).toBe('user-1');
+    });
+
+    it('preserves an existing completedAt — the first completion is the real one', async () => {
+      const first = new Date('2026-05-01');
+      const { manager, repo } = makeManager({ id: 'sch-1', status: 'COMPLETED', completedAt: first });
+      await (service as any).syncScheduleCompletion(assignment, 'user-1', manager);
+      expect(repo.save.mock.calls[0][0].completedAt).toBe(first);
+    });
+
+    it('creates a schedule when the assignment was never scheduled through the calendar', async () => {
+      const { manager, repo } = makeManager(null);
+      await (service as any).syncScheduleCompletion(assignment, 'user-1', manager);
+
+      const created = repo.save.mock.calls[0][0];
+      expect(created).toMatchObject({
+        assignmentId: 'asn-1', projectId: 'proj-1', assayerId: 'asr-1', status: 'COMPLETED',
+      });
+    });
+
+    it('propagates a failure instead of swallowing it', async () => {
+      const { manager, repo } = makeManager({ id: 'sch-1', status: 'CONFIRMED', completedAt: null });
+      repo.save.mockRejectedValueOnce(new Error('db down'));
+      await expect((service as any).syncScheduleCompletion(assignment, 'user-1', manager)).rejects.toThrow('db down');
     });
   });
 });

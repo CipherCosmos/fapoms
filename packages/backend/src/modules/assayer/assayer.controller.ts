@@ -21,15 +21,16 @@ import {
   UseInterceptors,
   UploadedFile,
   Res,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID } from 'class-validator';
 
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
-import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf } from './assayer-visibility';
+import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
 const STAFF_ASSAYER_EDITORS: string[] = [
@@ -296,6 +297,19 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   eligibleClients?: string[];
 }
 
+export class UpdateLiveLocationDto {
+  @IsNumber()
+  latitude: number;
+
+  @IsNumber()
+  longitude: number;
+}
+
+export class UpdateLiveTrackingDto {
+  @IsNotEmpty()
+  enabled: boolean;
+}
+
 export class CreateWorkforceAttributeRequestDto {
   @IsString() @IsNotEmpty()
   type: string;
@@ -542,7 +556,37 @@ export class AssayerController {
   // Was @Public(): returns the full roster and, until the entity was changed, each
   // assayer's bcrypt hash — readable by anyone who could reach the API. The pre-login
   // identity check that needed it now uses POST /auth/verify-assayer.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER)
+  /**
+   * Read access matches who actually needs to identify a field worker, not who owns the record.
+   *
+   * READ_ONLY_AUDITOR was excluded, yet route-permissions grants it the Billing and Clients
+   * screens — both of which call this endpoint. A live probe of every role against every page
+   * they can open found exactly this: the auditor could open two pages that then 403'd,
+   * leaving an empty screen with nothing to do. An audit role that cannot see the workforce it
+   * is auditing is not a coherent position.
+   *
+   * The validation and data-entry roles are included for the same reason: they review an
+   * assayer's submitted work and raise clarifications addressed to that person, so they need
+   * to resolve who performed an audit.
+   *
+   * Widening this is safe because visibility is enforced at FIELD level, not endpoint level —
+   * `scopeAssayerForRoles` strips PAN, Aadhaar, date of birth, emergency contacts and banking
+   * details for everyone outside HR/administrators (Finance keeps banking, since they pay).
+   * Everyone added here receives the operational subset only.
+   */
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.HR_MANAGER,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.FINANCE_MANAGER,
+    SystemRole.READ_ONLY_AUDITOR,
+    SystemRole.VALIDATION_MANAGER,
+    SystemRole.VALIDATOR,
+    SystemRole.DATA_ENTRY_HEAD,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
   @Get()
   @ApiOperation({ summary: 'List all registered assayers' })
   async findAll(
@@ -631,6 +675,50 @@ export class AssayerController {
     };
   }
 
+  /**
+   * Live-location sharing (mobile). Updates the assayer's live position without
+   * touching their home address. Live coordinates only feed the recommendation
+   * engine when live sharing is also enabled. Self-only — an assayer can only
+   * update their own live position, never another assayer's.
+   */
+  @Put(':id/live-location')
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Update the authenticated assayer\'s live location (opt-in)' })
+  async updateLiveLocation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLiveLocationDto,
+    @Req() req: any,
+  ) {
+    if (req.user?.id !== id) {
+      throw new ForbiddenException('You may only update your own live location');
+    }
+    const assayer = await this.assayerService.updateLiveLocation(
+      id, dto.latitude, dto.longitude, req.user?.id ?? id,
+    );
+    return { success: true, data: assayer };
+  }
+
+  /**
+   * Toggle live-location sharing for the authenticated assayer. Off by default.
+   * Only assayers with this enabled are ranked by their live coordinate.
+   */
+  @Put(':id/live')
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Enable or disable the authenticated assayer\'s live-location sharing' })
+  async setLiveTracking(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLiveTrackingDto,
+    @Req() req: any,
+  ) {
+    if (req.user?.id !== id) {
+      throw new ForbiddenException('You may only change your own live-location sharing');
+    }
+    const assayer = await this.assayerService.setLiveTracking(
+      id, dto.enabled, req.user?.id ?? id,
+    );
+    return { success: true, data: assayer };
+  }
+
   @Delete(':id')
   @HttpCode(204)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
@@ -687,6 +775,7 @@ export class AssayerController {
   }
 
   @Get(':assayerId/commercial/active')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.FINANCE_MANAGER)
   @ApiOperation({ summary: 'Get currently active commercial profile for an assayer' })
   async getActiveCommercial(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -791,14 +880,14 @@ export class AssayerController {
   // Government Documents
   @Post(':assayerId/government-document')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
-  @RequirePermissions('assayer:create:organization')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Add a government document to an assayer' })
   async addGovernmentDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() dto: CreateGovernmentDocumentRequestDto,
     @Req() req: any,
   ) {
+    assertSelfOrPrivileged(req.user, assayerId, 'upload documents');
     const doc = await this.assayerService.addGovernmentDocument(assayerId, dto, req.user.id);
     return { success: true, data: doc };
   }
@@ -837,14 +926,14 @@ export class AssayerController {
   // Assayer Documents
   @Post(':assayerId/document')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
-  @RequirePermissions('assayer:create:organization')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Upload a new versioned document for an assayer' })
   async addAssayerDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() dto: CreateAssayerDocumentRequestDto,
     @Req() req: any,
   ) {
+    assertSelfOrPrivileged(req.user, assayerId, 'upload documents');
     const doc = await this.assayerService.addAssayerDocument(assayerId, dto, req.user.id);
     return { success: true, data: doc };
   }
@@ -952,6 +1041,7 @@ export class AssayerController {
 
   // Activity Timeline
   @Get(':assayerId/activity')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER)
   @ApiOperation({ summary: 'Get activity timeline for an assayer' })
   async getActivityTimeline(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1001,5 +1091,38 @@ export class AssayerController {
       data: result,
     };
   }
+
+  /**
+   * The assayer's own password change. `@AnyAuthenticated()` rather than `@Roles(ASSAYER)`
+   * so that the route is reachable by the principal it is about, whose token carries the
+   * synthetic ASSAYER role; the service verifies the current password before changing it.
+   */
+  @Post('me/change-password')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Change your own password (assayer)' })
+  async changeMyPassword(@Body() dto: { currentPassword: string; newPassword: string }, @Req() req: any) {
+    if (!dto?.currentPassword || !dto?.newPassword) {
+      throw new BadRequestException('Please enter your current password and your new password.');
+    }
+    await this.assayerService.changeOwnPassword(req.user.id, dto.currentPassword, dto.newPassword);
+    return { success: true, message: 'Your password has been changed.' };
+  }
+
+  /** HR/admin recovery path for an assayer who cannot sign in. */
+  @Post(':assayerId/reset-password')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @ApiOperation({ summary: "Reset an assayer's password (HR/admin)" })
+  async resetAssayerPassword(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Body() dto: { newPassword: string },
+    @Req() req: any,
+  ) {
+    if (!dto?.newPassword) {
+      throw new BadRequestException('A new password is required.');
+    }
+    await this.assayerService.resetPasswordByStaff(assayerId, dto.newPassword, req.user.id);
+    return { success: true, message: 'Password reset. Ask the assayer to sign in with it and change it.' };
+  }
+
 }
 

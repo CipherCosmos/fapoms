@@ -28,17 +28,20 @@ export const StatusBadge: React.FC<{
       title={title}
       className={className}
       style={{
-        padding: variant === 'tag' ? (size === 'sm' ? '3px 8px' : '4px 12px') : size === 'sm' ? '3px 10px' : '6px 12px',
-        borderRadius: variant === 'tag' ? '6px' : '10px',
-        fontSize: variant === 'tag' ? (size === 'sm' ? '11px' : '12px') : '11px',
-        fontWeight: variant === 'tag' ? 700 : 600,
+        padding: variant === 'tag' ? (size === 'sm' ? '4px 10px' : '6px 14px') : size === 'sm' ? '4px 12px' : '8px 16px',
+        borderRadius: variant === 'tag' ? '6px' : '12px',
+        fontSize: variant === 'tag' ? (size === 'sm' ? '11.5px' : '12.5px') : '12px',
+        fontWeight: 700,
+        minHeight: size === 'sm' ? '24px' : '30px',
         background: bg,
         color,
-        border: border ? `1px solid ${color}40` : 'none',
+        border: border ? `1.5px solid ${color}60` : '1px solid rgba(0,0,0,0.06)',
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '4px',
+        justifyContent: 'center',
+        gap: '5px',
         whiteSpace: 'nowrap',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
         ...style,
       }}
     >

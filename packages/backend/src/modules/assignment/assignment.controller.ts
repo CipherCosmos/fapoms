@@ -57,11 +57,43 @@ export class AssignmentController {
   @ApiOperation({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' })
   async checkIn(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
     const body = dto || {};
-    const lat = body.lat ?? body.latitude ?? 0;
-    const lng = body.lng ?? body.longitude ?? 0;
+
+    /**
+     * A check-in with no position is refused rather than recorded at (0, 0).
+     *
+     * This previously read `body.lat ?? body.latitude ?? 0`, so a request carrying no
+     * coordinates at all produced a *successful* check-in at latitude 0, longitude 0 — a point
+     * in the Gulf of Guinea. That is not a degraded record, it is a false one: the system
+     * would assert that a field worker was somewhere they have certainly never been, and the
+     * row is indistinguishable from a genuine reading.
+     *
+     * Since check-in is the evidence that an assayer physically attended a bank branch, a
+     * missing fix must fail loudly so the app can prompt the worker to enable location.
+     */
+    const rawLat = body.lat ?? body.latitude;
+    const rawLng = body.lng ?? body.longitude;
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+
+    if (rawLat === undefined || rawLat === null || rawLng === undefined || rawLng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new BadRequestException(
+        'Check-in needs your location. Turn on location for the app and try again.',
+      );
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      throw new BadRequestException('The location reported for this check-in is not a valid coordinate.');
+    }
+    // Exactly (0,0) is never a real Indian branch and is the classic "unset value" signature.
+    if (lat === 0 && lng === 0) {
+      throw new BadRequestException(
+        'Your device did not report a real location. Step outside if you are indoors, then try again.',
+      );
+    }
+
+    const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
     const userId = req.user.id;
 
-    const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId);
+    const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy);
     if (!result.success) {
       return {
         success: false,
@@ -80,6 +112,7 @@ export class AssignmentController {
   }
 
   @Post()
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Create a new assignment in CREATED status' })
   async create(@Body() dto: CreateAssignmentDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
@@ -127,6 +160,7 @@ export class AssignmentController {
   }
 
   @Get('dashboard/summary')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get assignment status and SLA statistics summary' })
   async getDashboardSummary() {
     const summary = await this.assignmentService.getDashboardSummary();
@@ -137,6 +171,7 @@ export class AssignmentController {
   }
 
   @Get(':id')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const assignment = await this.assignmentService.findOne(id);
@@ -147,6 +182,7 @@ export class AssignmentController {
   }
 
   @Put(':id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Update assignment details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -162,6 +198,7 @@ export class AssignmentController {
   }
 
   @Post(':id/transition')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Transition assignment status' })
   async transition(
     @Param('id') id: string,
@@ -174,6 +211,35 @@ export class AssignmentController {
       throw new BadRequestException('targetStatus is required for assignment transition');
     }
     const userId = req.user.id;
+
+    /**
+     * An assayer may only drive their OWN assignment, and only through the transitions that
+     * are theirs to make.
+     *
+     * There was no ownership check here at all. Any authenticated assayer could POST to any
+     * assignment id and: reject someone else's offer (which resets the branch to
+     * CANDIDATE_SEARCH and frees it), accept work assigned to a colleague, or — worst —
+     * set the agreed fee via a counter-offer, which feeds straight into billing. Cancelling
+     * and completing are back-office decisions and were reachable by the field app too.
+     */
+    const callerRoles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
+
+    if (callerIsAssayer) {
+      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'COUNTER_OFFER', 'NEGOTIATION', 'PENDING'];
+      if (!ASSAYER_TRANSITIONS.includes(targetStatus)) {
+        throw new ForbiddenException(
+          'Cancelling or completing an assignment is done by the operations team, not from the field app.',
+        );
+      }
+      const owned = await this.assignmentService.findOne(id);
+      if (!owned || owned.assayerId !== userId) {
+        throw new ForbiddenException('You can only act on an assignment that is assigned to you.');
+      }
+    }
+
     let assignment: any;
     if (targetStatus === 'COUNTER_OFFER' || targetStatus === 'NEGOTIATION' || (targetStatus === 'PENDING' && (body.counterFee !== undefined || body.fee !== undefined || body.proposedFee !== undefined))) {
       const feeVal = body.counterFee ?? body.fee ?? body.proposedFee;
@@ -186,9 +252,19 @@ export class AssignmentController {
     } else if (targetStatus === 'REJECTED') {
       assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
     } else if (targetStatus === 'CHECKED_IN') {
-      const lat = Number(body.lat || body.latitude || 28.6315);
-      const lng = Number(body.lng || body.longitude || 77.2167);
-      const checkInRes = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId);
+      // Second check-in path. The dedicated POST :id/check-in route validated coordinates, but
+      // this one still defaulted to New Delhi (28.6315, 77.2167) — so the same fabricated
+      // attendance record was reachable, just by a different URL. Same rule applies here:
+      // no real fix, no check-in.
+      const rawLat = body.lat ?? body.latitude;
+      const rawLng = body.lng ?? body.longitude;
+      const lat = Number(rawLat);
+      const lng = Number(rawLng);
+      if (rawLat == null || rawLng == null || !Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) {
+        throw new BadRequestException('Check-in needs your location. Turn on location for the app and try again.');
+      }
+      const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
+      const checkInRes = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy);
       assignment = checkInRes.assignment || (await this.assignmentService.findOne(id));
     } else if (targetStatus === 'CANCELLED') {
       assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);
@@ -204,6 +280,7 @@ export class AssignmentController {
   }
 
   @Post(':id/escalate')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Flag an assignment as urgent (sets priority to CRITICAL) and notify the assigning user' })
   async escalate(
     @Param('id', ParseUUIDPipe) id: string,
@@ -219,6 +296,7 @@ export class AssignmentController {
   }
 
   @Get(':id/timeline')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get unified activity timeline for an assignment' })
   async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
     const timeline = await this.assignmentService.getTimeline(id);

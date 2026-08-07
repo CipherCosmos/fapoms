@@ -13,7 +13,7 @@ export interface ThemeMeta {
 
 export const THEMES: ThemeMeta[] = [
   // Light
-  { id: 'gold', label: 'Sumeru Gold', group: 'light', description: 'Warm cream & gold — the signature look.', swatch: ['#211A14', '#FAF6EE', '#97681A'] },
+  { id: 'gold', label: 'Sumeru Flame', group: 'light', description: 'Warm white & flame orange — the brand look.', swatch: ['#1C1207', '#FFFAF5', '#C2410C'] },
   { id: 'paper', label: 'Pure Paper', group: 'light', description: 'Cool neutral white — clean & minimal.', swatch: ['#1B2430', '#F6F7F9', '#8A6416'] },
   { id: 'sepia', label: 'Desert Ink', group: 'light', description: 'High-contrast warm — easy on the eyes.', swatch: ['#1F160B', '#FBF6ED', '#7A4E0A'] },
   { id: 'snow', label: 'Snow', group: 'light', description: 'Pure white & black — bold monochrome.', swatch: ['#111113', '#FFFFFF', '#111113'] },
@@ -21,7 +21,7 @@ export const THEMES: ThemeMeta[] = [
   { id: 'rose-quartz', label: 'Rose Quartz', group: 'light', description: 'Warm blush & champagne gold.', swatch: ['#2D1B22', '#FFFBF9', '#E11D48'] },
 
   // Dark
-  { id: 'noir', label: 'Sumeru Noir', group: 'dark', description: 'Warm charcoal & gold — the signature dark.', swatch: ['#F3EEE4', '#161210', '#D8AE47'] },
+  { id: 'noir', label: 'Sumeru Flame Dark', group: 'dark', description: 'Warm near-black & flame orange — the brand dark.', swatch: ['#F7EFE7', '#14100C', '#FF8534'] },
   { id: 'black-gold', label: 'Black Gold', group: 'dark', description: 'True black & gold — premium contrast.', swatch: ['#F5F3EE', '#050505', '#D8AE47'] },
   { id: 'black-white', label: 'Black & White', group: 'dark', description: 'Pure monochrome — maximum clarity.', swatch: ['#FFFFFF', '#000000', '#FFFFFF'] },
   { id: 'slate', label: 'Cool Slate', group: 'dark', description: 'Neutral graphite — modern & restrained.', swatch: ['#EDEFF3', '#14161A', '#D9B25A'] },
@@ -43,7 +43,7 @@ export const DEFAULT_THEME = 'gold';
 
 /** Bases a custom theme can be built upon (one per light/dark/glass). */
 export const CUSTOM_BASES: ThemeMeta[] = [
-  { id: 'gold', label: 'Light base', group: 'light', description: 'Warm light surfaces', swatch: ['#211A14', '#FAF6EE', '#97681A'] },
+  { id: 'gold', label: 'Light base', group: 'light', description: 'Warm light surfaces', swatch: ['#1C1207', '#FFFAF5', '#C2410C'] },
   { id: 'noir', label: 'Dark base', group: 'dark', description: 'Warm dark surfaces', swatch: ['#F3EEE4', '#161210', '#D8AE47'] },
   { id: 'glass-light', label: 'Glass light', group: 'glass', description: 'Translucent light panels', swatch: ['#2A2A35', '#EFE9DD', '#7A5A14'] },
   { id: 'glass-dark', label: 'Glass dark', group: 'glass', description: 'Translucent dark panels', swatch: ['#F2EFF7', '#14121A', '#D9B25A'] },
@@ -51,6 +51,7 @@ export const CUSTOM_BASES: ThemeMeta[] = [
 
 /** Preset accent colors users can pick from (plus free-form hex input). */
 export const ACCENTS: { id: string; label: string; hex: string }[] = [
+  { id: 'flame', label: 'Sumeru Flame', hex: '#FF6B00' },
   { id: 'gold', label: 'Gold', hex: '#D8AE47' },
   { id: 'blue', label: 'Blue', hex: '#3B82F6' },
   { id: 'green', label: 'Green', hex: '#22A06B' },

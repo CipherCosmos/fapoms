@@ -11,6 +11,7 @@ import { RoutingService } from '../geo/routing.provider';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import { AssayerService } from '../assayer/assayer.service';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 /**
  * Covers the rules that decide whether a day is worth buying: how a branch's workload is
@@ -45,6 +46,22 @@ describe('DayPlannerService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DayPlannerService,
+        {
+          provide: FeePolicyService,
+          useValue: {
+            quote: jest.fn().mockResolvedValue({
+              baseFee: 1200, branchCount: 1, baseComponent: 1200,
+              distanceKm: 0, chargeableKm: 0, travelFee: 0, total: 1200,
+              usedFallbackBaseFee: false,
+              rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
+            }),
+            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            ratesFromConfiguration: jest.fn().mockReturnValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1200, usedFallback: false }),
+            calculateTravelFee: jest.fn().mockReturnValue({ chargeableKm: 0, travelFee: 0 }),
+            resolveClientIdForProject: jest.fn().mockResolvedValue(null),
+          },
+        },
         { provide: getRepositoryToken(ProjectBranchEntity), useValue: mockProjectBranchRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: { findOne: jest.fn().mockResolvedValue(PROJECT) } },
         { provide: getRepositoryToken(BranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },

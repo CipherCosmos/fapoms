@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsUUID, IsDateString } from 'class-validator';
 import { SchedulingService, CreateScheduleDto, UpdateScheduleDto } from './scheduling.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
 
 class CreateScheduleRequestDto implements CreateScheduleDto {
@@ -110,6 +111,7 @@ export class SchedulingController {
   }
 
   @Get('assayer-workload')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get number of confirmed/tentative schedules for an assayer around a date' })
   async getAssayerWorkload(
     @Query('assayerId') assayerId: string,
@@ -128,6 +130,7 @@ export class SchedulingController {
   }
 
   @Get(':id/timeline')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get unified activity timeline for a schedule' })
   async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
     const timeline = await this.schedulingService.getTimeline(id);

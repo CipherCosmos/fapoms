@@ -2,23 +2,51 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
 import { AssayerAssignment, AppNotification } from '../types/mobile-app';
+import {
+  getDefaultServerUrl,
+  loadStoredServerUrl,
+  saveServerUrl,
+  clearServerUrl,
+  normaliseServerUrl,
+} from './server-config';
 
-const getHostAddress = () => {
-  const envUrl = process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiUrl;
-  if (envUrl) {
-    return envUrl.endsWith('/api/v1') ? envUrl : `${envUrl.replace(/\/$/, '')}/api/v1`;
-  }
-  if (__DEV__) {
-    const hostUri = Constants.expoConfig?.hostUri;
-    if (hostUri) {
-      const ip = hostUri.split(':')[0];
-      return `http://${ip}:3000/api/v1`;
-    }
-  }
-  return Platform.OS === 'android' ? 'http://10.0.2.2:3000/api/v1' : 'http://localhost:3000/api/v1';
-};
+/**
+ * Mutable, because the server address is now a device setting rather than a build-time
+ * constant. Every call site below reads it inside a function body, so they all pick up a
+ * change immediately. See services/server-config.ts for why this had to become configurable:
+ * the old fallback (`10.0.2.2`) is an emulator-only alias that does not resolve on a real
+ * phone, and the port was hardcoded in three places.
+ */
+let API_BASE_URL = getDefaultServerUrl();
 
-const API_BASE_URL = getHostAddress();
+/**
+ * Apply any address the operator saved on this device. Call once during startup, before the
+ * first request — until it resolves, the build-time default is used.
+ */
+export async function initApiBaseUrl(): Promise<string> {
+  const stored = await loadStoredServerUrl();
+  if (stored) API_BASE_URL = stored;
+  return API_BASE_URL;
+}
+
+/** Point this install at a different backend, persisting the choice. */
+export async function setApiBaseUrl(rawUrl: string): Promise<string> {
+  const normalised = normaliseServerUrl(rawUrl);
+  await saveServerUrl(normalised);
+  API_BASE_URL = normalised;
+  return normalised;
+}
+
+/** Forget the override and fall back to the built-in default. */
+export async function resetApiBaseUrl(): Promise<string> {
+  await clearServerUrl();
+  API_BASE_URL = getDefaultServerUrl();
+  return API_BASE_URL;
+}
+
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
 
 const BACKEND_TO_MOBILE_STATUS: Record<string, string> = {
   PENDING: 'PENDING',
@@ -57,6 +85,21 @@ export class MobileApiService {
   static getApiOrigin(): string {
     // API_BASE_URL is like http://localhost:3000/api/v1 — strip /api/v1 suffix
     return API_BASE_URL.replace(/\/api\/v1$/, '');
+  }
+
+  /** Resolves a relative attachment URL to a full authenticated URL carrying the auth token */
+  static resolveAttachmentUrl(url: string | null | undefined): string {
+    if (!url) return '';
+    if (url.startsWith('data:')) return url;
+    let fullUrl = url;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      fullUrl = `${this.getApiOrigin()}${url.startsWith('/') ? '' : '/'}${url}`;
+    }
+    if (this.authToken && !fullUrl.includes('token=')) {
+      const separator = fullUrl.includes('?') ? '&' : '?';
+      fullUrl = `${fullUrl}${separator}token=${encodeURIComponent(this.authToken)}`;
+    }
+    return fullUrl;
   }
 
   static setAuthToken(token: string, userId?: string, userName?: string) {
@@ -352,6 +395,13 @@ export class MobileApiService {
     }
   }
 
+  /** Returns the authenticated assayer's own profile (used to sync live-sharing state). */
+  static async getSelfProfile(): Promise<{ success: boolean; data?: any; error?: string }> {
+    const id = this.currentUserId;
+    if (!id) return { success: false, error: 'Not authenticated' };
+    return this.getAssayerProfile(id);
+  }
+
   static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/profile`, {
@@ -526,10 +576,21 @@ export class MobileApiService {
     return response.ok;
   }
 
-  static async checkInBranch(assignmentId: string, lat: number, lng: number, syncToken?: string): Promise<{ success: boolean; error?: string }> {
+  /**
+   * `accuracy` is the GPS uncertainty radius in metres, sent so the server can record how
+   * trustworthy the fix was. A check-in accurate to 8 m and one accurate to 2 km are very
+   * different pieces of evidence, and without this they were indistinguishable.
+   */
+  static async checkInBranch(
+    assignmentId: string,
+    lat: number,
+    lng: number,
+    accuracy?: number,
+    syncToken?: string,
+  ): Promise<{ success: boolean; error?: string }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-in`, {
       method: 'POST',
-      body: JSON.stringify({ lat, lng, syncToken, timestamp: new Date().toISOString() }),
+      body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
     });
     const resData = await response.json().catch(() => ({}));
     return {
@@ -538,17 +599,66 @@ export class MobileApiService {
     };
   }
 
-  static async updateAssayerLocation(lat: number, lng: number): Promise<boolean> {
+  static async updateLiveLocation(lat: number, lng: number): Promise<boolean> {
     const id = this.currentUserId;
     if (!id) return false;
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}`, {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/live-location`, {
         method: 'PUT',
         body: JSON.stringify({ latitude: lat, longitude: lng }),
       });
       return response.ok;
     } catch {
       return false;
+    }
+  }
+
+  /** Turns live-location sharing on/off for the current assayer (default OFF). */
+  static async setLiveTracking(enabled: boolean): Promise<boolean> {
+    const id = this.currentUserId;
+    if (!id) return false;
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/live`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Uploads an assayer government identity document (Aadhaar, PAN, Driving Licence)
+   * during self-onboarding.
+   */
+  static async uploadGovernmentDocument(
+    documentType: string,
+    documentNumber: string,
+    expiryDate?: string,
+    filePaths?: string[],
+    remarks?: string,
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const id = this.currentUserId;
+    if (!id) return { success: false, error: 'Not authenticated' };
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/government-document`, {
+        method: 'POST',
+        body: JSON.stringify({
+          documentType,
+          documentNumber,
+          expiryDate,
+          filePaths: filePaths || [],
+          remarks,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success !== false) {
+        return { success: true, data: data.data };
+      }
+      return { success: false, error: data.message || 'Upload failed' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Network error' };
     }
   }
 
@@ -660,7 +770,13 @@ export class MobileApiService {
       httpMethod: 'POST',
       uploadType: FileSystem.FileSystemUploadType.MULTIPART,
       fieldName: 'file',
-      mimeType: 'application/pdf',
+      // Derived from the filename rather than asserted. This was hardcoded to
+      // 'application/pdf', so ML Kit's JPEG captures were stored as PDFs — the live document
+      // table contains rows named *.pdf with mime_type application/pdf that no PDF reader can
+      // open, because the bytes are JPEG.
+      mimeType: /\.(jpe?g)$/i.test(fileName) ? 'image/jpeg'
+        : /\.png$/i.test(fileName) ? 'image/png'
+        : 'application/pdf',
       parameters: { fileName },
       headers: this.getHeaders() as Record<string, string>,
     });

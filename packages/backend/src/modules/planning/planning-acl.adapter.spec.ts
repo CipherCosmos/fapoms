@@ -20,7 +20,11 @@ describe('PlanningAntiCorruptionLayer', () => {
   const mockBranchRepo = {};
   const mockAssayerRepo = {
     find: jest.fn().mockResolvedValue([
-      { id: 'as-1', displayName: 'Vijay Shankar', status: 'ACTIVE', latitude: 19.0, longitude: 72.0, skills: ['Gold'] },
+      // The adapter reads `effectiveLatitude`/`effectiveLongitude` — getters on AssayerEntity
+      // that prefer a live GPS fix over the registered home location. This fixture is a plain
+      // object, not an entity instance, so the getters don't come along with it and both must
+      // be set explicitly or the mapped location silently reads 0,0.
+      { id: 'as-1', displayName: 'Vijay Shankar', status: 'ACTIVE', latitude: 19.0, longitude: 72.0, effectiveLatitude: 19.0, effectiveLongitude: 72.0, skills: ['Gold'] },
     ]),
   };
   const mockAssignmentRepo = {};

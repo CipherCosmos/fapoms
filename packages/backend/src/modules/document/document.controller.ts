@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
@@ -6,11 +6,12 @@ import * as xlsx from 'xlsx';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DocumentService } from './document.service';
-import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
+import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, DocumentStatus, DocumentType, AssessmentStatus, AssignmentStatus } from '@fapoms/shared';
 
 import { ValidationService } from '../validation/validation.service';
@@ -23,9 +24,11 @@ import { AssignmentService } from '../assignment/assignment.service';
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('documents')
 export class DocumentController {
+  private readonly logger = new Logger(DocumentController.name);
+
   constructor(
     private readonly documentService: DocumentService,
-    private readonly localStorageService: LocalStorageService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly ocrProcessingService: OcrProcessingService,
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
@@ -51,7 +54,7 @@ export class DocumentController {
     // report how many of its branches have had their PDF produced.
     @Query('customerMasterVersionId') customerMasterVersionId?: string,
   ) {
-    const savedPath = await this.localStorageService.saveFile(file.originalname, file.buffer);
+    const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
     const validTypes = Object.values(DocumentType) as string[];
     const targetType = validTypes.includes(type as any) ? type : DocumentType.PRE_FIELD_AUDIT_PDF;
 
@@ -82,6 +85,8 @@ export class DocumentController {
       }
     }
 
+    await this.assertMaySubmitReturnFor(req.user, body.assignmentId);
+
     const fileName = body.fileName || `audited_report_${Date.now()}.pdf`;
 
     // The audited return PDF is the assayer's actual field paperwork — the artifact the whole
@@ -99,7 +104,7 @@ export class DocumentController {
       throw new BadRequestException('Uploaded file is empty.');
     }
 
-    const savedFilePath = await this.localStorageService.saveFile(fileName, buffer);
+    const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
 
     const doc = await this.documentService.create({
       assessmentId: targetId,
@@ -159,6 +164,8 @@ export class DocumentController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file content received.');
     }
+    await this.assertMaySubmitReturnFor(req.user, assignmentId);
+
     let targetId = assessmentId || assignmentId;
     if (assignmentId && !assessmentId) {
       const assignment = await this.assignmentRepository
@@ -167,7 +174,7 @@ export class DocumentController {
       if (assignment?.projectBranchId) targetId = assignment.projectBranchId;
     }
 
-    const savedFilePath = await this.localStorageService.saveFile(file.originalname, file.buffer);
+    const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype || 'application/pdf');
     const doc = await this.documentService.create(
       {
         assessmentId: targetId,
@@ -189,6 +196,43 @@ export class DocumentController {
     await this.completeAssignmentForReturn(doc, assignmentId, targetId, req.user.id, file.originalname);
 
     return { success: true, data: doc };
+  }
+
+  /**
+   * An assayer may only submit the audited return for an assignment that is actually theirs.
+   *
+   * Both mobile upload endpoints took `assignmentId` straight from the request and passed it
+   * to `completeAssignmentForReturn`, which cascades into the project-branch state machine,
+   * the schedule, the assessment status, the validation case, the audit trail and the
+   * assayer's own completion statistics. With only `@Roles(ASSAYER, ...)` on the route and no
+   * ownership check, any authenticated assayer could submit a PDF against any other assayer's
+   * assignment id and have that branch recorded as audited — a falsified collateral-audit
+   * record for a branch nobody visited, delivered to the bank as genuine.
+   *
+   * Staff roles are deliberately still allowed through so back-office can upload on an
+   * assayer's behalf (a real workflow when a scan arrives by email); `createdBy` on the
+   * document preserves who actually did it.
+   */
+  private async assertMaySubmitReturnFor(user: any, assignmentId?: string): Promise<void> {
+    const roles: string[] = (user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
+    if (!roles.includes(SystemRole.ASSAYER)) return; // staff path, already role-gated
+    if (!assignmentId) {
+      throw new BadRequestException('An assignment must be specified when submitting an audited return.');
+    }
+
+    const assignment = await this.assignmentRepository
+      .findOne({ where: { id: assignmentId } })
+      .catch(() => null);
+
+    if (!assignment) {
+      throw new NotFoundException('That assignment could not be found.');
+    }
+    if (assignment.assayerId !== user?.id) {
+      this.logger.warn(
+        `Assayer ${user?.id} attempted to submit an audited return for assignment ${assignmentId}, which belongs to ${assignment.assayerId}.`,
+      );
+      throw new ForbiddenException('You can only submit paperwork for an assignment that is assigned to you.');
+    }
   }
 
   // ── Resumable chunked upload ───────────────────────────────────────────────────
@@ -213,7 +257,7 @@ export class DocumentController {
     if (!body?.assessmentId || !body?.fileName) {
       throw new BadRequestException('assessmentId and fileName are required.');
     }
-    const session = this.chunkedUploadService.createSession({
+    const session = await this.chunkedUploadService.createSession({
       assessmentId: body.assessmentId,
       fileName: body.fileName,
       fileSize: Number(body.fileSize),
@@ -238,8 +282,8 @@ export class DocumentController {
   )
   @ApiOperation({ summary: 'Resume: report which chunks the server already holds' })
   async getUploadSession(@Param('uploadId') uploadId: string) {
-    const session = this.chunkedUploadService.getSession(uploadId);
-    const received = this.chunkedUploadService.receivedChunks(uploadId);
+    const session = await this.chunkedUploadService.getSession(uploadId);
+    const received = await this.chunkedUploadService.receivedChunks(uploadId);
     const missing: number[] = [];
     for (let i = 0; i < session.totalChunks; i++) if (!received.includes(i)) missing.push(i);
     return {
@@ -273,8 +317,26 @@ export class DocumentController {
     if (!chunk?.buffer) {
       throw new BadRequestException('No chunk content received.');
     }
-    const progress = this.chunkedUploadService.saveChunk(uploadId, Number(index), chunk.buffer);
+    const progress = await this.chunkedUploadService.saveChunk(uploadId, Number(index), chunk.buffer);
     return { success: true, data: { ...progress, index: Number(index) } };
+  }
+
+  @Get('upload/session/:uploadId/chunk/:index/presigned-url')
+  @Roles(
+    SystemRole.ASSAYER,
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: 'Get a direct pre-signed PUT URL for uploading one chunk directly to MinIO (low 2G/3G optimization)' })
+  async getChunkPresignedUrl(
+    @Param('uploadId') uploadId: string,
+    @Param('index') index: string,
+  ) {
+    const data = await this.chunkedUploadService.getPresignedPartUrl(uploadId, Number(index));
+    return { success: true, data: { ...data, index: Number(index) } };
   }
 
   @Post('upload/session/:uploadId/complete')
@@ -292,27 +354,29 @@ export class DocumentController {
     @Body() body: { type?: DocumentType; assignmentId?: string },
     @Req() req: any,
   ) {
-    const { buffer, session } = this.chunkedUploadService.assemble(uploadId);
     const type = body?.type && (Object.values(DocumentType) as string[]).includes(body.type)
       ? body.type
       : DocumentType.AUDITED_RETURN_PDF;
 
-    const savedFilePath = await this.localStorageService.saveFile(session.fileName, buffer);
+    // assemble() calls S3 CompleteMultipartUpload — the object is now in MinIO
+    // under s3Key. No buffer assembly happens in this process; no filesystem I/O.
+    const { s3Key, session } = await this.chunkedUploadService.assemble(uploadId);
     const doc = await this.documentService.create(
       {
         assessmentId: session.assessmentId,
         fileName: session.fileName,
-        filePath: savedFilePath,
-        fileSize: buffer.length,
+        filePath: s3Key,        // store the S3 object key, not a filesystem path
+        fileSize: session.fileSize,
         mimeType: 'application/pdf',
         type,
       },
       req.user.id,
     );
 
-    // Staging space is only released once the document is safely persisted — if create()
-    // throws, the chunks survive and the client can retry completion without re-uploading.
-    this.chunkedUploadService.discard(uploadId);
+    // Redis session entry is cleaned up only after the DB record is safely persisted.
+    // If create() throws, the multipart upload stays open in MinIO and the client
+    // can retry completion without re-uploading any chunks.
+    await this.chunkedUploadService.discard(uploadId);
 
     if (type === DocumentType.AUDITED_RETURN_PDF) {
       try {
@@ -454,14 +518,27 @@ export class DocumentController {
 
     let stat: { size: number; mtimeMs: number };
     try {
-      stat = await this.localStorageService.statFile(doc.filePath);
-    } catch {
-      // Previously this fell back to sending a synthesized placeholder PDF, so a document
-      // whose file was missing from storage still "downloaded" successfully — the assayer
-      // received a stub believing it was their branch's customer data, and the underlying
-      // storage failure stayed invisible. A missing file is a real error; surface it.
+      stat = await this.storage.statFile(doc.filePath);
+    } catch (err: any) {
+      /**
+       * A missing file is reported as missing.
+       *
+       * This previously synthesised a valid-but-blank PDF and returned it with HTTP 200, the
+       * real MIME type and the real filename — so a validator, or the bank client, would open
+       * the audited return, see an empty page, and reasonably conclude the audit produced
+       * nothing. Nothing in the response, the database row, or the logs distinguished that from
+       * a genuine empty submission. For a document that is legal evidence in a collateral
+       * audit, silently substituting a fake is the worst available behaviour: it converts a
+       * detectable storage failure into an undetectable evidentiary one.
+       *
+       * The original justification was "don't break download links with a 404". A broken link
+       * that says so is recoverable; a blank document that looks fine is not.
+       */
+      this.logger.error(
+        `Document ${id} (${doc.fileName}) has a database row but no file at ${doc.filePath}: ${err?.message}`,
+      );
       throw new NotFoundException(
-        `File for document ${id} is missing from storage (${doc.filePath}). It may not have been uploaded successfully.`,
+        'This document could not be found in storage. The record exists but the file is missing — please report this to your administrator, and do not treat it as an empty submission.',
       );
     }
 
@@ -502,7 +579,7 @@ export class DocumentController {
         res.status(206);
         res.setHeader('Content-Range', `bytes ${start}-${clampedEnd}/${stat.size}`);
         res.setHeader('Content-Length', clampedEnd - start + 1);
-        const partial = await this.localStorageService.getFileStream(doc.filePath, start, clampedEnd);
+        const partial = await this.storage.getFileStream(doc.filePath, start, clampedEnd);
         partial.pipe(res);
         return;
       }
@@ -510,7 +587,7 @@ export class DocumentController {
 
     // Content-Length lets the client show real progress and detect a truncated transfer.
     res.setHeader('Content-Length', stat.size);
-    const fileStream = await this.localStorageService.getFileStream(doc.filePath);
+    const fileStream = await this.storage.getFileStream(doc.filePath);
     fileStream.pipe(res);
   }
 
@@ -606,6 +683,7 @@ export class DocumentController {
   }
 
   @Get('project-branch/:projectBranchId/download-pdf')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Directly download the Pre-Audit PDF file for a project branch' })
   async downloadBranchPdf(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any, @Res() res: Response) {
     // Resolves only from *dispatched* paperwork. This used to pick the first
@@ -627,6 +705,7 @@ export class DocumentController {
   }
 
   @Get('project-branch/:projectBranchId')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get documents for a project branch' })
   async findByProjectBranch(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any) {
     // Assayers get the dispatch-gated view: only paperwork operations has actually
@@ -694,7 +773,7 @@ export class DocumentController {
       const file = byName.get(m.fileName);
       if (!file) continue;
       try {
-        const savedPath = await this.localStorageService.saveFile(file.originalname, file.buffer);
+        const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
         const doc = await this.documentService.create({
           assessmentId: m.projectBranchId,
           fileName: file.originalname,
@@ -758,6 +837,7 @@ export class DocumentController {
   }
 
   @Get('project/:projectId')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get all documents for a project' })
   async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const list = await this.documentService.findByProject(projectId);
@@ -810,7 +890,11 @@ export class DocumentController {
     @Query('assessmentId', ParseUUIDPipe) assessmentId: string,
     @Req() req: any,
   ) {
-    const savedPath = await this.localStorageService.saveFile(file?.originalname || `report_${assessmentId}.xlsx`, file?.buffer || Buffer.from(''));
+    const savedPath = await this.storage.saveFile(
+      file?.originalname || `report_${assessmentId}.xlsx`,
+      file?.buffer || Buffer.from(''),
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
 
     const doc = await this.documentService.create({
       assessmentId,

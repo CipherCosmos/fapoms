@@ -25,6 +25,8 @@ describe('AuthService', () => {
   };
 
   const mockAssayerRepo = {
+    // The assayer login path now records failed attempts and clears them on success.
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
     findOne: jest.fn(),
   };
 
@@ -153,4 +155,61 @@ describe('AuthService', () => {
       await expect(service.biometricLogin('some-refresh-token')).rejects.toThrow(ForbiddenException);
     });
   });
+    describe('brute-force lockout', () => {
+      // The assayer branch had no attempt counter and the app has no rate limiting, while
+      // 24 of 25 live accounts shared the importer's documented default password.
+      const bcrypt = require('bcrypt');
+      const realHash = bcrypt.hashSync('correct-horse', 4);
+
+      it('counts a failed attempt', async () => {
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE',
+          passwordHash: realHash, failedLoginAttempts: 0, lockedUntil: null,
+        });
+
+        await expect(service.login('AS0001', 'wrong', '1.1.1.1', 'jest')).rejects.toThrow();
+
+        expect(mockAssayerRepo.update).toHaveBeenCalledWith('a-1',
+          expect.objectContaining({ failedLoginAttempts: 1, lockedUntil: null }));
+      });
+
+      it('locks the account on the fifth consecutive failure', async () => {
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE',
+          passwordHash: realHash, failedLoginAttempts: 4, lockedUntil: null,
+        });
+
+        await expect(service.login('AS0001', 'wrong', '1.1.1.1', 'jest')).rejects.toThrow();
+
+        const patch = mockAssayerRepo.update.mock.calls.at(-1)[1];
+        expect(patch.failedLoginAttempts).toBe(5);
+        expect(patch.lockedUntil).toBeInstanceOf(Date);
+        expect(patch.lockedUntil.getTime()).toBeGreaterThan(Date.now());
+      });
+
+      it('refuses a locked account even when the password is correct', async () => {
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE',
+          passwordHash: realHash, failedLoginAttempts: 5,
+          lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+        });
+
+        await expect(service.login('AS0001', 'correct-horse', '1.1.1.1', 'jest'))
+          .rejects.toThrow(/try again in \d+ minute/i);
+      });
+
+      it('clears the counter after a successful sign-in', async () => {
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE',
+          passwordHash: realHash, failedLoginAttempts: 3, lockedUntil: null,
+        });
+
+        await service.login('AS0001', 'correct-horse', '1.1.1.1', 'jest');
+
+        expect(mockAssayerRepo.update).toHaveBeenCalledWith('a-1',
+          { failedLoginAttempts: 0, lockedUntil: null });
+      });
+    });
+
+
 });

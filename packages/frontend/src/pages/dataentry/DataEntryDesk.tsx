@@ -283,19 +283,19 @@ export const DataEntryDesk: React.FC = () => {
                   <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
                     {isHead && lane.key === 'unallocated' && (
                       <select defaultValue="" disabled={busy === d.id} onChange={(e) => assign(d.id, e.target.value)}
-                        style={{ padding: '5px 8px', fontSize: '11.5px', borderRadius: '6px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                        <option value="">Assign to…</option>
+                        style={{ padding: '7px 12px', minHeight: '36px', fontSize: '12px', fontWeight: 600, borderRadius: '6px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}>
+                        <option value="">Assign to operator…</option>
                         {team.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                     )}
                     {lane.key === 'working' && (
-                      <button onClick={() => handBack(d.id)} disabled={busy === d.id} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px' }}>
-                        {busy === d.id ? 'Saving…' : 'Hand back to head'}
+                      <button onClick={() => handBack(d.id)} disabled={busy === d.id} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 14px', minHeight: '36px', fontWeight: 700 }}>
+                        {busy === d.id ? 'Saving…' : '✓ Hand back to head'}
                       </button>
                     )}
                     <button onClick={() => openWorkspaceForDoc(d)} disabled={!d.projectBranchId} className="btn btn-secondary"
-                      style={{ fontSize: '11.5px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <FileText size={12} /> Open packet
+                      style={{ fontSize: '12px', padding: '7px 14px', minHeight: '36px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <FileText size={13} /> Open packet
                     </button>
                   </div>
                 </div>

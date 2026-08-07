@@ -23,6 +23,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import { geocodeIndia } from '../geo/india-geocoder';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 async function getRealCoordinates(address: string, name: string, district: string, state: string): Promise<{ lat: number; lng: number }> {
   const pinMatch = address.match(/\b\d{6}\b/);
@@ -86,6 +87,7 @@ export class ProjectService implements OnModuleInit {
       private readonly workflowEngine: WorkflowEngine,
       private readonly eventPublisher: DomainEventPublisher,
       private readonly projectQueryService: ProjectQueryService,
+      private readonly notificationDispatch: NotificationDispatchService,
    ) {}
 
   private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
@@ -933,6 +935,70 @@ export class ProjectService implements OnModuleInit {
     }
     const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.initiatePlanning(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  /**
+   * Record that a branch cannot be staffed, with the reason on the branch record.
+   *
+   * This is the write side of a status that has been declared everywhere and set nowhere —
+   * the reason no branch has ever left `IMPORTED` for a coverage failure, and why an
+   * unstaffable branch is currently indistinguishable from an untouched one.
+   */
+  async markBranchUnableToCover(
+    projectBranchId: string,
+    userId: string,
+    reason: string,
+    manager?: any,
+  ): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({ where: { id: projectBranchId, isActive: true } });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const previousStatus = pb.status;
+    const event = ProjectBranchStateMachine.markUnableToCover(pb, userId, reason);
+    // Kept on the branch so the cause travels with the record into client SLA reporting,
+    // rather than living only in the audit log.
+    pb.remarks = reason.trim();
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
+    this.eventPublisher.publish(event.constructor.name, event);
+
+    // `BRANCH_UNABLE_TO_COVER` has sat in the notification catalogue — CRITICAL priority,
+    // addressed to ops and admins — with no code path that could ever emit it. This is that
+    // path. A branch nobody can staff is exactly the event ops needs pushed at them.
+    const withBranch = await repo.findOne({ where: { id: saved.id }, relations: ['branch'] }).catch(() => null);
+    this.notificationDispatch.emitSafe({
+      type: 'BRANCH_UNABLE_TO_COVER',
+      entityType: 'PROJECT_BRANCH',
+      entityId: saved.id,
+      actorUserId: userId,
+      dedupeKey: `BRANCH_UNABLE_TO_COVER:${saved.id}`,
+      payload: {
+        projectBranchId: saved.id,
+        branchName: withBranch?.branch?.name ?? 'A branch',
+        reason: reason.trim(),
+      },
+    });
+
+    return saved;
+  }
+
+  /** Return an uncoverable branch to the planning pool. */
+  async reopenBranchCoverage(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({ where: { id: projectBranchId, isActive: true } });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const previousStatus = pb.status;
+    const event = ProjectBranchStateMachine.reopenCoverage(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
     await this.recordBranchTransition(saved, previousStatus, userId);

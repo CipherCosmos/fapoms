@@ -26,6 +26,7 @@ interface NavStep {
   distanceM: number;
   durationS: number;
   maneuver?: string;
+  coords?: LatLng[]; // the step's own polyline (for live step progression)
 }
 
 interface FareInfo {
@@ -191,6 +192,34 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   const routeRequestIdRef = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ---- Live turn-by-turn navigation state ----
+  const [heading, setHeading] = useState<number | null>(null);
+  const [speed, setSpeed] = useState<number | null>(null); // m/s
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [remainingKm, setRemainingKm] = useState<number | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const [passedIndex, setPassedIndex] = useState(0);
+  const watchRef = useRef<Location.LocationSubscription | null>(null);
+  const stepEndsRef = useRef<LatLng[]>([]);
+  const progressIdxRef = useRef(0);
+  const maxVertexRef = useRef(0);
+  // Live snapshot of everything the position watcher needs (avoids re-subscribing).
+  const navCtxRef = useRef<{
+    steps: NavStep[]; routeCoords: LatLng[]; distanceKm: number | null;
+    travelSeconds: number | null; mode: RouteMode; buildRoute: (from: LatLng, m?: RouteMode) => Promise<void>;
+  }>({ steps: [], routeCoords: [], distanceKm: null, travelSeconds: null, mode: 'driving', buildRoute: () => Promise.resolve() });
+
+  // Rebuild step-end anchors whenever the route steps change.
+  useEffect(() => {
+    stepEndsRef.current = steps
+      .map((s) => (s.coords && s.coords.length ? s.coords[s.coords.length - 1] : null))
+      .filter((c): c is LatLng => c != null);
+    progressIdxRef.current = 0;
+    maxVertexRef.current = 0;
+    setActiveStepIndex(0);
+    setPassedIndex(0);
+  }, [steps]);
+
   const apiKey = Constants.expoConfig?.extra?.googleMapsApiKey as string | undefined;
   const isWeb = Platform.OS === 'web';
 
@@ -280,6 +309,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                 distanceM: s.distance?.value ?? 0,
                 durationS: s.duration?.value ?? 0,
                 maneuver: s.maneuver,
+                coords: decodePolyline(s.polyline?.points || ''),
               }));
               const transitFare = route.fare
                 ? { text: route.fare.text || '', currency: route.fare.currency, value: route.fare.value }
@@ -349,6 +379,11 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
     [destination, apiKey, isWeb, mode],
   );
 
+  // Keep the live-nav context snapshot fresh with the latest values.
+  useEffect(() => {
+    navCtxRef.current = { steps, routeCoords, distanceKm, travelSeconds, mode, buildRoute };
+  }, [steps, routeCoords, distanceKm, travelSeconds, mode, buildRoute]);
+
   // Initial load: permission + first route.
   useEffect(() => {
     if (!visible || !destination) {
@@ -361,6 +396,12 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
       setSteps([]);
       setFare(null);
       setNavigating(false);
+      setHeading(null);
+      setSpeed(null);
+      setActiveStepIndex(0);
+      setRemainingKm(null);
+      setRemainingSeconds(null);
+      setPassedIndex(0);
       return;
     }
 
@@ -395,45 +436,94 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
     }
   }, [mode, visible, origin, destination, buildRoute]);
 
-  // Dynamic reroute: poll location while navigating; if far off the route, re-route.
+  // ---- Live turn-by-turn position handler: advances the current step, refreshes
+  // the live traffic ETA, tracks the travelled route, and re-routes when off course.
+  const handleNavPosition = useCallback(
+    (lat: number, lng: number, opt?: { heading?: number | null; speed?: number | null }) => {
+      const ctx = navCtxRef.current;
+      const c: LatLng = { latitude: lat, longitude: lng };
+      setOrigin(c);
+      if (opt?.heading != null) setHeading(opt.heading);
+      if (opt?.speed != null) setSpeed(opt.speed);
+
+      const ends = stepEndsRef.current;
+      if (ends.length > 0 && ctx.steps.length > 0) {
+        // Advance to the first step end the user hasn't yet passed (within 28 m).
+        while (progressIdxRef.current < ends.length) {
+          if (haversineKm(c, ends[progressIdxRef.current]) * 1000 < 28) progressIdxRef.current += 1;
+          else break;
+        }
+        const active = Math.min(progressIdxRef.current, ends.length - 1);
+        setActiveStepIndex(active);
+
+        const toActiveEndM = haversineKm(c, ends[active]) * 1000;
+        let remM = toActiveEndM;
+        for (let i = active + 1; i < ctx.steps.length; i++) remM += ctx.steps[i].distanceM;
+        setRemainingKm(remM / 1000);
+        if (ctx.distanceKm && ctx.distanceKm > 0 && ctx.travelSeconds) {
+          // Scale the original traffic-aware duration by the remaining fraction.
+          setRemainingSeconds(ctx.travelSeconds * (remM / 1000 / ctx.distanceKm));
+        }
+      }
+
+      if (ctx.routeCoords.length > 1) {
+        let nearest = 0;
+        let best = Infinity;
+        for (let i = 0; i < ctx.routeCoords.length; i++) {
+          const d = haversineKm(c, ctx.routeCoords[i]);
+          if (d < best) { best = d; nearest = i; }
+        }
+        if (nearest > maxVertexRef.current) maxVertexRef.current = nearest;
+        setPassedIndex(Math.min(maxVertexRef.current, ctx.routeCoords.length - 1));
+
+        // Re-route if the user drifted > 120 m from the route.
+        if (distanceToPolylineKm(c, ctx.routeCoords) > 0.12) {
+          ctx.buildRoute(c, ctx.mode);
+        }
+      }
+    },
+    [],
+  );
+
+  // Native: high-frequency location watch powering turn-by-turn navigation.
+  useEffect(() => {
+    if (watchRef.current) { watchRef.current.remove(); watchRef.current = null; }
+    if (!visible || !navigating || isWeb) return;
+    let cancelled = false;
+    (async () => {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (cancelled || perm.status !== 'granted') return;
+      const sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 5, timeInterval: 2500 },
+        (loc) => handleNavPosition(loc.coords.latitude, loc.coords.longitude, {
+          heading: loc.coords.heading,
+          speed: loc.coords.speed,
+        }),
+      );
+      if (!cancelled) watchRef.current = sub;
+      else sub.remove();
+    })();
+    return () => {
+      cancelled = true;
+      if (watchRef.current) { watchRef.current.remove(); watchRef.current = null; }
+    };
+  }, [visible, navigating, isWeb, handleNavPosition]);
+
+  // Web fallback: poll location while navigating; if far off the route, re-route.
   useEffect(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
-    if (!visible || !navigating || !origin || !destination) return;
+    if (!visible || !navigating || !origin || !destination || !isWeb) return;
 
     pollRef.current = setInterval(async () => {
       try {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        const current: LatLng = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-        const lastOrigin = origin;
-        if (!lastOrigin) return;
-        setOrigin(current);
-
-        // If we have a real route and the user has drifted off it, re-route.
-        if (routeCoords.length > 1) {
-          const off = distanceToPolylineKm(current, routeCoords);
-          if (off > 0.12) {
-            // 120m off route → reroute
-            const lastKey = routeCacheKey(
-              apiKey ? 'google' : 'osrm',
-              mode,
-              lastOrigin,
-              destination,
-            );
-            const nextKey = routeCacheKey(
-              apiKey ? 'google' : 'osrm',
-              mode,
-              current,
-              destination,
-            );
-            // Only refetch when the origin actually moved (avoid cache-hit spam).
-            if (nextKey !== lastKey) {
-              buildRoute(current, mode);
-            }
-          }
-        }
+        handleNavPosition(loc.coords.latitude, loc.coords.longitude, {
+          heading: loc.coords.heading,
+          speed: loc.coords.speed,
+        });
       } catch {
         // ignore location failures during polling
       }
@@ -445,7 +535,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
         pollRef.current = null;
       }
     };
-  }, [visible, navigating, origin, destination, routeCoords, mode, apiKey, buildRoute]);
+  }, [visible, navigating, origin, destination, isWeb, handleNavPosition]);
 
   const maneuverIcon = (m?: string): any => {
     switch (m) {
@@ -492,6 +582,41 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           <Button label="Close" variant="danger" icon="close" onPress={onClose} size="sm" />
         </View>
 
+        {/* Live turn-by-turn banner */}
+        {navigating && steps.length > 0 && (
+          <View style={{ backgroundColor: '#1e1b4b', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(99,102,241,0.3)' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={{ width: 46, height: 46, borderRadius: 12, backgroundColor: t.colors.primarySoft, alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name={maneuverIcon(steps[activeStepIndex]?.maneuver)} size={26} color={t.colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <AppText variant="h3" numberOfLines={2}>{steps[activeStepIndex]?.instruction || 'Arrive'}</AppText>
+                {activeStepIndex < steps.length - 1 && (
+                  <AppText variant="caption" tone="muted" numberOfLines={1}>
+                    Next: {steps[activeStepIndex + 1]?.instruction || ''}
+                  </AppText>
+                )}
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Icon name="time-outline" size={16} color={t.colors.primary} />
+                <AppText variant="h2">{remainingSeconds != null ? formatDuration(remainingSeconds) : '--'}</AppText>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Icon name="navigate" size={14} color={t.colors.textFaint} />
+                <AppText variant="caption" tone="muted">{remainingKm != null ? `${remainingKm.toFixed(1)} km` : '--'}</AppText>
+              </View>
+              {speed != null && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Icon name="speedometer" size={14} color={t.colors.textFaint} />
+                  <AppText variant="caption" tone="muted">{Math.max(0, Math.round(speed * 3.6))} km/h</AppText>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
         {/* Map */}
         {destination && (
           <View style={{ flex: 1 }}>
@@ -501,35 +626,40 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                 destination={destination}
                 routeCoords={routeCoords}
                 fitKey={fitKey}
+                heading={heading ?? undefined}
+                follow={navigating}
+                passedIndex={passedIndex}
               />
             </View>
 
-            {/* Mode toggle */}
-            <View style={{ position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'center' }}>
-              <View style={{ flexDirection: 'row', backgroundColor: t.colors.surface, borderRadius: t.radius.pill, padding: 4, borderWidth: 1, borderColor: t.colors.border }}>
-                {(['driving', 'transit'] as RouteMode[]).map((m) => {
-                  const active = mode === m;
-                  return (
-                    <Tappable key={m} onPress={() => setMode(m)}>
-                      <View style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: 6,
-                        paddingHorizontal: t.space.lg,
-                        paddingVertical: t.space.sm,
-                        borderRadius: t.radius.pill,
-                        backgroundColor: active ? t.colors.primarySoft : 'transparent',
-                      }}>
-                        <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? t.colors.primary : t.colors.textFaint} />
-                        <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
-                          {m === 'driving' ? 'Drive' : 'Transit'}
-                        </AppText>
-                      </View>
-                    </Tappable>
-                  );
-                })}
+            {/* Mode toggle (hidden while navigating) */}
+            {!navigating && (
+              <View style={{ position: 'absolute', top: 12, left: 12, right: 12, flexDirection: 'row', justifyContent: 'center' }}>
+                <View style={{ flexDirection: 'row', backgroundColor: t.colors.surface, borderRadius: t.radius.pill, padding: 4, borderWidth: 1, borderColor: t.colors.border }}>
+                  {(['driving', 'transit'] as RouteMode[]).map((m) => {
+                    const active = mode === m;
+                    return (
+                      <Tappable key={m} onPress={() => setMode(m)}>
+                        <View style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 6,
+                          paddingHorizontal: t.space.lg,
+                          paddingVertical: t.space.sm,
+                          borderRadius: t.radius.pill,
+                          backgroundColor: active ? t.colors.primarySoft : 'transparent',
+                        }}>
+                          <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? t.colors.primary : t.colors.textFaint} />
+                          <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
+                            {m === 'driving' ? 'Drive' : 'Transit'}
+                          </AppText>
+                        </View>
+                      </Tappable>
+                    );
+                  })}
+                </View>
               </View>
-            </View>
+            )}
 
             {/* Bottom panel */}
             <View style={{ position: 'absolute', left: 12, right: 12, bottom: 12, maxHeight: 260, backgroundColor: t.colors.surface, borderRadius: t.radius.lg, padding: t.space.lg, borderWidth: 1, borderColor: t.colors.border }}>
@@ -562,23 +692,26 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                     </AppText>
                   </View>
 
-                  {/* Turn-by-turn steps */}
+                  {/* Turn-by-turn steps (active step highlighted during nav) */}
                   {steps.length > 0 && (
                     <View style={{ marginTop: 8, maxHeight: 110 }}>
                       <ScrollView nestedScrollEnabled style={{ flex: 1 }}>
-                        {steps.map((s, i) => (
-                          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 }}>
-                            <Icon name={maneuverIcon(s.maneuver)} size={14} color={t.colors.primary} />
-                            <AppText variant="small" style={{ flex: 1 }} numberOfLines={2}>
-                              {s.instruction}
-                            </AppText>
-                            {s.distanceM > 0 && (
-                              <AppText variant="caption" tone="faint">
-                                {s.distanceM >= 1000 ? `${(s.distanceM / 1000).toFixed(1)} km` : `${Math.round(s.distanceM)} m`}
+                        {steps.map((s, i) => {
+                          const isActive = navigating && i === activeStepIndex;
+                          return (
+                            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3, backgroundColor: isActive ? t.colors.primarySoft : 'transparent', borderRadius: 6, paddingHorizontal: isActive ? 6 : 0 }}>
+                              <Icon name={maneuverIcon(s.maneuver)} size={14} color={isActive ? t.colors.primary : '#64748b'} />
+                              <AppText variant="small" style={{ flex: 1 }} numberOfLines={2} tone={isActive ? 'primary' : undefined}>
+                                {s.instruction}
                               </AppText>
-                            )}
-                          </View>
-                        ))}
+                              {s.distanceM > 0 && (
+                                <AppText variant="caption" tone="faint">
+                                  {s.distanceM >= 1000 ? `${(s.distanceM / 1000).toFixed(1)} km` : `${Math.round(s.distanceM)} m`}
+                                </AppText>
+                              )}
+                            </View>
+                          );
+                        })}
                       </ScrollView>
                     </View>
                   )}

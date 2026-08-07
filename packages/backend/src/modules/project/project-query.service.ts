@@ -55,6 +55,15 @@ export class ProjectQueryService {
           `COUNT(*) FILTER (WHERE pb.status = 'UNABLE_TO_COVER')::int`,
           'uncovered',
         )
+        // Branches still waiting for anyone to be put on them. This is the number ops actually
+        // starts the day with — "what is still unstaffed?" — and nothing computed it before, so
+        // a project could be 89% unstaffed (64 of 72 branches, as this one currently is) and
+        // look no different from one that was fully planned. Distinct from `uncovered`: those
+        // have had a decision recorded, these have not.
+        .addSelect(
+          `COUNT(*) FILTER (WHERE pb.status IN ('IMPORTED','PLANNING','CANDIDATE_SEARCH','CONTACT_INITIATED','NEGOTIATION'))::int`,
+          'unstaffed',
+        )
         .where('pb.project_id IN (:...ids)', { ids: projects.map((p) => p.id) })
         .andWhere('pb.is_active = true')
         .groupBy('pb.project_id')
@@ -68,6 +77,7 @@ export class ProjectQueryService {
           assigned: Number(c?.assigned ?? 0),
           completed: Number(c?.completed ?? 0),
           uncovered: Number(c?.uncovered ?? 0),
+          unstaffed: Number(c?.unstaffed ?? 0),
         };
       }
     }

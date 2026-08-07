@@ -58,7 +58,7 @@ export class PlanningAntiCorruptionLayer
         assayerId: new AssayerId(a.id),
         displayName: a.displayName,
         status: a.status,
-        location: new GeoCoordinate(a.latitude || 0, a.longitude || 0),
+        location: new GeoCoordinate(a.effectiveLatitude || 0, a.effectiveLongitude || 0),
         skills: new SkillSet(a.skills || []),
         maxWeeklyWorkload: a.maxWeeklyWorkload || 15,
       };

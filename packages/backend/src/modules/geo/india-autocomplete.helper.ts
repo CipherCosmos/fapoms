@@ -7,15 +7,13 @@ import * as path from 'path';
  * The geo reference tables hold only a curated handful of cities, so they cannot
  * answer "which district is Udhampur in?" or "is Doraha a real town?" for someone
  * working across the country. Rather than hard-code the entire India map into this
- * repo (unmaintainable and by definition stale), we ask a real geocoder.
+ * repo (unmaintainable and by definition stale), we ask the Google Places
+ * Autocomplete API (New). This is the ONLY source — no free-tier fallbacks, so a
+ * misleading hit from an unreliable provider never reaches the form. Requires
+ * GOOGLE_MAPS_API_KEY with the Places API (New) + billing enabled.
  *
- * Primary source is the Google Places Autocomplete API (set GOOGLE_MAPS_API_KEY),
- * which returns precise, India-bounded suggestions; when no key is configured it
- * falls back to Nominatim (OpenStreetMap), the same source the geocoders use, with
- * a small on-disk cache so keystroke autocomplete does not hammer a rate-limited API.
- *
- * Each result is normalised to {label, type, state, district, pincode} so the form
- * can type-select a real place and the backend persists real values.
+ * Results are cached on disk for 10 minutes so keystroke autocomplete does not
+ * hammer the API.
  */
 
 export interface IndiaPlaceResult {
@@ -40,21 +38,6 @@ function saveCache() {
   } catch { /* non-fatal */ }
 }
 
-function placeType(t?: string): IndiaPlaceResult['type'] {
-  switch (t) {
-    case 'administrative': return 'district';
-    case 'city':
-    case 'town':
-      return 'city';
-    case 'village':
-      return 'village';
-    case 'postcode':
-      return 'pincode';
-    default:
-      return 'locality';
-  }
-}
-
 /**
  * Search India for places matching `query`. `query` may be a 6-digit pincode, a
  * district, a city/town/village name, or "city, state" / "district, state".
@@ -67,10 +50,7 @@ export async function autocompleteIndia(query: string): Promise<IndiaPlaceResult
   const cached = cache[key];
   if (cached && Date.now() - cached.time < TTL_MS) return cached.data;
 
-  // Primary: Google Places Autocomplete (needs GOOGLE_MAPS_API_KEY + Places API).
-  let results = process.env.GOOGLE_MAPS_API_KEY ? await queryGooglePlaces(q) : [];
-  // Fallback: Nominatim (OpenStreetMap), same source as the address geocoders.
-  if (!results.length) results = await queryNominatim(q);
+  const results = process.env.GOOGLE_MAPS_API_KEY ? await queryGooglePlaces(q) : [];
 
   cache[key] = { time: Date.now(), data: results };
   saveCache();
@@ -119,54 +99,6 @@ async function queryGooglePlaces(q: string): Promise<IndiaPlaceResult[]> {
       const district = tokens.length > 2 ? tokens[tokens.length - 3] : '';
       const label = [city, district !== city ? district : '', state].filter(Boolean).join(', ');
       const place: IndiaPlaceResult = { label, type: 'locality', state, district, pincode: '' };
-      const sig = `${label} ${state} ${district}`.toLowerCase();
-      if (seen.has(sig)) continue;
-      seen.add(sig);
-      out.push(place);
-      if (out.length >= 8) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-async function queryNominatim(q: string): Promise<IndiaPlaceResult[]> {
-  // Nominatim's usage policy is ~1 req/sec; give the keystroke cadence room.
-  await new Promise((r) => setTimeout(r, 500));
-  try {
-    const url =
-      `${'https://nominatim.openstreetmap.org/search?q='}${encodeURIComponent(`${q}, India`)}` +
-      `&format=json&limit=14&countrycodes=in&addressdetails=1`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'fapoms-geo-autocomplete/1.0 (info@fapoms.com)' },
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) return [];
-
-    const data = (await res.json()) as any[];
-    const out: IndiaPlaceResult[] = [];
-    const seen = new Set<string>();
-    for (const d of data) {
-      const addr = d.address ?? {};
-      const name =
-        addr.city || addr.town || addr.village || addr.suburb || addr.county || addr.state_district || d.name;
-      const state = addr.state || '';
-      const district = addr.state_district || addr.county || addr.district || '';
-      if (!name || !state) continue;
-      const label = [name, addr.county && addr.county !== name ? addr.county : '', state]
-        .filter(Boolean)
-        .join(', ');
-      const place: IndiaPlaceResult = {
-        label,
-        type: placeType(addr.addresstype || d.type || 'locality'),
-        state,
-        district,
-        pincode: addr.postcode || '',
-      };
       const sig = `${label} ${state} ${district}`.toLowerCase();
       if (seen.has(sig)) continue;
       seen.add(sig);

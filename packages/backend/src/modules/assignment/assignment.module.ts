@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { PricingModule } from '../pricing/pricing.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AssignmentService } from './assignment.service';
@@ -25,6 +26,7 @@ import { ValidationModule } from '../validation/validation.module';
     ProjectModule,
     GeoModule,
     ValidationModule,
+    PricingModule,
     forwardRef(() => PlanningModule),
   ],
   controllers: [AssignmentController],

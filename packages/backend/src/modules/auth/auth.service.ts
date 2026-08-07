@@ -106,11 +106,27 @@ export class AuthService {
         select: {
           id: true, assayerCode: true, displayName: true, email: true, phone: true,
           organizationId: true, lifecycleStatus: true, passwordHash: true,
+          failedLoginAttempts: true, lockedUntil: true,
         },
       });
 
       if (!assayer) {
         throw new UnauthorizedException('Invalid credentials');
+      }
+
+      /**
+       * Brute-force lockout, matching the staff-login branch below.
+       *
+       * This branch had no attempt counter at all, and the application has no rate limiting,
+       * so an assayer code could be guessed against indefinitely. Combined with the bulk
+       * importer's documented default password (`assayer123`, shared by 24 of 25 live
+       * accounts), a single guess per account was enough to take the whole field workforce.
+       */
+      if (assayer.lockedUntil && assayer.lockedUntil > new Date()) {
+        const minutes = Math.max(1, Math.ceil((assayer.lockedUntil.getTime() - Date.now()) / 60000));
+        throw new ForbiddenException(
+          `Too many incorrect sign-in attempts. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+        );
       }
 
       // An assayer with no password set has never completed onboarding — deny access
@@ -121,11 +137,23 @@ export class AuthService {
 
       const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
       if (!isPasswordValid) {
+        const attempts = (assayer.failedLoginAttempts ?? 0) + 1;
+        const lockedUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;
+        await this.assayerRepository
+          .update(assayer.id, { failedLoginAttempts: attempts, lockedUntil })
+          .catch(() => undefined);
         throw new UnauthorizedException('Invalid credentials');
       }
 
       if (assayer.lifecycleStatus !== 'ACTIVE') {
         throw new ForbiddenException(`Account is ${String(assayer.lifecycleStatus).toLowerCase()}`);
+      }
+
+      // Successful sign-in clears the counter.
+      if (assayer.failedLoginAttempts || assayer.lockedUntil) {
+        await this.assayerRepository
+          .update(assayer.id, { failedLoginAttempts: 0, lockedUntil: null })
+          .catch(() => undefined);
       }
 
       const payload: JwtPayload = {
@@ -418,6 +446,17 @@ export class AuthService {
     }
 
     return null;
+  }
+
+  /**
+   * Verify an access token and return its payload.
+   */
+  async verifyJwtToken(token: string): Promise<JwtPayload | null> {
+    try {
+      return this.jwtService.verify<JwtPayload>(token);
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------

@@ -275,66 +275,102 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
             </div>
           )}
 
-          {/* Clarifications */}
-          <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={label}>Clarifications {openCount > 0 && `(${openCount} open)`}</span>
-            <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-secondary"
-              style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <MessageSquarePlus size={12} /> New
+          {/* Clarifications Header */}
+          <div style={{
+            padding: '10px 14px', borderBottom: '1px solid var(--border-color)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'var(--bg-surface-2)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <MessageSquare size={15} style={{ color: 'var(--accent)' }} />
+              <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Assayer Chat & Clarifications {openCount > 0 && <span style={{ color: 'var(--warning)', marginLeft: '4px' }}>({openCount} open)</span>}
+              </span>
+            </div>
+            <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-primary"
+              style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+              <MessageSquarePlus size={13} /> {showNewQuery ? 'Cancel' : 'New Question'}
             </button>
           </div>
 
           {showNewQuery && (
-            <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '6px' }}>
+            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', gap: '8px' }}>
               <input
                 value={newQueryText}
                 onChange={(e) => setNewQueryText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') raiseQuery(); }}
-                placeholder="What's unclear? e.g. gross weight on row 3…"
-                style={{ flex: 1, padding: '7px 9px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}
+                placeholder="Type your question for the assayer… e.g. Gross weight mismatch on row 3"
+                style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
               />
-              <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 11px' }}>
-                Raise
+              <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px', fontWeight: 600 }}>
+                {busy ? <Loader2 size={13} className="spin" /> : 'Start Thread'}
               </button>
             </div>
           )}
 
           {err && (
-            <div style={{ padding: '7px 13px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <AlertTriangle size={12} /> {err}
+            <div style={{ padding: '8px 14px', fontSize: '12px', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center', background: 'rgba(239,68,68,0.1)' }}>
+              <AlertTriangle size={13} /> {err}
             </div>
           )}
 
           {!selectedQuery ? (
-            <div style={{ flex: 1, overflowY: 'auto', padding: '4px 13px' }}>
-              {queries === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>Loading…</div>}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {queries === null && <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>Loading clarifications…</div>}
               {queries?.length === 0 && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>None raised yet.</div>
+                <div style={{
+                  padding: '24px 16px', textAlign: 'center', borderRadius: '10px',
+                  background: 'var(--bg-surface-2)', border: '1px border-dashed var(--border-color)',
+                  color: 'var(--text-muted)', fontSize: '12.5px',
+                }}>
+                  <MessageSquare size={24} style={{ opacity: 0.3, marginBottom: '8px' }} />
+                  <div>No clarification threads for this branch.</div>
+                  <div style={{ fontSize: '11.5px', marginTop: '4px' }}>Click "New Question" above to message the field assayer.</div>
+                </div>
               )}
-              {queries?.map((q) => (
-                <button
-                  key={q.id}
-                  onClick={() => setSelectedQuery(q.id)}
-                  style={{
-                    display: 'block', width: '100%', textAlign: 'left', padding: '9px 10px', marginTop: '6px',
-                    borderRadius: '8px', cursor: 'pointer', fontSize: '12.5px',
-                    background: q.status === 'RESOLVED' ? 'var(--status-completed-bg)' : 'var(--status-pending-bg)',
-                    border: `1px solid ${q.status === 'RESOLVED' ? 'var(--border-color)' : 'var(--status-pending-bg)'}`,
-                    color: 'inherit',
-                  }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <MessageSquare size={12} style={{ color: q.status === 'RESOLVED' ? 'var(--text-muted)' : 'var(--warning)', flexShrink: 0 }} />
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.queryText}</span>
-                  </div>
-                  <div style={{ ...label, marginTop: '3px' }}>{q.status.toLowerCase()}{q.targetField ? ` · ${q.targetField}` : ''}</div>
-                </button>
-              ))}
+              {queries?.map((q) => {
+                const isResolved = q.status === 'RESOLVED';
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => setSelectedQuery(q.id)}
+                    style={{
+                      display: 'flex', flexDirection: 'column', gap: '6px', width: '100%', textAlign: 'left',
+                      padding: '12px 14px', borderRadius: '10px', cursor: 'pointer', fontSize: '13px',
+                      background: isResolved ? 'var(--bg-surface-2)' : 'var(--bg-surface)',
+                      border: `1px solid ${isResolved ? 'var(--border-color)' : 'var(--accent)'}`,
+                      color: 'inherit', transition: 'all 0.15s ease',
+                      boxShadow: isResolved ? 'none' : '0 2px 5px rgba(0,0,0,0.04)',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, flex: 1, overflow: 'hidden' }}>
+                        <MessageSquare size={14} style={{ color: isResolved ? 'var(--text-muted)' : 'var(--accent)', flexShrink: 0 }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.queryText}</span>
+                      </div>
+                      <span style={{
+                        fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '10px',
+                        background: isResolved ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)',
+                        color: isResolved ? 'var(--success)' : 'var(--warning)',
+                        textTransform: 'uppercase', flexShrink: 0,
+                      }}>
+                        {q.status}
+                      </span>
+                    </div>
+                    {q.targetField && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
+                        Field: <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{q.targetField}</span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <div style={{ padding: '7px 13px', borderBottom: '1px solid var(--border-color)' }}>
-                <button onClick={() => setSelectedQuery(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 8px' }}>
-                  ← All clarifications
+              <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)' }}>
+                <button onClick={() => setSelectedQuery(null)} className="btn btn-secondary"
+                  style={{ fontSize: '11.5px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+                  <ArrowLeft size={12} /> All Clarification Threads
                 </button>
               </div>
               <ThreadPanel

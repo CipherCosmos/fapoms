@@ -39,6 +39,10 @@ export class ProjectBranchAuditScheduledEvent extends DomainEvent {}
 export class ProjectBranchAuditCompletedEvent extends DomainEvent {}
 export class ProjectBranchValidationCompletedEvent extends DomainEvent {}
 export class ProjectBranchClosedEvent extends DomainEvent {}
+/** Ops has concluded this branch cannot be staffed. See ProjectBranchStateMachine.markUnableToCover. */
+export class ProjectBranchUnableToCoverEvent extends DomainEvent {}
+/** A previously uncoverable branch is back in play. */
+export class ProjectBranchCoverageReopenedEvent extends DomainEvent {}
 
 // Assignment Events
 export class AssignmentCandidateSelectedEvent extends DomainEvent {}

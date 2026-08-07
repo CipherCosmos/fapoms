@@ -60,13 +60,39 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
       const assayerId = assignment.assayerId || MobileApiService.getCurrentUserId();
       if (!assayerId) return;
       const data = await MobileApiService.getAssayerQueries(assayerId);
-      setQueries(data || []);
-      if (data && data.length > 0) {
-        const openQ = data.find((q: any) => q.status === 'OPEN') || data[0];
+
+      // Strict scoping: filter queries to ONLY those belonging to this specific assignment/branch
+      const filtered = (data || []).filter((q: any) => {
+        const queryPbId = q.validationCase?.projectBranchId || q.projectBranchId;
+        const queryAsmId = q.validationCase?.assessmentId || q.assessmentId;
+        const targetPbId = assignment.projectBranchId;
+        const targetAsmId = assignment.id || (assignment as any).assessmentId;
+
+        if (targetPbId && queryPbId) {
+          return queryPbId === targetPbId;
+        }
+        if (targetAsmId && queryAsmId) {
+          return queryAsmId === targetAsmId;
+        }
+        if ((assignment as any).validationCaseId && q.validationCaseId === (assignment as any).validationCaseId) {
+          return true;
+        }
+        if (Array.isArray(assignment.queries)) {
+          return assignment.queries.some((aq: any) => aq.id === q.id);
+        }
+        return false;
+      });
+
+      setQueries(filtered);
+      if (filtered.length > 0) {
+        const openQ = filtered.find((q: any) => q.status === 'OPEN') || filtered[0];
         setActiveQueryId(openQ.id);
+      } else {
+        setActiveQueryId(null);
       }
     } catch (err) {
       setQueries([]);
+      setActiveQueryId(null);
     }
   };
 
@@ -281,15 +307,8 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                         const fileType = att.fileType || '';
                         const isOutgoing = att.uploadedBy === 'ASSAYER' || !att.uploadedBy;
                         
-                        // Resolve the full URL: server-stored files use relative paths like /api/v1/...
-                        const resolveUrl = (url: string) => {
-                          if (!url) return '';
-                          if (url.startsWith('data:') || url.startsWith('http://') || url.startsWith('https://')) return url;
-                          // Relative server URL — prepend the API origin
-                          const apiOrigin = MobileApiService.getApiOrigin();
-                          return `${apiOrigin}${url}`;
-                        };
-                        const fullUrl = resolveUrl(rawUrl);
+                        // Resolve the full URL with session auth token appended
+                        const fullUrl = MobileApiService.resolveAttachmentUrl(rawUrl);
 
                         const handleDownloadFile = () => {
                           try {
@@ -411,17 +430,23 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         <MLKitScannerModal
           visible={isCameraActive}
           onClose={() => setIsCameraActive(false)}
-          onPdfGenerated={(pdfName: string, base64Pdf: string) => {
+          onPdfGenerated={(baseName: string, pages: { base64: string; pageNumber: number }[], mimeType: string) => {
             setIsCameraActive(false);
+            // Attaches every captured page with its real media type. This previously kept only
+            // the first page and wrapped a JPEG in a `data:application/pdf` URL, so a
+            // multi-page clarification lost its evidence and the one surviving page would not
+            // render for the desk.
+            const ext = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/png' ? 'png' : 'pdf';
+            const total = pages.length;
             setAttachments((prev) => [
               ...prev,
-              {
-                url: `data:application/pdf;base64,${base64Pdf}`,
-                fileName: pdfName,
-                fileType: 'application/pdf',
+              ...pages.map((pg) => ({
+                url: `data:${mimeType};base64,${pg.base64}`,
+                fileName: total === 1 ? `${baseName}.${ext}` : `${baseName}_p${pg.pageNumber}of${total}.${ext}`,
+                fileType: mimeType,
                 uploadedBy: 'ASSAYER',
                 timestamp: new Date().toISOString(),
-              },
+              })),
             ]);
           }}
         />

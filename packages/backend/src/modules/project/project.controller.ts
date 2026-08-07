@@ -80,6 +80,11 @@ class TransitionProjectRequestDto {
   @IsOptional() @IsString() reason?: string;
 }
 
+class MarkUnableToCoverRequestDto {
+  // Required, not optional: this status exists so the cause is reportable to the client.
+  @IsString() @IsNotEmpty() reason: string;
+}
+
 @ApiTags('Projects')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -192,6 +197,35 @@ export class ProjectController {
   @ApiOperation({ summary: 'Full timeline for one project branch: status, assignments, documents, validation' })
   async getBranchHistory(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
     return { success: true, data: await this.projectService.getBranchHistory(projectBranchId) };
+  }
+
+  // Declaring a branch unstaffable is an operational decision with client-SLA consequences,
+  // so it sits with the roles that own coverage — not with everyone who can read the book.
+  @Post('branches/:projectBranchId/unable-to-cover')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Record that a branch cannot be staffed, with a reason' })
+  async markBranchUnableToCover(
+    @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @Body() dto: MarkUnableToCoverRequestDto,
+    @Req() req: any,
+  ) {
+    return {
+      success: true,
+      data: await this.projectService.markBranchUnableToCover(projectBranchId, req.user.userId, dto.reason),
+    };
+  }
+
+  @Post('branches/:projectBranchId/reopen-coverage')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Return an uncoverable branch to the planning pool' })
+  async reopenBranchCoverage(
+    @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @Req() req: any,
+  ) {
+    return {
+      success: true,
+      data: await this.projectService.reopenBranchCoverage(projectBranchId, req.user.userId),
+    };
   }
 
   @Get(':id/branches')

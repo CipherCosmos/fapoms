@@ -26,6 +26,21 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true, select: false })
   passwordHash: string | null;
 
+  /**
+   * Brute-force protection, mirroring what `users` has had all along.
+   *
+   * The assayer login branch had no attempt counter and no lockout, and there is no rate
+   * limiting anywhere in the application — so an unlimited number of guesses could be made
+   * against any assayer code. That mattered enormously because the bulk importer defaults
+   * every new assayer to the documented password `assayer123`: 24 of 25 live accounts share
+   * it. Without this, one wordlist of one entry unlocks the entire field workforce.
+   */
+  @Column({ name: 'failed_login_attempts', type: 'int', default: 0 })
+  failedLoginAttempts: number;
+
+  @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
+  lockedUntil: Date | null;
+
   @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })
   employeeCode: string | null;
 
@@ -71,6 +86,37 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true })
   @Index({ spatial: true })
   location: any | null;
+
+  // ── Live location (opt-in) ────────────────────────────────────────────────
+  // Home coordinates are `latitude`/`longitude` above. When the assayer opts in
+  // from the mobile app, `isLiveEnabled` turns on and their live position is kept
+  // in `liveLatitude`/`liveLongitude` (plus a geometry column for PostGIS). By
+  // default it is OFF, so live coordinates are never used for recommendations
+  // unless the assayer explicitly shares them.
+  @Column({ name: 'is_live_enabled', type: 'boolean', default: false })
+  isLiveEnabled: boolean;
+
+  @Column({ name: 'live_latitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  liveLatitude: number | null;
+
+  @Column({ name: 'live_longitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  liveLongitude: number | null;
+
+  @Column({ name: 'live_location', type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true })
+  @Index({ spatial: true })
+  liveLocation: any | null;
+
+  /** The position the planning/recommendation engine should use: the live
+   *  coordinate when the assayer has opted in and shared one, otherwise their
+   *  home address coordinate. Mirrors how ride-hailing ranks by where you are
+   *  now rather than where you live — but only for assayers who opted in. */
+  get effectiveLatitude(): number | null {
+    return this.isLiveEnabled && this.liveLatitude != null ? this.liveLatitude : this.latitude;
+  }
+
+  get effectiveLongitude(): number | null {
+    return this.isLiveEnabled && this.liveLongitude != null ? this.liveLongitude : this.longitude;
+  }
 
   @Column({
     type: 'enum',

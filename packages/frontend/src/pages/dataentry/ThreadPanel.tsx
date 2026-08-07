@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle } from 'lucide-react';
+import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare } from 'lucide-react';
 
 import { api } from '../../services/api';
 import type { RegionCapture, Region } from './PdfRegionViewer';
@@ -41,10 +41,6 @@ interface Props {
 const fmtWhen = (d: string) =>
   new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
-const label: React.CSSProperties = {
-  fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted)',
-};
 
 export const ThreadPanel: React.FC<Props> = ({
   queryId, status, pending, onClearPending, onFocusRegion, onResolved, onChanged,
@@ -108,62 +104,120 @@ export const ThreadPanel: React.FC<Props> = ({
   const resolved = status === 'RESOLVED';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {!resolved && (
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end' }}>
-          <button onClick={resolve} disabled={busy} className="btn btn-secondary"
-            style={{ fontSize: '11px', padding: '5px 9px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <CheckCircle2 size={12} /> Resolve
-          </button>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: 'var(--bg-surface)' }}>
+      {/* Header / Actions Bar */}
+      <div style={{
+        padding: '10px 14px', borderBottom: '1px solid var(--border-color)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'var(--bg-surface-2)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{
+            fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '12px',
+            background: resolved ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+            color: resolved ? 'var(--success)' : 'var(--warning)',
+            display: 'inline-flex', alignItems: 'center', gap: '4px',
+          }}>
+            {resolved ? <CheckCircle2 size={12} /> : <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--warning)' }} />}
+            {resolved ? 'RESOLVED' : 'ACTIVE CLARIFICATION'}
+          </span>
         </div>
-      )}
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 13px', minHeight: 0 }}>
-        {messages === null && <Muted>Loading conversation…</Muted>}
-        {messages?.length === 0 && (
-          <Muted>Nothing said yet. Mark the area you have a question about, then send — the assayer sees the same crop.</Muted>
+        {!resolved && (
+          <button onClick={resolve} disabled={busy} className="btn btn-secondary"
+            style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+            {busy ? <Loader2 size={12} className="spin" /> : <CheckCircle2 size={12} />} Mark Resolved
+          </button>
         )}
-        {messages?.map((m) => {
-          const mine = m.authorType === 'STAFF';
-          return (
-            <div key={m.id} style={{ display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start', marginBottom: '10px' }}>
-              <div style={{
-                maxWidth: '86%', padding: '8px 10px', borderRadius: '10px', fontSize: '12.5px',
-                background: mine ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
-                border: `1px solid ${mine ? 'var(--status-pending-bg)' : 'var(--border-color)'}`,
-              }}>
-                <div style={{ ...label, marginBottom: '4px' }}>
-                  {m.authorName ?? (mine ? 'Data entry' : 'Assayer')} · {fmtWhen(m.createdAt)}
-                </div>
+      </div>
 
+      {/* Messages Feed */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', minHeight: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {messages === null && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '12.5px', padding: '20px 0' }}>
+            <Loader2 size={15} className="spin" /> Loading message history…
+          </div>
+        )}
+        {messages?.length === 0 && (
+          <div style={{
+            padding: '24px 16px', textAlign: 'center', borderRadius: '10px',
+            background: 'var(--bg-surface-2)', border: '1px border-dashed var(--border-color)',
+            color: 'var(--text-muted)', fontSize: '12.5px',
+          }}>
+            <MessageSquare size={24} style={{ opacity: 0.3, marginBottom: '8px' }} />
+            <div>No messages yet in this clarification thread.</div>
+            <div style={{ fontSize: '11.5px', marginTop: '4px' }}>
+              Mark an area on the PDF or type below to send your query to the field assayer.
+            </div>
+          </div>
+        )}
+
+        {messages?.map((m) => {
+          const isStaff = m.authorType === 'STAFF';
+          return (
+            <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isStaff ? 'flex-end' : 'flex-start' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px',
+                fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 600,
+              }}>
+                <span style={{
+                  padding: '1px 5px', borderRadius: '4px', fontSize: '9.5px', fontWeight: 700,
+                  background: isStaff ? 'rgba(59, 130, 246, 0.15)' : 'rgba(168, 85, 247, 0.15)',
+                  color: isStaff ? '#3b82f6' : '#a855f7',
+                }}>
+                  {isStaff ? 'DATA ENTRY' : 'ASSAYER'}
+                </span>
+                <span>{m.authorName ?? (isStaff ? 'Data Entry Staff' : 'Field Assayer')}</span>
+                <span>·</span>
+                <span>{fmtWhen(m.createdAt)}</span>
+              </div>
+
+              <div style={{
+                maxWidth: '85%', padding: '10px 14px', borderRadius: '12px', fontSize: '13px', lineHeight: 1.45,
+                background: isStaff ? 'var(--accent)' : 'var(--bg-surface-2)',
+                color: isStaff ? '#ffffff' : 'inherit',
+                border: isStaff ? 'none' : '1px solid var(--border-color)',
+                borderTopRightRadius: isStaff ? '2px' : '12px',
+                borderTopLeftRadius: isStaff ? '12px' : '2px',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+              }}>
                 {m.pageNumber && (
                   <button
                     onClick={() => onFocusRegion({ pageNumber: m.pageNumber!, region: m.region })}
-                    title="Show this on the document"
+                    title="Focus marked area on document"
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px',
-                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                      color: 'var(--warning)', fontSize: '11px', fontWeight: 600,
+                      display: 'inline-flex', alignItems: 'center', gap: '5px', marginBottom: '8px',
+                      padding: '4px 8px', borderRadius: '6px', cursor: 'pointer',
+                      background: isStaff ? 'rgba(255,255,255,0.2)' : 'rgba(234,179,8,0.15)',
+                      color: isStaff ? '#ffffff' : 'var(--warning)',
+                      border: 'none', fontSize: '11px', fontWeight: 700,
                     }}>
-                    <CornerUpLeft size={11} /> page {m.pageNumber}
+                    <CornerUpLeft size={12} /> Jump to Page {m.pageNumber}
                   </button>
                 )}
 
                 {m.snapshotPath && (
-                  <img
-                    src={m.snapshotPath}
-                    alt={`Marked area on page ${m.pageNumber}`}
-                    onClick={() => m.pageNumber && onFocusRegion({ pageNumber: m.pageNumber, region: m.region })}
-                    style={{ maxWidth: '100%', borderRadius: '6px', marginBottom: '6px', cursor: 'pointer', border: '1px solid var(--border-color)' }}
-                  />
+                  <div style={{ marginBottom: '8px', overflow: 'hidden', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)' }}>
+                    <img
+                      src={m.snapshotPath}
+                      alt={`Marked crop on page ${m.pageNumber}`}
+                      onClick={() => m.pageNumber && onFocusRegion({ pageNumber: m.pageNumber, region: m.region })}
+                      style={{ maxWidth: '100%', display: 'block', cursor: 'pointer' }}
+                    />
+                  </div>
                 )}
 
-                {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
+                {m.body && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>}
 
                 {(m.attachments ?? []).map((a) => (
                   <a key={a.url} href={a.url} target="_blank" rel="noreferrer"
-                    style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--accent)', marginTop: '5px' }}>
-                    <ImageIcon size={11} /> {a.fileName}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px',
+                      marginTop: '8px', padding: '4px 8px', borderRadius: '6px',
+                      background: isStaff ? 'rgba(255,255,255,0.2)' : 'var(--bg-surface)',
+                      color: isStaff ? '#ffffff' : 'var(--accent)', textDecoration: 'none',
+                    }}>
+                    <ImageIcon size={12} /> {a.fileName}
                   </a>
                 ))}
               </div>
@@ -223,9 +277,5 @@ export const ThreadPanel: React.FC<Props> = ({
     </div>
   );
 };
-
-const Muted: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '16px 0' }}>{children}</div>
-);
 
 export default ThreadPanel;

@@ -86,10 +86,10 @@ export class PlanningService {
     const recommendations: AssayerRecommendation[] = [];
     for (const r of results) {
       let distanceKm: number | null = null;
-      if (branch.latitude && branch.longitude && r.assayer.latitude && r.assayer.longitude) {
+      if (branch.latitude && branch.longitude && r.assayer.effectiveLatitude && r.assayer.effectiveLongitude) {
         const route = await this.routingService.calculateRoute(
           { latitude: branch.latitude, longitude: branch.longitude },
-          { latitude: r.assayer.latitude, longitude: r.assayer.longitude },
+          { latitude: r.assayer.effectiveLatitude, longitude: r.assayer.effectiveLongitude },
         );
         distanceKm = route.distanceKm;
       }
@@ -117,8 +117,8 @@ export class PlanningService {
         city: r.assayer.city,
         distanceKm,
         score: r.score,
-        latitude: r.assayer.latitude,
-        longitude: r.assayer.longitude,
+        latitude: r.assayer.effectiveLatitude,
+        longitude: r.assayer.effectiveLongitude,
         baseFee,
         readableReasons,
         // Per-dimension scores so ops can see *why* this candidate ranked where they did,

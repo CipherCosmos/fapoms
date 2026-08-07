@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, Not } from 'typeorm';
+import { DataSource, Repository, In, Not, EntityManager } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
+import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { CustomerMasterVersionEntity } from '../customer-master/customer-master-version.entity';
 import { CustomerRecordEntity } from '../customer-master/customer-record.entity';
@@ -26,9 +27,11 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
-import { EventCategory, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority } from '@fapoms/shared';
+import { FeePolicyService } from '../pricing/fee-policy.service';
+import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance } from '@fapoms/shared';
 
-const TRAVEL_FEE_PER_KM = 8; // ₹8 per km allowance
+// Fee rates are no longer declared here. They resolve per client contract through
+// FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
 
 const ASSESSMENT_STATUS_MAP: Record<ProjectBranchStatus, AssessmentStatus> = {
   [ProjectBranchStatus.IMPORTED]: AssessmentStatus.PENDING_PLANNING,
@@ -89,11 +92,55 @@ export class AssignmentService {
     private readonly constraintEvaluator: ConstraintEvaluator,
     private readonly routingService: RoutingService,
     private readonly validationService: ValidationService,
+    private readonly feePolicyService: FeePolicyService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
 
 
+
+  /**
+   * Bring an assignment's schedule row to COMPLETED, creating it if the assignment was never
+   * scheduled through the Scheduling page.
+   *
+   * `schedules` is 1:1 with `assignments` and carries its own status, so the two can disagree.
+   * They are kept aligned here, in the caller's transaction, through the entity manager —
+   * previously this was hand-written SQL run outside any transaction, with failures logged to
+   * the console and otherwise ignored. The `@OneToOne` on ScheduleEntity.assignment provides
+   * the unique constraint that makes "one schedule per assignment" true at the database level,
+   * so the find-or-create below cannot produce a duplicate.
+   */
+  private async syncScheduleCompletion(
+    assignment: AssignmentEntity,
+    userId: string,
+    manager: EntityManager,
+  ): Promise<void> {
+    const scheduleRepo = manager.getRepository(ScheduleEntity);
+    const existing = await scheduleRepo.findOne({ where: { assignmentId: assignment.id } });
+
+    if (existing) {
+      existing.status = ScheduleStatus.COMPLETED;
+      // Preserved if already set: the first completion is the real one.
+      existing.completedAt = existing.completedAt ?? new Date();
+      existing.updatedBy = userId;
+      await scheduleRepo.save(existing);
+      return;
+    }
+
+    await scheduleRepo.save(
+      scheduleRepo.create({
+        assignmentId: assignment.id,
+        projectId: assignment.projectId,
+        assayerId: assignment.assayerId,
+        scheduledDate: assignment.scheduledDate ?? new Date(),
+        status: ScheduleStatus.COMPLETED,
+        completedAt: new Date(),
+        remarks: 'Completed audit',
+        createdBy: userId,
+        updatedBy: userId,
+      }),
+    );
+  }
 
   private async syncAssessmentStatus(assignment: AssignmentEntity): Promise<void> {
     if (assignment.assessment && assignment.projectBranch) {
@@ -171,9 +218,6 @@ export class AssignmentService {
     let calculatedTravelFee = 0;
     let distanceKm = 0;
 
-    const commProfile = await this.assayerService.getActiveCommercialProfile(assayer.id, scheduledDateObj || new Date()).catch(() => null);
-    const baseFee = commProfile?.baseFee ? Number(commProfile.baseFee) : 1200;
-
     if (projectBranch.branch?.latitude && projectBranch.branch?.longitude && assayer.latitude && assayer.longitude) {
       try {
         const route = await this.routingService.calculateRoute(
@@ -181,16 +225,45 @@ export class AssignmentService {
           { latitude: Number(assayer.latitude), longitude: Number(assayer.longitude) }
         );
         distanceKm = route.distanceKm || 0;
-        // Local commute within 10 km is included in base fee. Allowance applies only for extra distance beyond 10 km.
-        const chargeableKm = Math.max(0, distanceKm - 10);
-        calculatedTravelFee = Math.round(chargeableKm * TRAVEL_FEE_PER_KM);
       } catch (e) {
-        // Fallback distance calculation if routing fails
+        // Routing unavailable — the quote below falls back to zero travel rather than
+        // guessing a distance, so ops sees base fee only instead of a fabricated allowance.
       }
     }
 
+    // One calculator, one rate card. The free-commute allowance and per-km rate come from
+    // the client's contract, not from a constant in this file.
+    const quote = await this.feePolicyService.quote({
+      assayerId: assayer.id,
+      clientId: projectBranch.project?.clientId ?? null,
+      configuration: projectBranch.project?.client?.configuration ?? undefined,
+      distanceKm,
+      onDate: scheduledDateObj || new Date(),
+    });
+    const baseFee = quote.baseFee;
+    calculatedTravelFee = quote.travelFee;
+
     if (resolvedProposedFee === undefined || resolvedProposedFee === null) {
-      resolvedProposedFee = baseFee + calculatedTravelFee;
+      resolvedProposedFee = quote.total;
+    } else {
+      // A client-supplied fee is an operator override, not a free-form number. The Day Plan
+      // screen sends its own `proposedFee`, and this branch used to accept it verbatim —
+      // which is precisely how the two divergent formulas both reached the database. The
+      // override is still honoured (ops genuinely negotiate), but it is now bounded, and
+      // anything above the computed quote is recorded as a deliberate deviation rather
+      // than silently becoming the price.
+      const override = Number(resolvedProposedFee);
+      if (!Number.isFinite(override) || override < 0) {
+        throw new BadRequestException('Proposed fee must be a non-negative number.');
+      }
+      const ceiling = quote.total * 2;
+      if (override > ceiling) {
+        throw new BadRequestException(
+          `Proposed fee ₹${override} exceeds twice the contracted quote (₹${quote.total}) for this branch and assayer. ` +
+          `Raise the client's rate card if this is intended.`,
+        );
+      }
+      resolvedProposedFee = override;
     }
 
     // Validate proposed date against Holiday calendar via ConstraintEvaluator
@@ -457,13 +530,13 @@ export class AssignmentService {
       if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.AUDIT_COMPLETED) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);
       }
-      // Also sync/upsert associated schedule to COMPLETED
-      await this.dataSource.query(
-        `INSERT INTO schedules (id, version, is_active, assignment_id, project_id, assayer_id, scheduled_date, status, completed_at, remarks, created_by, updated_by)
-         VALUES (gen_random_uuid(), 1, true, $1, $2, $3, COALESCE($4, CURRENT_DATE), 'COMPLETED'::schedules_status_enum, NOW(), 'Completed audit', $5, $5)
-         ON CONFLICT (assignment_id) DO UPDATE SET status = 'COMPLETED'::schedules_status_enum, completed_at = COALESCE(schedules.completed_at, NOW()), updated_by = EXCLUDED.updated_by`,
-        [assignment.id, assignment.projectId, assignment.assayerId, assignment.scheduledDate, userId]
-      ).catch((err) => console.error('Schedule completion upsert failed:', err));
+      // The matching schedule row is brought to COMPLETED inside the transaction below,
+      // via syncScheduleCompletion(). It used to happen here instead, as raw SQL issued on
+      // `this.dataSource` — outside the transaction that saves the assignment, and with
+      // `.catch(err => console.error(...))` swallowing any failure. Two consequences, both
+      // real: if the assignment save below rolled back, the schedule was already COMPLETED
+      // and stayed that way; and if the upsert itself failed, nothing surfaced it, leaving
+      // `schedules.status` and `assignments.status` silently disagreeing about the same job.
     } else {
       throw new BadRequestException(`Invalid assignment status transition to ${targetStatus}`);
     }
@@ -480,6 +553,12 @@ export class AssignmentService {
         await manager.save(assignment.assessment);
       }
       const savedAssign = await manager.save(assignment);
+
+      if (targetStatus === AssignmentStatus.COMPLETED) {
+        // Inside the transaction: either both the assignment and its schedule reach
+        // COMPLETED, or neither does.
+        await this.syncScheduleCompletion(savedAssign, userId, manager);
+      }
 
       await this.auditService.recordEvent({
         category: EventCategory.OPERATIONAL,
@@ -1058,10 +1137,57 @@ export class AssignmentService {
     lng: number,
     syncToken?: string,
     userId?: string,
+    accuracyMeters?: number,
   ): Promise<{ success: boolean; assignment: AssignmentEntity; error?: string; message?: string }> {
     const assignment = await this.findOne(id);
     if (!assignment) {
       return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
+    }
+
+    /**
+     * Only the assigned assayer may check in, and only from a state that means they were
+     * actually expected on site.
+     *
+     * Neither rule existed. Any authenticated assayer could check in on ANY assignment by id,
+     * and could do so directly from PENDING or REJECTED — recording attendance at a branch
+     * they had never accepted, skipping the acceptance step entirely. Both produce a
+     * falsified attendance record in what is meant to be bank audit evidence.
+     *
+     * Staff roles are allowed through so ops can correct a record on the assayer's behalf;
+     * `updatedBy` preserves who actually performed it.
+     */
+    const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
+    if (!actorIsAssignedAssayer) {
+      const actor = await this.dataSource
+        .getRepository(UserEntity)
+        .findOne({ where: { id: userId }, relations: ['roles'] })
+        .catch(() => null);
+      const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
+      const staffOverride = actorRoles.some((r) =>
+        [
+          SystemRole.SUPER_ADMINISTRATOR,
+          SystemRole.ADMINISTRATOR,
+          SystemRole.OPERATIONS_MANAGER,
+        ].includes(r as SystemRole),
+      );
+      if (!staffOverride) {
+        return {
+          success: false,
+          assignment,
+          error: 'NOT_YOUR_ASSIGNMENT',
+          message: 'You can only check in to an assignment that is assigned to you.',
+        };
+      }
+    }
+
+    const CHECK_IN_ALLOWED_FROM = [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS];
+    if (!CHECK_IN_ALLOWED_FROM.includes(assignment.status)) {
+      return {
+        success: false,
+        assignment,
+        error: 'INVALID_STATE_FOR_CHECK_IN',
+        message: `You need to accept this assignment before checking in. It is currently ${String(assignment.status).replace(/_/g, ' ').toLowerCase()}.`,
+      };
     }
 
     if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
@@ -1073,9 +1199,28 @@ export class AssignmentService {
       };
     }
 
-    const timeStr = new Date().toISOString();
-    const checkInRemarks = `GPS Checked in at (${lat}, ${lng}) on ${timeStr}`;
-    assignment.remarks = assignment.remarks ? `${assignment.remarks} | ${checkInRemarks}` : checkInRemarks;
+    /**
+     * Check-in position is stored in real columns, not concatenated into `remarks`.
+     *
+     * It used to be written only as free text — `"GPS Checked in at (12.9, 77.5) on ..."` —
+     * appended to a notes field. That cannot be queried, cannot be compared against the
+     * branch's own coordinates, and cannot be produced as evidence in a dispute. The distance
+     * from the branch is computed and stored now, so an out-of-geofence check-in is a fact on
+     * the row rather than something nobody can ever discover.
+     */
+    const now = new Date();
+    assignment.checkInLatitude = lat;
+    assignment.checkInLongitude = lng;
+    assignment.checkInAccuracyMeters = accuracyMeters ?? null;
+    assignment.checkedInAt = now;
+
+    const branchLat = Number(assignment.projectBranch?.branch?.latitude);
+    const branchLng = Number(assignment.projectBranch?.branch?.longitude);
+    assignment.checkInDistanceMeters =
+      Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
+        ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
+        : null;
+
     assignment.status = AssignmentStatus.CHECKED_IN;
     assignment.updatedBy = userId || assignment.assayerId || id;
     assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;

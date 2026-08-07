@@ -242,12 +242,12 @@ export class DistanceScoreCalculator implements ScoreCalculator {
   constructor(private readonly routingService: RoutingService) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    if (!context.branch.latitude || !context.branch.longitude || !assayer.latitude || !assayer.longitude) {
+    if (!context.branch.latitude || !context.branch.longitude || !assayer.effectiveLatitude || !assayer.effectiveLongitude) {
       return 0;
     }
     const route = await this.routingService.calculateRoute(
       { latitude: context.branch.latitude, longitude: context.branch.longitude },
-      { latitude: assayer.latitude, longitude: assayer.longitude },
+      { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
     );
     return Math.max(0, 100 - (route.distanceKm / 5));
   }
@@ -260,12 +260,12 @@ export class TravelTimeScoreCalculator implements ScoreCalculator {
   constructor(private readonly routingService: RoutingService) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    if (!context.branch.latitude || !context.branch.longitude || !assayer.latitude || !assayer.longitude) {
+    if (!context.branch.latitude || !context.branch.longitude || !assayer.effectiveLatitude || !assayer.effectiveLongitude) {
       return 0;
     }
     const route = await this.routingService.calculateRoute(
       { latitude: context.branch.latitude, longitude: context.branch.longitude },
-      { latitude: assayer.latitude, longitude: assayer.longitude },
+      { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
     );
     return Math.max(0, 100 - (route.durationMinutes / 6));
   }
@@ -463,12 +463,12 @@ export class ClientPreferenceScoreCalculator implements ScoreCalculator {
     const preferences = context.client?.planningPreferences || {};
 
     // 1. Distance Preferences
-    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+    if (context.branch.latitude && context.branch.longitude && assayer.effectiveLatitude && assayer.effectiveLongitude) {
       const distance = calculateHaversineDistance(
         Number(context.branch.latitude),
         Number(context.branch.longitude),
-        Number(assayer.latitude),
-        Number(assayer.longitude)
+        Number(assayer.effectiveLatitude),
+        Number(assayer.effectiveLongitude)
       );
 
       const minDistance = Number(preferences.minDistanceKm);
@@ -611,12 +611,12 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
     let score = 80; // Baseline
 
     // 1. Proximity & Travel Feasibility for SLA
-    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+    if (context.branch.latitude && context.branch.longitude && assayer.effectiveLatitude && assayer.effectiveLongitude) {
       const dist = calculateHaversineDistance(
         Number(context.branch.latitude),
         Number(context.branch.longitude),
-        Number(assayer.latitude),
-        Number(assayer.longitude)
+        Number(assayer.effectiveLatitude),
+        Number(assayer.effectiveLongitude)
       );
 
       if (dist <= 15) {

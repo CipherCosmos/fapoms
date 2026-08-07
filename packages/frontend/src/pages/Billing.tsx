@@ -232,15 +232,15 @@ export const Billing: React.FC = () => {
             payments and reporting.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button onClick={handleSync} disabled={sync.isPending} className="btn btn-secondary" title="Ingest real completed/checked-in assignments with agreed fees into billing"
-            style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <RefreshCw size={14} className={sync.isPending ? 'spin' : ''} /> {sync.isPending ? 'Syncing...' : 'Sync from Assignments'}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+            <RefreshCw size={15} className={sync.isPending ? 'spin' : ''} /> {sync.isPending ? 'Syncing...' : 'Sync from Assignments'}
           </button>
-          <button onClick={() => setShowEntryModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Plus size={14} /> Entry</button>
-          <button onClick={() => setShowInvoiceModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={14} /> Invoice</button>
-          <button onClick={() => setShowPayableModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Banknote size={14} /> Payable</button>
-          <button onClick={() => setShowConflictModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={14} /> Conflict</button>
+          <button onClick={() => setShowEntryModal(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><Plus size={15} /> Entry</button>
+          <button onClick={() => setShowInvoiceModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><FileText size={15} /> Invoice</button>
+          <button onClick={() => setShowPayableModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><Banknote size={15} /> Payable</button>
+          <button onClick={() => setShowConflictModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><AlertTriangle size={15} /> Conflict</button>
         </div>
       </div>
       {showEntryModal && <CreateBillingEntryModal onClose={() => setShowEntryModal(false)} />}

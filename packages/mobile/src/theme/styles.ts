@@ -115,7 +115,7 @@ export const styles = StyleSheet.create({
   activeTabItem: {
     backgroundColor: 'rgba(99, 102, 241, 0.18)',
     borderBottomWidth: 2,
-    borderBottomColor: '#6366f1',
+    borderBottomColor: '#FF6B00',
   },
   tabLabel: {
     fontSize: 11,
@@ -180,7 +180,7 @@ export const styles = StyleSheet.create({
   seqText: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#818cf8',
+    color: '#FF9E00',
     letterSpacing: 0.5,
   },
   branchName: {
@@ -548,8 +548,8 @@ export const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   catBtnActive: {
-    backgroundColor: '#6366f1',
-    borderColor: '#818cf8',
+    backgroundColor: '#FF6B00',
+    borderColor: '#FF9E00',
   },
   btnTextDark: {
     color: '#0f172a',

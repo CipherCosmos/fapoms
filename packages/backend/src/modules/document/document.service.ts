@@ -10,7 +10,6 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
-import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 import { EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod } from '@fapoms/shared';
 
 export interface CreateDocumentDto {
@@ -135,10 +134,24 @@ export class DocumentService {
     if (doc.projectBranchId) {
       try {
         await this.validationService.getOrAdvanceForHandBack(doc.projectBranchId, doc.assessmentId ?? null, actorId);
+        (saved as any).validationAdvanced = true;
       } catch (e) {
-        // A validation hiccup should not lose the hand-back itself — the head can
-        // still see the packet is done and open its case manually if this fails.
-        this.logger.warn(`Could not advance validation case for branch ${doc.projectBranchId}: ${(e as Error).message}`);
+        /**
+         * Still not fatal — losing the operator's completed work over a validation hiccup
+         * would be worse. But it is no longer *silent*: this used to log a warning and return
+         * HTTP 200, so a hand-back that never reached the head's review queue was
+         * indistinguishable from one that did. The packet then sat in "being worked" forever
+         * while the operator believed they had passed it on.
+         *
+         * The flag travels back to the caller so the UI can say "saved, but the reviewer has
+         * not been notified — please tell your supervisor" instead of a plain success.
+         */
+        this.logger.error(
+          `Hand-back saved for branch ${doc.projectBranchId} but its validation case did not advance to review: ${(e as Error).message}`,
+        );
+        (saved as any).validationAdvanced = false;
+        (saved as any).validationWarning =
+          'Your work was saved, but the reviewer was not notified automatically. Please tell your supervisor so this packet is not missed.';
       }
     }
     return saved;
@@ -159,7 +172,6 @@ export class DocumentService {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly notificationService: NotificationService,
     private readonly pushNotificationService: PushNotificationService,
-    private readonly localStorageService: LocalStorageService,
     private readonly validationService: ValidationService,
   ) {}
 

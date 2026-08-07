@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BrandLogo } from '../components/BrandLogo';
 
 interface LoginProps {
   onLoginSuccess: (accessToken: string, refreshToken: string) => void;
@@ -79,24 +80,11 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           
           {/* Logo Header */}
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <div style={{
-              background: 'var(--gradient-neon)',
-              width: '52px',
-              height: '52px',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--on-gradient)',
-              fontWeight: 800,
-              fontSize: '26px',
-              fontFamily: 'var(--font-display)',
-              margin: '0 auto 16px auto',
-              boxShadow: '0 0 20px rgba(216,174,71,0.4), 0 0 0 1px rgba(216,174,71,0.35), inset 0 1px 0 rgba(255,255,255,0.4)',
-              position: 'relative'
-            }}>
-              <span style={{ position: 'relative', zIndex: 1 }}>S</span>
-              <span style={{ position: 'absolute', inset: '5px', borderRadius: '8px', border: '1px solid rgba(33,26,20,0.18)', pointerEvents: 'none' }} />
+            {/* The real mark, not a letter tile. This was a 52px square showing "S"
+                on a gold gradient — a stand-in that no longer matched the brand once
+                the flame logo existed. BrandLogo renders the same SVG as the sidebar. */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+              <BrandLogo size="lg" showSubtext={false} />
             </div>
             <h1 style={{ fontSize: '24px', fontWeight: 800, fontFamily: 'var(--font-display)', marginBottom: '6px', color: 'var(--text-primary)' }}>Sumeru Audit Suite</h1>
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Field Audit Planning & Operations Management</p>

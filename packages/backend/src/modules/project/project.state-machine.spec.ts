@@ -93,4 +93,40 @@ describe('ProjectBranchStateMachine', () => {
     expect(event.previousState).toBe(ProjectBranchStatus.IMPORTED);
     expect(event.newState).toBe(ProjectBranchStatus.PLANNING);
   });
+
+  describe('markUnableToCover', () => {
+    it('records a coverage failure from IMPORTED with a reason', () => {
+      const event = ProjectBranchStateMachine.markUnableToCover(pb, 'user-1', 'No assayer within 120km');
+      expect(pb.status).toBe(ProjectBranchStatus.UNABLE_TO_COVER);
+      expect(event.previousState).toBe(ProjectBranchStatus.IMPORTED);
+    });
+
+    it('requires a reason — an unexplained coverage failure is not reportable', () => {
+      expect(() => ProjectBranchStateMachine.markUnableToCover(pb, 'user-1', '   ')).toThrow(BadRequestException);
+      expect(pb.status).toBe(ProjectBranchStatus.IMPORTED);
+    });
+
+    it('refuses to mark a branch that has already been audited', () => {
+      pb.status = ProjectBranchStatus.AUDIT_COMPLETED;
+      expect(() => ProjectBranchStateMachine.markUnableToCover(pb, 'user-1', 'too late')).toThrow(BadRequestException);
+    });
+
+    it('refuses to mark a closed branch', () => {
+      pb.status = ProjectBranchStatus.CLOSED;
+      expect(() => ProjectBranchStateMachine.markUnableToCover(pb, 'user-1', 'too late')).toThrow(BadRequestException);
+    });
+  });
+
+  describe('reopenCoverage', () => {
+    it('returns an uncoverable branch to PLANNING', () => {
+      pb.status = ProjectBranchStatus.UNABLE_TO_COVER;
+      ProjectBranchStateMachine.reopenCoverage(pb, 'user-1');
+      expect(pb.status).toBe(ProjectBranchStatus.PLANNING);
+    });
+
+    it('only applies to a branch actually marked uncoverable', () => {
+      pb.status = ProjectBranchStatus.SCHEDULED;
+      expect(() => ProjectBranchStateMachine.reopenCoverage(pb, 'user-1')).toThrow(BadRequestException);
+    });
+  });
 });

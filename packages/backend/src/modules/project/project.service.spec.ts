@@ -15,6 +15,8 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { AssessmentEntity } from './assessment.entity';
 import { ProjectQueryService } from './project-query.service';
+import { ZoneEntity } from '../zone/zone.entity';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 describe('ProjectService', () => {
   let service: ProjectService;
@@ -97,6 +99,14 @@ describe('ProjectService', () => {
         {
           provide: getRepositoryToken(ClientEntity),
           useValue: mockClientRepo,
+        },
+        {
+          provide: getRepositoryToken(ZoneEntity),
+          useValue: { createQueryBuilder: jest.fn(() => ({ where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getMany: jest.fn().mockResolvedValue([]) })), find: jest.fn().mockResolvedValue([]), findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: NotificationDispatchService,
+          useValue: { emit: jest.fn().mockResolvedValue(undefined), emitSafe: jest.fn() },
         },
         {
           provide: BranchQueryService,

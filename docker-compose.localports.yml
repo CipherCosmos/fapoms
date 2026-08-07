@@ -1,0 +1,35 @@
+# Local port-conflict override.
+#
+# Use when another project on this machine already owns the ports FAPOMS wants:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.localports.yml up -d
+#
+# On this machine the conflicts are a Next.js dev server on :3000 and an `adops` project
+# holding :5432 and :9000. Rather than stopping anyone else's work, this moves or withdraws
+# only FAPOMS' own host bindings.
+#
+# Two different Compose tags are needed here, and mixing them up is easy:
+#   `!reset []`  — empties the list, publishing NO host port.
+#   `!override`  — REPLACES the base list with the one given below.
+# Plain merging is the default, so declaring `["3001:3000"]` on its own would publish BOTH
+# 3000 and 3001 and leave the conflict in place.
+#
+# Nothing here changes container-internal ports, so service-to-service traffic is untouched:
+# the frontend still proxies to http://backend:3000 across the Docker network, and the backend
+# still reaches postgres:5432 and redis:6379 by service name.
+
+services:
+  # Postgres and MinIO need no host port at all — nothing outside Docker talks to them
+  # directly. Use `docker exec fapoms-postgres psql -U fapoms -d fapoms` for a shell.
+  postgres:
+    ports: !reset []
+
+  minio:
+    ports: !reset []
+
+  # Published on 3001 so the other project's :3000 keeps working.
+  # API:      http://localhost:3001/api/v1
+  # Swagger:  http://localhost:3001/api/docs
+  backend:
+    ports: !override
+      - "3001:3000"

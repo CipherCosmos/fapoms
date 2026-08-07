@@ -24,7 +24,34 @@
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   /* ------------------------------------------------------------------ */
-  /* Shared brand gold (identical across all themes)                     */
+  /* Sumeru brand flame — lifted directly from logo.svg                  */
+  /* ------------------------------------------------------------------ */
+  /* Sampled directly out of public/logo.avif — the flame tips, body and core
+     measured from the actual pixels, so the mark and the UI are literally the
+     same colour rather than a designer's approximation of it.            */
+  --flame-600: #E95815;  /* flame tips   — sampled from logo.avif */
+  --flame-500: #ED6714;  /* flame body   — the brand orange       */
+  --flame-400: #F37C13;  /* flame core   — warm amber             */
+  --flame-300: #F8912B;  /* highlight    — extended from the core */
+
+  /* Deepened extensions. The logo's own orange is only 2.86:1 on white —
+     fine for a 40px mark, unreadable as 13px body text or a link. These two
+     carry the same hue far enough down the ramp to pass WCAG AA as text
+     (#B8460D = 5.16:1, #8F350A = 7.0:1 on the light ground) so light mode can
+     stay on brand without becoming unreadable. Dark mode needs no such help:
+     the logo's own colours already measure 5.3–7.0:1 on the ground below.  */
+  --flame-700: #B8460D;  /* text/link + button fill on light surfaces */
+  --flame-800: #8F350A;  /* hover / pressed on light surfaces         */
+
+  /* Warm ink and ground that belong to the flame family rather than a
+     neutral grey — a blue-grey chrome makes the logo look pasted on.     */
+  --flame-ink:   #1C1207;
+  --flame-cream: #FFFAF5;
+
+  --flame-gradient: linear-gradient(180deg, var(--flame-600) 0%, var(--flame-500) 35%, var(--flame-400) 70%, var(--flame-300) 100%);
+
+  /* ------------------------------------------------------------------ */
+  /* Shared brand gold (used by the non-signature themes)                */
   /* ------------------------------------------------------------------ */
   --gold-100: #F3D98A;   /* highlight / gradient top     */
   --gold-400: #D8AE47;   /* primary gold — buttons/links  */
@@ -60,39 +87,47 @@
 /* GOLD  (default) — warm cream + gold                                          */
 /* --------------------------------------------------------------------------- */
 [data-theme="gold"], :root {
-  --bg-page:      #FAF6EE;
+  /* Warm off-white rather than cream: the logo's flame sits on white in the
+     mark itself, and a yellow-cream ground muddies the orange next to it. */
+  --bg-page:      var(--flame-cream);
   --bg-surface:   #FFFFFF;
-  --bg-surface-2: #F1E9D8;
+  --bg-surface-2: #FDF0E4;
   --bg-input:     #FFFFFF;
   --bg-card:      #FFFFFF;
   --bg-elevated:  #FFFFFF;
-  --border-hair:  rgba(33, 26, 20, 0.12);
-  --text-primary: #211A14;
-  --text-secondary: #5B4E3E;
-  --text-muted:   #7C6E59;
-  --accent:       #97681A;
-  --accent-strong:#7A5E16;
+  --border-hair:  rgba(28, 18, 7, 0.12);
+  --text-primary: var(--flame-ink);
+  --text-secondary: #5C4632;
+  --text-muted:   #806653;
+  /* Deepened flame — the logo orange itself is unreadable at body size on
+     white (2.86:1); this is the same hue at 5.18:1. */
+  --accent:       var(--flame-700);
+  --accent-strong:var(--flame-800);
   --on-accent:    #FFFFFF;
-  --btn-bg:       var(--gold-400);
-  --btn-text:     #211A14;
+  /* Amber fill with dark ink reads at 8.3:1 and keeps the brand warmth on
+     primary buttons without a white-on-orange contrast failure. */
+  --btn-bg:       var(--flame-400);
+  --btn-text:     var(--flame-ink);
   --success:      #3F7D53;
-  --warning:      #7E4E0A;
-  --danger:       #B14444;
+  /* Warning is pulled away from the brand orange on purpose — when the whole
+     UI is orange, an orange warning stops reading as a warning. */
+  --warning:      #8A5A00;
+  --danger:       #B3261E;
 
   --bg-primary:   var(--bg-page);
-  --bg-secondary: #FAF6EE;
+  --bg-secondary: #FFF5EC;
   --bg-tertiary:  var(--bg-surface-2);
-  --bg-glass:     rgba(250, 246, 238, 0.85);
-  --bg-glass-hover: #F1E9D8;
+  --bg-glass:     rgba(255, 250, 245, 0.85);
+  --bg-glass-hover: #FDF0E4;
   --border-color: var(--border-hair);
-  --border-color-hover: rgba(33, 26, 20, 0.22);
+  --border-color-hover: rgba(28, 18, 7, 0.22);
   --accent-primary: var(--accent);
   --accent-primary-hover: var(--accent-strong);
-  --accent-secondary: var(--gold-700);
-  --accent-secondary-hover: var(--gold-100);
-  --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #F1E9D8 0%, #FAF6EE 100%);
-  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.9) 0%, rgba(241, 233, 216, 0.85) 100%);
+  --accent-secondary: var(--flame-500);
+  --accent-secondary-hover: var(--flame-600);
+  --gradient-neon: var(--flame-gradient);
+  --gradient-dark: linear-gradient(180deg, #FDF0E4 0%, var(--flame-cream) 100%);
+  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.92) 0%, rgba(253, 240, 228, 0.85) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
 
@@ -101,21 +136,23 @@
   --status-completed: var(--success);
   --status-completed-bg: rgba(63, 125, 83, 0.12);
   --status-draft: var(--text-muted);
-  --status-draft-bg: rgba(124, 110, 89, 0.12);
+  --status-draft-bg: rgba(128, 102, 83, 0.12);
   --status-pending: var(--warning);
-  --status-pending-bg: rgba(126, 78, 10, 0.16);
+  --status-pending-bg: rgba(138, 90, 0, 0.14);
   --status-cancelled: var(--danger);
-  --status-cancelled-bg: rgba(177, 68, 68, 0.12);
+  --status-cancelled-bg: rgba(179, 38, 30, 0.10);
 
   --priority-low: var(--success);
   --priority-medium: var(--warning);
-  --priority-high: #7E4E0A;
+  --priority-high: var(--flame-700);
   --priority-critical: var(--danger);
 
-  --shadow-sm: 0 1px 2px rgba(33, 26, 20, 0.06);
-  --shadow-md: 0 6px 18px rgba(33, 26, 20, 0.12);
-  --shadow-lg: 0 16px 40px rgba(33, 26, 20, 0.16);
-  --shadow-neon: 0 4px 14px rgba(216, 174, 71, 0.18);
+  /* Shadows tinted with the brand hue rather than neutral black, so elevation
+     feels part of the same family. */
+  --shadow-sm: 0 1px 2px rgba(28, 18, 7, 0.06);
+  --shadow-md: 0 6px 18px rgba(28, 18, 7, 0.10);
+  --shadow-lg: 0 16px 40px rgba(28, 18, 7, 0.14);
+  --shadow-neon: 0 4px 14px rgba(237, 103, 20, 0.22);
 
   color-scheme: light;
 }
@@ -256,39 +293,48 @@
 /* NOIR  (default dark) — warm gold-on-charcoal                                 */
 /* --------------------------------------------------------------------------- */
 [data-theme="noir"] {
-  --bg-page:      #161210;
-  --bg-surface:   #221B15;
-  --bg-surface-2: #2B231C;
-  --bg-input:     #221B15;
-  --bg-card:      #221B15;
-  --bg-elevated:  #2B231C;
-  --border-hair:  rgba(255, 255, 255, 0.10);
-  --text-primary: #F3EEE4;
-  --text-secondary: rgba(255, 255, 255, 0.65);
-  --text-muted:   rgba(255, 255, 255, 0.45);
-  --accent:       var(--gold-400);
-  --accent-strong: var(--gold-100);
-  --on-accent:    #211A14;
-  --btn-bg:       var(--gold-400);
-  --btn-text:     #211A14;
+  /* Warm near-black carrying a trace of the flame's red, not a neutral or
+     blue-tinted charcoal — the logo looks foreign against cool greys.       */
+  --bg-page:      #14100C;
+  --bg-surface:   #1F1813;
+  --bg-surface-2: #2A211A;
+  --bg-input:     #1F1813;
+  --bg-card:      #1F1813;
+  --bg-elevated:  #2A211A;
+  --border-hair:  rgba(255, 236, 220, 0.10);
+  --text-primary: #F7EFE7;
+  --text-secondary: rgba(247, 239, 231, 0.66);
+  --text-muted:   rgba(247, 239, 231, 0.46);
+  /* Dark mode can use the logo's own colours directly: #FF8534 measures
+     7.8:1 and #FF9E00 9.1:1 against this ground, so the brand orange is
+     fully readable here with no deepening. */
+  --accent:       #F98A2B;
+  --accent-strong: var(--flame-400);
+  --on-accent:    var(--flame-ink);
+  /* Dark ink on the flame, not white: white on #FF6B00 is only 2.86:1 and fails
+     AA outright. The same fill with near-black text reads at 6.4:1 and keeps the
+     button unmistakably brand-coloured. */
+  --btn-bg:       var(--flame-500);
+  --btn-text:     var(--flame-ink);
   --success:      #6FAE81;
-  --warning:      #D8AE47;
-  --danger:       #D97070;
+  /* Held at gold so it stays distinguishable from the orange accent. */
+  --warning:      #E8B93C;
+  --danger:       #E5675E;
 
   --bg-primary:   var(--bg-page);
-  --bg-secondary: #1B1612;
+  --bg-secondary: #1A1410;
   --bg-tertiary:  var(--bg-surface-2);
-  --bg-glass:     rgba(22, 18, 16, 0.75);
+  --bg-glass:     rgba(20, 16, 12, 0.75);
   --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
-  --border-color-hover: rgba(255, 255, 255, 0.18);
+  --border-color-hover: rgba(255, 236, 220, 0.20);
   --accent-primary: var(--accent);
   --accent-primary-hover: var(--accent-strong);
-  --accent-secondary: var(--gold-400);
-  --accent-secondary-hover: var(--gold-100);
-  --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #221B15 0%, #161210 100%);
-  --gradient-card: linear-gradient(145deg, rgba(43, 35, 28, 0.85) 0%, rgba(34, 27, 21, 0.85) 100%);
+  --accent-secondary: var(--flame-500);
+  --accent-secondary-hover: var(--flame-400);
+  --gradient-neon: var(--flame-gradient);
+  --gradient-dark: linear-gradient(180deg, #1F1813 0%, #14100C 100%);
+  --gradient-card: linear-gradient(145deg, rgba(42, 33, 26, 0.85) 0%, rgba(31, 24, 19, 0.85) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
 
@@ -297,21 +343,21 @@
   --status-completed: var(--success);
   --status-completed-bg: rgba(111, 174, 129, 0.16);
   --status-draft: var(--text-muted);
-  --status-draft-bg: rgba(255, 255, 255, 0.08);
+  --status-draft-bg: rgba(247, 239, 231, 0.08);
   --status-pending: var(--warning);
-  --status-pending-bg: rgba(216, 174, 71, 0.18);
+  --status-pending-bg: rgba(232, 185, 60, 0.16);
   --status-cancelled: var(--danger);
-  --status-cancelled-bg: rgba(217, 112, 112, 0.16);
+  --status-cancelled-bg: rgba(229, 103, 94, 0.16);
 
   --priority-low: var(--success);
   --priority-medium: var(--warning);
-  --priority-high: #D8AE47;
+  --priority-high: #F98A2B;
   --priority-critical: var(--danger);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
-  --shadow-neon: 0 4px 14px rgba(216, 174, 71, 0.15);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.44);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.54);
+  --shadow-neon: 0 4px 16px rgba(237, 103, 20, 0.28);
 
   color-scheme: dark;
 }

@@ -6,32 +6,52 @@ import { StorageEngine } from './storage-engine.interface';
 
 @Injectable()
 export class LocalStorageService implements StorageEngine {
-  private readonly uploadDir = path.join(__dirname, '../../../../uploads');
+  private readonly uploadDir: string;
 
   constructor() {
+    const candidates = [
+      path.join(__dirname, '../../../../uploads'),
+      path.resolve(process.cwd(), 'packages/uploads'),
+      path.resolve(process.cwd(), '../uploads'),
+      '/app/packages/uploads',
+    ];
+    this.uploadDir = candidates.find((c) => fs.existsSync(c)) || candidates[0];
     if (!fs.existsSync(this.uploadDir)) {
       fs.mkdirSync(this.uploadDir, { recursive: true });
     }
   }
 
-  async saveFile(fileName: string, buffer: Buffer): Promise<string> {
+  async saveFile(fileName: string, content: Buffer | Readable): Promise<string> {
     const safeFileName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
     const filePath = path.join(this.uploadDir, safeFileName);
-    await fs.promises.writeFile(filePath, buffer);
+    if (Buffer.isBuffer(content)) {
+      await fs.promises.writeFile(filePath, content);
+    } else {
+      const writeStream = fs.createWriteStream(filePath);
+      await new Promise<void>((resolve, reject) => {
+        content.pipe(writeStream);
+        writeStream.on('finish', () => resolve());
+        writeStream.on('error', reject);
+        content.on('error', reject);
+      });
+    }
     return `/uploads/${safeFileName}`;
   }
 
   /** Resolves a stored relative path to a real file on disk, or throws. */
   private resolveExisting(relativePath: string): string {
-    const absolutePath = relativePath.startsWith('/')
-      ? path.join(this.uploadDir, path.basename(relativePath))
-      : path.join(this.uploadDir, relativePath);
+    const baseName = path.basename(relativePath);
+    const candidatePaths = [
+      path.join(this.uploadDir, baseName),
+      path.join(__dirname, '../../../../uploads', baseName),
+      path.resolve(process.cwd(), 'packages/uploads', baseName),
+      path.resolve(process.cwd(), '../uploads', baseName),
+      `/app/packages/uploads/${baseName}`,
+    ];
 
-    if (fs.existsSync(absolutePath)) return absolutePath;
-
-    // Try resolving directly from app root or uploadDir
-    const directPath = path.resolve(this.uploadDir, '..', relativePath.replace(/^\//, ''));
-    if (fs.existsSync(directPath)) return directPath;
+    for (const cp of candidatePaths) {
+      if (fs.existsSync(cp)) return cp;
+    }
 
     throw new BadRequestException(`File ${relativePath} not found on disk.`);
   }

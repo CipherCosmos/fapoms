@@ -569,34 +569,33 @@ export const Assignments: React.FC = () => {
                 </div>
               </div>
 
-              {/* Lifecycle actions — contextual to the current status. This is the
-                  page's actual management console, not just a viewer. */}
+              {/* Lifecycle actions — contextual to the current status. Touch-friendly hit targets for ops. */}
               {selectedAsn.status !== 'COMPLETED' && (
-                <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px', background: 'var(--bg-surface-2)' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                     {selectedAsn.status === 'PENDING' && (
                       <>
-                        <button onClick={() => { if (window.confirm('Accept this offer? This commits the assayer to the assignment.')) runTransition('ACCEPTED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
-                          ✓ Accept
+                        <button onClick={() => { if (window.confirm('Accept this offer? This commits the assayer to the assignment.')) runTransition('ACCEPTED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}>
+                          ✓ Accept Offer
                         </button>
-                        <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
-                          ✕ Reject
+                        <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
+                          ✕ Reject Offer
                         </button>
                       </>
                     )}
                     {['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
-                      <button onClick={() => { if (window.confirm('Mark this assignment complete? This is not reversible.')) runTransition('COMPLETED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
-                        ✓ Mark Complete
+                      <button onClick={() => { if (window.confirm('Mark this assignment complete? This is not reversible.')) runTransition('COMPLETED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}>
+                        ✓ Mark Audit Complete
                       </button>
                     )}
                     {['PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
-                      <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
-                        Cancel
+                      <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                        🚫 Cancel Assignment
                       </button>
                     )}
                     {['REJECTED', 'CANCELLED'].includes(selectedAsn.status) && (
-                      <button onClick={() => navigate('/planning')} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
-                        Reassign →
+                      <button onClick={() => navigate('/planning')} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+                        🔄 Reassign Branch →
                       </button>
                     )}
                     {selectedAsn.priority !== 'CRITICAL' && (

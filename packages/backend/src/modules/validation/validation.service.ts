@@ -36,6 +36,21 @@ export class ValidationService implements OnModuleInit {
       { from: [ValidationStatus.PENDING], to: ValidationStatus.ASSIGNED },
       { from: [ValidationStatus.ASSIGNED], to: ValidationStatus.OCR_PROCESSING },
       { from: [ValidationStatus.OCR_PROCESSING], to: ValidationStatus.HUMAN_REVIEW },
+      /**
+       * Hand-back straight to review, without passing through OCR.
+       *
+       * `getOrAdvanceForHandBack` explicitly handles a case sitting at PENDING — that is the
+       * normal state, since `getOrCreateForBranch` opens every case at PENDING the moment a
+       * packet is delegated. But this edge was never registered, so the workflow engine
+       * rejected the very first hand-back of every packet. The caller in
+       * `document.service.ts` catches and logs that, returning HTTP 200, so the operator saw
+       * "handed back" while the case silently stayed put and never reached the head's review
+       * queue. Work looked done and simply stopped moving.
+       *
+       * ASSIGNED is included for the same reason: a packet delegated to a member and typed up
+       * without an OCR pass must still be able to reach review.
+       */
+      { from: [ValidationStatus.PENDING, ValidationStatus.ASSIGNED], to: ValidationStatus.HUMAN_REVIEW },
       { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.APPROVED },
       { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.CORRECTION_REQUIRED },
       { from: [ValidationStatus.CORRECTION_REQUIRED], to: ValidationStatus.HUMAN_REVIEW },

@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { SystemRole } from '@fapoms/shared';
 
 /**
@@ -68,4 +69,27 @@ export function scopeAssayerListForRoles<T extends Record<string, any>>(
  */
 export function rolesOf(user: any): string[] {
   return (user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
+}
+
+/** True when the principal is an assayer acting on records other than their own. */
+export function isAssayerActingOnAnother(user: any, targetAssayerId: string): boolean {
+  return rolesOf(user).includes('ASSAYER') && user?.id !== targetAssayerId;
+}
+
+/**
+ * Rejects an assayer touching another assayer's record.
+ *
+ * Call sites previously wrote `req.user.role === SystemRole.ASSAYER && req.user.id !== id`.
+ * `req.user` has no scalar `role` — `AuthService.validateJwtPayload` returns
+ * `roles: [{ name: 'ASSAYER' }]` — so that condition was permanently `undefined === 'ASSAYER'`,
+ * i.e. always false. The guard read as if it protected the record and in fact never once ran:
+ * any assayer could write KYC and government-ID documents onto any other assayer's HR file.
+ *
+ * Centralised here so the roles-array shape is handled in exactly one place and the mistake
+ * cannot be repeated by copying the old pattern.
+ */
+export function assertSelfOrPrivileged(user: any, targetAssayerId: string, action = 'modify this record'): void {
+  if (isAssayerActingOnAnother(user, targetAssayerId)) {
+    throw new ForbiddenException(`You can only ${action} on your own record.`);
+  }
 }

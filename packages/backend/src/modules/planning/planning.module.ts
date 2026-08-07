@@ -3,6 +3,7 @@
  */
 
 import { Module, forwardRef } from '@nestjs/common';
+import { PricingModule } from '../pricing/pricing.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { CommandCenterService } from './command-center.service';
@@ -75,6 +76,7 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 
 @Module({
   imports: [
+    PricingModule,
     TypeOrmModule.forFeature([
       BranchEntity,
       AssayerEntity,

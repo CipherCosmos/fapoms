@@ -92,7 +92,9 @@ describe('BranchService', () => {
           },
           'user-1',
         ),
-      ).rejects.toThrow(/State 'UnknownState' not found/);
+        // Geocoding now reports the whole unresolvable address rather than blaming the state
+        // field alone — an unknown place is usually a typo in any of the three parts.
+      ).rejects.toThrow(/Could not verify .*UnknownState.* as a real place/);
     });
 
     it('should successfully create a branch if geography validation passes', async () => {

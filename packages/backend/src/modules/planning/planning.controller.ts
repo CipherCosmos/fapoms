@@ -298,6 +298,7 @@ export class PlanningController {
   }
 
   @Get('projects/:projectId/coverage')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get project planning coverage and metrics summary' })
   async getProjectCoverage(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const coverage = await this.planningOrchestratorService.getProjectCoverage(projectId);
@@ -499,6 +500,7 @@ export class PlanningController {
   }
 
   @Get('rules/:id')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get a business planning rule by ID' })
   async getRule(@Param('id', ParseUUIDPipe) id: string) {
     const rule = await this.planningService.getRule(id);

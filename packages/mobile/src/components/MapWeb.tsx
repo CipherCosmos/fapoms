@@ -10,12 +10,17 @@ export interface MapRenderProps {
   routeCoords: Array<{ latitude: number; longitude: number }>;
   showTraffic?: boolean;
   fitKey: number;
+  // Live navigation extras (native follow-camera uses these; web ignores them).
+  heading?: number;
+  follow?: boolean;
+  passedIndex?: number;
 }
 
-export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destination, routeCoords, fitKey }) => {
+export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destination, routeCoords, fitKey, passedIndex }) => {
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
   const routeRef = useRef<any>(null);
+  const routePassedRef = useRef<any>(null);
   const leafletRef = useRef<any>(null);
 
   useEffect(() => {
@@ -72,6 +77,7 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
 
       mapRef.current = map;
       routeRef.current = null;
+      routePassedRef.current = null;
 
       const bounds: [number, number][] = [[destination.latitude, destination.longitude]];
       if (origin) bounds.push([origin.latitude, origin.longitude]);
@@ -93,7 +99,7 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
     };
   }, [destination.latitude, destination.longitude, origin?.latitude, origin?.longitude]);
 
-  // Draw the route polyline whenever it changes.
+  // Draw the route polyline whenever it changes, tinting the travelled part.
   useEffect(() => {
     const map = mapRef.current;
     const L: any = leafletRef.current;
@@ -108,6 +114,22 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
       if (latlngs.length > 1) map.fitBounds(latlngs, { padding: [50, 60] });
     }, 150);
   }, [routeCoords, fitKey]);
+
+  // Travelled part of the route, drawn as a thinner grey overlay.
+  useEffect(() => {
+    const map = mapRef.current;
+    const L: any = leafletRef.current;
+    if (!map || !L || routeCoords.length < 2 || passedIndex == null || passedIndex < 1) return;
+    const latlngs = routeCoords
+      .slice(0, passedIndex + 1)
+      .map((c) => [c.latitude, c.longitude] as [number, number]);
+    if (!latlngs.length) return;
+    if (routePassedRef.current) {
+      routePassedRef.current.setLatLngs(latlngs);
+    } else {
+      routePassedRef.current = L.polyline(latlngs, { color: '#64748b', weight: 5, opacity: 0.85 }).addTo(map);
+    }
+  }, [routeCoords, passedIndex]);
 
   return (
     <View style={{ position: 'relative', flex: 1, overflow: 'hidden', backgroundColor: '#0f172a' }}>

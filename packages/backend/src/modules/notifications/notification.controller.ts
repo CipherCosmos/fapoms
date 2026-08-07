@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationCategory } from '@fapoms/shared';
 import { NotificationService } from './notification.service';
 import { PushNotificationService } from './push-notification.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, AnyAuthenticated } from '../auth/guards';
 import { DevicePlatform } from './device-token.entity';
 import { rolesOf } from '../assayer/assayer-visibility';
 
@@ -30,6 +30,7 @@ export class NotificationController {
   //
   // Authentication is required here regardless: these return one recipient's own data.
   @Get()
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Get a page of notifications for the authenticated user or assayer' })
   async findMyNotifications(
     @Req() req: any,
@@ -43,6 +44,7 @@ export class NotificationController {
   }
 
   @Get('unread-count')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Just the bell badge count — cheap enough to poll on its own' })
   async unreadCount(@Req() req: any) {
     const count = await this.notificationService.getUnreadCount(req.user.id);
@@ -50,6 +52,7 @@ export class NotificationController {
   }
 
   @Get('preferences')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Per-category channel preferences for the authenticated recipient' })
   async getPreferences(@Req() req: any) {
     const prefs = await this.notificationService.getPreferences(req.user.id, this.isAssayer(req.user));
@@ -57,6 +60,7 @@ export class NotificationController {
   }
 
   @Put('preferences/:category')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Turn a channel on or off for one notification category' })
   async setPreference(
     @Param('category') category: NotificationCategory,
@@ -71,6 +75,7 @@ export class NotificationController {
   }
 
   @Post(':id/read')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Mark one of your own notifications as read' })
   async markAsRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     // Previously `req?.user?.id || id`, which fell back to using the *notification id* as the
@@ -80,6 +85,7 @@ export class NotificationController {
   }
 
   @Post('read-all')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Mark every one of your unread notifications as read' })
   async markAllAsRead(@Req() req: any) {
     const updated = await this.notificationService.markAllAsRead(req.user.id);
@@ -87,6 +93,7 @@ export class NotificationController {
   }
 
   @Post('device-token')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Register or update push notification device token' })
   async registerDeviceToken(
     @Req() req: any,
@@ -103,6 +110,7 @@ export class NotificationController {
   }
 
   @Post('device-token/unregister')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Unregister a push notification device token' })
   async unregisterDeviceToken(@Req() req: any, @Body() dto: { token: string }) {
     if (!dto.token) throw new BadRequestException('token is required');

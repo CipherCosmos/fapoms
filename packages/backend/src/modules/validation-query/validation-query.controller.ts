@@ -1,42 +1,33 @@
 import {
   Controller, Get, Post, Param, Body, UseGuards, ParseUUIDPipe, Req, Res,
-  UseInterceptors, UploadedFile, UploadedFiles,
+  UseInterceptors, UploadedFile, UploadedFiles, Query, Inject, BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { memoryStorage } from 'multer';
 import { IsOptional, IsString, IsArray, IsNumber, IsObject } from 'class-validator';
 import { ValidationQueryService } from './validation-query.service';
 import { QueryThreadService } from './query-thread.service';
 import { QueryMessageAuthor } from './validation-query-message.entity';
 import { CreateValidationQueryDto, RespondValidationQueryDto } from './dto/validation-query.dto';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
-import * as fs from 'fs';
-import * as path from 'path';
 import { Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { DocumentAccessTokenService } from '../document/document-access-token.service';
+import { AuthService } from '../auth/auth.service';
 
-// Persistent storage: Docker volume bind-mounted at ./packages/uploads → /app/packages/backend/uploads
-const CHAT_UPLOADS_DIR = path.resolve(__dirname, '../../../../uploads/chat');
-
-// Ensure directory exists on module load
-if (!fs.existsSync(CHAT_UPLOADS_DIR)) {
-  fs.mkdirSync(CHAT_UPLOADS_DIR, { recursive: true });
-}
-
-// Multer disk storage configuration — saves files directly to disk, no base64
-const chatStorage = diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, CHAT_UPLOADS_DIR);
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, `${Date.now()}-${uuidv4().slice(0, 8)}-${safeName}`);
-  },
-});
+/**
+ * Multer memory-storage configuration for chat attachments.
+ *
+ * Files arrive in req.file.buffer and are immediately pushed to object storage
+ * (MinIO / S3). Nothing touches the local filesystem.
+ */
+const chatMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+};
 
 class PostQueryMessageDto {
   @IsOptional() @IsString() body?: string;
@@ -51,27 +42,43 @@ class PostQueryMessageDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('validation-queries')
 export class ValidationQueryController {
-  constructor(private readonly validationQueryService: ValidationQueryService,
-    private readonly threadService: QueryThreadService,) {}
+  constructor(
+    private readonly validationQueryService: ValidationQueryService,
+    private readonly threadService: QueryThreadService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
+    private readonly documentAccessTokenService: DocumentAccessTokenService,
+    private readonly authService: AuthService,
+  ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
-  // FILE UPLOAD — Multer multipart/form-data (production-grade, no base64)
+  // FILE UPLOAD — Multer memory storage + S3 (no filesystem)
   // ───────────────────────────────────────────────────────────────────────────
 
   @Post('upload-attachment')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Upload chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FilesInterceptor('files', 10, { storage: chatStorage, limits: { fileSize: 25 * 1024 * 1024 } }))
+  @UseInterceptors(FilesInterceptor('files', 10, chatMulterOptions))
   async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
-    const results = (files || []).map(file => ({
-      url: `/api/v1/validation-queries/attachment/${file.filename}`,
-      fileName: file.originalname,
-      fileType: file.mimetype,
-      size: file.size,
-      uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'VALIDATOR',
-      timestamp: new Date().toISOString(),
-    }));
+    const results = await Promise.all(
+      (files || []).map(async (file) => {
+        const key = await this.storage.saveFile(
+          `chat/${file.originalname}`,
+          file.buffer,
+          file.mimetype,
+        );
+        return {
+          // Return the key as the URL — the download endpoint resolves it via S3.
+          url: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}`,
+          s3Key: key,
+          fileName: file.originalname,
+          fileType: file.mimetype,
+          size: file.size,
+          uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'VALIDATOR',
+          timestamp: new Date().toISOString(),
+        };
+      }),
+    );
 
     return { success: true, data: results };
   }
@@ -81,15 +88,23 @@ export class ValidationQueryController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Upload single chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file', { storage: chatStorage, limits: { fileSize: 25 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', chatMulterOptions))
   async uploadSingleAttachment(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
     if (!file) {
       return { success: false, message: 'No file provided' };
     }
+
+    const key = await this.storage.saveFile(
+      `chat/${file.originalname}`,
+      file.buffer,
+      file.mimetype,
+    );
+
     return {
       success: true,
       data: {
-        url: `/api/v1/validation-queries/attachment/${file.filename}`,
+        url: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}`,
+        s3Key: key,
         fileName: file.originalname,
         fileType: file.mimetype,
         size: file.size,
@@ -99,36 +114,115 @@ export class ValidationQueryController {
     };
   }
 
+  @Get('attachment-token')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER,
+    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
+  )
+  @ApiOperation({ summary: 'Issue a short-lived HMAC signed token for downloading an attachment' })
+  async issueAttachmentToken(@Query('key') key: string) {
+    if (!key) throw new BadRequestException('key query parameter is required.');
+    const { token, expiresAt } = this.documentAccessTokenService.issue(key);
+    return {
+      success: true,
+      data: {
+        downloadUrl: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}?token=${token}`,
+        token,
+        expiresAt,
+      },
+    };
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
-  // FILE DOWNLOAD — Stream from persistent Docker volume
+  // FILE DOWNLOAD — Stream from object storage (MinIO / S3) with token auth
   // ───────────────────────────────────────────────────────────────────────────
 
-  @Get('attachment/:filename')
-  @ApiOperation({ summary: 'Download/view a chat attachment file' })
-  async downloadAttachment(@Param('filename') filename: string, @Res() res: Response) {
-    const safeName = path.basename(filename);
-    const filePath = path.join(CHAT_UPLOADS_DIR, safeName);
+  @Public()
+  @Get('attachment/*path')
+  @ApiOperation({ summary: 'Download/view a chat attachment file using JWT or signed HMAC token' })
+  async downloadAttachment(
+    @Param('path') pathParam: string | string[],
+    @Query('token') token: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const rawKey = Array.isArray(pathParam) ? pathParam.join('/') : pathParam;
+    const key = decodeURIComponent(rawKey);
 
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, message: 'File not found' });
+    // Check 1: User is already populated by Passport (e.g. Bearer header)
+    let user = req.user;
+
+    // Check 2: Try verifying `token` query param as a JWT access token
+    if (!user && token) {
+      try {
+        const payload = await this.authService.verifyJwtToken(token);
+        if (payload) {
+          user = await this.authService.validateJwtPayload(payload);
+        }
+      } catch {
+        // Not a valid JWT token — fallback to checking if it is an HMAC download token
+      }
     }
 
-    const ext = path.extname(safeName).toLowerCase();
+    // Check 3: If still no authenticated user, verify as a short-lived HMAC download token
+    if (!user) {
+      try {
+        this.documentAccessTokenService.verify(key, token);
+      } catch (err: any) {
+        try {
+          this.documentAccessTokenService.verify(`uploads/${key}`, token);
+        } catch {
+          throw err;
+        }
+      }
+    }
+
+    // Support candidate keys for both relative key format and legacy format
+    const candidateKeys = [
+      key,
+      `uploads/${key}`,
+      key.startsWith('uploads/') ? key.replace(/^uploads\//, '') : key,
+      `uploads/chat/${key}`,
+    ];
+
+    let resolvedKey: string | null = null;
+    let stat: { size: number; mtimeMs: number } | null = null;
+
+    for (const ck of candidateKeys) {
+      try {
+        stat = await this.storage.statFile(ck);
+        resolvedKey = ck;
+        break;
+      } catch {
+        // try next candidate
+      }
+    }
+
+    if (!resolvedKey || !stat) {
+      return res.status(404).json({ success: false, message: 'File not found in object storage' });
+    }
+
+    const ext = key.split('.').pop()?.toLowerCase() ?? '';
     const mimeMap: Record<string, string> = {
-      '.pdf': 'application/pdf',
-      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-      '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls': 'application/vnd.ms-excel',
-      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.txt': 'text/plain', '.csv': 'text/csv',
+      'pdf': 'application/pdf',
+      'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+      'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp',
+      'doc': 'application/msword',
+      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'xls': 'application/vnd.ms-excel',
+      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'txt': 'text/plain', 'csv': 'text/csv',
     };
     const contentType = mimeMap[ext] || 'application/octet-stream';
+    const fileName = key.split('/').pop() ?? 'attachment';
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
-    fs.createReadStream(filePath).pipe(res);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.setHeader('Content-Length', stat.size);
+
+    const stream = await this.storage.getFileStream(resolvedKey);
+    stream.pipe(res);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -138,8 +232,12 @@ export class ValidationQueryController {
   @Roles(...STAFF_ROLES)
   @Get()
   @ApiOperation({ summary: 'List validation queries' })
-  async findAll() {
-    const list = await this.validationQueryService.findByAssayer('');
+  async findAll(@Query('assayerId') assayerId?: string) {
+    if (assayerId) {
+      const list = await this.validationQueryService.findByAssayer(assayerId);
+      return { success: true, data: list };
+    }
+    const list = await this.validationQueryService.findAllQueries();
     return { success: true, data: list };
   }
 
@@ -172,6 +270,7 @@ export class ValidationQueryController {
   }
 
   @Get('validation-case/:validationCaseId')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all queries raised for a specific validation case' })
   async findByValidationCase(@Param('validationCaseId', ParseUUIDPipe) validationCaseId: string) {
     const list = await this.validationQueryService.findByValidationCase(validationCaseId);
@@ -179,6 +278,7 @@ export class ValidationQueryController {
   }
 
   @Get('assayer/:assayerId')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all pending queries assigned to an assayer' })
   async findByAssayer(@Param('assayerId') assayerId: string) {
     const list = await this.validationQueryService.findByAssayer(assayerId);
