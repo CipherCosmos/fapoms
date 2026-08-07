@@ -780,11 +780,23 @@ function AppMain() {
           unreadCount={unreadNotifCount}
           onClose={() => setNotifModalVisible(false)}
           onMarkRead={(id) => {
-            MobileApiService.markNotificationRead(id)
-              .then((ok) => { if (!ok) return; })
-              .catch(() => {});
+            // Marked read locally first so the list responds immediately, then reverted if the
+            // server disagrees. Previously the result was discarded entirely (behind a `.then`
+            // that did nothing), so a failed call left the row looking read until the next
+            // reload quietly brought it back.
             setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
             setUnreadNotifCount((c) => Math.max(0, c - 1));
+
+            MobileApiService.markNotificationRead(id)
+              .then((ok) => {
+                if (ok) return;
+                setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: false } : n)));
+                setUnreadNotifCount((c) => c + 1);
+              })
+              .catch(() => {
+                setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: false } : n)));
+                setUnreadNotifCount((c) => c + 1);
+              });
           }}
           onTapNotification={(n) => {
             setNotifModalVisible(false);

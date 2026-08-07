@@ -15,24 +15,69 @@ import * as Font from 'expo-font';
 const _glyphMap: Record<string, number> = require('@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json');
 const _fontAsset = require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf');
 
-const FONT_FAMILY = Platform.select({ android: 'ionicons', default: 'Ionicons' })!;
+/**
+ * One name for both registering and rendering the font.
+ *
+ * Android used to render with `'ionicons'` while `loadAsync` registered `'Ionicons'`. With
+ * expo-font the key passed to `loadAsync` *is* the family name, so the two never matched and
+ * every icon in the Android app fell back to a tofu box. The lowercase name is a
+ * react-native-vector-icons convention, which does not apply here.
+ */
+const FONT_FAMILY = 'Ionicons';
 
-// Load the Ionicons font. On web we also inject a @font-face rule.
-let _fontReady = false;
+let _fontReady = Font.isLoaded(FONT_FAMILY);
+const _fontListeners = new Set<() => void>();
+
 (async () => {
   try {
-    if (!Font.isLoaded('Ionicons')) {
-      await Font.loadAsync({ Ionicons: _fontAsset });
+    if (!_fontReady) {
+      await Font.loadAsync({ [FONT_FAMILY]: _fontAsset });
+      _fontReady = true;
     }
-    _fontReady = true;
-  } catch {}
+  } catch (err) {
+    // Not silent. Swallowing this is what let the name mismatch above ship unnoticed —
+    // every icon rendered as a box and nothing anywhere said why.
+    console.warn('Ionicons font failed to load; icons will render as boxes:', err);
+  } finally {
+    _fontListeners.forEach((notify) => notify());
+  }
 })();
+
+/**
+ * Re-renders the icon once the font finishes loading.
+ *
+ * The load is a module-level promise shared by every icon, so components that mounted before
+ * it resolved previously kept their tofu glyphs until something else happened to re-render
+ * them — on the login screen, nothing did.
+ */
+function useFontReady(): boolean {
+  const [ready, setReady] = React.useState(_fontReady);
+  useEffect(() => {
+    if (_fontReady) {
+      if (!ready) setReady(true);
+      return;
+    }
+    const notify = () => setReady(_fontReady);
+    _fontListeners.add(notify);
+    return () => {
+      _fontListeners.delete(notify);
+    };
+  }, [ready]);
+  return ready;
+}
 
 export type IconName = string;
 
 export const Icon: React.FC<{ name: IconName; size?: number; color?: string; style?: StyleProp<TextStyle> }> = ({ name, size = 20, color = '#fff', style }) => {
+  const ready = useFontReady();
   const glyph = _glyphMap[name as string];
   const char = glyph != null ? String.fromCodePoint(glyph) : '?';
+
+  // Until the font is registered, render nothing at icon size rather than the glyph's
+  // codepoint, which the system font draws as a tofu box.
+  if (!ready) {
+    return <View style={{ width: size, height: size }} />;
+  }
 
   return (
     <Text

@@ -23,12 +23,15 @@ import Settings from './pages/Settings';
 import { api } from './services/api';
 import HrWorkspace from './pages/hr/HrWorkspace';
 import DataEntryDesk from './pages/dataentry/DataEntryDesk';
+import ForcePasswordChange from './pages/ForcePasswordChange';
 
 interface UserProfile {
   displayName: string;
   email: string;
   username: string;
   roles: { name: SystemRole }[];
+  /** Set while the account still holds a password issued by someone else. */
+  mustChangePassword?: boolean;
 }
 
 export const App: React.FC = () => {
@@ -93,6 +96,29 @@ export const App: React.FC = () => {
         <Route path="/login" element={<Login onLoginSuccess={handleLoginSuccess} />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+    );
+  }
+
+  /**
+   * An account still on an issued password sees only the change-password form.
+   *
+   * After the token check because changing a password needs a session, and before the
+   * application because operational work should not happen under a credential that was handed
+   * out rather than chosen. Waits for the profile to load so a slow /users/me does not flash
+   * this screen at someone who does not need it.
+   */
+  if (!isLoadingUser && currentUser?.mustChangePassword) {
+    return (
+      <ForcePasswordChange
+        onChanged={() => {
+          setCurrentUser((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
+          try {
+            const cached = getCachedUser();
+            if (cached) localStorage.setItem('fapoms_user_cache', JSON.stringify({ ...cached, mustChangePassword: false }));
+          } catch {}
+        }}
+        onLogout={handleLogout}
+      />
     );
   }
 

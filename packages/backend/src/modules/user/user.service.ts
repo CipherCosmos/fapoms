@@ -356,7 +356,18 @@ export class UserService {
       throw new BadRequestException('Current password is incorrect.');
     }
 
+    // Matches the rule already enforced on the assayer path. Without it, a user forced to
+    // rotate off a seeded credential could satisfy the requirement with a single character.
+    if (!newPassword || newPassword.trim().length < 8) {
+      throw new BadRequestException('Your new password must be at least 8 characters.');
+    }
+    if (newPassword === currentPassword) {
+      throw new BadRequestException('Your new password must be different from your current one.');
+    }
+
     user.passwordHash = await bcrypt.hash(newPassword, 12);
+    // The holder has now chosen their own credential, so forced rotation is satisfied.
+    user.mustChangePassword = false;
     user.updatedBy = id;
     await this.userRepository.save(user);
 

@@ -261,6 +261,48 @@ export const Assignments: React.FC = () => {
 
   const selectedAsn = assignments.find(a => a.id === selectedAsnId);
 
+  /**
+   * Reimbursement claims raised by the assayer on this assignment.
+   *
+   * The expense endpoints existed with no operations surface at all, so a field worker could
+   * file a claim and nobody could approve it without calling the API directly.
+   */
+  const { data: expenses = [], refetch: refetchExpenses } = useQuery({
+    queryKey: ['assignment-expenses', selectedAsnId],
+    queryFn: () => api.request<any[]>(`/assignments/${selectedAsnId}/expenses`),
+    enabled: !!selectedAsnId,
+  });
+
+  const [reviewingExpenseId, setReviewingExpenseId] = useState<string | null>(null);
+
+  const reviewExpense = async (expenseId: string, approve: boolean) => {
+    // A rejection the assayer cannot understand is one they cannot correct, and the server
+    // requires a reason for exactly that reason.
+    let notes: string | undefined;
+    if (!approve) {
+      const entered = window.prompt('Why is this claim being rejected? The assayer will see this.');
+      if (entered === null) return;
+      if (!entered.trim()) {
+        setActionError('A reason is required to reject a claim.');
+        return;
+      }
+      notes = entered.trim();
+    }
+    setReviewingExpenseId(expenseId);
+    try {
+      await api.request(`/expenses/${expenseId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ approve, notes }),
+      });
+      await refetchExpenses();
+      setActionError(null);
+    } catch (err: any) {
+      setActionError(err?.message || 'Could not record the decision.');
+    } finally {
+      setReviewingExpenseId(null);
+    }
+  };
+
   const { data: timeline = [], isLoading: isLoadingTimeline } = useQuery({
     queryKey: queryKeys.assignments.timeline(selectedAsnId || ''),
     queryFn: () => api.request<TimelineEvent[]>(`/assignments/${selectedAsnId}/timeline`),
@@ -674,6 +716,42 @@ export const Assignments: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Expense claims — approve or reject without leaving the assignment. */}
+              {expenses.length > 0 && (
+                <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.3px' }}>
+                    EXPENSE CLAIMS ({expenses.length})
+                  </span>
+                  {expenses.map((e: any) => {
+                    const pending = e.status === 'PENDING';
+                    const tone = e.status === 'APPROVED' ? 'var(--success)' : e.status === 'REJECTED' ? 'var(--danger)' : 'var(--warning)';
+                    return (
+                      <div key={e.id} style={{
+                        display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                        background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)',
+                        borderRadius: 'var(--radius-sm)', padding: '7px 9px',
+                      }}>
+                        <span style={{ fontSize: '12px', fontWeight: 700 }}>₹{Number(e.amount).toLocaleString()}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{String(e.category).replace(/_/g, ' ').toLowerCase()}</span>
+                        {e.description && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{e.description}</span>}
+                        <span style={{ fontSize: '9px', fontWeight: 700, color: tone }}>{e.status}</span>
+                        {pending && (
+                          <span style={{ display: 'flex', gap: '4px' }}>
+                            <button onClick={() => reviewExpense(e.id, true)} disabled={reviewingExpenseId === e.id}
+                              className="btn btn-primary" style={{ padding: '2px 8px', fontSize: '9.5px' }}>Approve</button>
+                            <button onClick={() => reviewExpense(e.id, false)} disabled={reviewingExpenseId === e.id}
+                              className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '9.5px', color: 'var(--danger)' }}>Reject</button>
+                          </span>
+                        )}
+                        {!pending && e.reviewNotes && (
+                          <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', width: '100%' }}>Note: {e.reviewNotes}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Timeline Section */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px 16px', overflow: 'hidden' }}>

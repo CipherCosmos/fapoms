@@ -85,6 +85,26 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => { cancelled = true; };
   }, []);
 
+  /**
+   * One place where a position push succeeds or fails, so the outcome is recorded rather
+   * than discarded. Deliberately does not surface a toast — the push runs on a timer in the
+   * background and a transient signal drop is normal; it is a *sustained* failure that
+   * matters, which is what the counter makes visible.
+   */
+  const pushLiveLocation = useCallback((lat: number, lng: number) => {
+    MobileApiService.updateLiveLocation(lat, lng)
+      .then(() => setLiveTrackingFailures(0))
+      .catch((err: any) => {
+        setLiveTrackingFailures((n) => {
+          const next = n + 1;
+          if (next === 1 || next % 5 === 0) {
+            console.warn(`Live location push failed (${next} in a row):`, err?.message ?? err);
+          }
+          return next;
+        });
+      });
+  }, []);
+
   const requestLocationPermission = useCallback(async (): Promise<boolean> => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -124,7 +144,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
         setLocation(coords);
         setLoadingLocation(false);
-        MobileApiService.updateLiveLocation(coords.latitude, coords.longitude).catch(() => {});
+        pushLiveLocation(coords.latitude, coords.longitude);
         return coords;
       } else {
         // Permission refused. Say so plainly and report no position at all.
@@ -160,10 +180,10 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const cur = location;
       if (!cur) {
         const loc = await refreshLocation();
-        if (loc) MobileApiService.updateLiveLocation(loc.latitude, loc.longitude).catch(() => {});
+        if (loc) pushLiveLocation(loc.latitude, loc.longitude);
         return;
       }
-      MobileApiService.updateLiveLocation(cur.latitude, cur.longitude).catch(() => {});
+      pushLiveLocation(cur.latitude, cur.longitude);
     };
     report();
     reportTimerRef.current = setInterval(report, 30000);
@@ -181,7 +201,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Immediately report a fresh position so the switch takes effect right away.
       if (enabled) {
         const loc = await refreshLocation();
-        if (loc) MobileApiService.updateLiveLocation(loc.latitude, loc.longitude).catch(() => {});
+        if (loc) pushLiveLocation(loc.latitude, loc.longitude);
       }
     }
     return ok;
