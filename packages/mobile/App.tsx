@@ -42,6 +42,13 @@ import { RejectionModal } from './src/components/RejectionModal';
 import { ExpenseModal } from './src/components/ExpenseModal';
 import { NegotiateModal } from './src/components/NegotiateModal';
 
+/**
+ * How recently a notification must have arrived for a launch to count as "opened from it".
+ * Ten minutes comfortably covers seeing a banner and acting on it, without letting a tap
+ * from days ago keep redirecting every future launch.
+ */
+const DEEP_LINK_MAX_AGE_MS = 10 * 60 * 1000;
+
 function AppMain() {
   const theme = useTheme();
   const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword } = useAuth();
@@ -271,7 +278,24 @@ function AppMain() {
 
     getLastNotificationResponseAsync().then((response) => {
       const data = response?.notification?.request?.content?.data;
-      if (data) handleNotificationTap(data);
+      if (!data) return;
+
+      /**
+       * This call returns the last tapped notification *forever*, not only when that tap is
+       * what launched the app. Every cold start replayed the same old tap, so the app always
+       * opened on the schedule of whichever assignment was last notified about — the chosen
+       * landing tab was silently overridden on launch, every launch.
+       *
+       * A tap that genuinely launched this session belongs to a recently-delivered
+       * notification, so anything older than the window is treated as already handled.
+       * Erring toward ignoring is the safe side: the notification list is still one tap away,
+       * whereas a wrong redirect hijacks the whole app on every launch.
+       */
+      const deliveredAt = response?.notification?.date;
+      const ageMs = typeof deliveredAt === 'number' ? Date.now() - deliveredAt : Infinity;
+      if (ageMs > DEEP_LINK_MAX_AGE_MS) return;
+
+      handleNotificationTap(data);
     });
 
     const unsubscribe = setupNotificationListeners(
@@ -565,7 +589,6 @@ function AppMain() {
         <>
         {selectedTab === 'HOME' && (
           <HomeScreen
-            assayerName={user?.name || 'Assayer'}
             assignments={assignments}
             totalAssignments={profile.totalAssignments}
             completedAssignments={profile.completedAssignments}

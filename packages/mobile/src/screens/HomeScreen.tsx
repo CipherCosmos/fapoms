@@ -6,7 +6,6 @@ import { StatsScreen } from './StatsScreen';
 import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
 
 export interface HomeScreenProps {
-  assayerName: string;
   assignments: AssayerAssignment[];
   totalAssignments: number;
   completedAssignments: number;
@@ -48,7 +47,6 @@ const greeting = (): string => {
  * its one next action first, and demotes everything else to a summary.
  */
 export const HomeScreen: React.FC<HomeScreenProps> = ({
-  assayerName,
   assignments,
   totalAssignments,
   completedAssignments,
@@ -88,11 +86,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   return (
     <View style={{ gap: t.space['2xl'] }}>
+      {/*
+        Greeting and date only — the app bar directly above already shows the assayer's name
+        and code, so repeating the name here in display type spent the most valuable space on
+        the screen restating what the user just read.
+      */}
       <View style={{ gap: 2 }}>
+        <AppText variant="h2">{greeting()}</AppText>
         <AppText variant="small" tone="muted">
-          {greeting()}
+          {new Date().toLocaleDateString('en-IN', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+          })}
         </AppText>
-        <AppText variant="h1">{assayerName}</AppText>
       </View>
 
       {current ? (

@@ -51,6 +51,7 @@ import { RedisClientModule } from './infrastructure/redis/redis-client.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { APP_GUARD } from '@nestjs/core';
 
 @Module({
@@ -71,10 +72,29 @@ import { APP_GUARD } from '@nestjs/core';
      *
      * These are global defaults; the auth routes narrow them further with their own @Throttle.
      */
-    // A single unnamed ("default") throttler, because the per-route @Throttle decorators
-    // override by that key. Defining named throttlers here instead would leave those
-    // decorators referring to a throttler that does not exist.
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
+    /**
+     * A single unnamed ("default") throttler, because the per-route @Throttle decorators
+     * override by that key. Defining named throttlers here instead would leave those
+     * decorators referring to a throttler that does not exist.
+     *
+     * Counters live in Redis rather than process memory. In-memory storage gives each
+     * replica its own budget, so behind a load balancer an attacker gets N times the
+     * intended allowance simply by spreading requests, and every deploy resets the counters
+     * to zero. Redis is already a hard dependency here (queues, upload sessions), so this
+     * adds no new infrastructure.
+     */
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [{ ttl: 60_000, limit: 300 }],
+        storage: new ThrottlerStorageRedisService({
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD'),
+        }),
+      }),
+    }),
 
     // Database connection
     TypeOrmModule.forRootAsync({

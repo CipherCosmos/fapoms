@@ -94,6 +94,10 @@ services:
       - ./packages/backend/src:/app/packages/backend/src
       - ./packages/backend/nest-cli.json:/app/packages/backend/nest-cli.json
       - ./packages/backend/tsconfig.json:/app/packages/backend/tsconfig.json
+      # The dependency manifest, so the container resolves the same package set as the host.
+      # Without it, any `npm install` inside the container prunes packages added on the host
+      # (helmet, throttler) because the container's copy of this file predates them.
+      - ./packages/backend/package.json:/app/packages/backend/package.json
       # Operational scripts (password rotation, backfills) run inside the container so they
       # use the same network and credentials as the app.
       - ./packages/backend/scripts:/app/packages/backend/scripts

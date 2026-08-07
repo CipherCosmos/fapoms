@@ -23,6 +23,7 @@
     "@bull-board/api": "^8.3.0",
     "@bull-board/express": "^8.3.0",
     "@fapoms/shared": "*",
+    "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/bull": "^11.0.4",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
