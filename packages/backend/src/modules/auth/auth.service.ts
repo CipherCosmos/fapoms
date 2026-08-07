@@ -106,7 +106,7 @@ export class AuthService {
         select: {
           id: true, assayerCode: true, displayName: true, email: true, phone: true,
           organizationId: true, lifecycleStatus: true, passwordHash: true,
-          failedLoginAttempts: true, lockedUntil: true,
+          failedLoginAttempts: true, lockedUntil: true, mustChangePassword: true,
         },
       });
 
@@ -186,6 +186,10 @@ export class AuthService {
           email: assayer.email,
           phone: assayer.phone,
           status: assayer.lifecycleStatus,
+          // The client uses this to route straight to a change-password screen. Returned
+          // rather than enforced server-side at login so the user can still authenticate —
+          // they need a session in order to change the password at all.
+          mustChangePassword: !!assayer.mustChangePassword,
         },
       };
     }
@@ -241,6 +245,7 @@ export class AuthService {
         email: user.email,
         displayName: user.displayName,
         roles: user.roles,
+        mustChangePassword: !!user.mustChangePassword,
       },
     };
   }

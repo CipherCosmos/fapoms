@@ -1,4 +1,4 @@
-import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
@@ -130,4 +130,16 @@ export class AssignmentEntity extends BaseEntity {
   @ManyToOne(() => OperationsExecutionGroupEntity, (eg) => eg.assignments, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'execution_group_id' })
   executionGroup: OperationsExecutionGroupEntity | null;
+
+  /**
+   * Reimbursement claims raised against this visit.
+   *
+   * Declared by entity name rather than an imported class: ExpenseEntity already points back
+   * here, and importing it would close a cycle between the two modules. The mobile earnings
+   * screen reads `assignment.expenses`, which is why this is loaded with the assayer's
+   * assignment list — without it that screen totals an array that is never populated and
+   * reports ₹0 regardless of what was claimed.
+   */
+  @OneToMany('ExpenseEntity', 'assignment')
+  expenses: any[];
 }

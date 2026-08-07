@@ -22,6 +22,66 @@ import { SystemRole } from '@fapoms/shared';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, Min, MaxLength } from 'class-validator';
+
+/**
+ * Request bodies for the two assignment-mutating routes.
+ *
+ * Both previously typed their `@Body()` as `CreateAssignmentDto` / `UpdateAssignmentDetailsDto`,
+ * which are plain TypeScript *interfaces* declared in assignment.service.ts. Interfaces are
+ * erased at compile time, so ValidationPipe had no metadata to work with and every field went
+ * through unchecked. An empty `{}` body therefore travelled all the way to the INSERT and came
+ * back as `null value in column "assayer_id" violates not-null constraint` — a 500 where the
+ * caller should have been told which fields were missing.
+ *
+ * These classes implement the same interfaces, so the service signatures are unchanged and the
+ * compiler enforces that the two stay in step.
+ */
+class CreateAssignmentRequestDto implements CreateAssignmentDto {
+  @IsUUID()
+  projectBranchId: string;
+
+  @IsUUID()
+  assayerId: string;
+
+  @IsOptional() @IsNumber() @Min(0)
+  proposedFee?: number;
+
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+
+  @IsOptional() @IsString()
+  remarks?: string;
+
+  @IsOptional() @IsBoolean()
+  autoSchedule?: boolean;
+}
+
+/** Escalation reason is free text and optional; the endpoint applies a default when absent. */
+class EscalateAssignmentRequestDto {
+  @IsOptional() @IsString() @MaxLength(1000)
+  reason?: string;
+}
+
+/** A comment must actually say something — the route already rejects whitespace-only. */
+class AddCommentRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  comment: string;
+}
+
+class UpdateAssignmentDetailsRequestDto implements UpdateAssignmentDetailsDto {
+  @IsOptional() @IsNumber() @Min(0)
+  proposedFee?: number;
+
+  @IsOptional() @IsNumber() @Min(0)
+  agreedFee?: number;
+
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+
+  @IsOptional() @IsString()
+  remarks?: string;
+}
 
 @ApiTags('Assignments')
 @ApiBearerAuth()
@@ -114,7 +174,7 @@ export class AssignmentController {
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Create a new assignment in CREATED status' })
-  async create(@Body() dto: CreateAssignmentDto, @Req() req: any) {
+  async create(@Body() dto: CreateAssignmentRequestDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const assignment = await this.assignmentService.create(dto, userId);
     return {
@@ -186,7 +246,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Update assignment details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateAssignmentDetailsDto,
+    @Body() dto: UpdateAssignmentDetailsRequestDto,
     @Req() req: any,
   ) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
@@ -284,7 +344,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Flag an assignment as urgent (sets priority to CRITICAL) and notify the assigning user' })
   async escalate(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { reason?: string },
+    @Body() body: EscalateAssignmentRequestDto,
     @Req() req: any,
   ) {
     const userId = req.user.id;
@@ -306,14 +366,34 @@ export class AssignmentController {
     };
   }
 
+  // This route declared only @RequirePermissions and no @Roles. Every other route on this
+  // controller carries one, and the class does not set a default — so once RolesGuard became
+  // deny-by-default this returned 403 to every role including administrators, taking the
+  // Assignments page's only mutation with it. Confirmed against the running stack before fixing.
+  //
+  // Assayers are included because a field note from the person who actually attended the branch
+  // is the most useful comment on the thread; the ownership check below keeps them to their own.
   @Post(':id/comments')
-  @RequirePermissions('assignment:create:organization')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Post a comment to an assignment' })
   async addComment(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { comment: string },
+    @Body() body: AddCommentRequestDto,
     @Req() req: any,
   ) {
+    const roles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    if (roles.includes(SystemRole.ASSAYER)) {
+      const assignment = await this.assignmentService.findOne(id).catch(() => null);
+      if (!assignment || assignment.assayerId !== req.user?.id) {
+        throw new ForbiddenException('You can only comment on an assignment of your own.');
+      }
+    }
+
+    if (!body?.comment?.trim()) {
+      throw new BadRequestException('A comment cannot be empty.');
+    }
     const userName = req.user.displayName || req.user.email || 'System User';
     const comment = await this.assignmentService.addComment(id, body.comment, req.user.id, userName);
     return {

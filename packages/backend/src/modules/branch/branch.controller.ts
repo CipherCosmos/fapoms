@@ -12,6 +12,7 @@ import {
   ParseUUIDPipe,
   UseInterceptors,
   UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -267,8 +268,9 @@ export class BranchController {
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
   ) {
-    if (!file) {
-      return { success: false, error: 'No file uploaded.' };
+    // Same as above: this returned HTTP 201 Created for a request with no file attached.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
     const result = await this.branchService.importExcel(file.buffer, clientId, req.user.id);
     return { success: true, data: result };

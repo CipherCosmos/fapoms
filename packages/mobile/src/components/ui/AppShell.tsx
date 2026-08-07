@@ -15,7 +15,7 @@ import { AppText, Avatar, Icon, IconButton, Tappable } from './primitives';
 
 type IconName = string;
 
-export type TabType = 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
+export type TabType = 'HOME' | 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
 
 /** Safe top padding without pulling in react-native-safe-area-context. */
 const TOP_INSET = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 10, default: 16 });
@@ -69,6 +69,7 @@ export const TabDock: React.FC<{
 }> = ({ selected, onSelect, queryCount }) => {
   const t = useTheme();
   const tabs: TabSpec[] = [
+    { key: 'HOME', label: 'Home', icon: 'home-outline', iconActive: 'home' },
     { key: 'SCHEDULE', label: 'Route', icon: 'map-outline', iconActive: 'map' },
     { key: 'QUERIES', label: 'Queries', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', badge: queryCount },
     { key: 'EARNINGS', label: 'Earnings', icon: 'wallet-outline', iconActive: 'wallet' },

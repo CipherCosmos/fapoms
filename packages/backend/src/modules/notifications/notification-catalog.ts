@@ -53,6 +53,18 @@ const VALIDATION = ['VALIDATION_MANAGER', 'VALIDATOR'];
 const BOTH_CHANNELS = [NotificationChannel.IN_APP, NotificationChannel.PUSH];
 const IN_APP = [NotificationChannel.IN_APP];
 
+/**
+ * `link` is what the web app calls `navigate()` with when a notification is clicked
+ * (Notifications.tsx). It must therefore match a route the frontend actually declares.
+ *
+ * These used to read `/assignments/${assignmentId}`, and the frontend has no
+ * `/assignments/:id` route — only `/assignments`, which already accepts `?id=` and
+ * pre-selects that row. So every assignment notification fell through to the catch-all
+ * `path="*"` and silently redirected to the dashboard: the user clicked "New assignment
+ * offered — Thrissur Main" and landed on a dashboard with no explanation and no way back to
+ * the record. Six of the sixteen types were affected, including all the assignment-lifecycle
+ * ones that make up most real traffic.
+ */
 export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   // ── Assignment lifecycle ────────────────────────────────────────────────
   ASSIGNMENT_OFFERED: {
@@ -63,7 +75,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: BOTH_CHANNELS,
     title: 'New assignment offered',
     body: 'You have been offered ${branchName} on ${scheduledDate}. Please accept or decline.',
-    link: '/assignments/${assignmentId}',
+    link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
   ASSIGNMENT_ACCEPTED: {
@@ -73,7 +85,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'Assignment accepted',
     body: '${assayerName} accepted ${branchName}.',
-    link: '/assignments/${assignmentId}',
+    link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
   ASSIGNMENT_REJECTED: {
@@ -93,7 +105,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: BOTH_CHANNELS,
     title: 'Assignment escalated',
     body: '${branchName} has been marked critical. ${reason}',
-    link: '/assignments/${assignmentId}',
+    link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
   ASSIGNMENT_AUTO_DECLINED: {
@@ -116,7 +128,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: BOTH_CHANNELS,
     title: 'Clarification needed',
     body: 'A question was raised on your report for ${branchName}. Please respond.',
-    link: '/assignments/${assignmentId}',
+    link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
   VALIDATION_QUERY_ANSWERED: {
@@ -159,7 +171,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: BOTH_CHANNELS,
     title: 'Document needs re-upload',
     body: '${documentName} for ${branchName} was not accepted. Reason: ${reason}',
-    link: '/assignments/${assignmentId}',
+    link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
 
@@ -172,6 +184,43 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     title: 'Branch cannot be covered',
     body: '${branchName} has no available assayer and needs a decision.',
     link: '/planning',
+    skipActor: true,
+  },
+
+  // ── Expenses ────────────────────────────────────────────────────────────
+  // Reimbursement is money owed to a person for outlay they have already made, so both
+  // directions are worth pushing: ops needs to know a claim is waiting, and the assayer
+  // needs to know the outcome without having to keep checking the app.
+  EXPENSE_CLAIMED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.NORMAL,
+    roles: [...OPS, ...ADMINS, 'FINANCE_MANAGER'],
+    channels: IN_APP,
+    title: 'Expense claim submitted',
+    body: '₹${amount} (${category}) claimed against ${branchName}.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  EXPENSE_APPROVED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Expense approved',
+    body: 'Your ₹${amount} ${category} claim has been approved.',
+    link: '/earnings',
+    skipActor: true,
+  },
+  EXPENSE_REJECTED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Expense not approved',
+    body: 'Your ₹${amount} ${category} claim was not approved. Reason: ${reason}',
+    link: '/earnings',
     skipActor: true,
   },
 

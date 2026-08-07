@@ -1720,6 +1720,8 @@ export class AssayerService implements OnModuleInit {
 
     await this.assayerRepository.update(assayerId, {
       passwordHash: await bcrypt.hash(newPassword, 12),
+      // The holder has now chosen their own credential, so the forced-rotation flag clears.
+      mustChangePassword: false,
       failedLoginAttempts: 0,
       lockedUntil: null,
       updatedBy: assayerId,
@@ -1737,6 +1739,9 @@ export class AssayerService implements OnModuleInit {
       passwordHash: await bcrypt.hash(newPassword, 12),
       failedLoginAttempts: 0,
       lockedUntil: null,
+      // A password chosen by HR is a temporary credential, not the assayer's own. Forcing a
+      // change at next sign-in keeps a staff-known password from becoming the permanent one.
+      mustChangePassword: true,
       updatedBy: actorId,
     });
   }

@@ -29,6 +29,7 @@ describe('DocumentService', () => {
 
   const mockAssessmentRepo = {
     findOne: jest.fn(),
+    find: jest.fn(),
   };
 
   const mockAssignmentRepo: any = {
@@ -339,6 +340,36 @@ describe('DocumentService', () => {
           'user-1',
         ),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  /**
+   * `findByProject` passed the assessment-id array straight into `where` cast to `any`, which
+   * TypeORM renders as `assessment_id = $1` with a Postgres array literal — the endpoint 500'd
+   * with `invalid input syntax for type uuid: "{...}"` for any project that had assessments.
+   * The empty case was worse: `assessmentId: undefined` is dropped from the WHERE clause
+   * entirely, so a project with none returned every document in the system.
+   */
+  describe('findByProject', () => {
+    it('filters by assessment ids using In(), not an array equality', async () => {
+      mockAssessmentRepo.find.mockResolvedValue([{ id: 'a-1' }, { id: 'a-2' }]);
+      mockDocumentRepo.find.mockResolvedValue([]);
+
+      await service.findByProject('p-1');
+
+      const where = mockDocumentRepo.find.mock.calls[0][0].where;
+      // A FindOperator, not a bare array — the bare array is what produced invalid SQL.
+      expect(Array.isArray(where.assessmentId)).toBe(false);
+      expect(where.assessmentId).toEqual(expect.objectContaining({ type: 'in', value: ['a-1', 'a-2'] }));
+    });
+
+    it('returns nothing for a project with no assessments, rather than every document', async () => {
+      mockAssessmentRepo.find.mockResolvedValue([]);
+      mockDocumentRepo.find.mockClear();
+
+      await expect(service.findByProject('empty-project')).resolves.toEqual([]);
+      // Must not fall through to an unfiltered query.
+      expect(mockDocumentRepo.find).not.toHaveBeenCalled();
     });
   });
 });

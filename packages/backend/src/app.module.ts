@@ -49,6 +49,9 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
 import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
 import { RedisClientModule } from './infrastructure/redis/redis-client.module';
 import { HealthController } from './health.controller';
+import { ExpenseModule } from './modules/expense/expense.module';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
@@ -57,6 +60,21 @@ import { HealthController } from './health.controller';
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
     }),
+
+    /**
+     * Request throttling.
+     *
+     * There was none, which matters most on `/auth/login`: an unauthenticated caller could
+     * try passwords as fast as the network allowed. That is not theoretical here — the seeded
+     * accounts share a small number of weak passwords, so an unthrottled login endpoint is
+     * the shortest path into a system holding bank audit evidence.
+     *
+     * These are global defaults; the auth routes narrow them further with their own @Throttle.
+     */
+    // A single unnamed ("default") throttler, because the per-route @Throttle decorators
+    // override by that key. Defining named throttlers here instead would leave those
+    // decorators referring to a throttler that does not exist.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
 
     // Database connection
     TypeOrmModule.forRootAsync({
@@ -117,10 +135,15 @@ import { HealthController } from './health.controller';
     QueueModule,
     SlaScannerModule,
 
+    ExpenseModule,
+
     // Real-time events
     RealtimeModule,
   ],
   controllers: [HealthController],
-  providers: [],
+  providers: [
+    // Applied globally so a new controller cannot be added without throttling by omission.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

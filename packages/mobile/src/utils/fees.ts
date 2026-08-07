@@ -16,8 +16,19 @@ export interface FeeBearingAssignment {
   agreedTravelFee?: number | null;
 }
 
-/** Commercial default used only when an assignment has no standard base fee configured yet. */
-export const DEFAULT_STANDARD_BASE_FEE = 1200;
+/**
+ * No client-side default fee.
+ *
+ * This used to fall back to a hardcoded ₹1200 when an assignment carried no fee of any kind.
+ * That was a seventh independent copy of a base-fee figure that the backend now resolves from
+ * the client's contracted rate card and the assayer's own commercial profile — so the number
+ * invented here could differ from what the worker is actually owed. Showing a field worker a
+ * fabricated figure for their own pay is worse than showing them nothing, so an unpriced
+ * assignment now resolves to 0 and the screens render it as "not set".
+ *
+ * In practice the server always sends `currentStandardBaseFee` (and a real proposed/agreed
+ * fee), so this path is defensive rather than routine.
+ */
 
 /**
  * Resolves the base audit fee (excluding travel) for an assignment.
@@ -29,7 +40,12 @@ export const DEFAULT_STANDARD_BASE_FEE = 1200;
 export function getAssignmentBaseFee(a: FeeBearingAssignment): number {
   if (a.agreedBaseFee && a.agreedBaseFee > 0) return a.agreedBaseFee;
   if (a.proposedFee && a.proposedFee > 0) return a.proposedFee;
-  return a.standardBaseFee || DEFAULT_STANDARD_BASE_FEE;
+  return a.standardBaseFee && a.standardBaseFee > 0 ? a.standardBaseFee : 0;
+}
+
+/** True when nothing on the assignment states a fee — render "not set", never a guess. */
+export function hasResolvedFee(a: FeeBearingAssignment): boolean {
+  return getAssignmentTotalFee(a) > 0;
 }
 
 /** Base fee (see {@link getAssignmentBaseFee}) plus any agreed travel allowance. */

@@ -60,6 +60,13 @@ export class ValidationQueryController {
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FilesInterceptor('files', 10, chatMulterOptions))
   async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
+    // Previously `(files || []).map(...)` — a request carrying no files produced an empty
+    // result set and HTTP 201, so a failed attach looked to the caller exactly like a
+    // successful one with nothing in it.
+    if (!files?.length) {
+      throw new BadRequestException('No files were uploaded.');
+    }
+
     const results = await Promise.all(
       (files || []).map(async (file) => {
         const key = await this.storage.saveFile(
@@ -90,8 +97,11 @@ export class ValidationQueryController {
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', chatMulterOptions))
   async uploadSingleAttachment(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
-    if (!file) {
-      return { success: false, message: 'No file provided' };
+    // Was `return { success: false, ... }`, which still went out as HTTP 201 Created. Any
+    // client branching on the status code — including anything using `response.ok` — read a
+    // rejected upload as a successful one.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded.');
     }
 
     const key = await this.storage.saveFile(

@@ -6,7 +6,7 @@
 
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In} from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
@@ -20,10 +20,11 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
 import * as xlsx from 'xlsx';
 import { geocodeIndia } from '../geo/india-geocoder';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { AssignmentEntity } from '../assignment/assignment.entity';
 
 async function getRealCoordinates(address: string, name: string, district: string, state: string): Promise<{ lat: number; lng: number }> {
   const pinMatch = address.match(/\b\d{6}\b/);
@@ -624,20 +625,63 @@ export class ProjectService implements OnModuleInit {
     const pb = await this.projectBranchRepository.findOne({
       where: { id: projectBranchId, projectId, isActive: true },
     });
-    if (pb) {
-      pb.isActive = false;
-      pb.updatedBy = userId;
-      await this.projectBranchRepository.save(pb);
 
-      await this.auditService.recordEvent({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'PROJECT_BRANCH_REMOVED',
-        entityType: 'PROJECT',
-        entityId: projectId,
-        userId,
-        remarks: `Removed branch association link ${projectBranchId}`,
-      });
+    // Previously wrapped in `if (pb) { ... }` with no else, so a branch that did not exist —
+    // or that existed but belonged to a *different* project — returned HTTP 200 and a branch
+    // list, reporting a removal that never happened. Silence on a delete is the worst possible
+    // answer: the operator believes the branch is gone and stops looking at it.
+    if (!pb) {
+      throw new NotFoundException(
+        `Branch link ${projectBranchId} was not found on project ${projectId}, so nothing was removed.`,
+      );
     }
+
+    /**
+     * A branch cannot be pulled out from under work already committed to it.
+     *
+     * There was no check here at all. Removing a branch deactivates the link that assignments,
+     * schedules, documents and validation cases all hang off — so doing it while an assayer
+     * held a live offer, or had already travelled and checked in, silently stranded their job:
+     * the assignment row survives pointing at an inactive branch, the assayer keeps seeing it
+     * in the app, and it disappears from every operations view. Completed and cancelled work is
+     * historical and safe to unlink.
+     */
+    const liveAssignment = await this.projectBranchRepository.manager
+      .getRepository(AssignmentEntity)
+      .findOne({
+        where: {
+          projectBranchId,
+          isActive: true,
+          status: In([
+            AssignmentStatus.PENDING,
+            AssignmentStatus.ACCEPTED,
+            AssignmentStatus.CHECKED_IN,
+            AssignmentStatus.IN_PROGRESS,
+          ]),
+        },
+      })
+      .catch(() => null);
+
+    if (liveAssignment) {
+      throw new BadRequestException(
+        `This branch has an active assignment (${liveAssignment.assignmentNumber}, ${liveAssignment.status}). ` +
+        `Cancel or complete it before removing the branch from the project.`,
+      );
+    }
+
+    pb.isActive = false;
+    pb.updatedBy = userId;
+    await this.projectBranchRepository.save(pb);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'PROJECT_BRANCH_REMOVED',
+      entityType: 'PROJECT',
+      entityId: projectId,
+      userId,
+      remarks: `Removed branch association link ${projectBranchId}`,
+    });
+
     return this.findProjectBranches(projectId);
   }
 

@@ -25,12 +25,13 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, MinLength, MaxLength } from 'class-validator';
 
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
+import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
 const STAFF_ASSAYER_EDITORS: string[] = [
@@ -40,14 +41,40 @@ const STAFF_ASSAYER_EDITORS: string[] = [
 ];
 
 /**
- * What an assayer may change about themselves from the mobile app: where to reach
- * them and where they are. Identity, banking and employment dates are HR's record
- * of the person — self-service edits there are a fraud and payroll risk.
+ * What an assayer may change about themselves from the mobile app.
+ *
+ * The mobile profile screen offers roughly twenty editable fields; this list held ten, so
+ * everything else was refused — and because the app reported success regardless of the
+ * response, a worker updating their emergency contact was told it saved when it had not.
+ *
+ * The split is by who the data belongs to, not by convenience:
+ *  - Personal facts (contact, address, next of kin, languages, skills, travel preferences)
+ *    are the worker's own and are theirs to correct. Nobody in HR knows their new phone
+ *    number sooner than they do.
+ *  - Payment details (PAN, bank account, IFSC) stay HR-maintained. Letting a payee silently
+ *    redirect their own payments is the classic payroll-diversion route, and these are audited
+ *    changes on a system producing legally significant evidence.
+ *  - Capacity limits (max daily/weekly workload) and licence numbers stay HR-maintained too:
+ *    they drive scheduling and eligibility, so an assayer could otherwise quietly remove
+ *    themselves from the planning pool by setting a limit to zero.
  */
 const SELF_EDITABLE_FIELDS: string[] = [
   'phone', 'alternatePhone', 'email',
   'address', 'city', 'district', 'state', 'pincode',
   'latitude', 'longitude',
+  'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+  'languages', 'skills', 'experienceYears',
+  'preferredRegions',
+];
+
+/**
+ * Fields the mobile app must render read-only. Exposed so the app can grey them out with a
+ * reason rather than presenting an input that silently refuses to save.
+ */
+const HR_MAINTAINED_FIELDS: string[] = [
+  'panNumber', 'bankAccountNumber', 'ifscCode',
+  'maxDailyWorkload', 'maxWeeklyWorkload',
+  'employmentType', 'performanceRating',
 ];
 
 class CreateAssayerRequestDto implements CreateAssayerDto {
@@ -533,6 +560,32 @@ export class UpdateAssayerDocumentRequestDto {
   remarks?: string;
 }
 
+
+/**
+ * Password bodies.
+ *
+ * Both routes typed `@Body()` as an inline object literal, which TypeScript erases — so the
+ * only checks were the hand-written `if (!dto?.newPassword)` guards below. Presence was
+ * enforced; length and composition were not, so a one-character password would have been
+ * accepted and hashed. That matters here more than most places: this deployment's assayer
+ * accounts currently share a single weak password, and these are the two routes that exist to
+ * move off it.
+ */
+class ChangeOwnPasswordRequestDto {
+  @IsString() @IsNotEmpty()
+  currentPassword: string;
+
+  @IsString() @MinLength(8, { message: 'Your new password must be at least 8 characters.' })
+  @MaxLength(128)
+  newPassword: string;
+}
+
+class ResetAssayerPasswordRequestDto {
+  @IsString() @MinLength(8, { message: 'The new password must be at least 8 characters.' })
+  @MaxLength(128)
+  newPassword: string;
+}
+
 @ApiTags('Assayers')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -619,6 +672,29 @@ export class AssayerController {
     return {
       success: true,
       data: scopeAssayerForRoles(assayer as any, rolesOf(req.user), req.user?.id === id),
+    };
+  }
+
+  /**
+   * Which profile fields the caller may edit.
+   *
+   * The mobile app previously had no way to know, so it rendered every field as editable and
+   * reported success on a refusal. Serving the policy rather than duplicating the list in the
+   * client keeps the two from drifting apart.
+   */
+  @Roles(SystemRole.ASSAYER, ...STAFF_ROLES)
+  @Get('profile/editable-fields')
+  @ApiOperation({ summary: 'Fields the current caller may self-edit, and those HR maintains' })
+  async getEditableFields(@Req() req: any) {
+    const isStaff = rolesOf(req.user).some((r) => STAFF_ASSAYER_EDITORS.includes(r));
+    return {
+      success: true,
+      data: {
+        selfEditable: isStaff ? null : SELF_EDITABLE_FIELDS,
+        hrMaintained: isStaff ? [] : HR_MAINTAINED_FIELDS,
+        // null selfEditable means "no restriction" — staff edit the whole record.
+        unrestricted: isStaff,
+      },
     };
   }
 
@@ -1085,6 +1161,12 @@ export class AssayerController {
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
   async uploadAssayers(@UploadedFile() file: any, @Req() req: any) {
+    // A submitted form with no file attached reaches here as `undefined`, and reading
+    // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
+    // needs to be told to pick a file, not shown a crash.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
     const result = await this.assayerService.uploadFromExcel(file.buffer, req.user.id);
     return {
       success: true,
@@ -1100,7 +1182,7 @@ export class AssayerController {
   @Post('me/change-password')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Change your own password (assayer)' })
-  async changeMyPassword(@Body() dto: { currentPassword: string; newPassword: string }, @Req() req: any) {
+  async changeMyPassword(@Body() dto: ChangeOwnPasswordRequestDto, @Req() req: any) {
     if (!dto?.currentPassword || !dto?.newPassword) {
       throw new BadRequestException('Please enter your current password and your new password.');
     }
@@ -1114,7 +1196,7 @@ export class AssayerController {
   @ApiOperation({ summary: "Reset an assayer's password (HR/admin)" })
   async resetAssayerPassword(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Body() dto: { newPassword: string },
+    @Body() dto: ResetAssayerPasswordRequestDto,
     @Req() req: any,
   ) {
     if (!dto?.newPassword) {

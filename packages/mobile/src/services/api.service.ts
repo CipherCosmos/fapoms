@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
-import { AssayerAssignment, AppNotification } from '../types/mobile-app';
+import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary } from '../types/mobile-app';
 import {
   getDefaultServerUrl,
   loadStoredServerUrl,
@@ -402,14 +402,90 @@ export class MobileApiService {
     return this.getAssayerProfile(id);
   }
 
-  static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string }> {
+  /**
+   * Save the signed-in assayer's own profile.
+   *
+   * Three things were wrong here. The path was `PUT /assayers/:id/profile`, which does not
+   * exist — only `GET` does — so every save returned 404. The payload was the whole profile
+   * screen state, including read-only statistics (earnings, completion counts, ratings) and
+   * fields the server refuses to let an assayer self-edit, which would have been rejected
+   * even against the correct route. And several field names did not match the backend at all
+   * (`emergencyName` vs `emergencyContactName`).
+   *
+   * Only self-editable fields are sent now, under their real names, with the comma-separated
+   * text inputs converted to the arrays the API expects.
+   */
+  /**
+   * Change the signed-in assayer's own password.
+   *
+   * Backed by `POST /assayers/me/change-password`, which verifies the current password,
+   * enforces a minimum length, and clears the forced-rotation flag on success.
+   */
+  static async changeOwnPassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/profile`, {
-        method: 'PUT',
-        body: JSON.stringify(profileData),
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/change-password`, {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
       });
       const data = await response.json().catch(() => ({}));
-      return { success: response.ok && data?.success !== false, error: data?.message };
+      if (!response.ok || data?.success === false) {
+        return {
+          success: false,
+          error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Could not change your password.'),
+        };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error changing password' };
+    }
+  }
+
+  static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string }> {
+    const toArray = (v: any): string[] =>
+      Array.isArray(v) ? v : String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+    const payload: Record<string, any> = {};
+    const put = (key: string, value: any) => {
+      if (value !== undefined && value !== null && value !== '') payload[key] = value;
+    };
+
+    put('phone', profileData.phone);
+    put('alternatePhone', profileData.alternatePhone);
+    put('email', profileData.email);
+    put('address', profileData.address);
+    put('city', profileData.city);
+    put('district', profileData.district);
+    put('state', profileData.state);
+    put('pincode', profileData.pincode);
+    // 0,0 is the "not known yet" marker in this app, not a real location off West Africa.
+    if (profileData.latitude && profileData.longitude) {
+      payload.latitude = Number(profileData.latitude);
+      payload.longitude = Number(profileData.longitude);
+    }
+    put('emergencyContactName', profileData.emergencyName);
+    put('emergencyContactPhone', profileData.emergencyPhone);
+    put('emergencyContactRelation', profileData.emergencyRelation);
+    if (profileData.skills) payload.skills = toArray(profileData.skills);
+    if (profileData.languages) payload.languages = toArray(profileData.languages);
+    if (profileData.preferredRegions) payload.preferredRegions = toArray(profileData.preferredRegions);
+    if (profileData.experienceYears != null) payload.experienceYears = Number(profileData.experienceYears) || 0;
+
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false) {
+        return {
+          success: false,
+          error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Save failed (${response.status})`),
+        };
+      }
+      return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error updating profile' };
     }
@@ -436,44 +512,198 @@ export class MobileApiService {
     }
   }
 
-  static async getAssayerBilling(assayerId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  /**
+   * Resumable upload for the audited-return PDF.
+   *
+   * `uploadCompletedAuditPdf` sends the whole file in one request and retries the *whole
+   * file* on failure. A branch visit ends with a multi-megabyte scan uploaded over rural
+   * mobile data, so a drop at 90% meant starting again — and the retry loop could burn four
+   * full attempts before giving up. This opens a session, sends fixed-size chunks, and on
+   * reconnect asks the server which chunks survived so it sends only the gaps.
+   *
+   * Falls back to the single-shot path when a session cannot be opened, so an older backend
+   * (or a misconfigured object store) still uploads rather than failing outright.
+   */
+  static async uploadAuditPdfResumable(
+    assessmentId: string,
+    fileName: string,
+    fileUri: string,
+    assignmentId?: string,
+    onProgress?: (percent: number) => void,
+  ): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
+    const info = await FileSystem.getInfoAsync(fileUri, { size: true });
+    if (!info.exists) return { success: false, error: 'The scanned file is no longer on the device.' };
+    const fileSize = (info as any).size as number;
+
+    let session: { uploadId: string; totalChunks: number; chunkSize: number } | null = null;
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/billing/assayer/${assayerId}`);
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && data.success) {
-        return { success: true, data: data.data };
+      const res = await this.fetchWithAuth(`${API_BASE_URL}/documents/upload/session`, {
+        method: 'POST',
+        body: JSON.stringify({ assessmentId, fileName, fileSize }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success && data.data?.uploadId) session = data.data;
+    } catch {
+      // Fall through to the single-shot path below.
+    }
+
+    if (!session) {
+      return this.uploadCompletedAuditPdf(assessmentId, fileName, { uri: fileUri }, assignmentId);
+    }
+
+    const { uploadId, totalChunks, chunkSize } = session;
+
+    // Ask which chunks already exist before sending anything. On a fresh session this is
+    // empty; on a resume it is what makes the whole exercise worthwhile.
+    let missing: number[] = Array.from({ length: totalChunks }, (_, i) => i);
+    try {
+      const res = await this.fetchWithAuth(`${API_BASE_URL}/documents/upload/session/${uploadId}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success && Array.isArray(data.data?.missingChunks)) {
+        missing = data.data.missingChunks;
       }
-      return { success: false, error: data.message || 'Failed to fetch billing records' };
+    } catch {
+      // Keep the full list — re-sending a chunk is safe, losing one is not.
+    }
+
+    for (const index of missing) {
+      const position = index * chunkSize;
+      const length = Math.min(chunkSize, fileSize - position);
+
+      const chunkUrl = `${API_BASE_URL}/documents/upload/session/${uploadId}/chunk/${index}`;
+      let sent = false;
+
+      // Three attempts per chunk. A chunk is small, so a retry here costs seconds rather
+      // than restarting the entire transfer.
+      for (let attempt = 1; attempt <= 3 && !sent; attempt++) {
+        let tempUri: string | null = null;
+        try {
+          const base64 = await FileSystem.readAsStringAsync(fileUri, {
+            encoding: FileSystem.EncodingType.Base64,
+            position,
+            length,
+          });
+
+          if (Platform.OS === 'web') {
+            // RN's Blob typings differ from the DOM's; on web this is the real browser Blob.
+            const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+            const blob = new (globalThis as any).Blob([bytes]);
+            const form = new FormData();
+            (form as any).append('chunk', blob, `${fileName}.part${index}`);
+            const res = await this.fetchWithAuth(chunkUrl, { method: 'PUT', body: form as any });
+            sent = res.ok;
+          } else {
+            /**
+             * Native goes through a temp file rather than FormData.
+             *
+             * React Native's FormData only accepts `{uri, name, type}` parts, not Blobs, and
+             * `atob` is not dependable under Hermes. Staging the slice on disk lets
+             * `uploadAsync` stream the raw bytes, which is also what the single-shot path does.
+             */
+            tempUri = `${FileSystem.cacheDirectory}chunk_${uploadId}_${index}`;
+            await FileSystem.writeAsStringAsync(tempUri, base64, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            const result = await FileSystem.uploadAsync(chunkUrl, tempUri, {
+              httpMethod: 'PUT',
+              uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+              fieldName: 'chunk',
+              headers: this.authToken ? { Authorization: `Bearer ${this.authToken}` } : undefined,
+            });
+            sent = result.status >= 200 && result.status < 300;
+          }
+        } catch {
+          sent = false;
+        } finally {
+          if (tempUri) await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
+        }
+        if (!sent && attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+
+      if (!sent) {
+        return {
+          success: false,
+          error: `Upload stalled at part ${index + 1} of ${totalChunks}. Reconnect and retry — the parts already sent are kept.`,
+        };
+      }
+      onProgress?.(Math.round(((index + 1) / totalChunks) * 100));
+    }
+
+    try {
+      const res = await this.fetchWithAuth(
+        `${API_BASE_URL}/documents/upload/session/${uploadId}/complete`,
+        { method: 'POST', body: JSON.stringify({ type: 'AUDITED_RETURN_PDF' }) },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success) {
+        return { success: true, documentUrl: `/documents/${data.data?.id}/download` };
+      }
+      return { success: false, error: data?.message || 'The upload could not be finalised.' };
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error fetching billing' };
+      return { success: false, error: err?.message || 'Network error finalising the upload.' };
     }
   }
 
-  static async getAssayerBillingEngineEntries(assayerId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  /**
+   * The signed-in assayer's own expense claims.
+   *
+   * `submitExpense` above has always existed, but nothing ever read the claims back — an
+   * assayer could file a reimbursement and then had no way to see whether it was approved,
+   * rejected or still sitting in the queue. Both endpoints scope to the caller's own record
+   * server-side, so no id is passed.
+   */
+  static async getMyExpenses(
+    status?: 'PENDING' | 'APPROVED' | 'REJECTED',
+  ): Promise<AssayerExpense[]> {
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/billing-engine/entries?assayerId=${assayerId}`);
+      const qs = status ? `?status=${status}` : '';
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/expenses/mine${qs}`);
       const data = await response.json().catch(() => ({}));
-      if (response.ok && data.success) {
-        return { success: true, data: data.data };
-      }
-      return { success: false, error: data.message || 'Failed to fetch billing entries' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error fetching billing entries' };
+      if (!response.ok || !data?.success) return [];
+      return (data.data || []).map((e: any) => ({
+        id: e.id,
+        assignmentId: e.assignmentId,
+        branchName:
+          e.assignment?.projectBranch?.branchName || e.assignment?.branchName || 'Unknown branch',
+        category: e.category,
+        amount: Number(e.amount) || 0,
+        description: e.description || '',
+        status: e.status,
+        receiptUrl: e.receiptUrl,
+        createdAt: e.createdAt,
+      }));
+    } catch {
+      return [];
     }
   }
 
-  static async getAssayerLedger(assayerId: string): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  /** Claim totals, for the earnings screen. */
+  static async getMyExpenseSummary(): Promise<ExpenseSummary> {
+    const empty: ExpenseSummary = { pending: 0, approved: 0, rejected: 0, totalClaimed: 0 };
     try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/ledger/assayer/${assayerId}`);
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/expenses/mine/summary`);
       const data = await response.json().catch(() => ({}));
-      if (response.ok && data.success) {
-        return { success: true, data: data.data };
-      }
-      return { success: false, error: data.message || 'Failed to fetch ledger entries' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error fetching ledger' };
+      if (!response.ok || !data?.success || !data.data) return empty;
+      const d = data.data;
+      return {
+        pending: Number(d.pending) || 0,
+        approved: Number(d.approved) || 0,
+        rejected: Number(d.rejected) || 0,
+        totalClaimed: Number(d.totalClaimed) || 0,
+      };
+    } catch {
+      return empty;
     }
   }
+
+  // Removed: getAssayerBilling, getAssayerBillingEngineEntries and getAssayerLedger.
+  //
+  // None of the three were called anywhere in the app, and two pointed at endpoints that have
+  // never existed — `/billing/assayer/:id` and `/ledger/assayer/:id` both 404. The earnings
+  // screen derives its figures from assignment fees and expense claims instead. If a real
+  // statement view is wanted later, the working endpoints are
+  // `GET /billing-engine/assayers/:assayerId/statement` and
+  // `GET /billing-engine/ledger/:entityType/:entityId`.
 
   static async getBranchDocuments(projectBranchId: string): Promise<{
     success: boolean;
@@ -523,7 +753,9 @@ export class MobileApiService {
           estimatedAuditHours: branch?.estimatedDurationHours != null ? Number(branch.estimatedDurationHours) : 0,
           status: (BACKEND_TO_MOBILE_STATUS as any)[item.status] || 'PENDING',
           proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
-          standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : 1200,
+          // Null, not an invented 1200 — see utils/fees.ts. The server resolves this from the
+          // assayer's commercial profile, so a missing value means "unknown", not "₹1200".
+          standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : null,
           agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
           agreedTravelFee: item.travelAllowance != null ? Number(item.travelAllowance) : 0,
           distanceKm: (() => {
@@ -546,7 +778,10 @@ export class MobileApiService {
           remarks: item.remarks || '',
           customers: item.customers || [],
           queries: item.queries || [],
-          expenses: item.expenses || [],
+          // `amount` arrives as a decimal string ("180.00") — Postgres numerics serialise that
+          // way. The earnings screen sums these with `+`, so leaving them as strings would
+          // concatenate rather than add ("0" + "180.00" = "0180.00") and show a nonsense total.
+          expenses: (item.expenses || []).map((e: any) => ({ ...e, amount: Number(e.amount) || 0 })),
         };
       });
     } catch (error) {

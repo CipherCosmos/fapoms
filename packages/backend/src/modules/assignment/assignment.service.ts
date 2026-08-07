@@ -900,7 +900,8 @@ export class AssignmentService {
           AssignmentStatus.CANCELLED,
         ]),
       },
-      relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project'],
+      // `expenses` feeds the mobile earnings screen's claim total, which had no data source.
+      relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project', 'expenses'],
       order: { createdAt: 'DESC' },
     });
 
@@ -1089,6 +1090,29 @@ export class AssignmentService {
         try {
           await this.rejectOffer(assignment.id, 'SYSTEM', 'AUTO_DECLINED_SLA_EXPIRED');
           declinedCount++;
+
+          // Reusing rejectOffer means ops was told the assayer *declined* — the same message
+          // a real refusal produces. Operationally those are different situations: a decline
+          // is an answer, a timeout means nobody responded at all and the assayer may not even
+          // know they were offered the work. `ASSIGNMENT_AUTO_DECLINED` exists in the catalogue
+          // for exactly this and had no code path able to emit it.
+          const withBranch = await this.assignmentRepository
+            .findOne({ where: { id: assignment.id }, relations: ['projectBranch', 'projectBranch.branch'] })
+            .catch(() => null);
+
+          this.notificationDispatch.emitSafe({
+            type: 'ASSIGNMENT_AUTO_DECLINED',
+            entityType: 'ASSIGNMENT',
+            entityId: assignment.id,
+            assayerId: assignment.assayerId,
+            ownerUserId: assignment.createdBy ?? null,
+            dedupeKey: `ASSIGNMENT_AUTO_DECLINED:${assignment.id}`,
+            payload: {
+              assignmentId: assignment.id,
+              assignmentNumber: assignment.assignmentNumber,
+              branchName: withBranch?.projectBranch?.branch?.name ?? 'A branch',
+            },
+          });
         } catch (err) {
           console.error(`Failed to auto-decline expired assignment ${assignment.id}:`, err);
         }

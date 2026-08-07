@@ -10,13 +10,59 @@ import { setupBullBoard } from './infrastructure/queue/bull-board.setup';
 
 import * as express from 'express';
 import * as compression from 'compression';
+import helmet from 'helmet';
+
+/**
+ * Configuration that must never reach production, checked before anything connects.
+ *
+ * These are fail-fast rather than warnings on purpose: each one is silent in the moment and
+ * expensive later, so the only safe behaviour is to refuse to start.
+ */
+export function assertProductionSafeConfig(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const fatal: string[] = [];
+
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret || jwtSecret === 'dev-secret') {
+    fatal.push('JWT_SECRET is unset or still the development default. Every access token would be forgeable by anyone who has read this repository.');
+  } else if (jwtSecret.length < 32) {
+    fatal.push('JWT_SECRET is shorter than 32 characters. Use a high-entropy random value.');
+  }
+
+  /**
+   * The one that would quietly destroy data.
+   *
+   * `synchronize: true` lets TypeORM reshape the live schema to match the entity classes on
+   * every boot — dropping columns, indexes and constraints it does not recognise, with no
+   * migration and no confirmation. This repository has already lost a unique index to it once
+   * (see notification.entity.ts, where a raw-SQL index had to be moved into a decorator after
+   * synchronize deleted it). Against a production database holding audit evidence for a bank,
+   * a single deploy could silently drop columns and the data in them.
+   */
+  if (process.env.DB_SYNCHRONIZE === 'true') {
+    fatal.push('DB_SYNCHRONIZE=true is not permitted in production — it rewrites the live schema from the entity classes and drops anything it does not recognise. Run migrations instead.');
+  }
+
+  if (!process.env.CORS_ORIGINS) {
+    fatal.push('CORS_ORIGINS is unset, so the API would fall back to localhost development origins and reject the real frontend.');
+  }
+
+  // A production database reachable with the development password is not a production database.
+  const dbPassword = process.env.DB_PASSWORD;
+  if (!dbPassword || ['postgres', 'password', 'fapoms', 'changeme'].includes(dbPassword)) {
+    fatal.push('DB_PASSWORD is unset or a well-known default.');
+  }
+
+  if (fatal.length > 0) {
+    throw new Error(
+      `Refusing to start in production with unsafe configuration:\n  - ${fatal.join('\n  - ')}`,
+    );
+  }
+}
 
 async function bootstrap() {
-  const nodeEnv = process.env.NODE_ENV;
-  const jwtSecret = process.env.JWT_SECRET;
-  if (nodeEnv === 'production' && (!jwtSecret || jwtSecret === 'dev-secret')) {
-    throw new Error('CRITICAL: JWT_SECRET must be set to a secure key in production environments!');
-  }
+  assertProductionSafeConfig();
 
   const app = await NestFactory.create(AppModule);
 
@@ -61,6 +107,26 @@ async function bootstrap() {
     }),
   );
 
+  /**
+   * Security response headers.
+   *
+   * There were none. The API serves audit documents and is called from a browser SPA, so the
+   * defaults that matter here are clickjacking protection, MIME-sniffing prevention and
+   * referrer suppression.
+   *
+   * `contentSecurityPolicy` is disabled deliberately: this process serves JSON and file
+   * downloads, not HTML pages, and helmet's default CSP breaks the Swagger UI that ops uses.
+   * `crossOriginResourcePolicy` is relaxed to cross-origin because the frontend is served from
+   * a different origin and fetches document blobs from here.
+   */
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
+
   // CORS configuration — allows frontend web and mobile app
   const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:8081,http://localhost:19006')
     .split(',')
@@ -91,4 +157,8 @@ async function bootstrap() {
   console.log(`Bull Board: http://localhost:${port}/bull-board`);
 }
 
-bootstrap();
+// Only start the server when this file is the entry point. Importing it (for example to unit
+// test the production-config guard above) must not boot the whole application.
+if (require.main === module) {
+  bootstrap();
+}

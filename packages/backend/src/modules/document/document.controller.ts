@@ -1,5 +1,6 @@
 import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import * as xlsx from 'xlsx';
@@ -18,6 +19,51 @@ import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
 import { AssignmentService } from '../assignment/assignment.service';
+
+
+/**
+ * Runtime-validated bodies for the document mutations.
+ *
+ * Each of these typed `@Body()` as an inline object literal. TypeScript erases that, so
+ * ValidationPipe had no metadata and the values arrived unchecked — a `documentIds` of
+ * `"not-an-array"` or a `status` outside the enum reached the service either way.
+ */
+class CreateUploadSessionRequestDto {
+  @IsUUID()
+  assessmentId: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(255)
+  fileName: string;
+
+  @IsInt() @Min(1)
+  fileSize: number;
+
+  @IsOptional() @IsInt() @Min(1)
+  chunkSize?: number;
+}
+
+class CompleteUploadSessionRequestDto {
+  @IsOptional() @IsEnum(DocumentType)
+  type?: DocumentType;
+
+  @IsOptional() @IsUUID()
+  assignmentId?: string;
+}
+
+class UpdateDocumentStatusRequestDto {
+  @IsEnum(DocumentStatus)
+  status: DocumentStatus;
+}
+
+class DispatchBatchRequestDto {
+  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  documentIds: string[];
+}
+
+class AssignDataEntryRequestDto {
+  @IsUUID()
+  assigneeId: string;
+}
 
 @ApiTags('Documents')
 @ApiBearerAuth()
@@ -251,7 +297,7 @@ export class DocumentController {
   )
   @ApiOperation({ summary: 'Open a resumable upload session' })
   async createUploadSession(
-    @Body() body: { assessmentId: string; fileName: string; fileSize: number; chunkSize?: number },
+    @Body() body: CreateUploadSessionRequestDto,
     @Req() req: any,
   ) {
     if (!body?.assessmentId || !body?.fileName) {
@@ -351,7 +397,7 @@ export class DocumentController {
   @ApiOperation({ summary: 'Assemble the chunks into the final document' })
   async completeUpload(
     @Param('uploadId') uploadId: string,
-    @Body() body: { type?: DocumentType; assignmentId?: string },
+    @Body() body: CompleteUploadSessionRequestDto,
     @Req() req: any,
   ) {
     const type = body?.type && (Object.values(DocumentType) as string[]).includes(body.type)
@@ -447,6 +493,12 @@ export class DocumentController {
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({ summary: 'Validate Customer Master Excel file' })
   async validateCustomerExcel(@UploadedFile() file: any) {
+    // A submitted form with no file attached reaches here as `undefined`, and reading
+    // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
+    // needs to be told to pick a file, not shown a crash.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
     const workbook = xlsx.read(file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -659,7 +711,7 @@ export class DocumentController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
   @RequirePermissions('document:edit:organization')
   @ApiOperation({ summary: 'Update document status' })
-  async updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: { status: DocumentStatus }, @Req() req: any) {
+  async updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDocumentStatusRequestDto, @Req() req: any) {
     const doc = await this.documentService.updateStatus(id, dto.status, req.user.id);
     return { success: true, data: doc };
   }
@@ -808,7 +860,7 @@ export class DocumentController {
     SystemRole.DOCUMENT_EXECUTIVE,
   )
   @ApiOperation({ summary: 'Release several documents to their assayers in one action' })
-  async dispatchBatch(@Body() body: { documentIds: string[] }, @Req() req: any) {
+  async dispatchBatch(@Body() body: DispatchBatchRequestDto, @Req() req: any) {
     if (!body?.documentIds?.length) {
       throw new BadRequestException('documentIds is required.');
     }
@@ -948,7 +1000,7 @@ export class DocumentController {
   @ApiOperation({ summary: 'Delegate a returned packet to a data entry team member' })
   async assignDataEntry(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { assigneeId: string },
+    @Body() body: AssignDataEntryRequestDto,
     @Req() req: any,
   ) {
     const doc = await this.documentService.assignForDataEntry(id, body.assigneeId, req.user.id);

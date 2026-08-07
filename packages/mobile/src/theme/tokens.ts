@@ -55,43 +55,54 @@ export interface Palette {
 }
 
 const dark: Palette = {
-  /* Warm near-black carrying a trace of the flame's red rather than the previous
-     blue-slate (#0A101C). The Sumeru mark is a warm orange flame; on a cool navy
-     ground it read as a sticker rather than part of the product. Every value below
-     is contrast-checked against this bg — the dimmest tier still measures 4.6:1. */
-  bg: '#14100C',
-  surface: '#1F1813',
-  surfaceAlt: '#2A211A',
-  surfacePress: 'rgba(255,236,220,0.08)',
-  border: 'rgba(255,236,220,0.12)',
-  borderStrong: 'rgba(255,236,220,0.24)',
+  /* Near-black with only a trace of warmth, and three clearly separated surface
+     tiers above it.
 
-  text: '#F7EFE7',
-  textMuted: '#B8A493',
-  textFaint: '#8C7A6B',
+     The previous ground (#14100C) was heavily brown, which forced every card to
+     carry a visible border to separate from it — the "boxes drawn on boxes" look
+     that dated the app. Depth now comes from the tier gap between bg/surface/
+     surfaceAlt plus elevation, so borders can drop to a hairline hint. Enough
+     warmth remains that the flame orange still reads as part of the family
+     rather than an accent bolted on. */
+  bg: '#121014',
+  surface: '#1C191E',
+  surfaceAlt: '#252128',
+  surfacePress: 'rgba(255,255,255,0.06)',
+  /* Halved from 0.12. At this weight a border is a seam, not an outline —
+     it separates adjacent surfaces without drawing a box around every element. */
+  border: 'rgba(255,255,255,0.06)',
+  borderStrong: 'rgba(255,255,255,0.14)',
 
-  /* The logo's own orange, used unmodified — on this ground it measures 7.8:1,
-     so dark mode needs none of the deepening light mode requires. */
+  text: '#F4F2F6',
+  textMuted: '#A8A2AE',
+  textFaint: '#7B7583',
+
+  /* The logo's own orange, unmodified — 7.6:1 on this ground. Reserved for the
+     single primary action on a screen; everything else uses neutrals or status. */
   primary: '#FF8534',
-  primarySoft: 'rgba(255,133,52,0.15)',
+  /* Softs dropped from 0.15 to 0.10. At 0.15 a "subtle" tint competed with the
+     solid primary button for attention, so nothing read as the main action. */
+  primarySoft: 'rgba(255,133,52,0.10)',
   onPrimary: '#1C1207',
 
-  accent: '#FF9E00',
-  accentSoft: 'rgba(255,158,0,0.15)',
+  accent: '#FFA53D',
+  accentSoft: 'rgba(255,165,61,0.10)',
   onAccent: '#1C1207',
 
-  success: '#6FBE86',
-  successSoft: 'rgba(111,190,134,0.15)',
+  /* Status hues desaturated toward the ground so a screen of badges reads as
+     information rather than a set of competing alerts. */
+  success: '#63B383',
+  successSoft: 'rgba(99,179,131,0.10)',
   /* Held at gold, distinct from the orange primary — a warning the same colour as
      every button stops functioning as a warning. */
-  warning: '#E8B93C',
-  warningSoft: 'rgba(232,185,60,0.15)',
-  danger: '#E5675E',
-  dangerSoft: 'rgba(229,103,94,0.15)',
-  info: '#7FB2E8',
-  infoSoft: 'rgba(127,178,232,0.15)',
+  warning: '#D9AE3F',
+  warningSoft: 'rgba(217,174,63,0.10)',
+  danger: '#DC6459',
+  dangerSoft: 'rgba(220,100,89,0.10)',
+  info: '#7AA9DB',
+  infoSoft: 'rgba(122,169,219,0.10)',
 
-  scrim: 'rgba(12,9,6,0.74)',
+  scrim: 'rgba(8,6,10,0.78)',
 };
 
 const light: Palette = {

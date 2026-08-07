@@ -38,6 +38,16 @@ export interface AssayerExpense {
   description: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   receiptUrl?: string;
+  /** Set when the claim is read back from `/expenses/mine`; absent on locally-built rows. */
+  createdAt?: string;
+}
+
+/** Claim totals from `/expenses/mine/summary`, in rupees. */
+export interface ExpenseSummary {
+  pending: number;
+  approved: number;
+  rejected: number;
+  totalClaimed: number;
 }
 
 export interface AssayerAssignment {

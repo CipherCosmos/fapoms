@@ -7,6 +7,12 @@ interface AuthUser {
   name: string;
   assayerCode?: string;
   email?: string;
+  /**
+   * Set when this account is still using a password somebody else chose — a seeded
+   * credential or an HR reset. The app routes straight to the change-password screen and
+   * will not show audit work until it is cleared.
+   */
+  mustChangePassword?: boolean;
 }
 
 interface AuthContextType {
@@ -18,6 +24,8 @@ interface AuthContextType {
   biometricLogin: () => Promise<{ success: boolean; error?: string }>;
   verifyIdentity: (identifier: string) => Promise<{ verified: boolean; assayer?: any; error?: string }>;
   logout: () => void;
+  /** Called after a successful password change so the app can leave the forced-change screen. */
+  clearMustChangePassword: () => void;
   refreshUserSession: () => Promise<void>;
 }
 
@@ -54,6 +62,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initSession();
   }, [initSession]);
 
+  /** Clears the forced-rotation flag locally once the server has accepted a new password. */
+  const clearMustChangePassword = () => {
+    setUser((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
+  };
+
   const login = async (u: string, p: string) => {
     setAuthenticating(true);
     const res = await MobileApiService.login(u, p);
@@ -63,6 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         id: res.user.id || MobileApiService.getCurrentUserId() || '',
         name: res.user.name || res.user.displayName || res.user.username || u,
         assayerCode: res.user.assayerCode,
+        mustChangePassword: !!res.user.mustChangePassword,
       });
       setAuthenticating(false);
       return { success: true };
@@ -158,6 +172,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         biometricLogin,
         verifyIdentity,
         logout,
+        clearMustChangePassword,
         refreshUserSession,
       }}
     >

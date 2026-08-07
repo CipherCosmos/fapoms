@@ -12,7 +12,7 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsObject } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength } from 'class-validator';
 
 import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
@@ -77,6 +77,147 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
   actions?: Record<string, any> | null;
 }
 
+/**
+ * Runtime-validated body for execution packaging. Was typed as the `GroupPackageDto`
+ * interface, which is erased at compile time — so ValidationPipe saw nothing and an empty
+ * body reached the service, which then threw on a missing assayer.
+ */
+class GroupPackageRequestDto implements GroupPackageDto {
+  @IsUUID()
+  assayerId: string;
+
+  @IsOptional() @IsString()
+  name?: string;
+
+  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  assignmentIds: string[];
+
+  @IsOptional() @IsObject()
+  logisticsPreferences?: any;
+}
+
+
+/**
+ * Runtime-validated bodies for the operations control-centre and field-visit routes.
+ *
+ * These three took their `@Body()` as an inline TypeScript object literal
+ * (`{ projectId: string; ... }`). Like an interface, that type is erased at compile time, so
+ * ValidationPipe had nothing to check and an empty body reached the service — each returned a
+ * 500 instead of telling the caller which fields were missing. Twenty-two other routes across
+ * the codebase still take bodies this way; these are the three that demonstrably crash.
+ */
+class CreateOperationsTaskRequestDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsString() @IsNotEmpty()
+  title: string;
+
+  @IsString() @IsNotEmpty()
+  reason: string;
+
+  @IsEnum(OperationsTaskPriority)
+  priority: OperationsTaskPriority;
+}
+
+class CreateOperationsExceptionRequestDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsEnum(OperationsExceptionCategory)
+  category: OperationsExceptionCategory;
+
+  @IsString() @IsNotEmpty()
+  message: string;
+
+  @IsOptional() @IsUUID()
+  targetEntityId?: string;
+}
+
+class CreateFieldVisitRequestDto {
+  @IsUUID()
+  coveragePlanId: string;
+
+  @IsUUID()
+  executionGroupId: string;
+
+  @IsUUID()
+  branchId: string;
+
+  @IsUUID()
+  assayerId: string;
+
+  @IsDateString()
+  plannedDate: string;
+}
+
+
+/**
+ * Runtime-validated bodies for the remaining planning mutations.
+ *
+ * All of these took inline object literals, which TypeScript erases — so status and severity
+ * fields typed as enums were accepted as any string, and required ids as anything at all.
+ */
+class UpdateFieldVisitStatusRequestDto {
+  @IsEnum(FieldVisitStatus)
+  status: FieldVisitStatus;
+}
+
+class CreateFieldIncidentRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(255)
+  title: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  description: string;
+
+  @IsEnum(IncidentSeverity)
+  severity: IncidentSeverity;
+}
+
+/** Resolving anything operational requires a stated reason — that is the point of the record. */
+class JustificationRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  justification: string;
+}
+
+class CreateConversationRequestDto {
+  @IsEnum(NegotiationParticipant)
+  sender: NegotiationParticipant;
+
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  message: string;
+
+  @IsOptional() @IsNumber() @Min(0)
+  feeOverride?: number;
+
+  @IsOptional() @IsDateString()
+  dateOverride?: string;
+}
+
+class CreateCoveragePlanRequestDto {
+  @IsOptional() @IsArray()
+  overrides?: PlanOverrideDto[];
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  justification?: string;
+}
+
+class TransitionCoveragePlanRequestDto {
+  @IsEnum(CoveragePlanStatus)
+  status: CoveragePlanStatus;
+}
+
+class SimulateScenarioRequestDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsOptional() @IsObject()
+  weightOverrides?: Record<string, number>;
+
+  @IsOptional() @IsNumber() @Min(0)
+  defaultRadiusOverride?: number;
+}
+
 @ApiTags('Planning')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -102,7 +243,7 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Initialize new field visit execution record' })
   async createVisit(
-    @Body() body: { coveragePlanId: string; executionGroupId: string; branchId: string; assayerId: string; plannedDate: string }
+    @Body() body: CreateFieldVisitRequestDto
   ) {
     const visit = await this.fieldService.createFieldVisit(
       body.coveragePlanId,
@@ -123,7 +264,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' })
   async transitionVisit(
     @Param('visitId', ParseUUIDPipe) visitId: string,
-    @Body() body: { status: FieldVisitStatus }
+    @Body() body: UpdateFieldVisitStatusRequestDto
   ) {
     const visit = await this.fieldService.transitionVisitStatus(visitId, body.status);
     return {
@@ -138,7 +279,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Report operational field incident (e.g. branch closed, assayer illness)' })
   async reportIncident(
     @Param('visitId', ParseUUIDPipe) visitId: string,
-    @Body() body: { title: string; description: string; severity: IncidentSeverity }
+    @Body() body: CreateFieldIncidentRequestDto
   ) {
     const incident = await this.fieldService.reportIncident(visitId, body.title, body.description, body.severity);
     return {
@@ -153,7 +294,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Resolve active field incident' })
   async resolveIncident(
     @Param('incidentId', ParseUUIDPipe) incidentId: string,
-    @Body() body: { justification: string }
+    @Body() body: JustificationRequestDto
   ) {
     const incident = await this.fieldService.resolveIncident(incidentId, body.justification);
     return {
@@ -188,7 +329,7 @@ export class PlanningController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Bundle multiple operational assignments into a single deployment package' })
-  async packageAssignments(@Body() dto: GroupPackageDto) {
+  async packageAssignments(@Body() dto: GroupPackageRequestDto) {
     const pkg = await this.executionService.packageAssignments(dto);
     return {
       success: true,
@@ -202,7 +343,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Record conversation message with fee/date negotiations' })
   async postMessage(
     @Param('groupId', ParseUUIDPipe) groupId: string,
-    @Body() body: { sender: NegotiationParticipant; message: string; feeOverride?: number; dateOverride?: string }
+    @Body() body: CreateConversationRequestDto
   ) {
     const msg = await this.executionService.postConversationMessage(
       groupId,
@@ -244,7 +385,7 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate manual operational task in the queue' })
   async createTask(
-    @Body() body: { projectId: string; title: string; reason: string; priority: OperationsTaskPriority }
+    @Body() body: CreateOperationsTaskRequestDto
   ) {
     const task = await this.controlCenterService.createOperationsTask(body.projectId, body.title, body.reason, body.priority);
     return {
@@ -259,7 +400,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Resolve an operations task with justification log' })
   async resolveTask(
     @Param('taskId', ParseUUIDPipe) taskId: string,
-    @Body() body: { justification: string }
+    @Body() body: JustificationRequestDto
   ) {
     const task = await this.controlCenterService.resolveOperationsTask(taskId, body.justification);
     return {
@@ -273,7 +414,7 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Flag managed exception rule violations' })
   async createException(
-    @Body() body: { projectId: string; category: OperationsExceptionCategory; message: string; targetEntityId?: string }
+    @Body() body: CreateOperationsExceptionRequestDto
   ) {
     const exc = await this.controlCenterService.flagException(body.projectId, body.category, body.message, body.targetEntityId);
     return {
@@ -288,7 +429,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Resolve or bypass exception log with justification' })
   async resolveException(
     @Param('exceptionId', ParseUUIDPipe) exceptionId: string,
-    @Body() body: { justification: string }
+    @Body() body: JustificationRequestDto
   ) {
     const exc = await this.controlCenterService.resolveException(exceptionId, body.justification);
     return {
@@ -325,7 +466,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Create or regenerate coverage plan version with manual overrides' })
   async createOrRegeneratePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Body() body: { overrides?: PlanOverrideDto[]; justification?: string },
+    @Body() body: CreateCoveragePlanRequestDto,
     @Req() req: any
   ) {
     const plan = await this.operationsPlanningService.createOrRegeneratePlan(projectId, body.overrides || [], req.user.id, body.justification);
@@ -341,7 +482,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' })
   async transitionPlan(
     @Param('planId', ParseUUIDPipe) planId: string,
-    @Body() body: { status: CoveragePlanStatus },
+    @Body() body: TransitionCoveragePlanRequestDto,
     @Req() req: any
   ) {
     const plan = await this.operationsPlanningService.transitionPlanStatus(planId, body.status, req.user.id);
@@ -394,7 +535,7 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' })
   async simulateScenario(
-    @Body() dto: { projectId: string; weightOverrides?: Record<string, number>; defaultRadiusOverride?: number }
+    @Body() dto: SimulateScenarioRequestDto
   ) {
     const plan = await this.scenarioPlanningService.simulatePlanningScenario(dto);
     return {

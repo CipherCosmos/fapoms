@@ -726,6 +726,12 @@ export class RiskScoreCalculator implements ScoreCalculator {
   }
 }
 
+/** Per-client data a batch of recommendation runs can share. */
+export interface RecommendationPreload {
+  client: ClientEntity | null;
+  assayers: AssayerEntity[];
+}
+
 @Injectable()
 export class RecommendationEngine {
   private static readonly logger = new Logger(RecommendationEngine.name);
@@ -805,12 +811,42 @@ export class RecommendationEngine {
     }
   }
 
+  /**
+   * Load the parts of a recommendation run that do not vary between branches of the same
+   * client, so a batch caller can pay for them once instead of once per branch.
+   *
+   * Coverage planning scores 31 clusters for a single project, and each `recommend()` call
+   * independently re-fetched the same client, re-loaded every active assayer, and re-ran
+   * workforce hydration over all of them — 31 times. That is most of why the coverage-plan
+   * endpoint took over four seconds on 72 branches, and it scales with branch count, so a
+   * national rollout would push it past any reasonable timeout.
+   */
+  async preloadContext(clientId?: string | null): Promise<RecommendationPreload> {
+    const client = clientId
+      ? await this.clientRepository.findOne({ where: { id: clientId, isActive: true } })
+      : null;
+
+    const assayers = await this.assayerRepository.find({
+      where: { isActive: true, status: AssayerStatus.ACTIVE },
+    });
+    await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+
+    return { client, assayers };
+  }
+
   async recommend(
     branch: BranchEntity,
     scheduledDate: Date,
     weights: Record<string, number> = {},
+    /**
+     * Supplied by batch callers that already hold the client and hydrated assayer list.
+     * Omitted, this method behaves exactly as before and loads them itself.
+     */
+    preloaded?: RecommendationPreload,
   ) {
-    const client = branch.clientId
+    const client = preloaded
+      ? preloaded.client
+      : branch.clientId
       ? await this.clientRepository.findOne({ where: { id: branch.clientId, isActive: true } })
       : null;
 
@@ -823,10 +859,15 @@ export class RecommendationEngine {
       weights: resolvedConfig.weights,
     };
 
-    const assayers = await this.assayerRepository.find({
-      where: { isActive: true, status: AssayerStatus.ACTIVE },
-    });
-    await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+    // Reused from the preload when a batch caller supplied one; hydration is idempotent and
+    // the scorers only read these, so sharing one list across branches is safe.
+    let assayers = preloaded?.assayers;
+    if (!assayers) {
+      assayers = await this.assayerRepository.find({
+        where: { isActive: true, status: AssayerStatus.ACTIVE },
+      });
+      await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+    }
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this
     // branch, so they can still be surfaced as a candidate (e.g. as their own backup reference,

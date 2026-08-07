@@ -1,7 +1,7 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AssayerAssignment } from '../types/mobile-app';
-import { getAssignmentTotalFee } from '../utils/fees';
+import { AssayerAssignment, AssayerExpense, ExpenseSummary } from '../types/mobile-app';
+import { getAssignmentTotalFee, hasResolvedFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import {
   AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Section, StatStrip, StatTile,
@@ -15,6 +15,15 @@ interface EarningsScreenProps {
   earningsAwaitingApproval?: number;
   assignments: AssayerAssignment[];
   onOpenExpenseModal: () => void;
+  /**
+   * The assayer's full claim history from `/expenses/mine`.
+   *
+   * Falls back to the claims embedded in the loaded assignments when the request has not
+   * resolved. Those only ever covered claims against currently-loaded assignments, so a
+   * claim on an older audit was invisible — which is why the server-side list is preferred.
+   */
+  claims?: AssayerExpense[];
+  claimSummary?: ExpenseSummary;
   qualityScore?: number | null;
   queryResolutionRate?: number;
   avgAuditHours?: number | null;
@@ -40,6 +49,19 @@ const BILLING_STATE: Record<string, { label: string; tone: Tone }> = {
   REJECTED: { label: 'Rejected', tone: 'danger' },
 };
 
+/** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */
+const CLAIM_TONE: Record<string, Tone> = {
+  APPROVED: 'success',
+  PENDING: 'warning',
+  REJECTED: 'danger',
+};
+
+const CLAIM_LABEL: Record<string, string> = {
+  APPROVED: 'Approved',
+  PENDING: 'Awaiting approval',
+  REJECTED: 'Rejected',
+};
+
 const money = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 /**
@@ -58,11 +80,14 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   assignments,
   billingEntries,
   onOpenExpenseModal,
+  claims,
+  claimSummary,
 }) => {
   const t = useTheme();
 
-  const expenses = assignments.flatMap((a) => a.expenses ?? []);
-  const totalExpenses = expenses.reduce((s, e) => s + (e?.amount ?? 0), 0);
+  const expenses = claims?.length ? claims : assignments.flatMap((a) => a.expenses ?? []);
+  const totalExpenses =
+    claimSummary?.totalClaimed ?? expenses.reduce((s, e) => s + (e?.amount ?? 0), 0);
   const owed = runningBalance ?? pendingEarnings ?? 0;
   const paid = earningsPaid ?? 0;
   const awaiting = earningsAwaitingApproval ?? 0;
@@ -137,7 +162,10 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   <AppText variant="bodyStrong">{money(exp.amount)}</AppText>
-                  <Badge label={String(exp.status)} tone={exp.status === 'APPROVED' ? 'success' : 'neutral'} />
+                  <Badge
+                    label={CLAIM_LABEL[exp.status] ?? String(exp.status)}
+                    tone={CLAIM_TONE[exp.status] ?? 'neutral'}
+                  />
                 </View>
               </Card>
             </FadeIn>
@@ -164,7 +192,11 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       : '—'}
                   </AppText>
                 </View>
-                <AppText variant="h3" tone="success">{money(getAssignmentTotalFee(a))}</AppText>
+                {/* An assignment with no fee on it is unpriced, not free — say so rather than
+                    rendering a zero or fabricated amount against someone's pay. */}
+                {hasResolvedFee(a)
+                  ? <AppText variant="h3" tone="success">{money(getAssignmentTotalFee(a))}</AppText>
+                  : <AppText variant="small" tone="muted">Fee not set</AppText>}
               </Card>
             </FadeIn>
           ))

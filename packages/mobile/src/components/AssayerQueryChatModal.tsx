@@ -6,7 +6,6 @@ import {
   Modal,
   ScrollView,
   TextInput,
-  Alert,
   StyleSheet,
   Image,
   KeyboardAvoidingView,
@@ -17,8 +16,9 @@ import * as FileSystem from 'expo-file-system';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { connectMobileSocket } from '../services/socket';
-import { MLKitScannerModal } from './MLKitScannerModal';
+import { DocumentScanner, readAsBase64 } from './DocumentScanner';
 import { useTheme } from '../theme/ThemeProvider';
+import { useFeedback } from './ui/Feedback';
 import { AppText, Icon, IconButton, Tappable } from './ui/primitives';
 
 interface AssayerQueryChatModalProps {
@@ -33,6 +33,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   assignment,
 }) => {
   const t = useTheme();
+  const feedback = useFeedback();
   const [queries, setQueries] = useState<any[]>([]);
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
   const [responseText, setResponseText] = useState('');
@@ -115,7 +116,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
             if (uploadRes && uploadRes.length > 0) {
               setAttachments((prev) => [...prev, ...uploadRes]);
             } else {
-              Alert.alert('Upload Failed', `Could not upload ${file.name}. Please retry.`);
+              feedback.error('Upload failed', `${file.name} was not attached. Please retry.`);
             }
           }
         };
@@ -135,11 +136,11 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         if (uploadRes && uploadRes.length > 0) {
           setAttachments((prev) => [...prev, ...uploadRes]);
         } else {
-          Alert.alert('Upload Failed', `Could not upload ${asset.name}. Please retry.`);
+          feedback.error('Upload failed', `${asset.name} was not attached. Please retry.`);
         }
       }
     } catch (err: any) {
-      Alert.alert('Attachment Error', err?.message || 'Failed to select file.');
+      feedback.error('Attachment failed', err?.message || 'The file could not be selected.');
     }
   };
 
@@ -150,7 +151,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   const handleSendResponse = async () => {
     if (!activeQueryId) return;
     if (!responseText.trim() && attachments.length === 0) {
-      Alert.alert('Empty Message', 'Please enter a message or attach a file.');
+      feedback.warning('Nothing to send', 'Enter a message or attach a file first.');
       return;
     }
 
@@ -172,10 +173,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         await loadQueries();
         setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
       } else {
-        Alert.alert('Delivery Failed', 'Could not send message. Please retry.');
+        feedback.error('Not delivered', 'The message could not be sent. Please retry.');
       }
     } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Network error.');
+      feedback.error('Not delivered', err?.message || 'Network error.');
     } finally {
       setIsSubmitting(false);
     }
@@ -324,7 +325,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                               setTimeout(() => g.document.body.removeChild(link), 500);
                             }
                           } catch (err: any) {
-                            Alert.alert('Download Error', err?.message || 'Could not download file.');
+                            feedback.error('Download failed', err?.message || 'The file could not be downloaded.');
                           }
                         };
 
@@ -427,27 +428,52 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         )}
 
         {/* Camera capture modal overlay for scanning/attaching photos directly inside chat */}
-        <MLKitScannerModal
+        <DocumentScanner
           visible={isCameraActive}
+          purpose="Attach to this clarification"
           onClose={() => setIsCameraActive(false)}
-          onPdfGenerated={(baseName: string, pages: { base64: string; pageNumber: number }[], mimeType: string) => {
+          onSaved={async (doc) => {
             setIsCameraActive(false);
-            // Attaches every captured page with its real media type. This previously kept only
-            // the first page and wrapped a JPEG in a `data:application/pdf` URL, so a
-            // multi-page clarification lost its evidence and the one surviving page would not
-            // render for the desk.
-            const ext = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/png' ? 'png' : 'pdf';
-            const total = pages.length;
-            setAttachments((prev) => [
-              ...prev,
-              ...pages.map((pg) => ({
-                url: `data:${mimeType};base64,${pg.base64}`,
-                fileName: total === 1 ? `${baseName}.${ext}` : `${baseName}_p${pg.pageNumber}of${total}.${ext}`,
-                fileType: mimeType,
-                uploadedBy: 'ASSAYER',
-                timestamp: new Date().toISOString(),
-              })),
-            ]);
+
+            /**
+             * Attaches the assembled PDF when there is one, otherwise every page image.
+             *
+             * The thread stores attachments as inline data URLs, so the bytes have to be read
+             * back off disk here — the scanner deliberately hands over file URIs rather than
+             * base64 to keep multi-page scans off the bridge.
+             */
+            try {
+              if (doc.pdfUri) {
+                const base64 = await readAsBase64(doc.pdfUri);
+                setAttachments((prev) => [
+                  ...prev,
+                  {
+                    url: `data:application/pdf;base64,${base64}`,
+                    fileName: doc.fileName,
+                    fileType: 'application/pdf',
+                    uploadedBy: 'ASSAYER',
+                    timestamp: new Date().toISOString(),
+                  },
+                ]);
+                return;
+              }
+
+              const base = doc.fileName.replace(/\.[^.]+$/, '');
+              const total = doc.pages.length;
+              const encoded = await Promise.all(doc.pages.map((pg) => readAsBase64(pg.uri)));
+              setAttachments((prev) => [
+                ...prev,
+                ...doc.pages.map((pg, i) => ({
+                  url: `data:image/jpeg;base64,${encoded[i]}`,
+                  fileName: total === 1 ? doc.fileName : `${base}_p${pg.pageNumber}of${total}.jpg`,
+                  fileType: 'image/jpeg',
+                  uploadedBy: 'ASSAYER',
+                  timestamp: new Date().toISOString(),
+                })),
+              ]);
+            } catch (err: any) {
+              feedback.error('Attachment failed', err?.message || 'The scanned document could not be read.');
+            }
           }}
         />
       </KeyboardAvoidingView>

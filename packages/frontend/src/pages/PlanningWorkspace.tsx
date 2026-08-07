@@ -307,6 +307,8 @@ export const PlanningWorkspace: React.FC = () => {
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkScheduledDate, setBulkScheduledDate] = useState('');
   const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
+  /** Latest call outcome per assayer for the focused branch, keyed by assayer id. */
+  const [lastContact, setLastContact] = useState<Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }>>({});
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
   const [negotiatingFee, setNegotiatingFee] = useState('');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
@@ -392,8 +394,10 @@ export const PlanningWorkspace: React.FC = () => {
     setSelectedCandidateForMap(null);
     if (selectedPb) {
       loadCandidates(selectedPb.branchId);
+      loadLastContact(selectedPb.id);
     } else {
       setCandidates([]);
+      setLastContact({});
     }
   }, [selectedBranchId, branches]);
 
@@ -753,10 +757,57 @@ export const PlanningWorkspace: React.FC = () => {
           autoSchedule: autoDispatch,
         })
       });
+      // The call that produced this agreement is the record of who committed to what fee, and
+      // when. `call_logs` has existed since the first migration with nowhere writing to it, so
+      // a negotiated fee had no supporting record if the assayer later disputed it. Logged
+      // after the assignment so a logging failure can never cost the assignment itself.
+      recordCall(selectedCandidate.id, 'AGREED', Number(negotiatingFee), 'Agreed during Call & Assign');
+
       setMessage({ type: 'success', text: `Assigned ${selectedCandidate.displayName} to branch. Assayer will receive the offer on their mobile app.` });
       loadProjectBranches(selectedProjectId);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
+    }
+  };
+
+  /**
+   * Record the outcome of phoning an assayer.
+   *
+   * Deliberately fire-and-forget: this is a supporting record, and losing it must never block
+   * or undo the operational action it accompanies.
+   */
+  const recordCall = (
+    assayerId: string,
+    outcome: 'AGREED' | 'NEGOTIATING' | 'DECLINED' | 'NO_ANSWER' | 'CALLBACK_REQUESTED' | 'WRONG_NUMBER',
+    negotiatedFee?: number,
+    notes?: string,
+  ) => {
+    if (!selectedBranchId) return;
+    api.request('/call-logs', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectBranchId: selectedBranchId,
+        assayerId,
+        outcome,
+        // The server rejects a fee on outcomes where no fee was discussed.
+        negotiatedFee: (outcome === 'AGREED' || outcome === 'NEGOTIATING') ? negotiatedFee : undefined,
+        notes,
+      }),
+    })
+      .then(() => loadLastContact(selectedBranchId))
+      .catch(() => { /* supporting record only */ });
+  };
+
+  /** "Have we already tried this person?" — the question ops otherwise answers by redialling. */
+  const loadLastContact = async (projectBranchId: string) => {
+    try {
+      const res = await api.request<Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }>>(
+        `/call-logs/last-contact?projectBranchId=${projectBranchId}`,
+        { method: 'GET' },
+      );
+      setLastContact(res || {});
+    } catch {
+      setLastContact({});
     }
   };
 
@@ -930,6 +981,24 @@ export const PlanningWorkspace: React.FC = () => {
               background: cardBg, border: `1px solid ${cardBorderColor}`, borderRadius: 'var(--radius-md)', padding: '14px',
               display: 'flex', flexDirection: 'column', gap: '10px'
             }}>
+              {/* Prior contact, so nobody is called twice about the same branch. Until now no
+                  call left any trace at all, making this unanswerable from the screen. */}
+              {lastContact[c.id] && (() => {
+                const lc = lastContact[c.id];
+                const hrs = Math.round((Date.now() - new Date(lc.timestamp).getTime()) / 3_600_000);
+                const when = hrs < 1 ? 'just now' : hrs < 24 ? `${hrs}h ago` : `${Math.round(hrs / 24)}d ago`;
+                const negative = ['NO_ANSWER', 'DECLINED', 'WRONG_NUMBER'].includes(lc.outcome);
+                return (
+                  <div style={{
+                    fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                    background: negative ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
+                    color: negative ? 'var(--danger)' : 'var(--warning)',
+                  }}>
+                    ☎ {lc.outcome.replace(/_/g, ' ').toLowerCase()} · {when}
+                    {lc.negotiatedFee != null && ` · ₹${lc.negotiatedFee.toLocaleString()}`}
+                  </div>
+                );
+              })()}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1027,6 +1096,25 @@ export const PlanningWorkspace: React.FC = () => {
                   className="btn btn-primary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Phone size={12} /> Call & Assign
                 </button>
+
+                {/* Logging a call that did NOT end in an assignment is the more valuable half:
+                    an unanswered call leaves no other trace, so without this the next operator
+                    (or the same one tomorrow) rediscovers it by dialling again. */}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    recordCall(c.id, e.target.value as any, undefined, 'Logged from candidate list');
+                    e.target.value = '';
+                  }}
+                  title="Record a call that did not result in an assignment"
+                  style={{ gridColumn: '1 / -1', padding: '5px 8px', fontSize: '10.5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <option value="">Log call outcome…</option>
+                  <option value="NO_ANSWER">No answer</option>
+                  <option value="CALLBACK_REQUESTED">Asked to call back</option>
+                  <option value="DECLINED">Declined the work</option>
+                  <option value="WRONG_NUMBER">Wrong number</option>
+                </select>
 
                 <button onClick={async () => {
                   const selectedPb = branches.find(b => b.id === selectedBranchId);

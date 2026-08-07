@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull} from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectService } from '../project/project.service';
@@ -149,7 +149,13 @@ export class ValidationService implements OnModuleInit {
     if (availableValidatorIds.length === 0) return 0;
 
     const unassignedCases = await this.validationCaseRepository.find({
-      where: { status: ValidationStatus.PENDING, reviewerId: undefined as any, isActive: true },
+      // `IsNull()`, not `undefined`. TypeORM drops an `undefined` value from the WHERE clause
+      // altogether, so this read every PENDING case regardless of reviewer and then reassigned
+      // them round-robin — quietly taking cases away from whoever already held them. Today the
+      // two states rarely coexist (assignCase sets reviewer and status together), but the query
+      // did not express the condition it relied on, so any path that set a reviewer without
+      // moving the status would have caused silent reassignment.
+      where: { status: ValidationStatus.PENDING, reviewerId: IsNull(), isActive: true },
       order: { createdAt: 'ASC' },
     });
 

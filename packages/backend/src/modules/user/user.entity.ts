@@ -56,6 +56,18 @@ export class UserEntity extends BaseEntity {
   @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
   lockedUntil: Date | null;
 
+  /**
+   * Forces a password change at next sign-in.
+   *
+   * Set on any account whose password was issued by someone else — seeded accounts and
+   * staff-initiated resets — so a credential the account holder did not choose cannot remain
+   * in use indefinitely. This deployment needs it: every seeded account currently shares one
+   * of two well-known passwords.
+   */
+  @Column({ name: 'must_change_password', type: 'boolean', default: false })
+  mustChangePassword: boolean;
+
+
   @ManyToMany(() => RoleEntity, { eager: true })
   @JoinTable({
     name: 'user_roles',

@@ -92,6 +92,36 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.join(`org:${payload.organizationId}`);
       }
 
+      /**
+       * Internal staff share one room for organisation-wide operational traffic.
+       *
+       * Field assayers are deliberately excluded. Every broadcast in this gateway used to end
+       * with an unconditional `server.emit(...)`, which goes to *every* connected socket and
+       * bypasses the `user:`/`org:`/`assignment:` rooms joined just above — so an assayer's
+       * phone received branch, client, zone, billing and other assayers' assignment events for
+       * work they have no connection to. Verified against the running stack: a socket
+       * authenticated as one assayer received project-branch events for an unrelated branch.
+       *
+       * `org:` alone is not enough as a replacement, because most tokens here carry no
+       * organizationId — without this room those events would reach nobody and the web app's
+       * live updates would silently stop.
+       */
+      const roleNames: string[] = (payload.roles || [])
+        .map((r: any) => (typeof r === 'string' ? r : r?.name))
+        .filter(Boolean);
+
+      // ASSAYER and CLIENT_USER are external principals. CLIENT_USER is excluded for the same
+      // reason `STAFF_ROLES` excludes it: `users` has no client_id, so a client user cannot be
+      // scoped to their own client, and unscoped access to every client's operational traffic
+      // is worse than no live updates. A token carrying no roles at all is treated as external
+      // too — the room is opt-in, never a default.
+      const EXTERNAL_ROLES = ['ASSAYER', 'CLIENT_USER'];
+      const isInternalStaff =
+        roleNames.length > 0 && roleNames.some((r) => !EXTERNAL_ROLES.includes(r));
+      if (isInternalStaff) {
+        client.join('staff');
+      }
+
       if (!this.userSockets.has(userId)) {
         this.userSockets.set(userId, new Set());
       }
@@ -145,6 +175,27 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  /**
+   * Organisation-wide operational traffic, scoped to people entitled to see it.
+   *
+   * Replaces the bare `this.server.emit(...)` that every branch of `broadcastEvent` used to
+   * end with. That form ignores rooms entirely and delivers to every connected socket, which
+   * on this system meant field assayers' phones received the whole operational firehose —
+   * other assayers' assignments and fees, client and branch records, billing events.
+   *
+   * Delivery is to the event's own organisation where the payload names one, and otherwise to
+   * internal staff. Assayers still receive everything genuinely theirs through the
+   * `user:` and `assignment:` room emits, which are untouched.
+   */
+  private emitOperational(eventName: string, payload: any) {
+    const orgId = payload?.organizationId || payload?.metadata?.organizationId;
+    if (orgId) {
+      this.server.to(`org:${orgId}`).emit(eventName, payload);
+      return;
+    }
+    this.server.to('staff').emit(eventName, payload);
+  }
+
   broadcastEvent(eventName: string, payload: any) {
     if (!this.server) return;
 
@@ -183,7 +234,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit('assignment:status-changed', payload);
         }
-        this.server.emit('assignment:status-changed', payload);
+        this.emitOperational('assignment:status-changed', payload);
         break;
       }
 
@@ -208,7 +259,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -249,7 +300,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -258,7 +309,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.projectBranchId) {
           this.server.to(`branch:${payload.projectBranchId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -266,7 +317,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.assignmentId) {
           this.server.to(`assignment:${payload.assignmentId}`).emit('communication:created', payload);
         }
-        this.server.emit('communication:created', payload);
+        this.emitOperational('communication:created', payload);
         break;
       }
 
@@ -274,7 +325,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit('billing:created', payload);
         }
-        this.server.emit('billing:created', payload);
+        this.emitOperational('billing:created', payload);
         break;
       }
 
@@ -286,7 +337,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -296,13 +347,13 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
       case 'organization:created':
       case 'organization:updated': {
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -312,7 +363,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.userId) {
           this.server.to(`user:${payload.userId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -325,7 +376,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -335,7 +386,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -347,14 +398,14 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.projectId) {
           this.server.to(`project:${payload.projectId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
       case 'holiday:created':
       case 'holiday:updated':
       case 'holiday:deleted': {
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -364,7 +415,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.clientId) {
           this.server.to(`client:${payload.clientId}`).emit(eventType, payload);
         }
-        this.server.emit(eventType, payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 
@@ -385,7 +436,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (aggregateId) {
         this.server.to(`project:${aggregateId}`).emit(eventName, payload);
       }
-      this.server.emit(eventName, payload);
+      this.emitOperational(eventName, payload);
       return;
     }
 
@@ -393,7 +444,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (aggregateId) {
         this.server.to(`user:${aggregateId}`).emit(eventName, payload);
       }
-      this.server.emit(eventName, payload);
+      this.emitOperational(eventName, payload);
       return;
     }
 
@@ -401,11 +452,11 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (aggregateId) {
         this.server.to(`validation:${aggregateId}`).emit(eventName, payload);
       }
-      this.server.emit(eventName, payload);
+      this.emitOperational(eventName, payload);
       return;
     }
 
-    this.server.emit(eventName, payload);
+    this.emitOperational(eventName, payload);
   }
 
   sendToUser(userId: string, event: string, data: any) {

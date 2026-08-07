@@ -13,6 +13,7 @@ import { NotificationService } from '../notifications/notification.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { QueryMessageAuthor } from './validation-query-message.entity';
 import { QueryThreadService } from './query-thread.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 export interface CreateValidationQueryDto {
   validationCaseId: string;
@@ -37,6 +38,7 @@ export class ValidationQueryService {
     private readonly notificationService: NotificationService,
     private readonly pushNotificationService: PushNotificationService,
     private readonly threadService: QueryThreadService,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   async createQuery(dto: CreateValidationQueryDto, userId: string): Promise<ValidationQueryEntity> {
@@ -199,6 +201,48 @@ export class ValidationQueryService {
       entityId: saved.id,
       userId,
       remarks: `Assayer responded to query ${queryId}: "${assayerResponse}"`,
+    });
+
+    /**
+     * Tell the validation desk an answer arrived.
+     *
+     * `VALIDATION_QUERY_ANSWERED` has existed in the notification catalogue, addressed to the
+     * validation roles, with nothing anywhere able to emit it. Raising a query notifies the
+     * assayer; answering it notified nobody, so the desk had to keep reopening cases to
+     * discover whether a reply had come in. That is the half of the clarification loop that
+     * decides how long a case sits open.
+     */
+    // Resolved the same way createQuery() does: a query hangs off a validation case, and the
+    // case carries the project branch, which is what links back to the assignment.
+    const valCase = await this.validationCaseRepository
+      .findOne({ where: { id: saved.validationCaseId } })
+      .catch(() => null);
+
+    const assignment = valCase?.projectBranchId
+      ? await this.assignmentRepository
+          .findOne({
+            where: { projectBranchId: valCase.projectBranchId, isActive: true },
+            relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
+            order: { createdAt: 'DESC' },
+          })
+          .catch(() => null)
+      : null;
+
+    this.notificationDispatch.emitSafe({
+      type: 'VALIDATION_QUERY_ANSWERED',
+      entityType: 'VALIDATION_QUERY',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: query.assayerId ?? null,
+      // Not defaulted to the type+id pair: a query can legitimately be answered more than
+      // once, and each reply is a distinct thing the desk needs to see.
+      dedupeKey: `VALIDATION_QUERY_ANSWERED:${saved.id}:${saved.respondedAt?.toISOString()}`,
+      payload: {
+        queryId: saved.id,
+        validationCaseId: saved.validationCaseId,
+        assayerName: assignment?.assayer?.displayName ?? 'The assayer',
+        branchName: assignment?.projectBranch?.branch?.name ?? 'a branch',
+      },
     });
 
     try {

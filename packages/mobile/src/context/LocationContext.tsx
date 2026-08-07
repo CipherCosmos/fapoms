@@ -25,6 +25,15 @@ interface LocationContextType {
   liveTrackingEnabled: boolean;
   liveTrackingReady: boolean;
   setLiveTrackingEnabled: (enabled: boolean) => Promise<boolean>;
+  /**
+   * Consecutive failed position pushes, reset on the next success.
+   *
+   * Every one of these calls used to end in `.catch(() => {})`. Live position is what the
+   * desk uses to see an assayer is actually at the branch, so a silently dead feed looks
+   * identical to an assayer who never arrived — with nothing on the device hinting at it.
+   * Exposing the count lets the UI say so instead of guessing.
+   */
+  liveTrackingFailures: number;
 }
 
 const LocationContext = createContext<LocationContextType | undefined>(undefined);
@@ -50,6 +59,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Live-location sharing. Default OFF; the initial value is loaded from the
   // server so it survives app restarts and reflects what HR/planning sees.
+  const [liveTrackingFailures, setLiveTrackingFailures] = useState(0);
   const [liveTrackingEnabled, setLiveTrackingEnabledState] = useState(false);
   const [liveTrackingReady, setLiveTrackingReady] = useState(false);
   const liveEnabledRef = useRef(false);
@@ -213,6 +223,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         liveTrackingEnabled,
         liveTrackingReady,
         setLiveTrackingEnabled,
+        liveTrackingFailures,
       }}
     >
       {children}

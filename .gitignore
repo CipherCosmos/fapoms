@@ -65,7 +65,10 @@ GoogleService-Info.plist
 service-account-key.json
 *-firebase-adminsdk-*.json
 
-# Mobile platform build dirs
+# Mobile platform build dirs — `expo prebuild` output only.
+# Anchored to the generated directories rather than a bare `android/`, which matched every
+# directory of that name at any depth and silently excluded the hand-written native source
+# under packages/mobile/modules/*/android/.
 .expo/
-android/
-ios/
+/packages/mobile/android/
+/packages/mobile/ios/

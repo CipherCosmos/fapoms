@@ -12,6 +12,8 @@ import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 import { AssessmentEntity } from './assessment.entity';
 import { CallLogEntity } from './call-log.entity';
+import { CallLogService } from './call-log.service';
+import { CallLogController } from './call-log.controller';
 import { ClientEntity } from '../client/client.entity';
 import { UserEntity } from '../user/user.entity';
 import { ZoneEntity } from '../zone/zone.entity';
@@ -26,8 +28,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     BranchModule,
     NotificationsModule,
   ],
-  controllers: [ProjectController],
-  providers: [ProjectService, ProjectQueryService],
-  exports: [ProjectService, ProjectQueryService, TypeOrmModule],
+  controllers: [ProjectController, CallLogController],
+  providers: [ProjectService, ProjectQueryService, CallLogService],
+  exports: [ProjectService, ProjectQueryService, CallLogService, TypeOrmModule],
 })
 export class ProjectModule {}

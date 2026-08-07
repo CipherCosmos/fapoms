@@ -1,11 +1,42 @@
 import { Controller, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Body, BadRequestException, ParseIntPipe, DefaultValuePipe, ParseBoolPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsIn, MaxLength } from 'class-validator';
 import { NotificationCategory } from '@fapoms/shared';
 import { NotificationService } from './notification.service';
 import { PushNotificationService } from './push-notification.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, AnyAuthenticated } from '../auth/guards';
 import { DevicePlatform } from './device-token.entity';
 import { rolesOf } from '../assayer/assayer-visibility';
+
+
+/**
+ * Device-token and preference bodies, previously inline object literals with no runtime
+ * validation. `token` in particular is the FCM registration string the push worker sends to,
+ * so an empty or malformed value silently poisons delivery for that device.
+ */
+class UpdatePreferenceRequestDto {
+  @IsOptional() @IsBoolean()
+  inApp?: boolean;
+
+  @IsOptional() @IsBoolean()
+  push?: boolean;
+
+  @IsOptional() @IsBoolean()
+  email?: boolean;
+}
+
+class RegisterDeviceTokenRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(4096)
+  token: string;
+
+  @IsIn(['ios', 'android'])
+  platform: DevicePlatform;
+}
+
+class UnregisterDeviceTokenRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(4096)
+  token: string;
+}
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
@@ -65,7 +96,7 @@ export class NotificationController {
   async setPreference(
     @Param('category') category: NotificationCategory,
     @Req() req: any,
-    @Body() dto: { inApp?: boolean; push?: boolean; email?: boolean },
+    @Body() dto: UpdatePreferenceRequestDto,
   ) {
     if (!Object.values(NotificationCategory).includes(category)) {
       throw new BadRequestException(`Unknown category "${category}".`);
@@ -97,7 +128,7 @@ export class NotificationController {
   @ApiOperation({ summary: 'Register or update push notification device token' })
   async registerDeviceToken(
     @Req() req: any,
-    @Body() dto: { token: string; platform: DevicePlatform },
+    @Body() dto: RegisterDeviceTokenRequestDto,
   ) {
     if (!dto.token || !dto.platform) {
       throw new BadRequestException('token and platform are required');
@@ -112,7 +143,7 @@ export class NotificationController {
   @Post('device-token/unregister')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Unregister a push notification device token' })
-  async unregisterDeviceToken(@Req() req: any, @Body() dto: { token: string }) {
+  async unregisterDeviceToken(@Req() req: any, @Body() dto: UnregisterDeviceTokenRequestDto) {
     if (!dto.token) throw new BadRequestException('token is required');
     await this.pushService.unregisterToken(req.user.id, dto.token);
     return { success: true };

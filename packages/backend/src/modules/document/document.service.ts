@@ -786,12 +786,23 @@ export class DocumentService {
   }
 
   async findByProject(projectId: string): Promise<DocumentEntity[]> {
-    const assessmentIds = await this.assessmentRepository.find({
+    const assessments = await this.assessmentRepository.find({
       where: { projectId, isActive: true },
       select: ['id'],
     });
+
+    // No assessments means no documents. This used to fall through to
+    // `assessmentId: undefined`, which TypeORM drops from the WHERE clause entirely — so a
+    // project with nothing in it returned every document in the system, across every project
+    // and every client.
+    if (assessments.length === 0) return [];
+
     return this.documentRepository.find({
-      where: { assessmentId: assessmentIds.length > 0 ? assessmentIds.map(a => a.id) as any : undefined, isActive: true },
+      // `In(...)`, not a bare array cast to `any`. The array form compiled fine but emitted
+      // `assessment_id = $1` with a Postgres array literal as the parameter, so the endpoint
+      // failed with `invalid input syntax for type uuid: "{...}"` for any project that had
+      // more than zero assessments — i.e. always, in practice.
+      where: { assessmentId: In(assessments.map((a) => a.id)), isActive: true },
       relations: ['assessment', 'assessment.branch'],
       order: { createdAt: 'DESC' },
     });

@@ -4,6 +4,7 @@ import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import { ClusterManager, BranchCluster } from './cluster.manager';
 import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider } from './planning-providers.interface';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 export interface CoverageWarning {
   type: string;
@@ -47,6 +48,7 @@ export class CoveragePlanningEngine {
     private readonly recommendationEngine: RecommendationEngine,
     private readonly constraintEvaluator: ConstraintEvaluator,
     private readonly clusterManager: ClusterManager,
+    private readonly feePolicyService: FeePolicyService,
     @Inject('PlanningBranchProvider')
     private readonly branchProvider: PlanningBranchProvider,
     @Inject('AssayerAvailabilityProvider')
@@ -99,21 +101,60 @@ export class CoveragePlanningEngine {
 
     const clusterAssignments: Array<{ id: string; name: string; branchCount: number; assignedAssayerName: string | null }> = [];
 
+    // Client and assayer roster are identical for every cluster in one project, so they are
+    // fetched and hydrated once here instead of inside each of the (currently 31) per-cluster
+    // recommend() calls. That repeated work was the bulk of this endpoint's four-second
+    // response, and it grows with branch count.
+    const preloaded = await this.recommendationEngine.preloadContext(project.clientId ?? null);
+
     // Solve matching on clusters
     for (const cluster of clusters) {
       let assignedAssayerName: string | null = null;
       let highestScore = -1;
       let selectedAssayer: any | null = null;
 
-      // Evaluate candidates on cluster center
+      /**
+       * Score candidates against a real branch standing in for the cluster, positioned at the
+       * cluster centre.
+       *
+       * This used to pass `id: cluster.id`, which is a synthetic string of the form
+       * `cluster-<uuid>` minted by ClusterManager — not a branch id and not a UUID at all. The
+       * recommendation engine runs genuine id-keyed queries with it (no-repeat-auditor history,
+       * client eligibility), so Postgres rejected it outright:
+       * `invalid input syntax for type uuid: "cluster-..."`. The whole endpoint 500'd every
+       * time it was called, which nothing in the product currently does.
+       *
+       * Using the cluster's own nearest-to-centre branch keeps the geography (its coordinates
+       * are overridden with the centre below) while making every id-keyed lookup resolve
+       * against a branch that actually exists.
+       */
+      const representative = cluster.branches.reduce((closest, b) => {
+        if (b.latitude == null || b.longitude == null) return closest;
+        if (!closest) return b;
+        const d = (x: any) =>
+          Math.hypot(Number(x.latitude) - cluster.centerLatitude, Number(x.longitude) - cluster.centerLongitude);
+        return d(b) < d(closest) ? b : closest;
+      }, null as any) ?? cluster.branches[0];
+
+      if (!representative) {
+        for (const b of cluster.branches) {
+          uncoveredBranches.push({
+            branchId: b.id,
+            branchName: b.name,
+            reason: 'Cluster contains no branch with usable coordinates, so no assayer could be scored against it.',
+          });
+        }
+        continue;
+      }
+
       const clusterCenterBranch = {
-        id: cluster.id,
+        ...representative,
         latitude: cluster.centerLatitude,
         longitude: cluster.centerLongitude,
         clientId: project.clientId,
       } as any;
 
-      const candidates = await this.recommendationEngine.recommend(clusterCenterBranch, new Date());
+      const candidates = await this.recommendationEngine.recommend(clusterCenterBranch, new Date(), {}, preloaded);
       
       // Filter out double-booked or capacity-short candidates
       const validCandidates = candidates.filter((c) => {
@@ -127,10 +168,20 @@ export class CoveragePlanningEngine {
         assignedAssayerName = selectedAssayer.displayName;
         assignedAssayerIds.add(selectedAssayer.id);
 
-        // Consume workload and accumulate mock cost
         allocationMap[selectedAssayer.id] = (allocationMap[selectedAssayer.id] || 0) + cluster.branches.length;
         matchedCount += cluster.branches.length;
-        totalEstimatedCost += cluster.branches.length * 1500; // Mock base fee cost calculation
+
+        // Priced through the one calculator the rest of the platform quotes from. This was
+        // `cluster.branches.length * 1500`, commented "Mock base fee cost calculation" — a
+        // sixth independent copy of a fee rate, disagreeing with the contracted rate card and
+        // ignoring both the assayer's own commercial profile and travel entirely.
+        const clusterQuote = await this.feePolicyService.quote({
+          assayerId: selectedAssayer.id,
+          clientId: project.clientId ?? null,
+          distanceKm: 0, // Cluster-level estimate: per-branch travel is resolved at assign time.
+          branchCount: cluster.branches.length,
+        });
+        totalEstimatedCost += clusterQuote.total;
       } else {
         // Explanations for uncovered clusters
         for (const b of cluster.branches) {

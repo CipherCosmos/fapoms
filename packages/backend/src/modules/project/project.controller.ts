@@ -19,6 +19,7 @@ import {
   UseInterceptors,
   UploadedFile,
   Res,
+  BadRequestException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -26,7 +27,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID } from 'class-validator';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -78,6 +79,12 @@ class UpdateProjectRequestDto {
 class TransitionProjectRequestDto {
   @IsString() @IsNotEmpty() targetStatus: string;
   @IsOptional() @IsString() reason?: string;
+}
+
+/** Attaching existing branches to a project. */
+class AddProjectBranchesRequestDto {
+  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  branchIds: string[];
 }
 
 class MarkUnableToCoverRequestDto {
@@ -300,7 +307,7 @@ export class ProjectController {
   @ApiOperation({ summary: 'Associate branches with a project' })
   async associateBranches(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: { branchIds: string[] },
+    @Body() dto: AddProjectBranchesRequestDto,
     @Req() req: any
   ) {
     const list = await this.projectService.associateBranches(id, dto.branchIds, req.user.id);
@@ -320,6 +327,12 @@ export class ProjectController {
     @UploadedFile() file: any,
     @Req() req: any
   ) {
+    // A submitted form with no file attached reaches here as `undefined`, and reading
+    // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
+    // needs to be told to pick a file, not shown a crash.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
     const list = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
     return {
       success: true,

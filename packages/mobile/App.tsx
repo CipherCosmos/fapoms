@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { registerRootComponent } from 'expo';
-import { AssayerAssignment, AppNotification } from './src/types/mobile-app';
+import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import {
   registerForPushNotificationsAsync,
@@ -22,9 +21,12 @@ import { AssignmentProvider, useAssignments } from './src/context/AssignmentCont
 // UI Shell
 import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
 import { AppText, Button } from './src/components/ui/primitives';
+import { FeedbackProvider, useFeedback } from './src/components/ui/Feedback';
 
 // Screens
 import { LoginScreen } from './src/screens/LoginScreen';
+import { ChangePasswordScreen } from './src/screens/ChangePasswordScreen';
+import { HomeScreen } from './src/screens/HomeScreen';
 import { ScheduleScreen } from './src/screens/ScheduleScreen';
 import { PdfDocsScreen } from './src/screens/PdfDocsScreen';
 import { QueriesScreen } from './src/screens/QueriesScreen';
@@ -33,7 +35,7 @@ import { ProfileScreen, ProfileDataState } from './src/screens/ProfileScreen';
 
 // Modals
 import { NotificationsModal } from './src/components/NotificationsModal';
-import { MLKitScannerModal } from './src/components/MLKitScannerModal';
+import { DocumentScanner } from './src/components/DocumentScanner';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
 import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 import { RejectionModal } from './src/components/RejectionModal';
@@ -42,12 +44,27 @@ import { NegotiateModal } from './src/components/NegotiateModal';
 
 function AppMain() {
   const theme = useTheme();
-  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout } = useAuth();
+  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword } = useAuth();
   const { location, refreshLocation } = useLocation();
   const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense } = useAssignments();
 
-  const [selectedTab, setSelectedTab] = useState<TabType>('SCHEDULE');
+  const [selectedTab, setSelectedTab] = useState<TabType>('HOME');
   const [refreshing, setRefreshing] = useState(false);
+  const feedback = useFeedback();
+  /**
+   * Claim totals, read back from the server.
+   *
+   * The app could file an expense but never see one again — `/expenses/mine/summary` existed
+   * from the start and nothing called it, so an assayer had no way to tell an approved claim
+   * from a rejected one.
+   */
+  const [claims, setClaims] = useState<AssayerExpense[]>([]);
+  const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary>({
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    totalClaimed: 0,
+  });
 
   // Scanner modal state
   const [scannerModalVisible, setScannerModalVisible] = useState(false);
@@ -216,11 +233,22 @@ function AppMain() {
     }
   }, [user?.id]);
 
+  const loadExpenseSummary = useCallback(async () => {
+    if (!user?.id) return;
+    const [summary, mine] = await Promise.all([
+      MobileApiService.getMyExpenseSummary(),
+      MobileApiService.getMyExpenses(),
+    ]);
+    setExpenseSummary(summary);
+    setClaims(mine);
+  }, [user?.id]);
+
   useEffect(() => {
     if (isAuthenticated) {
       registerForPushNotificationsAsync();
       loadNotifications();
       loadAssayerProfile();
+      loadExpenseSummary();
 
       // Silent background auto-refresh every 30 seconds
       const timer = setInterval(() => {
@@ -277,14 +305,20 @@ function AppMain() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadAssignments(), refreshLocation(), loadNotifications(), loadAssayerProfile()]);
+    await Promise.all([
+      loadAssignments(),
+      refreshLocation(),
+      loadNotifications(),
+      loadAssayerProfile(),
+      loadExpenseSummary(),
+    ]);
     setRefreshing(false);
   };
 
   const handleAcceptAssignment = async (id: string) => {
     const res = await updateAssignmentStatus(id, 'ACCEPTED');
     if (!res.success) {
-      Alert.alert('Error', res.error || 'Failed to accept assignment');
+      feedback.error('Not accepted', res.error || 'The assignment could not be accepted.');
     }
   };
 
@@ -296,7 +330,7 @@ function AppMain() {
       setRejectAssignmentId(null);
       setRejectReason('');
     } else {
-      Alert.alert('Error', res.error || 'Failed to reject assignment');
+      feedback.error('Not declined', res.error || 'The assignment could not be declined.');
     }
   };
 
@@ -331,9 +365,9 @@ function AppMain() {
     const res = await MobileApiService.checkInBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
     if (res.success) {
       await loadAssignments();
-      Alert.alert('Checked In', `Checked in at ${assignment.branchName}`);
+      feedback.success('Checked In', `Checked in at ${assignment.branchName}`);
     } else {
-      Alert.alert('Could not check in', res.error || 'Check-in failed. Please try again.');
+      feedback.error('Could not check in', res.error || 'Check-in failed. Please try again.');
     }
   };
 
@@ -344,12 +378,21 @@ function AppMain() {
   const handleSaveProfile = async () => {
     setSavingProfile(true);
     try {
-      if (user?.id) {
-        await MobileApiService.updateAssayerProfile(user.id, profile);
+      if (!user?.id) {
+        feedback.error('Not signed in', 'Sign in again before saving your profile.');
+        return;
       }
-      Alert.alert('Success', 'Profile saved successfully');
+      // `updateAssayerProfile` reports failure by return value, not by throwing, so the catch
+      // below never saw a rejected save. This claimed "Profile saved successfully" on a 404 —
+      // and the endpoint it called did not exist, so that is what every save did.
+      const result = await MobileApiService.updateAssayerProfile(user.id, profile);
+      if (!result.success) {
+        feedback.error('Not saved', result.error || 'Your profile could not be saved. Please try again.');
+        return;
+      }
+      feedback.success('Profile saved');
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Failed to save profile');
+      feedback.error('Not saved', e?.message || 'Your profile could not be saved.');
     } finally {
       setSavingProfile(false);
     }
@@ -377,9 +420,9 @@ function AppMain() {
       const base64 = await assetToBase64(asset);
       const name = asset.name || 'audit_packet.pdf';
       setStagedPdf({ name, base64 });
-      Alert.alert('PDF attached', `${name} is ready to submit.`);
+      feedback.success('PDF attached', `${name} is ready to submit.`);
     } catch (err: any) {
-      Alert.alert('File Picker Error', err?.message || 'Failed to select a PDF file.');
+      feedback.error('File Picker Error', err?.message || 'Failed to select a PDF file.');
     }
   }, []);
 
@@ -389,14 +432,14 @@ function AppMain() {
       .then((res) => {
         if (res?.success) {
           setStagedPdf({ name, base64 });
-          Alert.alert('Upload Complete', `${name} was uploaded successfully.`);
+          feedback.success('Upload Complete', `${name} was uploaded successfully.`);
         } else {
-          Alert.alert('Upload Failed', res?.error || 'The document could not be uploaded.');
+          feedback.error('Upload Failed', res?.error || 'The document could not be uploaded.');
         }
         return res?.success ?? false;
       })
       .catch(() => {
-        Alert.alert('Upload Failed', 'The document could not be uploaded. Please try again.');
+        feedback.error('Upload Failed', 'The document could not be uploaded. Please try again.');
         return false;
       })
       .finally(() => setUploadingPdf(false));
@@ -405,7 +448,7 @@ function AppMain() {
   const handleSubmitCompletedPdf = useCallback(() => {
     if (!pdfDocsAssignment) return;
     if (!stagedPdf) {
-      Alert.alert('Nothing to submit', 'Attach a PDF or scan the pages first.');
+      feedback.warning('Nothing to submit', 'Attach a PDF or scan the pages first.');
       return;
     }
     uploadPdf(pdfDocsAssignment, stagedPdf.name, stagedPdf.base64).then((ok) => {
@@ -441,6 +484,22 @@ function AppMain() {
             return await biometricLogin();
           }}
         />
+      </SafeAreaView>
+    );
+  }
+
+  /**
+   * An account still holding an issued password sees only the change-password screen.
+   *
+   * Placed after the authentication gate because changing a password requires a session, and
+   * before every other screen because audit work must not be done under a credential that
+   * two dozen people share.
+   */
+  if (user?.mustChangePassword) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
+        <ChangePasswordScreen onChanged={clearMustChangePassword} onLogout={logout} />
       </SafeAreaView>
     );
   }
@@ -504,6 +563,27 @@ function AppMain() {
           />
         ) : (
         <>
+        {selectedTab === 'HOME' && (
+          <HomeScreen
+            assayerName={user?.name || 'Assayer'}
+            assignments={assignments}
+            totalAssignments={profile.totalAssignments}
+            completedAssignments={profile.completedAssignments}
+            averageRating={profile.averageRating}
+            runningBalance={Number(profile.runningBalance) || 0}
+            expenseSummary={expenseSummary}
+            onOpenAssignment={handleOpenPdfDocs}
+            onCheckIn={handleCheckIn}
+            onScan={(a) => {
+              setActiveScannerAssignment(a);
+              setScannerModalVisible(true);
+            }}
+            onNavigate={(a) => setNavAssignment(a)}
+            onSeeSchedule={() => setSelectedTab('SCHEDULE')}
+            onSeeQueries={() => setSelectedTab('QUERIES')}
+          />
+        )}
+
         {selectedTab === 'SCHEDULE' && (
           <ScheduleScreen
             assignments={assignments}
@@ -548,7 +628,12 @@ function AppMain() {
           <EarningsScreen
             totalEarnings={totalEarnings}
             pendingEarnings={pendingEarnings}
+            runningBalance={Number(profile.runningBalance) || 0}
+            earningsPaid={Number(profile.earningsPaid) || 0}
+            earningsAwaitingApproval={Number(profile.earningsAwaitingApproval) || 0}
             assignments={assignments}
+            claims={claims}
+            claimSummary={expenseSummary}
             onOpenExpenseModal={() => setExpenseModalVisible(true)}
           />
         )}
@@ -584,45 +669,71 @@ function AppMain() {
       />
 
       {scannerModalVisible && (
-        <MLKitScannerModal
+        <DocumentScanner
           visible={scannerModalVisible}
+          purpose="Audited return for this assignment"
           onClose={() => {
             setScannerModalVisible(false);
             setActiveScannerAssignment(null);
           }}
-          onPdfGenerated={async (baseName, pages, mimeType) => {
+          onSaved={async (doc) => {
             const assignment = activeScannerAssignment;
             setScannerModalVisible(false);
             setActiveScannerAssignment(null);
             if (!assignment) {
-              Alert.alert('Upload Failed', 'No assignment was selected for this upload.');
-              return;
-            }
-            if (!pages?.length) {
-              Alert.alert('Nothing to upload', 'No pages were captured.');
+              feedback.error('Upload Failed', 'No assignment was selected for this upload.');
               return;
             }
 
             /**
-             * Uploads every captured page and reports honestly on partial failure.
+             * One upload for the whole packet.
              *
-             * The old code uploaded one page and announced "uploaded successfully" regardless
-             * of how many were scanned. A partially-delivered evidence packet that reports
-             * complete is the worst outcome here — the desk has no way to know pages are
-             * missing, and the assayer has already left the branch.
+             * This used to loop over the pages and POST each one separately, producing N
+             * unrelated `AUDITED_RETURN_PDF` rows named `..._p1of6.jpg` — six loose JPEGs
+             * where the desk expected one document, each triggering its own assignment
+             * completion. ML Kit now assembles the pages into a single PDF on-device, so
+             * the evidence arrives as one file that matches what the record claims to hold.
              */
-            const ext = mimeType === 'image/jpeg' ? 'jpg' : 'pdf';
-            const total = pages.length;
-            Alert.alert('Scan complete', `${total} page${total === 1 ? '' : 's'} captured. Uploading…`);
+            if (doc.pdfUri) {
+              /**
+               * Resumable, because this is the upload that matters and the worst place to be
+               * when it fails: a multi-megabyte scan going out over rural mobile data at the
+               * end of a branch visit. A drop now costs only the unsent chunks.
+               */
+              feedback.info('Uploading', `Sending ${doc.fileName}…`);
+              const res = await MobileApiService.uploadAuditPdfResumable(
+                assignment.id,
+                doc.fileName,
+                doc.pdfUri,
+                assignment.id,
+              ).catch((err: any) => ({ success: false, error: err?.message }));
 
+              if (res?.success) {
+                feedback.success('Upload complete', `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} uploaded as ${doc.fileName}.`);
+              } else {
+                feedback.error(
+                  'Upload failed',
+                  `${doc.fileName} was not uploaded${res?.error ? `: ${res.error}` : ''}. Please retry before leaving the branch.`,
+                );
+              }
+              return;
+            }
+
+            /**
+             * Image fallback for the platforms with no ML Kit PDF (iOS, web, attached files).
+             * Still reports partial failure honestly — a half-delivered evidence packet that
+             * announces success is worse than one that fails loudly.
+             */
+            const total = doc.pages.length;
             const failed: number[] = [];
-            for (const pg of pages) {
-              const name = total === 1 ? `${baseName}.${ext}` : `${baseName}_p${pg.pageNumber}of${total}.${ext}`;
+            for (const pg of doc.pages) {
+              const base = doc.fileName.replace(/\.[^.]+$/, '');
+              const name = total === 1 ? doc.fileName : `${base}_p${pg.pageNumber}of${total}.jpg`;
               try {
                 const res = await MobileApiService.uploadCompletedAuditPdf(
                   assignment.id,
                   name,
-                  { base64: pg.base64 },
+                  { uri: pg.uri },
                   assignment.id,
                 );
                 if (!res?.success) failed.push(pg.pageNumber);
@@ -632,14 +743,13 @@ function AppMain() {
             }
 
             if (failed.length === 0) {
-              Alert.alert('Upload complete', `All ${total} page${total === 1 ? '' : 's'} were uploaded.`);
+              feedback.success('Upload complete', `All ${total} page${total === 1 ? '' : 's'} were uploaded.`);
             } else {
-              Alert.alert(
+              feedback.warning(
                 'Some pages did not upload',
                 `${total - failed.length} of ${total} uploaded. Page${failed.length === 1 ? '' : 's'} ${failed.join(', ')} failed — please scan ${failed.length === 1 ? 'it' : 'them'} again before leaving the branch.`,
               );
             }
-            return;
           }}
         />
       )}
@@ -695,10 +805,13 @@ function AppMain() {
                 description,
               });
               if (res.success) {
-                Alert.alert('Expense Logged', `Logged ₹${amount} for ${category}`);
+                feedback.success('Claim filed', `₹${amount} for ${category} is awaiting approval.`);
                 setExpenseModalVisible(false);
+                // Pull the totals back so the new claim shows on Home immediately rather
+                // than only after the next manual pull-to-refresh.
+                loadExpenseSummary();
               } else {
-                Alert.alert('Error', res.error || 'Failed to submit expense');
+                feedback.error('Claim not filed', res.error || 'The expense could not be submitted.');
               }
             } else {
               setExpenseModalVisible(false);
@@ -723,14 +836,14 @@ function AppMain() {
               { proposedFee: counterFee }
             );
             if (res.success) {
-              Alert.alert(
+              feedback.success(
                 'Counter-Offer Submitted',
                 `Your proposed fee of ₹${counterFee.toLocaleString('en-IN')} has been sent to Operations.`
               );
               setNegotiateModalVisible(false);
               setNegotiateAssignment(null);
             } else {
-              Alert.alert('Error', res.error || 'Failed to submit counter-offer.');
+              feedback.error('Offer not sent', res.error || 'The counter-offer could not be submitted.');
             }
           }}
         />
@@ -759,7 +872,7 @@ class AppErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#14100C', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#121014', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <StatusBar barStyle="light-content" />
           <View style={{ gap: 12, alignItems: 'center' }}>
             <ActivityIndicator size="large" color="#FF6B00" />
@@ -794,7 +907,7 @@ export default function App() {
   if (!apiReady) {
     return (
       <ThemeProvider>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#14100C' }}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121014' }}>
           <ActivityIndicator color="#FF8534" />
         </View>
       </ThemeProvider>
@@ -807,7 +920,9 @@ export default function App() {
         <AuthProvider>
           <LocationProvider>
             <AssignmentProvider>
-              <AppMain />
+              <FeedbackProvider>
+                <AppMain />
+              </FeedbackProvider>
             </AssignmentProvider>
           </LocationProvider>
         </AuthProvider>
@@ -815,5 +930,3 @@ export default function App() {
     </ThemeProvider>
   );
 }
-
-registerRootComponent(App);
