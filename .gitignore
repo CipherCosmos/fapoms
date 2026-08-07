@@ -24,6 +24,8 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+.env.docker
+!.env.docker.example
 
 # IDE & OS Files
 .DS_Store
@@ -48,6 +50,7 @@ test-results/
 playwright-report/
 blob-report/
 coverage/
+evidence/
 
 # Test spreadsheets & Excel dumps
 *.xlsx
