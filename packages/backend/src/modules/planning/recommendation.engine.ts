@@ -62,6 +62,21 @@ export interface PlanningContext {
     routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }>;
     /** The project-branch row for this branch — identical for every candidate. */
     projectBranch?: any;
+    /**
+     * Every active commercial profile per assayer, newest effective date first.
+     *
+     * The cost and profitability scorers each queried this table per candidate, and they
+     * select from it differently — cost takes the profile in force on the scheduled date,
+     * profitability takes the most recent regardless of date. Both rules are preserved exactly
+     * here; the rows are simply fetched once instead of 2N times. That the two disagree about
+     * which fee applies is a real inconsistency, but correcting it would move scores, so it is
+     * left visible rather than folded in silently.
+     */
+    commercialProfilesByAssayer: Record<string, any[]>;
+    /** Clarification queries raised against each assayer. */
+    queryCountByAssayer: Record<string, number>;
+    /** Lifetime assignment counts per assayer: everything dispatched, and everything taken. */
+    assignmentTotalsByAssayer: Record<string, { total: number; accepted: number }>;
   };
 }
 
@@ -364,7 +379,15 @@ export class RejectionAcceptanceScoreCalculator implements ScoreCalculator {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
   ) {}
 
-  async calculate(assayer: AssayerEntity): Promise<number> {
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    // Both counts for the whole pool arrive in one grouped query; the per-candidate pair below
+    // remains for standalone use.
+    const shared = context?.branchFacts?.assignmentTotalsByAssayer[assayer.id];
+    if (shared) {
+      if (shared.total === 0) return 85;
+      return Math.round((shared.accepted / shared.total) * 100);
+    }
+
     const totalDispatched = await this.assignmentRepository.count({
       where: { assayerId: assayer.id, isActive: true },
     });
@@ -430,7 +453,13 @@ export class QueryVolumeScoreCalculator implements ScoreCalculator {
     private readonly queryRepository: Repository<ValidationQueryEntity>,
   ) {}
 
-  async calculate(assayer: AssayerEntity): Promise<number> {
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    const sharedQueryCount = context?.branchFacts?.queryCountByAssayer[assayer.id];
+    if (sharedQueryCount !== undefined) {
+      if (sharedQueryCount === 0) return 95;
+      return Math.max(20, Math.round(100 - (sharedQueryCount * 10)));
+    }
+
     const queries = await this.queryRepository.find({
       where: { assayerId: assayer.id, isActive: true },
       take: 50,
@@ -473,10 +502,12 @@ export class CostScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    const profiles = await this.commercialRepository.find({
-      where: { assayerId: assayer.id, isActive: true },
-      order: { effectiveStartDate: 'DESC' },
-    });
+    const profiles = context.branchFacts
+      ? (context.branchFacts.commercialProfilesByAssayer[assayer.id] ?? [])
+      : await this.commercialRepository.find({
+          where: { assayerId: assayer.id, isActive: true },
+          order: { effectiveStartDate: 'DESC' },
+        });
 
     let activeProfile: AssayerCommercialProfileEntity | null = null;
     const targetDate = context.scheduledDate;
@@ -740,10 +771,13 @@ export class ProfitabilityScoreCalculator implements ScoreCalculator {
     const budget = context.client?.budget ? Number(context.client.budget) : 0;
     if (budget <= 0) return 100; // No budget constraint
 
-    const profile = await this.commercialRepository.findOne({
-      where: { assayerId: assayer.id, isActive: true },
-      order: { effectiveStartDate: 'DESC' },
-    });
+    // Newest first in the shared list, which is exactly what findOne with this ordering gave.
+    const profile = context.branchFacts
+      ? ((context.branchFacts.commercialProfilesByAssayer[assayer.id] ?? [])[0] ?? null)
+      : await this.commercialRepository.findOne({
+          where: { assayerId: assayer.id, isActive: true },
+          order: { effectiveStartDate: 'DESC' },
+        });
 
     if (!profile) return 50;
 
@@ -822,6 +856,10 @@ export class RecommendationEngine {
     // longer each query for these per candidate.
     @InjectRepository(ProjectBranchEntity)
     private readonly engineProjectBranchRepository: Repository<ProjectBranchEntity>,
+    @InjectRepository(AssayerCommercialProfileEntity)
+    private readonly commercialRepositoryForFacts: Repository<AssayerCommercialProfileEntity>,
+    @InjectRepository(ValidationQueryEntity)
+    private readonly queryRepositoryForFacts: Repository<ValidationQueryEntity>,
     private readonly engineRoutingService: RoutingService,
     private readonly assayerService: AssayerService,
   ) {
@@ -984,6 +1022,82 @@ export class RecommendationEngine {
       }
     }
 
+    /**
+     * Three more sets of per-candidate lookups collapsed into one query each.
+     *
+     * Cost and profitability both read the commercial profile table per assayer; rejection
+     * rate issued two counts per assayer; query volume issued one. Across a pool of N that is
+     * 4N round trips producing values that a single grouped query returns in one.
+     */
+    const assayerIds = assayers.map((a) => a.id);
+    const [profileRows, queryRows, totalRows, acceptedRows] = await Promise.all([
+      assayerIds.length
+        ? this.commercialRepositoryForFacts.find({
+            where: { assayerId: In(assayerIds), isActive: true },
+            order: { effectiveStartDate: 'DESC' },
+          }).catch(() => [])
+        : Promise.resolve([]),
+      assayerIds.length
+        ? this.queryRepositoryForFacts
+            .createQueryBuilder('q')
+            .select('q.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('q.isActive = true')
+            .andWhere('q.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('q.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('a.isActive = true')
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('a.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('a.isActive = true')
+            .andWhere('a.status IN (:...statuses)', {
+              statuses: [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED],
+            })
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('a.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const commercialProfilesByAssayer = (profileRows as any[]).reduce<Record<string, any[]>>((acc, p) => {
+      (acc[p.assayerId] ||= []).push(p);
+      return acc;
+    }, {});
+
+    const queryCountByAssayer = (queryRows as any[]).reduce<Record<string, number>>((acc, r) => {
+      acc[r.assayerId] = Number(r.count) || 0;
+      return acc;
+    }, {});
+
+    const acceptedByAssayer = (acceptedRows as any[]).reduce<Record<string, number>>((acc, r) => {
+      acc[r.assayerId] = Number(r.count) || 0;
+      return acc;
+    }, {});
+
+    // Every candidate gets an entry, including those with no history at all — otherwise the
+    // scorer would fall through to its own queries for exactly the assayers with no rows.
+    const assignmentTotalsByAssayer = assayerIds.reduce<Record<string, { total: number; accepted: number }>>((acc, id) => {
+      const total = (totalRows as any[]).find((r) => r.assayerId === id);
+      acc[id] = { total: Number(total?.count) || 0, accepted: acceptedByAssayer[id] ?? 0 };
+      return acc;
+    }, {});
+
     context.branchFacts = {
       lastAssignment: lastAssignment
         ? { assayerId: lastAssignment.assayerId, status: lastAssignment.status }
@@ -994,6 +1108,9 @@ export class RecommendationEngine {
       }, {}),
       routeByAssayer,
       projectBranch: projectBranchRow,
+      commercialProfilesByAssayer,
+      queryCountByAssayer,
+      assignmentTotalsByAssayer,
     };
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this

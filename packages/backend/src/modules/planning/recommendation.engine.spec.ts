@@ -42,6 +42,17 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
 
+  /** Grouped-count query builder shape used by the engine's fact resolution. */
+  const groupedCountBuilder = () => ({
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    groupBy: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn().mockResolvedValue([]),
+  });
+
+
   const mockAssayerService = {
     hydrateWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
     hydrateAllWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
@@ -67,18 +78,18 @@ describe('RecommendationEngine', () => {
      * count instead of one count per assayer. Returning an empty set here means "nobody has
      * committed work", which is what these fixtures already assumed.
      */
-    createQueryBuilder: jest.fn(() => ({
-      select: jest.fn().mockReturnThis(),
-      addSelect: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      groupBy: jest.fn().mockReturnThis(),
-      getRawMany: jest.fn().mockResolvedValue([]),
-    })),
+    createQueryBuilder: jest.fn(groupedCountBuilder),
   };
 
   const mockCommercialRepo = {
     find: jest.fn(),
+    findOne: jest.fn(),
+  };
+
+  const mockQueryRepo = {
+    count: jest.fn(),
+    find: jest.fn(),
+    createQueryBuilder: jest.fn(groupedCountBuilder),
   };
 
   const mockClientRepo = {
@@ -150,7 +161,7 @@ describe('RecommendationEngine', () => {
         },
         {
           provide: getRepositoryToken(ValidationQueryEntity),
-          useValue: { count: jest.fn().mockResolvedValue(0), find: jest.fn().mockResolvedValue([]) },
+          useValue: mockQueryRepo,
         },
         {
           provide: RoutingService,
@@ -187,6 +198,13 @@ describe('RecommendationEngine', () => {
     // so they must resolve rather than return undefined.
     mockProjectBranchRepo.findOne.mockResolvedValue(null);
     mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 10, durationMinutes: 20 });
+    mockCommercialRepo.find.mockResolvedValue([]);
+    mockCommercialRepo.findOne.mockResolvedValue(null);
+    mockQueryRepo.find.mockResolvedValue([]);
+    mockQueryRepo.count.mockResolvedValue(0);
+    // createQueryBuilder is a factory, so clearAllMocks strips its implementation too.
+    mockAssignmentRepo.createQueryBuilder.mockImplementation(groupedCountBuilder);
+    mockQueryRepo.createQueryBuilder.mockImplementation(groupedCountBuilder);
   });
 
   it('should filter out inactive assayers', async () => {
