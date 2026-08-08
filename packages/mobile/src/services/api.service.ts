@@ -12,6 +12,15 @@ import {
   normaliseServerUrl,
 } from './server-config';
 
+/** One row of the per-category notification preference set returned by the API. */
+export interface NotificationPreference {
+  category: string;
+  inApp: boolean;
+  push: boolean;
+  email: boolean;
+}
+
+
 /**
  * Mutable, because the server address is now a device setting rather than a build-time
  * constant. Every call site below reads it inside a function body, so they all pick up a
@@ -399,6 +408,45 @@ export class MobileApiService {
    * Backed by `POST /assayers/me/change-password`, which verifies the current password,
    * enforces a minimum length, and clears the forced-rotation flag on success.
    */
+  /**
+   * Per-category notification preferences for the signed-in assayer.
+   *
+   * The backend has always exposed these; nothing in the app used them, so notifications
+   * were all-or-nothing — an assayer could not keep assignment offers while muting billing
+   * updates. The server returns a full set with defaults for categories never explicitly set,
+   * so the caller never has to reason about missing rows.
+   */
+  static async getNotificationPreferences(): Promise<NotificationPreference[]> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/preferences`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) return [];
+      return Array.isArray(data.data) ? data.data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Turn one channel on or off for one category. Returns the refreshed full set. */
+  static async setNotificationPreference(
+    category: string,
+    patch: { inApp?: boolean; push?: boolean; email?: boolean },
+  ): Promise<{ success: boolean; preferences?: NotificationPreference[]; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/preferences/${category}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false) {
+        return { success: false, error: data?.message || 'Could not save that preference.' };
+      }
+      return { success: true, preferences: Array.isArray(data.data) ? data.data : undefined };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error saving preference' };
+    }
+  }
+
   static async changeOwnPassword(
     currentPassword: string,
     newPassword: string,

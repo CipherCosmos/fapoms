@@ -1747,6 +1747,26 @@ export class AssayerService implements OnModuleInit {
       lockedUntil: null,
       updatedBy: assayerId,
     });
+
+    /**
+     * Credential changes are audited.
+     *
+     * Neither this method nor resetPasswordByStaff recorded anything, while the equivalent
+     * user paths emit USER_PASSWORD_CHANGED / USER_PASSWORD_RESET. On a system whose output
+     * is legal audit evidence, a credential change with no trail cannot be investigated at
+     * all — found while trying to establish who had changed an assayer's password and
+     * discovering the answer was unrecoverable.
+     */
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'ASSAYER_PASSWORD_CHANGED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: assayerId,
+      remarks: 'Assayer changed their own password.',
+    }).catch(() => { /* never fail the password change over its audit row */ });
+
+    await this.recordActivity(assayerId, 'PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
   }
 
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
@@ -1765,6 +1785,18 @@ export class AssayerService implements OnModuleInit {
       mustChangePassword: true,
       updatedBy: actorId,
     });
+
+    // Who reset whose credential, and when — see the note in changeOwnPassword.
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'ASSAYER_PASSWORD_RESET',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks: 'Password reset by staff. The assayer must choose a new one at next sign-in.',
+    }).catch(() => { /* never fail the reset over its audit row */ });
+
+    await this.recordActivity(assayerId, 'PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
   }
 
   /**

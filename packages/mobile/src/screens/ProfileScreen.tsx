@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, TextInput, Switch, TextStyle } from 'react-native';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
@@ -7,6 +7,7 @@ import {
 import { useLocation } from '../context/LocationContext';
 import { formatRupees as money } from '@fapoms/shared';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
+import { MobileApiService, NotificationPreference } from '../services/api.service';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
 
@@ -67,6 +68,20 @@ interface ProfileScreenProps {
   onLogout?: () => void;
 }
 
+/**
+ * Plain-language names for the notification categories. The API returns enum values
+ * (ASSIGNMENT, BILLING…), which are not what a field assayer should be reading.
+ */
+const CATEGORY_LABELS: Record<string, { label: string; hint: string }> = {
+  ASSIGNMENT: { label: 'Assignments', hint: 'New offers, acceptances and cancellations' },
+  VALIDATION: { label: 'Clarifications', hint: 'Questions raised on your submitted reports' },
+  DOCUMENT: { label: 'Documents', hint: 'Paperwork dispatched to you, or sent back for re-upload' },
+  PLANNING: { label: 'Planning', hint: 'Coverage and scheduling changes affecting your branches' },
+  WORKFORCE: { label: 'Your record', hint: 'Certification expiry and profile changes' },
+  BILLING: { label: 'Payments', hint: 'Expense decisions and payouts' },
+  SYSTEM: { label: 'System', hint: 'Service notices and app updates' },
+};
+
 type SectionKey = 'PROFILE' | 'WORK' | 'STATS' | 'APP';
 
 /**
@@ -105,6 +120,36 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [biometrics, setBiometrics] = useState(() => getPreference('biometrics'));
   const [pushEnabled, setPushEnabled] = useState(() => getPreference('pushEnabled'));
   const [pushBusy, setPushBusy] = useState(false);
+
+  /**
+   * Per-category notification preferences, held server-side.
+   *
+   * Push used to be all-or-nothing: an assayer who wanted to stop billing chatter had to
+   * silence assignment offers too — the one notification they cannot afford to miss. The
+   * backend has always stored these per category; nothing in the app read them.
+   */
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPreference[]>([]);
+  const [notifPrefsLoading, setNotifPrefsLoading] = useState(true);
+  const [savingCategory, setSavingCategory] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    MobileApiService.getNotificationPreferences()
+      .then((prefs) => { if (!cancelled) setNotifPrefs(prefs); })
+      .finally(() => { if (!cancelled) setNotifPrefsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleCategory = async (category: string, push: boolean) => {
+    setSavingCategory(category);
+    // Optimistic: the switch responds immediately, and reverts if the server refuses.
+    const previous = notifPrefs;
+    setNotifPrefs((prev) => prev.map((p) => (p.category === category ? { ...p, push } : p)));
+    const res = await MobileApiService.setNotificationPreference(category, { push });
+    if (!res.success) setNotifPrefs(previous);
+    else if (res.preferences) setNotifPrefs(res.preferences);
+    setSavingCategory(null);
+  };
   const { liveTrackingEnabled, liveTrackingReady, setLiveTrackingEnabled } = useLocation();
 
   const Field: React.FC<{
@@ -114,8 +159,39 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     placeholder?: string;
     keyboardType?: 'default' | 'numeric' | 'phone-pad';
     autoCapitalize?: 'none' | 'characters' | 'words';
-  }> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none' }) => {
+    /**
+     * Maintained by HR and refused by the server on a self-edit. Rendered read-only with the
+     * reason instead of as an input: an editable box that always fails is worse than no box,
+     * because the worker types, saves, and only then learns it was never theirs to change.
+     */
+    lockedReason?: string;
+  }> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none', lockedReason }) => {
     const [focus, setFocus] = useState(false);
+
+    if (lockedReason) {
+      return (
+        <View style={{ gap: t.space.sm }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+            <Icon name="lock-closed" size={11} color={t.colors.textFaint} />
+          </View>
+          <View style={{
+            backgroundColor: t.colors.surface,
+            borderRadius: t.radius.md,
+            borderWidth: 1.5,
+            borderColor: t.colors.border,
+            paddingHorizontal: t.space.lg,
+            paddingVertical: t.space.md,
+          }}>
+            <AppText variant="small" tone={value ? 'default' : 'faint'}>
+              {value ? String(value) : 'Not on file'}
+            </AppText>
+          </View>
+          <AppText variant="caption" tone="faint">{lockedReason}</AppText>
+        </View>
+      );
+    }
+
     return (
       <View style={{ gap: t.space.sm }}>
         <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
@@ -275,10 +351,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <Card level={1} style={{ gap: t.space.lg }}>
               <View style={{ flexDirection: 'row', gap: t.space.md }}>
                 <View style={{ flex: 1 }}>
-                  <Field label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={(v) => onUpdateProfileField('maxDailyWorkload', Number(v) || 0)} keyboardType="numeric" />
+                  <Field label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations — it decides how much work you can be offered." />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Field label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={(v) => onUpdateProfileField('maxWeeklyWorkload', Number(v) || 0)} keyboardType="numeric" />
+                  <Field label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations, alongside your daily limit." />
                 </View>
               </View>
               <Field label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" />
@@ -291,9 +367,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <AppText variant="caption" tone="faint">
                 Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
               </AppText>
-              <Field label="PAN" value={profile.panNumber} onChange={(v) => onUpdateProfileField('panNumber', v)} autoCapitalize="characters" />
-              <Field label="Bank account" value={profile.bankAccountNumber} onChange={(v) => onUpdateProfileField('bankAccountNumber', v)} keyboardType="numeric" />
-              <Field label="IFSC" value={profile.ifscCode} onChange={(v) => onUpdateProfileField('ifscCode', v)} autoCapitalize="characters" />
+              <Field label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason="Held by HR. Contact your HR coordinator to correct this." />
+              <Field label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason="Payment details are changed by HR only, so a payout cannot be redirected from a handset." />
+              <Field label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason="Changed by HR alongside your bank account." />
             </Card>
           </Section>
         </>
@@ -369,6 +445,30 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               />
               {pushBusy && (
                 <AppText variant="caption" tone="faint" style={{ marginTop: 4 }}>Updating this device with the server…</AppText>
+              )}
+
+              {/* Per-category control, so the notifications that matter most to a field
+                  worker can stay on while the rest are muted. Only shown while push is on —
+                  with the device unregistered these have nothing to act on. */}
+              {pushEnabled && (
+                <View style={{ marginTop: t.space.md, gap: t.space.xs }}>
+                  <AppText variant="caption" tone="faint">WHICH ALERTS</AppText>
+                  {notifPrefsLoading ? (
+                    <AppText variant="caption" tone="faint">Loading your alert preferences…</AppText>
+                  ) : notifPrefs.length === 0 ? (
+                    <AppText variant="caption" tone="faint">Alert preferences unavailable offline.</AppText>
+                  ) : (
+                    notifPrefs.map((pref) => (
+                      <Toggle
+                        key={pref.category}
+                        label={CATEGORY_LABELS[pref.category]?.label ?? pref.category}
+                        hint={savingCategory === pref.category ? 'Saving…' : CATEGORY_LABELS[pref.category]?.hint}
+                        value={pref.push}
+                        onChange={(v) => toggleCategory(pref.category, v)}
+                      />
+                    ))
+                  )}
+                </View>
               )}
               <Divider spacing={t.space.xs} />
               <Toggle

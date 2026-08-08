@@ -146,8 +146,11 @@ export const Tappable: React.FC<{
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
   scaleTo?: number;
+  /** Passed through to Pressable so icon-only controls announce themselves to screen readers. */
+  accessibilityLabel?: string;
+  accessibilityRole?: 'button' | 'link' | 'switch';
   children: React.ReactNode;
-}> = ({ onPress, disabled, style, scaleTo, children }) => {
+}> = ({ onPress, disabled, style, scaleTo, accessibilityLabel, accessibilityRole, children }) => {
   const t = useTheme();
   const scale = useRef(new Animated.Value(1)).current;
   const to = scaleTo ?? t.motion.pressScale;
@@ -157,6 +160,8 @@ export const Tappable: React.FC<{
 
   return (
     <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole={accessibilityRole}
       onPress={onPress}
       disabled={disabled}
       onPressIn={() => !disabled && animate(to)}
@@ -279,13 +284,18 @@ export const IconButton: React.FC<{
   tone?: 'default' | 'primary' | 'danger';
   badge?: number;
   size?: number;
-}> = ({ icon, onPress, tone = 'default', badge, size = 42 }) => {
+  /**
+   * Spoken description. These buttons are icon-only, so without it a screen reader announces
+   * nothing useful — "button" and no indication of what it does.
+   */
+  accessibilityLabel?: string;
+}> = ({ icon, onPress, tone = 'default', badge, size = 42, accessibilityLabel }) => {
   const t = useTheme();
   const fg = tone === 'primary' ? t.colors.primary : tone === 'danger' ? t.colors.danger : t.colors.textMuted;
   const bg = tone === 'primary' ? t.colors.primarySoft : tone === 'danger' ? t.colors.dangerSoft : t.colors.surfaceAlt;
 
   return (
-    <Tappable onPress={onPress} scaleTo={0.9}>
+    <Tappable onPress={onPress} scaleTo={0.9} accessibilityLabel={accessibilityLabel} accessibilityRole="button">
       <View style={{
         width: size, height: size, borderRadius: t.radius.md,
         backgroundColor: bg, borderWidth: 1, borderColor: t.colors.border,

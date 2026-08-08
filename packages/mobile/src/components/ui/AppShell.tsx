@@ -44,6 +44,15 @@ export const TopBar: React.FC<{
         <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? 'Field Assayer'}</AppText>
       </View>
 
+      {/* Light/dark is a lighting decision, not a settings decision — an assayer moves from
+          bright sunlight to a dim branch back office during a single visit. It was reachable
+          only three levels deep (Profile > App tab), so it is surfaced here as one tap.
+          Cycles system -> light -> dark. */}
+      <IconButton
+        icon={t.preference === 'system' ? 'contrast-outline' : t.mode === 'dark' ? 'moon' : 'sunny'}
+        onPress={t.cyclePreference}
+        accessibilityLabel={`Theme: ${t.preference}. Tap to change.`}
+      />
       {onRefresh && (
         <IconButton
           icon="refresh-outline"
