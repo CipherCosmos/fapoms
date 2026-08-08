@@ -595,6 +595,14 @@ export class PlanningController {
       throw new BadRequestException('projectIds is required — pass one or more comma-separated project ids.');
     }
 
+    // Without this, a malformed id reaches Postgres inside In(...) and comes back as a 500
+    // with a driver-level cast error, which tells the caller nothing about what they got wrong.
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const malformed = ids.filter((id) => !UUID.test(id));
+    if (malformed.length > 0) {
+      throw new BadRequestException(`Not a valid project id: ${malformed.join(', ')}`);
+    }
+
     const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
     const plan = await this.dayPlannerService.generateDayPlans(
       ids,

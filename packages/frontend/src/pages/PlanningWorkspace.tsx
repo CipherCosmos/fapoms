@@ -219,6 +219,15 @@ interface ProjectDayPlan {
     branchId: string; branchName: string; packetCount: number | null;
     auditHours: number; idleHours: number; note: string;
   }>;
+  /**
+   * Branches whose own workload exceeds one working day, with the assayer-days each needs.
+   * These used to appear as "cluster exceeds daily capacity" in unclusteredBranches — true,
+   * unactionable, and repeated on every visit.
+   */
+  multiDayBranches: Array<{
+    branchId: string; branchName: string; packetCount: number | null;
+    auditHours: number; daysRequired: number; note: string;
+  }>;
   summary: {
     totalClusters: number;
     totalBranchesCovered: number;
@@ -344,6 +353,11 @@ export const PlanningWorkspace: React.FC = () => {
   }, [candidates, slaEnabled, slaRadius, showAllCandidates]);
   const drawerRef = useRef<HTMLDivElement>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
+  /**
+   * Projects to plan together. Empty means "just the one currently selected", which keeps the
+   * screen behaving as before until an operator deliberately widens the scope.
+   */
+  const [dayPlanProjectIds, setDayPlanProjectIds] = useState<string[]>([]);
   const [isLoadingDayPlans, setIsLoadingDayPlans] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   // Day plans previously had no date picker at all — always locked to the backend's default
@@ -492,7 +506,11 @@ export const PlanningWorkspace: React.FC = () => {
     finally { setIsLoadingQueue(false); }
   };
 
-  const loadDayPlans = async () => {
+  /**
+   * `projectIdsOverride` lets the project chips reload immediately on click rather than
+   * waiting for the next render to observe the new state.
+   */
+  const loadDayPlans = async (projectIdsOverride?: string[]) => {
     if (!selectedProjectId) return;
     setIsLoadingDayPlans(true);
     setDayPlanData(null);
@@ -502,9 +520,17 @@ export const PlanningWorkspace: React.FC = () => {
       // everywhere. Previously this request sent no params at all: no date (always locked to
       // the backend's "right now" default) and no radius (the endpoint had no minimum-distance
       // concept whatsoever until this fix).
-      const params = new URLSearchParams({ targetDate: dayPlanTargetDate });
+      // Several projects can be planned together so an assayer's day is built from every
+      // nearby branch, not just those in one engagement.
+      const projectIdsForPlan = Array.from(
+        new Set([...(selectedProjectId ? [selectedProjectId] : []), ...(projectIdsOverride ?? dayPlanProjectIds)]),
+      );
+      const params = new URLSearchParams({
+        targetDate: dayPlanTargetDate,
+        projectIds: projectIdsForPlan.join(','),
+      });
       if (slaEnabled) params.set('minDistanceKm', String(slaRadius));
-      const data = await api.request<ProjectDayPlan>(`/planning/projects/${selectedProjectId}/day-plans?${params}`);
+      const data = await api.request<ProjectDayPlan>(`/planning/day-plans?${params}`);
       setDayPlanData(data);
       if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
     } catch (err) { console.error('Failed to load day plans', err); }
@@ -1971,6 +1997,32 @@ export const PlanningWorkspace: React.FC = () => {
                   onChange={(e) => setDayPlanTargetDate(e.target.value)}
                   style={{ padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontSize: '11px', outline: 'none' }} />
               </label>
+              {/* Coverage doesn't stop at an engagement boundary: two banks can have branches
+                  on the same street, and an assayer sent to one may as well cover both. The
+                  globally-selected project is always in scope; these only widen it. */}
+              {projects.length > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Plan with:</span>
+                  {projects.filter((p) => p.id !== selectedProjectId).map((p) => {
+                    const on = dayPlanProjectIds.includes(p.id);
+                    return (
+                      <button key={p.id} type="button"
+                        onClick={() => {
+                          const next = on ? dayPlanProjectIds.filter((x) => x !== p.id) : [...dayPlanProjectIds, p.id];
+                          setDayPlanProjectIds(next);
+                          loadDayPlans(next);
+                        }}
+                        title={`${on ? 'Exclude' : 'Include'} ${p.name} when clustering branches for this day`}
+                        style={{ padding: '3px 8px', fontSize: '10.5px', fontWeight: on ? 700 : 500, cursor: 'pointer',
+                          background: on ? 'var(--accent-primary)' : 'var(--bg-primary)',
+                          color: on ? '#fff' : 'var(--text-secondary)',
+                          border: `1px solid ${on ? 'var(--accent-primary)' : 'var(--border-color)'}`, borderRadius: '999px' }}>
+                        {p.projectNumber}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {/* Same control that drives the single-branch candidate list and map — reused
                   here rather than a separate day-plans-only setting, so "Min Radius Filter"
                   means one thing everywhere on this page. */}
@@ -1984,7 +2036,7 @@ export const PlanningWorkspace: React.FC = () => {
                   {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
                 </select>
               )}
-              <button onClick={loadDayPlans} disabled={isLoadingDayPlans}
+              <button onClick={() => loadDayPlans()} disabled={isLoadingDayPlans}
                 className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <Route size={13} /> {isLoadingDayPlans ? 'Generating...' : 'Generate Day Plans'}
               </button>
@@ -2063,6 +2115,33 @@ export const PlanningWorkspace: React.FC = () => {
                     <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
                       <span style={{ fontWeight: 600, color: 'var(--text-primary)', minWidth: '160px' }}>{b.branchName}</span>
                       <span style={{ color: 'var(--danger)', fontWeight: 700 }}>{b.idleHours}h idle</span>
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        {b.packetCount != null ? `${b.packetCount} packets ≈ ${b.auditHours}h` : `~${b.auditHours}h (no packet count recorded)`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Branches too big for one day. These previously surfaced as "cluster exceeds
+                  daily capacity" in the unclustered list — accurate but unactionable, and on
+                  this dataset that was 43 of 64 branches, i.e. most of the portfolio silently
+                  unplannable. Stated as assayer-days, it becomes a coverage plan. */}
+              {(dayPlanData.multiDayBranches?.length ?? 0) > 0 && (
+                <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent-primary)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary)', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Layers size={13} /> {dayPlanData.multiDayBranches.length} branch(es) need more than one day on their own
+                    <span style={{ marginLeft: 'auto', fontWeight: 800 }}>
+                      {dayPlanData.multiDayBranches.reduce((sum, b) => sum + b.daysRequired, 0)} assayer-days
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Their own workload exceeds a working day, so they can't be bundled with anything. Split each across the days shown, or send more than one assayer.
+                  </div>
+                  {[...dayPlanData.multiDayBranches].sort((a, b) => b.daysRequired - a.daysRequired).map((b, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', minWidth: '160px' }}>{b.branchName}</span>
+                      <span style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>{b.daysRequired} day(s)</span>
                       <span style={{ color: 'var(--text-muted)' }}>
                         {b.packetCount != null ? `${b.packetCount} packets ≈ ${b.auditHours}h` : `~${b.auditHours}h (no packet count recorded)`}
                       </span>

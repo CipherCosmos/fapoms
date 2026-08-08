@@ -42,7 +42,7 @@ describe('DayPlannerService', () => {
   const mockConstraintEvaluator = { checkHoliday: jest.fn() };
   const mockProjectBranchRepo = { find: jest.fn() };
 
-  const build = async () => {
+  const build = async (overrides: { projectRepo?: any; clientRepo?: any } = {}) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DayPlannerService,
@@ -67,7 +67,7 @@ describe('DayPlannerService', () => {
           provide: getRepositoryToken(ProjectEntity),
           // find() as well as findOne(): a day plan can now span several projects, so the
           // service loads them as a set.
-          useValue: {
+          useValue: overrides.projectRepo ?? {
             findOne: jest.fn().mockResolvedValue(PROJECT),
             find: jest.fn().mockResolvedValue([PROJECT]),
           },
@@ -78,7 +78,7 @@ describe('DayPlannerService', () => {
         { provide: getRepositoryToken(AssayerEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
         {
           provide: getRepositoryToken(ClientEntity),
-          useValue: {
+          useValue: overrides.clientRepo ?? {
             findOne: jest.fn().mockResolvedValue({ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }),
             find: jest.fn().mockResolvedValue([{ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }]),
           },
@@ -203,4 +203,78 @@ describe('DayPlannerService', () => {
       expect(plan.dateAdjustment?.reason).toMatch(/Karnataka/);
     });
   });
+
+  /**
+   * A cluster can now span engagements — two banks can have branches on the same street. The
+   * risk that creates is silently applying one client's commercial terms to another client's
+   * branch, which would misprice the day and weaken the conflict-of-interest control. These
+   * assert each branch keeps its own client's terms, and that the strictest floor wins.
+   */
+  describe('planning several projects together', () => {
+    const PROJECT_2 = { id: 'proj-2', name: 'Other Bank Cycle', clientId: 'client-2' };
+    // 20 minutes per packet vs client-1's 15 — a real contractual difference, not a default.
+    const CLIENT_1 = { id: 'client-1', planningPreferences: { minutesPerPacket: 15, minDistanceKm: 5 } };
+    const CLIENT_2 = { id: 'client-2', planningPreferences: { minutesPerPacket: 20, minDistanceKm: 25 } };
+
+    const buildCrossClient = () => build({
+      projectRepo: {
+        findOne: jest.fn().mockResolvedValue(PROJECT),
+        find: jest.fn().mockResolvedValue([PROJECT, PROJECT_2]),
+      },
+      clientRepo: {
+        findOne: jest.fn().mockResolvedValue(CLIENT_1),
+        find: jest.fn().mockResolvedValue([CLIENT_1, CLIENT_2]),
+      },
+    });
+
+    it("sizes each branch with its own client's packet agreement, not the first project's", async () => {
+      const svc = await buildCrossClient();
+      // Same packet count on both branches; only the governing client differs.
+      mockProjectBranchRepo.find.mockResolvedValue([
+        { ...projectBranch(branchA, 12), projectId: PROJECT.id },
+        { ...projectBranch(branchC, 12), projectId: PROJECT_2.id },
+      ]);
+
+      const plan = await svc.generateDayPlans([PROJECT.id, PROJECT_2.id], '2026-08-20');
+
+      const sized: Array<{ branchId: string; hours: number }> = [
+        ...plan.clusters.flatMap((c) => c.cluster.branches.map((b) => ({ branchId: b.branchId, hours: b.estimatedDurationHours }))),
+        ...plan.underutilizedBranches.map((b) => ({ branchId: b.branchId, hours: b.auditHours })),
+        ...plan.multiDayBranches.map((b) => ({ branchId: b.branchId, hours: b.auditHours })),
+      ];
+      // 12 x 15min = 3h under client-1; 12 x 20min = 4h under client-2. If the planner applied
+      // one client's agreement to both branches, these would be equal.
+      expect(sized.find((b) => b.branchId === branchA.id)?.hours).toBeCloseTo(3, 5);
+      expect(sized.find((b) => b.branchId === branchC.id)?.hours).toBeCloseTo(4, 5);
+    });
+
+    it('enforces the strictest conflict-of-interest floor across the clients in scope', async () => {
+      const svc = await buildCrossClient();
+      mockProjectBranchRepo.find.mockResolvedValue([
+        { ...projectBranch(branchA, 4), projectId: PROJECT.id },
+        { ...projectBranch(branchC, 4), projectId: PROJECT_2.id },
+      ]);
+
+      const plan = await svc.generateDayPlans([PROJECT.id, PROJECT_2.id], '2026-08-20');
+
+      // client-2's 25km floor governs the whole plan; client-1's 5km must not relax it for a
+      // shared day, or an assayer excluded by one bank gets in through the other's branch.
+      expect(plan.effectiveMinDistanceKm).toBe(25);
+    });
+
+    it("lets the operator's manual filter tighten, but never loosen, the client floors", async () => {
+      const svc = await buildCrossClient();
+      mockProjectBranchRepo.find.mockResolvedValue([
+        { ...projectBranch(branchA, 4), projectId: PROJECT.id },
+        { ...projectBranch(branchC, 4), projectId: PROJECT_2.id },
+      ]);
+
+      const tighter = await svc.generateDayPlans([PROJECT.id, PROJECT_2.id], '2026-08-20', 40);
+      expect(tighter.effectiveMinDistanceKm).toBe(40);
+
+      const looser = await svc.generateDayPlans([PROJECT.id, PROJECT_2.id], '2026-08-20', 2);
+      expect(looser.effectiveMinDistanceKm).toBe(25);
+    });
+  });
+
 });
