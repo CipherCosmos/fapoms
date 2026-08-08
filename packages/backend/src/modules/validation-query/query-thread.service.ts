@@ -4,7 +4,11 @@ import { Repository } from 'typeorm';
 
 import { ValidationQueryEntity } from './validation-query.entity';
 import { ValidationQueryMessageEntity, QueryMessageAuthor } from './validation-query-message.entity';
+import { ValidationCaseEntity } from '../validation/validation-case.entity';
+import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ValidationQueryStatus } from '@fapoms/shared';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 export interface PostMessageDto {
   body?: string;
@@ -27,7 +31,39 @@ export class QueryThreadService {
     private readonly queryRepository: Repository<ValidationQueryEntity>,
     @InjectRepository(ValidationQueryMessageEntity)
     private readonly messageRepository: Repository<ValidationQueryMessageEntity>,
+    @InjectRepository(ValidationCaseEntity)
+    private readonly validationCaseRepository: Repository<ValidationCaseEntity>,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly notificationDispatch: NotificationDispatchService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
+
+  /**
+   * Resolve the assayer name, branch name and assignment id a query notification needs, the same
+   * way ValidationQueryService does — via the case's project branch and its active assignment.
+   * The templates fall back to "—" for anything missing, so a best-effort empty result still
+   * delivers a usable notification.
+   */
+  private async notificationContext(query: ValidationQueryEntity): Promise<{ assayerName: string; branchName: string; assignmentId: string | null }> {
+    const valCase = await this.validationCaseRepository
+      .findOne({ where: { id: query.validationCaseId } })
+      .catch(() => null);
+    const assignment = valCase?.projectBranchId
+      ? await this.assignmentRepository
+          .findOne({
+            where: { projectBranchId: valCase.projectBranchId, isActive: true },
+            relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
+            order: { createdAt: 'DESC' },
+          })
+          .catch(() => null)
+      : null;
+    return {
+      assayerName: assignment?.assayer?.displayName ?? 'The assayer',
+      branchName: assignment?.projectBranch?.branch?.name ?? 'a branch',
+      assignmentId: assignment?.id ?? null,
+    };
+  }
 
   async listMessages(queryId: string): Promise<ValidationQueryMessageEntity[]> {
     await this.mustExist(queryId);
@@ -103,6 +139,53 @@ export class QueryThreadService {
       query.status = ValidationQueryStatus.OPEN;
     }
     await this.queryRepository.save(query);
+
+    /**
+     * Tell the other side a message arrived.
+     *
+     * This is the message path BOTH clients actually use — the mobile assayer and the web desk
+     * post here — yet it emitted nothing, so an assayer's answer reached the database and the
+     * desk was never told. The notifying code lived only in the legacy /respond route that
+     * nothing calls. Without this, the "chat with the assayer" loop is one-way: the desk finds
+     * a reply only by reopening the case by hand.
+     */
+    const ctx = await this.notificationContext(query);
+    if (authorType === QueryMessageAuthor.ASSAYER) {
+      // The assayer answered — the ball is now in the desk's court.
+      this.notificationDispatch.emitSafe({
+        type: 'VALIDATION_QUERY_ANSWERED',
+        entityType: 'VALIDATION_QUERY',
+        entityId: query.id,
+        actorUserId: authorId,
+        assayerId: query.assayerId ?? null,
+        // A query can be answered more than once; each reply is its own event.
+        dedupeKey: `VALIDATION_QUERY_ANSWERED:${saved.id}:${saved.createdAt?.toISOString?.() ?? ''}`,
+        payload: { queryId: query.id, validationCaseId: query.validationCaseId, messageId: saved.id, assayerName: ctx.assayerName, branchName: ctx.branchName },
+      });
+    } else {
+      // The desk added to the thread — the assayer needs to see it and reply.
+      this.notificationDispatch.emitSafe({
+        type: 'VALIDATION_QUERY_RAISED',
+        entityType: 'VALIDATION_QUERY',
+        entityId: query.id,
+        actorUserId: authorId,
+        assayerId: query.assayerId ?? null,
+        dedupeKey: `VALIDATION_QUERY_MESSAGE:${saved.id}`,
+        payload: { queryId: query.id, validationCaseId: query.validationCaseId, messageId: saved.id, branchName: ctx.branchName, assignmentId: ctx.assignmentId },
+      });
+    }
+
+    try {
+      this.eventPublisher.publish('query:message', {
+        eventType: 'query:message',
+        queryId: query.id,
+        validationCaseId: query.validationCaseId,
+        assayerId: query.assayerId ?? null,
+        authorType,
+        status: query.status,
+        messageId: saved.id,
+      });
+    } catch { /* realtime is best-effort; the message is already saved */ }
 
     return saved;
   }
