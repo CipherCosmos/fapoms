@@ -197,6 +197,34 @@ export const Billing: React.FC = () => {
     return [...reachable];
   }, [selectedEntries]);
 
+  /**
+   * Consolidate the selected entries into one. The backend refuses a cross-client merge or one
+   * that touches an invoiced/part-paid line, so the button is only offered when the selection
+   * already satisfies both — a disabled button with a silent 400 is worse than no button.
+   */
+  const canMergeSelected = (() => {
+    if (selectedEntries.length < 2) return false;
+    const oneClient = new Set(selectedEntries.map((e) => e.clientId)).size === 1;
+    const noneLocked = selectedEntries.every((e) => e.state !== BillingState.INVOICED
+      && e.state !== BillingState.PAID && e.state !== BillingState.PARTIALLY_PAID);
+    return oneClient && noneLocked;
+  })();
+
+  const runMerge = async () => {
+    if (!canMergeSelected || bulkBusy) return;
+    setBulkBusy(true); setBulkReport(null);
+    try {
+      const merged = await billingApi.mergeEntries([...selectedEntryIds]);
+      toast('success', `Merged ${selectedEntryIds.size} entries into ${merged.entryNumber ?? 'one line'}.`);
+    } catch (err: any) {
+      toast({ type: 'error', title: 'Merge failed', message: userMessage(err) });
+    } finally {
+      setBulkBusy(false);
+      setSelectedEntryIds(new Set());
+      entries.refetch();
+    }
+  };
+
   const runBulkTransition = async () => {
     if (!bulkTarget || selectedEntryIds.size === 0) return;
     setBulkBusy(true);
@@ -386,6 +414,13 @@ export const Billing: React.FC = () => {
                 </>
               ) : (
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No state is reachable from the selected entries.</span>
+              )}
+              {canMergeSelected && (
+                <button onClick={runMerge} disabled={bulkBusy} className="btn btn-secondary"
+                  title="Consolidate the selected entries for this client into one billable line"
+                  style={{ fontSize: '12px', padding: '6px 12px' }}>
+                  Merge {selectedEntryIds.size} →
+                </button>
               )}
               <button onClick={() => setSelectedEntryIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
             </div>
