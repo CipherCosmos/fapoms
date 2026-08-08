@@ -14,7 +14,7 @@ import { ConfigurationResolver } from '../platform/configuration/configuration.r
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
-import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
+import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 
 /**
  * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
@@ -415,7 +415,7 @@ export class WorkloadScoreCalculator implements ScoreCalculator {
       },
     });
 
-    const maxCapacity = assayer.maxWeeklyWorkload || 15;
+    const maxCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
     const remaining = Math.max(0, maxCapacity - activeCount);
     return Math.min(100, (remaining / maxCapacity) * 100);
   }
@@ -837,7 +837,10 @@ export class CustomerDensityScoreCalculator implements ScoreCalculator {
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
     const customerCount = Number(context.branch.riskScore || 20);
-    const maxCapacity = assayer.maxWeeklyWorkload || 50;
+    // Deliberately the platform default, not the 50 that used to sit here: this is the same
+    // "how much can this assayer take on" figure every other engine uses, and a second default
+    // meant a capacity-less assayer scored as three times roomier here than anywhere else.
+    const maxCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
     // Score increases when high-customer-density branches are assigned to high-capacity assayers
     return Math.min(100, (customerCount / maxCapacity) * 100);
   }

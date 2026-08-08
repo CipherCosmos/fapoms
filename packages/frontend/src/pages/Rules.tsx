@@ -43,7 +43,7 @@ const RULE_TYPES: { value: string; label: string; conditionKey: string; creatabl
   { value: 'SKILL', label: 'Required skill', conditionKey: 'requiredSkill', creatable: true, hint: 'Assayer must have this exact skill recorded.' },
   { value: 'CERTIFICATION', label: 'Required certification', conditionKey: 'requiredCertification', creatable: true, hint: 'Assayer must hold this certification, unexpired, on the audit date.' },
   { value: 'TERRITORY', label: 'Restricted territory', conditionKey: 'restrictedStates', creatable: true, hint: 'Assayers based in these states are excluded.' },
-  { value: 'CAPACITY', label: 'Weekly capacity limit', conditionKey: 'maxWeeklyCapacity', creatable: true, hint: 'Excludes an assayer once their active workload reaches this count.' },
+  { value: 'CAPACITY', label: 'Concurrent assignment limit', conditionKey: 'maxWeeklyCapacity', creatable: true, hint: 'Excludes an assayer once this many assignments are open at once. Not windowed to a calendar week — an audit scheduled next month still occupies them.' },
   { value: 'PREFERENCE', label: 'Client preference (read-only)', conditionKey: '', creatable: false, hint: "Driven by the client's preferred/restricted assayer list, not by a condition set here." },
 ];
 
@@ -186,7 +186,7 @@ export const Rules: React.FC = () => {
       case 'SKILL': return r.conditions?.requiredSkill ? `Requires skill: ${r.conditions.requiredSkill}` : 'No skill set';
       case 'CERTIFICATION': return r.conditions?.requiredCertification ? `Requires certification: ${r.conditions.requiredCertification}` : 'No certification set';
       case 'TERRITORY': return (r.conditions?.restrictedStates ?? []).length ? `Excludes: ${r.conditions.restrictedStates.join(', ')}` : 'No states set';
-      case 'CAPACITY': return r.conditions?.maxWeeklyCapacity ? `Excludes once weekly workload ≥ ${r.conditions.maxWeeklyCapacity}` : 'No limit set';
+      case 'CAPACITY': { const cap = r.conditions?.maxConcurrentAssignments ?? r.conditions?.maxWeeklyCapacity ?? r.conditions?.maxConcurrent; return cap ? `Excludes once open assignments ≥ ${cap}` : 'No limit set'; }
       case 'PREFERENCE': return "Mirrors the client's preferred/restricted assayer list";
       default: return JSON.stringify(r.conditions);
     }

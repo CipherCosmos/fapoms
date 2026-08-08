@@ -38,6 +38,8 @@ export interface AssayerRecommendation {
   /** Per-dimension scores (distance, acceptanceRate, queryVolume, …) behind the total. */
   scoreBreakdown?: Record<string, number>;
   pendingOnThisBranch?: boolean;
+  /** The assayer's own weekly cap, so downstream planners need not assume a platform default. */
+  maxWeeklyWorkload?: number;
 }
 
 /** A candidate the filters removed, and why — surfaced so ops isn't left guessing. */
@@ -137,6 +139,7 @@ export class PlanningService {
         // rather than being handed an unexplained number.
         scoreBreakdown: r.breakdown,
         pendingOnThisBranch: r.pendingOnThisBranch,
+        maxWeeklyWorkload: r.assayer.maxWeeklyWorkload ?? undefined,
       });
     }
 

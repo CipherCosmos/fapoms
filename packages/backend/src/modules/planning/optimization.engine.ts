@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { ProjectQueryService } from '../project/project-query.service';
 import { PlanningService, AssayerRecommendation } from './planning.service';
 import { ConstraintEvaluator } from './constraint.evaluator';
+import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+import { WorkloadProvider } from './planning-providers.interface';
 
 export interface OptimizationMatching {
   projectBranchId: string;
@@ -26,6 +28,8 @@ export class OptimizationEngine {
   constructor(
     private readonly projectQueryService: ProjectQueryService,
     private readonly planningService: PlanningService,
+    @Inject('WorkloadProvider')
+    private readonly workloadProvider: WorkloadProvider,
   ) {}
 
   /**
@@ -43,9 +47,15 @@ export class OptimizationEngine {
       (pb) => pb.status === 'IMPORTED' || pb.status === 'PLANNING' || pb.status === 'CANDIDATE_SEARCH'
     );
 
-    // Keep track of dynamically consumed workloads during planning
-    // Key: assayerId, Value: number of assignments made in this run
+    /**
+     * Workload consumed as this run allocates, seeded with what each assayer already owes.
+     *
+     * This map used to start empty, so the optimizer believed every assayer was completely free
+     * however much work they were already committed to, and would pile a full notional week on
+     * top of an existing one. It is now seeded from the same reader the coverage planner uses.
+     */
     const simulatedWorkloadMap: Record<string, number> = {};
+    const capacityByAssayer: Record<string, number> = {};
 
     const assignments: OptimizationMatching[] = [];
     const unmatchedBranches: Array<{ projectBranchId: string; branchId: string; branchName: string }> = [];
@@ -60,8 +70,22 @@ export class OptimizationEngine {
 
       // Filter out candidates whose simulated workload capacity has been reached in this run.
       // Filter out candidates with very low scores (under 30) for quality assurance.
+      // Seed each newly-seen candidate with their real committed load and their own cap, rather
+      // than assuming everyone is idle and everyone's limit is the same number.
+      const unseen = candidates.map((c) => c.id).filter((id) => !(id in simulatedWorkloadMap));
+      if (unseen.length > 0) {
+        const existing = await this.workloadProvider.getAssayerCurrentWorkloads(unseen);
+        for (const id of unseen) {
+          simulatedWorkloadMap[id] = existing[id] ?? 0;
+        }
+      }
+      for (const c of candidates) {
+        capacityByAssayer[c.id] = c.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
+      }
+
+      // Filter out candidates whose capacity is exhausted, and very low scores (under 30).
       const validCandidates = candidates.filter((c) => {
-        const capacityLimit = 15; // default weekly workload capacity
+        const capacityLimit = capacityByAssayer[c.id] ?? DEFAULT_WEEKLY_CAPACITY;
         const currentSimulatedLoad = simulatedWorkloadMap[c.id] || 0;
         return currentSimulatedLoad < capacityLimit && (c.score === undefined || c.score >= 30);
       });

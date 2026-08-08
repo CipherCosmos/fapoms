@@ -10,7 +10,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerStatus } from '@fapoms/shared';
-import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
+import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 
 @Injectable()
 export class PlanningAntiCorruptionLayer
@@ -61,7 +61,7 @@ export class PlanningAntiCorruptionLayer
         status: a.status,
         location: new GeoCoordinate(a.effectiveLatitude || 0, a.effectiveLongitude || 0),
         skills: new SkillSet(a.skills || []),
-        maxWeeklyWorkload: a.maxWeeklyWorkload || 15,
+        maxWeeklyWorkload: a.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY,
       };
     });
   }

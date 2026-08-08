@@ -64,3 +64,12 @@ export function isTerminalAssignmentStatus(status: AssignmentStatus): boolean {
 export function sqlStatusList(statuses: AssignmentStatus[]): string {
   return statuses.map((s) => `'${s}'`).join(',');
 }
+
+/**
+ * Weekly capacity assumed for an assayer whose own `maxWeeklyWorkload` is unset.
+ *
+ * This literal was written out in six places — five as 15 and one as 50 — so the same assayer's
+ * spare capacity differed depending on which engine asked. Stated once, so a change to the
+ * platform default cannot land in five files and miss the sixth.
+ */
+export const DEFAULT_WEEKLY_CAPACITY = 15;

@@ -5,6 +5,7 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { ClusterManager, BranchCluster } from './cluster.manager';
 import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider } from './planning-providers.interface';
 import { FeePolicyService } from '../pricing/fee-policy.service';
+import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 
 export interface CoverageWarning {
   type: string;
@@ -93,7 +94,7 @@ export class CoveragePlanningEngine {
     const allocationMap = await this.workloadProvider.getAssayerCurrentWorkloads(assayerIds);
 
     const workforceCapacity: AssayerCapacityMetrics[] = activeAssayers.map((a) => {
-      const weeklyCapacity = a.maxWeeklyWorkload || 15;
+      const weeklyCapacity = a.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
       const currentAllocation = allocationMap[a.assayerId.value] || 0;
       const remainingCapacity = Math.max(0, weeklyCapacity - currentAllocation);
       const utilizationPercentage = parseFloat(((currentAllocation / weeklyCapacity) * 100).toFixed(1));
@@ -189,7 +190,7 @@ export class CoveragePlanningEngine {
       
       // Filter out double-booked or capacity-short candidates
       const validCandidates = candidates.filter((c) => {
-        const remaining = (allocationMap[c.assayer.id] || 0) < (c.assayer.maxWeeklyWorkload || 15);
+        const remaining = (allocationMap[c.assayer.id] || 0) < (c.assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY);
         return remaining;
       });
 
