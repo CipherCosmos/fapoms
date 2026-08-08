@@ -50,6 +50,18 @@ export interface PlanningContext {
     lastAssignment: { assayerId: string; status: AssignmentStatus } | null;
     /** Committed workload per assayer id, for every candidate in the pool. */
     activeWorkloadByAssayer: Record<string, number>;
+    /**
+     * Branch-to-assayer route, computed once per candidate.
+     *
+     * The distance and travel-time scorers each called `calculateRoute` with the identical
+     * origin and destination, so every candidate was routed twice — and routing is the most
+     * expensive thing in this pipeline, since it can reach an external provider. Sharing one
+     * result halves the calls and makes the ranking self-consistent: the two scores can no
+     * longer disagree because they were computed from separate responses.
+     */
+    routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }>;
+    /** The project-branch row for this branch — identical for every candidate. */
+    projectBranch?: any;
   };
 }
 
@@ -252,10 +264,14 @@ export class RequiredSkillsFilter implements CandidateFilter {
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
-    const pb = await this.projectBranchRepository.findOne({
-      where: { branchId: context.branch.id, isActive: true },
-      relations: ['project'],
-    });
+    // Same row for every candidate, so recommend() resolves it once. The query remains as a
+    // standalone fallback.
+    const pb = context.branchFacts?.projectBranch !== undefined
+      ? context.branchFacts.projectBranch
+      : await this.projectBranchRepository.findOne({
+          where: { branchId: context.branch.id, isActive: true },
+          relations: ['project'],
+        });
 
     if (!pb || !pb.project) {
       return true;
@@ -276,10 +292,11 @@ export class DistanceScoreCalculator implements ScoreCalculator {
     if (!context.branch.latitude || !context.branch.longitude || !assayer.effectiveLatitude || !assayer.effectiveLongitude) {
       return 0;
     }
-    const route = await this.routingService.calculateRoute(
-      { latitude: context.branch.latitude, longitude: context.branch.longitude },
-      { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
-    );
+    const route = context.branchFacts?.routeByAssayer[assayer.id]
+      ?? await this.routingService.calculateRoute(
+        { latitude: context.branch.latitude, longitude: context.branch.longitude },
+        { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
+      );
     return Math.max(0, 100 - (route.distanceKm / 5));
   }
 }
@@ -294,10 +311,12 @@ export class TravelTimeScoreCalculator implements ScoreCalculator {
     if (!context.branch.latitude || !context.branch.longitude || !assayer.effectiveLatitude || !assayer.effectiveLongitude) {
       return 0;
     }
-    const route = await this.routingService.calculateRoute(
-      { latitude: context.branch.latitude, longitude: context.branch.longitude },
-      { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
-    );
+    // Shared with the distance scorer — see branchFacts.routeByAssayer.
+    const route = context.branchFacts?.routeByAssayer[assayer.id]
+      ?? await this.routingService.calculateRoute(
+        { latitude: context.branch.latitude, longitude: context.branch.longitude },
+        { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
+      );
     return Math.max(0, 100 - (route.durationMinutes / 6));
   }
 }
@@ -799,6 +818,11 @@ export class RecommendationEngine {
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly constraintEvaluator: ConstraintEvaluator,
+    // Used only to resolve the per-recommendation shared facts, so filters and scorers no
+    // longer each query for these per candidate.
+    @InjectRepository(ProjectBranchEntity)
+    private readonly engineProjectBranchRepository: Repository<ProjectBranchEntity>,
+    private readonly engineRoutingService: RoutingService,
     private readonly assayerService: AssayerService,
   ) {
     this.filters.push(
@@ -908,7 +932,7 @@ export class RecommendationEngine {
      * With a national workforce the per-candidate versions made the cost of a single
      * recommendation grow with total headcount rather than with anything about the branch.
      */
-    const [lastAssignment, workloadRows] = await Promise.all([
+    const [lastAssignment, workloadRows, projectBranchRow] = await Promise.all([
       this.assignmentRepository.findOne({
         where: { projectBranch: { branchId: branch.id }, isActive: true },
         order: { createdAt: 'DESC' },
@@ -926,7 +950,39 @@ export class RecommendationEngine {
         .groupBy('a.assayerId')
         .getRawMany()
         .catch(() => []),
+      this.engineProjectBranchRepository.findOne({
+        where: { branchId: branch.id, isActive: true },
+        relations: ['project'],
+      }).catch(() => null),
     ]);
+
+    /**
+     * One route per candidate instead of two.
+     *
+     * The distance and travel-time scorers each routed the same origin/destination pair, so a
+     * pool of N candidates produced 2N calls to the routing provider — the single most
+     * expensive operation here, since it can be an external service. Computed once, in
+     * parallel across candidates, and shared. A failed route is omitted rather than defaulted,
+     * so the scorers fall through to their own call and no candidate is silently scored zero.
+     */
+    const routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }> = {};
+    if (branch.latitude && branch.longitude) {
+      const routed = await Promise.all(
+        assayers.map(async (a) => {
+          if (!a.effectiveLatitude || !a.effectiveLongitude) return null;
+          const route = await this.engineRoutingService
+            .calculateRoute(
+              { latitude: Number(branch.latitude), longitude: Number(branch.longitude) },
+              { latitude: Number(a.effectiveLatitude), longitude: Number(a.effectiveLongitude) },
+            )
+            .catch(() => null);
+          return route ? ([a.id, route] as const) : null;
+        }),
+      );
+      for (const entry of routed) {
+        if (entry) routeByAssayer[entry[0]] = { distanceKm: entry[1].distanceKm, durationMinutes: entry[1].durationMinutes };
+      }
+    }
 
     context.branchFacts = {
       lastAssignment: lastAssignment
@@ -936,6 +992,8 @@ export class RecommendationEngine {
         acc[r.assayerId] = Number(r.count) || 0;
         return acc;
       }, {}),
+      routeByAssayer,
+      projectBranch: projectBranchRow,
     };
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this

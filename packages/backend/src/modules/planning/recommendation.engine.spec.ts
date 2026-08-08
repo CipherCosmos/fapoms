@@ -183,6 +183,10 @@ describe('RecommendationEngine', () => {
     mockAssignmentRepo.find.mockResolvedValue([]);
     mockAssignmentRepo.findOne.mockResolvedValue(null);
     mockAssignmentRepo.count.mockResolvedValue(0);
+    // recommend() also awaits these while resolving the facts it shares across candidates,
+    // so they must resolve rather than return undefined.
+    mockProjectBranchRepo.findOne.mockResolvedValue(null);
+    mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 10, durationMinutes: 20 });
   });
 
   it('should filter out inactive assayers', async () => {

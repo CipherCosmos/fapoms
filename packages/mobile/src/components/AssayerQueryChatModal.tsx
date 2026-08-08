@@ -39,9 +39,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
   /** Bumped by the socket listeners so an open thread reloads when the desk replies. */
   const [threadVersion, setThreadVersion] = useState(0);
-  const [responseText, setResponseText] = useState('');
   const [attachments, setAttachments] = useState<{ url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[]>([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -103,7 +101,6 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
     }
   };
 
-  const [replyToMessage, setReplyToMessage] = useState<{ sender: string; text: string } | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
 
   type Attachment = { url: string; fileName: string; fileType: string };
@@ -160,43 +157,6 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
     }
   }, [feedback]);
 
-  const removePendingAttachment = (index: number) => {
-    setAttachments((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleSendResponse = async () => {
-    if (!activeQueryId) return;
-    if (!responseText.trim() && attachments.length === 0) {
-      feedback.warning('Nothing to send', 'Enter a message or attach a file first.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      let finalMsg = responseText.trim();
-      if (replyToMessage) {
-        finalMsg = `> ↩️ Replying to ${replyToMessage.sender}: "${replyToMessage.text.slice(0, 60)}${replyToMessage.text.length > 60 ? '...' : ''}"\n${finalMsg}`;
-      }
-      if (!finalMsg && attachments.length > 0) {
-        finalMsg = 'Sent attachment(s)';
-      }
-
-      const success = await MobileApiService.respondToQuery(activeQueryId, finalMsg, attachments);
-      if (success) {
-        setResponseText('');
-        setAttachments([]);
-        setReplyToMessage(null);
-        await loadQueries();
-        setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-      } else {
-        feedback.error('Not delivered', 'The message could not be sent. Please retry.');
-      }
-    } catch (err: any) {
-      feedback.error('Not delivered', err?.message || 'Network error.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const activeQuery = queries.find((q: any) => q.id === activeQueryId) ?? null;
 
@@ -261,45 +221,49 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           onClose={() => setIsCameraActive(false)}
           onSaved={async (doc) => {
             setIsCameraActive(false);
+            if (!activeQueryId) return;
 
             /**
-             * Attaches the assembled PDF when there is one, otherwise every page image.
+             * Uploads the scan and posts it into the thread.
              *
-             * The thread stores attachments as inline data URLs, so the bytes have to be read
-             * back off disk here — the scanner deliberately hands over file URIs rather than
-             * base64 to keep multi-page scans off the bridge.
+             * The old path inlined the bytes as a `data:` URL on a local attachments array
+             * that the new composer no longer reads — the scan simply disappeared. Uploading
+             * through the same endpoint the file picker uses means the desk sees a real,
+             * downloadable document rather than a multi-megabyte string embedded in a message.
              */
             try {
-              if (doc.pdfUri) {
-                const base64 = await readAsBase64(doc.pdfUri);
-                setAttachments((prev) => [
-                  ...prev,
-                  {
-                    url: `data:application/pdf;base64,${base64}`,
-                    fileName: doc.fileName,
-                    fileType: 'application/pdf',
-                    uploadedBy: 'ASSAYER',
-                    timestamp: new Date().toISOString(),
-                  },
-                ]);
+              const asset = doc.pdfUri
+                ? { uri: doc.pdfUri, name: doc.fileName, mimeType: 'application/pdf' }
+                : null;
+
+              const uploaded = asset
+                ? await MobileApiService.uploadChatAttachment(asset)
+                : (
+                    await Promise.all(
+                      doc.pages.map((pg, i) =>
+                        MobileApiService.uploadChatAttachment({
+                          uri: pg.uri,
+                          name: `${doc.fileName.replace(/\.[^.]+$/, '')}_p${i + 1}.jpg`,
+                          mimeType: 'image/jpeg',
+                        }),
+                      ),
+                    )
+                  ).flat();
+
+              if (!uploaded || uploaded.length === 0) {
+                feedback.error('Not attached', 'The scan could not be uploaded. Please retry.');
                 return;
               }
 
-              const base = doc.fileName.replace(/\.[^.]+$/, '');
-              const total = doc.pages.length;
-              const encoded = await Promise.all(doc.pages.map((pg) => readAsBase64(pg.uri)));
-              setAttachments((prev) => [
-                ...prev,
-                ...doc.pages.map((pg, i) => ({
-                  url: `data:image/jpeg;base64,${encoded[i]}`,
-                  fileName: total === 1 ? doc.fileName : `${base}_p${pg.pageNumber}of${total}.jpg`,
-                  fileType: 'image/jpeg',
-                  uploadedBy: 'ASSAYER',
-                  timestamp: new Date().toISOString(),
-                })),
-              ]);
+              const res = await MobileApiService.postQueryMessage(activeQueryId, '', uploaded);
+              if (!res.success) {
+                feedback.error('Not sent', res.error || 'The scan could not be sent.');
+                return;
+              }
+              setThreadVersion((v) => v + 1);
+              feedback.success('Sent', `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} sent to the desk.`);
             } catch (err: any) {
-              feedback.error('Attachment failed', err?.message || 'The scanned document could not be read.');
+              feedback.error('Attachment failed', err?.message || 'The scanned document could not be sent.');
             }
           }}
         />
