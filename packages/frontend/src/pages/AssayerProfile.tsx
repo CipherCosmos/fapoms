@@ -197,7 +197,7 @@ export const AssayerProfile: React.FC = () => {
 
   return (
     <div style={{ padding: '20px 26px', maxWidth: '1280px', margin: '0 auto' }}>
-      <button onClick={() => navigate('/hr?tab=roster')} className="btn btn-secondary"
+      <button onClick={() => navigate('/hr/roster')} className="btn btn-secondary"
         style={{ padding: '6px 12px', fontSize: '12px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <ArrowLeft size={14} /> Back to Workforce
       </button>

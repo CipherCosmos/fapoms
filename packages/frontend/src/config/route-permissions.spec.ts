@@ -50,6 +50,32 @@ describe('canAccessRoute', () => {
     });
   });
 
+  describe('the HR section pages', () => {
+    const HR_PAGES = [
+      '/hr', '/hr/roster', '/hr/onboarding', '/hr/records',
+      '/hr/compliance', '/hr/pay', '/hr/deployment', '/hr/utilisation', '/hr/activity',
+    ];
+
+    it('are all reachable by an HR manager', () => {
+      for (const page of HR_PAGES) {
+        expect(canAccessRoute([SystemRole.HR_MANAGER], page)).toBe(true);
+      }
+    });
+
+    it.each([
+      SystemRole.FINANCE_MANAGER,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.VALIDATOR,
+      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.CLIENT_USER,
+    ])('are all closed to %s', (role) => {
+      for (const page of HR_PAGES) {
+        expect(canAccessRoute([role], page)).toBe(false);
+      }
+    });
+  });
+
   describe('an unlisted path', () => {
     it('is denied rather than published', () => {
       expect(canAccessRoute([SystemRole.SUPER_ADMINISTRATOR], '/not-a-real-page')).toBe(false);

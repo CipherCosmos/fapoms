@@ -21,7 +21,15 @@ import { Notifications } from './pages/Notifications';
 import { Holidays } from './pages/Holidays';
 import Settings from './pages/Settings';
 import { api } from './services/api';
-import HrWorkspace from './pages/hr/HrWorkspace';
+import { HrLayout } from './pages/hr/HrLayout';
+import { HrOverviewPage } from './pages/hr/HrOverviewPage';
+import { HrRosterPage } from './pages/hr/HrRosterPage';
+import { HrOnboardingPage } from './pages/hr/HrOnboardingPage';
+import { HrRecordsPage } from './pages/hr/HrRecordsPage';
+import { HrCompliancePage } from './pages/hr/HrCompliancePage';
+import { HrDeploymentPage } from './pages/hr/HrDeploymentPage';
+import { HrUtilisationPage } from './pages/hr/HrUtilisationPage';
+import { HrActivityPage } from './pages/hr/HrActivityPage';
 import DataEntryDesk from './pages/dataentry/DataEntryDesk';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 
@@ -137,9 +145,19 @@ export const App: React.FC = () => {
         {/* Validation is now part of the merged data-entry board. */}
         <Route path="/validation" element={<Navigate to="/data-entry" replace />} />
         <Route path="/users" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Users /></ProtectedRoute>} />
-        <Route path="/hr" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><HrWorkspace /></ProtectedRoute>} />
+        {/* HR is a section, not a page: each concern has its own URL under the shared shell. */}
+        <Route path="/hr" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><HrLayout /></ProtectedRoute>}>
+          <Route index element={<HrOverviewPage />} />
+          <Route path="roster" element={<HrRosterPage />} />
+          <Route path="onboarding" element={<HrOnboardingPage />} />
+          <Route path="records" element={<HrRecordsPage />} />
+          <Route path="compliance" element={<HrCompliancePage />} />
+          <Route path="deployment" element={<HrDeploymentPage />} />
+          <Route path="utilisation" element={<HrUtilisationPage />} />
+          <Route path="activity" element={<HrActivityPage />} />
+        </Route>
         {/* The roster now lives inside the workforce console; keep the old path working. */}
-        <Route path="/assayers" element={<Navigate to="/hr?tab=roster" replace />} />
+        <Route path="/assayers" element={<Navigate to="/hr/roster" replace />} />
         <Route path="/assayers/:id" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerProfile /></ProtectedRoute>} />
         <Route path="/clients" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Clients /></ProtectedRoute>} />
         <Route path="/billing" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Billing /></ProtectedRoute>} />
