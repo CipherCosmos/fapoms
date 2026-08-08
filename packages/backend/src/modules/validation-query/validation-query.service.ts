@@ -269,6 +269,54 @@ export class ValidationQueryService {
     return saved;
   }
 
+  /**
+   * Reopen a resolved clarification.
+   *
+   * A RESOLVED query was permanently frozen — postMessage refuses to add to it — so if the
+   * resolution turned out wrong, or the answer needs a follow-up, there was no way back and the
+   * desk had to raise a brand-new query, losing the thread. Reopen returns it to OPEN (the ball
+   * back with the assayer) so the existing conversation continues.
+   */
+  async reopenQuery(queryId: string, userId: string): Promise<ValidationQueryEntity> {
+    const query = await this.queryRepository.findOne({ where: { id: queryId, isActive: true } });
+    if (!query) throw new NotFoundException(`ValidationQuery ${queryId} not found.`);
+    if (query.status !== ValidationQueryStatus.RESOLVED) {
+      throw new BadRequestException('Only a resolved clarification can be reopened.');
+    }
+
+    query.status = ValidationQueryStatus.OPEN;
+    query.updatedBy = userId;
+    const saved = await this.queryRepository.save(query);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'VALIDATION_QUERY_REOPENED',
+      entityType: 'VALIDATION_QUERY',
+      entityId: saved.id,
+      userId,
+      remarks: `Reopened resolved clarification ${queryId}.`,
+    });
+
+    // The assayer is on the hook again — notify them, and refresh any live thread.
+    this.notificationDispatch.emitSafe({
+      type: 'VALIDATION_QUERY_RAISED',
+      entityType: 'VALIDATION_QUERY',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: query.assayerId ?? null,
+      dedupeKey: `VALIDATION_QUERY_REOPENED:${saved.id}:${Date.now()}`,
+      payload: { queryId: saved.id, validationCaseId: saved.validationCaseId },
+    });
+    try {
+      this.eventPublisher.publish('query:reopened', {
+        eventType: 'query:reopened', queryId: saved.id, validationCaseId: saved.validationCaseId,
+        assayerId: query.assayerId, status: saved.status, userId,
+      });
+    } catch { /* realtime is best-effort */ }
+
+    return saved;
+  }
+
   async resolveQuery(queryId: string, userId: string): Promise<ValidationQueryEntity> {
     const query = await this.queryRepository.findOne({ where: { id: queryId, isActive: true } });
     if (!query) throw new NotFoundException(`ValidationQuery ${queryId} not found.`);

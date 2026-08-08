@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare } from 'lucide-react';
+import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare, RotateCcw } from 'lucide-react';
 
 import { api } from '../../services/api';
 import type { RegionCapture, Region } from './PdfRegionViewer';
@@ -101,6 +101,18 @@ export const ThreadPanel: React.FC<Props> = ({
     setBusy(false);
   };
 
+  // A resolution can be wrong; reopening returns the query to the assayer and keeps the thread
+  // rather than forcing a brand-new query that loses the conversation.
+  const reopen = async () => {
+    setBusy(true);
+    try {
+      await api.request(`/validation-queries/${queryId}/reopen`, { method: 'POST' });
+      onResolved?.();
+      load();
+    } catch (e) { setErr(userMessage(e)); }
+    setBusy(false);
+  };
+
   const resolved = status === 'RESOLVED';
 
   return (
@@ -123,10 +135,16 @@ export const ThreadPanel: React.FC<Props> = ({
           </span>
         </div>
 
-        {!resolved && (
+        {!resolved ? (
           <button onClick={resolve} disabled={busy} className="btn btn-secondary"
             style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
             {busy ? <Loader2 size={12} className="spin" /> : <CheckCircle2 size={12} />} Mark Resolved
+          </button>
+        ) : (
+          <button onClick={reopen} disabled={busy} className="btn btn-secondary"
+            title="Return this clarification to the assayer and continue the thread"
+            style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+            {busy ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />} Reopen
           </button>
         )}
       </div>

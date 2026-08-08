@@ -322,6 +322,14 @@ export class ValidationQueryController {
     return { success: true, data: query };
   }
 
+  @Post(':id/reopen')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'Reopen a resolved clarification, returning it to the assayer' })
+  async reopenQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    const query = await this.validationQueryService.reopenQuery(id, req.user.id);
+    return { success: true, data: query };
+  }
+
   @Get('validation-case/:validationCaseId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all queries raised for a specific validation case' })
