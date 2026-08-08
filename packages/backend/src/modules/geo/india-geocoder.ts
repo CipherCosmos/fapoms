@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { calculateHaversineDistance } from '@fapoms/shared';
 
 // Shared on-disk cache with the branch/assayer geocoders: one lookup paid,
 // every record in the same place free. Persisted so a restart does not re-hit
@@ -20,13 +21,9 @@ export interface GeocodeResult extends Coord {
   source: GeoSource;
 }
 
+/** Metres, from the one shared kilometre implementation. */
 function haversineM(a: Coord, b: Coord): number {
-  const R = 6371000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(s));
+  return calculateHaversineDistance(a.lat, a.lng, b.lat, b.lng) * 1000;
 }
 
 /** Case/space/punctuation/suffix-insensitive place name normaliser. */

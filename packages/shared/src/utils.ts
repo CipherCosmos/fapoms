@@ -77,3 +77,34 @@ export function canonicalState(raw: string | null | undefined): string {
   const k = String(raw).toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
   return STATE_ALIASES[k] ?? STATE_ALIASES[k.replace(/\s/g, '')] ?? k;
 }
+
+/**
+ * Rupee amounts, formatted one way everywhere.
+ *
+ * Six near-identical `money()` helpers had accumulated across the web and mobile apps, and
+ * they had already diverged: most passed `maximumFractionDigits: 0`, one rounded first, and
+ * one passed neither — so the same payable could render as "₹14,944" on one screen and
+ * "₹14,943.6" on another. Currency formatting is a product-wide decision, not a per-file one.
+ */
+export interface RupeeFormatOptions {
+  /** Decimal places. Defaults to 0 — whole rupees, which is what almost every surface wants. */
+  decimals?: number;
+  /** Rendered instead of a zero when the value is null/undefined, e.g. an em dash. */
+  emptyAs?: string;
+}
+
+export function formatRupees(
+  value: number | string | null | undefined,
+  options: RupeeFormatOptions = {},
+): string {
+  const { decimals = 0, emptyAs } = options;
+  if (emptyAs !== undefined && (value === null || value === undefined || value === '')) {
+    return emptyAs;
+  }
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return emptyAs ?? '₹0';
+  return `₹${n.toLocaleString('en-IN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}`;
+}

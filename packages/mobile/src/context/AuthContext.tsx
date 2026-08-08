@@ -38,7 +38,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const initSession = useCallback(async () => {
     setAuthenticating(true);
-    const session = MobileApiService.restoreSession();
+    // Awaited: reading the OS keystore is async, so this is the point at which the app
+    // learns whether a session survived the last launch.
+    const session = await MobileApiService.restoreSession();
     if (session && session.token) {
       const valid = await MobileApiService.validateSession();
       if (valid) {

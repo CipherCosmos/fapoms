@@ -3,8 +3,9 @@ import { ArrowDownLeft, ArrowUpRight, AlertTriangle, FileText, CheckCircle2, Clo
 import { useFinanceDashboard } from '../../hooks/useBilling';
 import type { BillingAging } from '../../services/billing';
 
-const money = (n?: number | null) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
-const moneyExact = (n?: number | null) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+import { formatRupees, formatRupees as money } from '@fapoms/shared';
+// Paise-accurate variant for reconciliation figures, from the same shared formatter.
+const moneyExact = (n?: number | null) => formatRupees(n, { decimals: 2 });
 
 /**
  * The finance console, organised around the questions finance actually asks —

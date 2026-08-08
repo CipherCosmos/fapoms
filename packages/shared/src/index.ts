@@ -17,5 +17,8 @@ export * from './api-contracts';
 // State machine definitions and validators
 export * from './state-machines';
 
+// Canonical display labels for every status enum
+export * from './labels';
+
 // Shared utilities
 export * from './utils';

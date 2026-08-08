@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { ChevronRight, ChevronDown, TrendingDown, TrendingUp, AlertCircle } from 'lucide-react';
 import { useClientBillingReport } from '../../hooks/useBilling';
 import type { BillingProjectRollup, BillingAssignmentRollup } from '../../services/billing';
+import { formatRupees } from '@fapoms/shared';
 
-const money = (n?: number | null) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+// Paise matter on the client billing hierarchy; every other surface rounds to whole rupees.
+const money = (n?: number | null) => formatRupees(n, { decimals: 2 });
 
 /**
  * Client → Projects → Assignments, with the revenue and the assayer cost booked

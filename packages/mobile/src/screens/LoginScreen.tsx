@@ -6,6 +6,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
 import { probeServerUrl, normaliseServerUrl } from '../services/server-config';
+import { getPreference } from '../services/preferences';
 
 interface LoginScreenProps {
   loginUsername?: string;
@@ -101,6 +102,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [focused, setFocused] = useState<'user' | 'pass' | 'server' | null>(null);
 
   // ── Server address ──────────────────────────────────────────────────────────
+  const biometricsEnabled = getPreference('biometrics');
   const [showServerSettings, setShowServerSettings] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [testingServer, setTestingServer] = useState(false);
@@ -258,12 +260,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               full
             />
 
+            {/* Offered only when the assayer has biometric sign-in switched on in their
+                profile. That switch previously set a state field nothing consulted, so the
+                option appeared regardless of the preference. */}
+            {biometricsEnabled && (
             <Tappable onPress={handleBiometricPress}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
                 <Icon name="finger-print" size={18} color={t.colors.textMuted} />
                 <AppText variant="small" tone="muted">Use biometric sign-in</AppText>
               </View>
             </Tappable>
+            )}
           </Card>
 
           {/* Server address.

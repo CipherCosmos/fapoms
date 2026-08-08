@@ -1,6 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useColorScheme } from 'react-native';
 import { Mode, Palette, palettes, space, radius, type as typeScale, elevation, motion } from './tokens';
+import { readPreference, writePreference } from '../services/token-store';
 
 /**
  * Dual-tone theming.
@@ -19,23 +20,21 @@ export type ThemePreference = Mode | 'system';
 
 const STORAGE_KEY = 'fapoms_theme_preference';
 
-function readStoredPreference(): ThemePreference {
-  try {
-    const g: any = globalThis as any;
-    const raw = g?.localStorage?.getItem(STORAGE_KEY);
-    if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
-  } catch {
-    // Native / private mode — fall through to system.
-  }
+/**
+ * Async, because it now reads the same device store the rest of the app uses.
+ *
+ * This previously went through `globalThis.localStorage`, which React Native does not have —
+ * so on a handset the assayer's light/dark choice was thrown away on every launch and the app
+ * silently reverted to following the system.
+ */
+async function readStoredPreference(): Promise<ThemePreference> {
+  const raw = await readPreference(STORAGE_KEY);
+  if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
   return 'system';
 }
 
 function writeStoredPreference(pref: ThemePreference) {
-  try {
-    (globalThis as any)?.localStorage?.setItem(STORAGE_KEY, pref);
-  } catch {
-    // Non-fatal: the choice simply won't survive a restart on this platform.
-  }
+  void writePreference(STORAGE_KEY, pref);
 }
 
 export interface Theme {
@@ -59,9 +58,30 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const systemScheme = useColorScheme();
-  const [preference, setPreferenceState] = useState<ThemePreference>(readStoredPreference);
+  const [preference, setPreferenceState] = useState<ThemePreference>('system');
+  /**
+   * Guards the first write.
+   *
+   * The stored choice arrives one tick after mount now that the read is async, so without
+   * this the initial 'system' default would be written straight back over whatever the
+   * assayer had actually chosen.
+   */
+  const hydrated = useRef(false);
 
-  useEffect(() => { writeStoredPreference(preference); }, [preference]);
+  useEffect(() => {
+    let cancelled = false;
+    readStoredPreference().then((stored) => {
+      if (cancelled) return;
+      setPreferenceState(stored);
+      hydrated.current = true;
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated.current) return;
+    writeStoredPreference(preference);
+  }, [preference]);
 
   const mode: Mode = preference === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : preference;
 

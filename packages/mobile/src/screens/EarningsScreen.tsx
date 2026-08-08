@@ -1,6 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AssayerPayableStatus } from '@fapoms/shared';
+import { AssayerPayableStatus, formatRupees as money } from '@fapoms/shared';
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 import { getAssignmentTotalFee, hasResolvedFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
@@ -64,8 +64,6 @@ const CLAIM_LABEL: Record<string, string> = {
   PENDING: 'Awaiting approval',
   REJECTED: 'Rejected',
 };
-
-const money = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 /**
  * Money: what has been paid, what is still owed, and what each audit earned.

@@ -4,7 +4,7 @@ import {
   X, ExternalLink, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin,
 } from 'lucide-react';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, formatRupees } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import type { Assayer } from './assayer-shared';
@@ -54,7 +54,8 @@ const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const fmtWhen = (d?: string | null) =>
   d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-const money = (n?: number | null) => (n == null ? '—' : `₹${Number(n).toLocaleString('en-IN')}`);
+// Keeps this screen's em-dash-for-unknown behaviour, now expressed through the shared formatter.
+const money = (n?: number | null) => formatRupees(n, { emptyAs: '—' });
 
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',

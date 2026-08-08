@@ -30,7 +30,7 @@ export const POSTURE: Record<Territory['posture'], { label: string; color: strin
   BALANCED:        { label: 'Balanced',        color: 'var(--success)', icon: <CheckCircle2 size={13} />,  meaning: 'Demand and local capacity are broadly matched.' },
 };
 
-const money = (n: number) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+import { formatRupees as money } from '@fapoms/shared';
 
 /**
  * Territory-by-territory posture, drillable to district.

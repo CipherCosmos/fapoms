@@ -109,9 +109,9 @@ export interface AssayerAssignment {
   sequenceOrder: number;
   estimatedCustomerCount: number;
   estimatedAuditHours: number;
-  // Mirrors AssignmentStatus in @fapoms/shared. CANCELLED was missing here even though
-  // BACKEND_TO_MOBILE_STATUS already passes it through, so a cancelled job fell through
-  // every status map and rendered as a raw uppercase string.
+  // Mirrors AssignmentStatus in @fapoms/shared. CANCELLED was missing here even though the
+  // API layer already passed it through, so a cancelled job fell through every status map and
+  // rendered as a raw uppercase string — or worse, was offered as the assayer's next job.
   status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
   proposedFee: number;
   standardBaseFee?: number;

@@ -3,6 +3,7 @@ import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, Re
 import * as DocumentPicker from 'expo-document-picker';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
+import { loadPreferences } from './src/services/preferences';
 import {
   registerForPushNotificationsAsync,
   setupNotificationListeners,
@@ -671,6 +672,8 @@ function AppMain() {
             assayerCode={user?.assayerCode || profile.assayerCode}
             profile={profile}
             savingProfile={savingProfile}
+            openQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status !== 'RESOLVED' && q.status !== 'CLOSED').length, 0)}
+            resolvedQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status === 'RESOLVED' || q.status === 'CLOSED').length, 0)}
             onUpdateProfileField={handleUpdateProfileField}
             onSaveProfile={handleSaveProfile}
             onLogout={logout}
@@ -938,9 +941,13 @@ export default function App() {
   const [apiReady, setApiReady] = useState(false);
 
   useEffect(() => {
-    initApiBaseUrl()
-      .catch(() => { /* falls back to the built-in default */ })
-      .finally(() => setApiReady(true));
+    // Device preferences are loaded alongside the server address: both are read from disk
+    // and both are consulted by code that runs synchronously afterwards (the notification
+    // chime, the sign-in screen's biometric option), so neither can be awaited later.
+    Promise.all([
+      initApiBaseUrl().catch(() => { /* falls back to the built-in default */ }),
+      loadPreferences().catch(() => { /* falls back to defaults */ }),
+    ]).finally(() => setApiReady(true));
   }, []);
 
   if (!apiReady) {

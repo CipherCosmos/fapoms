@@ -5,6 +5,7 @@ import { MobileApiService } from '../services/api.service';
 import { getAssignmentTotalFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
+import { formatRupees as money } from '@fapoms/shared';
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
@@ -30,8 +31,6 @@ const STATUS_META: Record<string, { label: string; tone: Tone }> = {
   REJECTED: { label: 'Declined', tone: 'danger' },
   CANCELLED: { label: 'Cancelled', tone: 'danger' },
 };
-
-const money = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' }) : 'Today';

@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } from '../components/ui/primitives';
+import { AssignmentStatus, assignmentStatusLabel, formatRupees as money } from '@fapoms/shared';
 import { StatsScreen } from './StatsScreen';
 import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
 
@@ -19,8 +20,6 @@ export interface HomeScreenProps {
   onSeeSchedule: () => void;
   onSeeQueries: () => void;
 }
-
-const money = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
 const isSameDay = (iso: string, day: Date): boolean => {
   const d = new Date(iso);
@@ -176,24 +175,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   );
 };
 
-const STATUS_TONE: Record<string, 'success' | 'warning' | 'info' | 'neutral'> = {
-  PENDING: 'warning',
-  ACCEPTED: 'info',
-  CHECKED_IN: 'success',
-  IN_PROGRESS: 'success',
-  COMPLETED: 'neutral',
-  REJECTED: 'neutral',
-  CANCELLED: 'neutral',
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  PENDING: 'Awaiting your response',
-  ACCEPTED: 'Accepted',
-  CHECKED_IN: 'Checked in',
-  IN_PROGRESS: 'In progress',
-  COMPLETED: 'Completed',
-  REJECTED: 'Declined',
-  CANCELLED: 'Cancelled',
+/**
+ * Tone is a mobile-theme concern, so it stays here — but the *wording* comes from
+ * `@fapoms/shared`, so an assignment reads the same on the assayer's phone as it does on the
+ * operations desk. This file previously carried its own labels, which had already drifted:
+ * CANCELLED was missing entirely.
+ */
+const STATUS_TONE: Record<AssignmentStatus, 'success' | 'warning' | 'info' | 'neutral'> = {
+  [AssignmentStatus.PENDING]: 'warning',
+  [AssignmentStatus.ACCEPTED]: 'info',
+  [AssignmentStatus.CHECKED_IN]: 'success',
+  [AssignmentStatus.IN_PROGRESS]: 'success',
+  [AssignmentStatus.COMPLETED]: 'neutral',
+  [AssignmentStatus.REJECTED]: 'neutral',
+  [AssignmentStatus.CANCELLED]: 'neutral',
 };
 
 const CurrentJobCard: React.FC<{
@@ -212,8 +207,8 @@ const CurrentJobCard: React.FC<{
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
         <View style={{ flex: 1, gap: t.space.xs }}>
           <Badge
-            label={STATUS_LABEL[assignment.status] || assignment.status}
-            tone={STATUS_TONE[assignment.status] || 'neutral'}
+            label={assignmentStatusLabel(assignment.status)}
+            tone={STATUS_TONE[assignment.status as AssignmentStatus] ?? 'neutral'}
             dot
           />
           <AppText variant="h2">{assignment.branchName}</AppText>

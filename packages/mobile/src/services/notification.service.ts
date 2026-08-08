@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { MobileApiService } from './api.service';
+import { getPreference } from './preferences';
 
 let Notifications: any = null;
 let Device: any = null;
@@ -83,7 +84,12 @@ export function playNotificationSound() {
  * Triggers audio chime, system tray notification, and browser OS desktop alert.
  */
 export function triggerAlertNotification(title: string, body: string, data?: any) {
-  playNotificationSound();
+  // The assayer's "Sound alerts" switch is consulted here — the one place the chime is
+  // actually produced. Previously the switch set a React state field that nothing read, so
+  // turning sound off still played the chime on every notification.
+  if (getPreference('soundAlerts')) {
+    playNotificationSound();
+  }
 
   const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
   if (Platform.OS === 'web' && g.window && 'Notification' in g.window && g.Notification.permission === 'granted') {
@@ -195,6 +201,37 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
 }
 
+
+/**
+ * Stop this handset receiving pushes.
+ *
+ * The "Push notifications" switch in the profile previously set a React state field that
+ * nothing read and nothing persisted — turning it off changed no behaviour at all, and the
+ * server kept sending to this device indefinitely. Unregistering the token is the only thing
+ * that genuinely stops delivery, since the decision is made server-side.
+ */
+export async function unregisterPushNotificationsAsync(): Promise<boolean> {
+  if (!Notifications?.getDevicePushTokenAsync || Platform.OS !== 'android') return false;
+  try {
+    const tokenData = await Notifications.getDevicePushTokenAsync();
+    const token = tokenData?.data;
+    if (!token) return false;
+
+    const response = await fetch(`${MobileApiService.getBaseUrl()}/notifications/device-token/unregister`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${MobileApiService.getAuthToken()}`,
+      },
+      body: JSON.stringify({ token }),
+    });
+    return response.ok;
+  } catch (err) {
+    console.log('Push unregister failed:', err);
+    return false;
+  }
+}
+
 export function setupNotificationListeners(
   onNotificationReceived?: (notification: any) => void,
   onNotificationResponse?: (response: any) => void,
@@ -245,7 +282,9 @@ export async function scheduleLocalNotification(title: string, body: string, dat
         title,
         body,
         data: data || {},
-        sound: 'default',
+        // Respects the same "Sound alerts" switch as the in-app chime, so turning sound off
+        // silences the tray notification too rather than only half of the experience.
+        sound: getPreference('soundAlerts') ? 'default' : undefined,
         priority: Notifications.AndroidNotificationPriority.MAX,
       },
       trigger: null, // trigger immediately in system tray

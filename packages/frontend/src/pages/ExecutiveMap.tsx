@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
+import { formatRupees as money } from '@fapoms/shared';
 
 interface BranchPoint {
   id: string; projectBranchId: string; name: string; branchCode: string | null;
@@ -35,8 +36,6 @@ interface CommandCenter {
   branchPoints: BranchPoint[];
   assayerPoints: Array<{ id: string; name: string; state: string; latitude: number | null; longitude: number | null }>;
 }
-
-const money = (n: number) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 /**
  * Executive command centre.

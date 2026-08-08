@@ -7,6 +7,7 @@ import { AppText, Badge, Button, Icon, IconButton, Tappable } from './ui/primiti
 import { AssayerAssignment } from '../types/mobile-app';
 import { styles } from '../theme/styles';
 import { InteractiveMap } from './MapEntry';
+import { calculateHaversineDistance } from '@fapoms/shared';
 
 interface InAppNavigationModalProps {
   visible: boolean;
@@ -38,14 +39,7 @@ interface FareInfo {
 // Geodesic "straight-line" distance (Haversine) in km. Used as a graceful,
 // zero-key fallback when routing is unavailable.
 function haversineKm(a: LatLng, b: LatLng): number {
-  const R = 6371;
-  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
-  const dLng = ((b.longitude - a.longitude) * Math.PI) / 180;
-  const la1 = (a.latitude * Math.PI) / 180;
-  const la2 = (b.latitude * Math.PI) / 180;
-  const h =
-    Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
+  return calculateHaversineDistance(a.latitude, a.longitude, b.latitude, b.longitude);
 }
 
 function formatDuration(seconds: number): string {

@@ -9,6 +9,7 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
+import { formatRupees as money } from '@fapoms/shared';
 
 interface Attention {
   key: string; severity: 'critical' | 'high' | 'medium';
@@ -47,8 +48,6 @@ interface Snapshot {
   }> | null;
   activities: Array<{ id: string; action: string; detail: string | null; occurredAt: string }> | null;
 }
-
-const money = (n: number) => `₹${(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 const SEVERITY: Record<Attention['severity'], string> = {
   critical: 'var(--danger)', high: 'var(--warning)', medium: 'var(--accent)',

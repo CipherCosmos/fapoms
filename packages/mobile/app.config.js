@@ -74,6 +74,10 @@ module.exports = {
           iOSEnterpriseDevelopment: true,
         },
       ],
+      // Auth tokens live in the OS keystore (Android Keychain / iOS Keychain) rather than
+      // in a plain file. Session state previously went through `globalThis.localStorage`,
+      // which does not exist in React Native — so nothing persisted at all.
+      'expo-secure-store',
     ],
     web: {
       favicon: './assets/favicon.png',

@@ -5,7 +5,18 @@ import {
   AppText, Avatar, Badge, Button, Card, Divider, Icon, Section, StatStrip, StatTile, Tappable,
 } from '../components/ui/primitives';
 import { useLocation } from '../context/LocationContext';
+import { formatRupees as money } from '@fapoms/shared';
+import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
+import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
+import { StatsScreen } from './StatsScreen';
 
+/**
+ * The assayer's record as the app holds it.
+ *
+ * The device-settings flags that used to live here (push, sound, biometrics, offline sync,
+ * theme, PIN) have been removed. They were never persisted and never read — see
+ * services/preferences.ts, which now owns them and is consulted where each one matters.
+ */
 export interface ProfileDataState {
   phone: string;
   alternatePhone: string;
@@ -41,15 +52,12 @@ export interface ProfileDataState {
   earningsPaid: number | string;
   earningsAwaitingApproval: number | string;
   assayerCode: string;
-  biometricsEnabled?: boolean;
-  pinCode?: string;
-  offlineSyncEnabled?: boolean;
-  pushNotificationsEnabled?: boolean;
-  soundAlertsEnabled?: boolean;
-  appTheme?: 'DARK' | 'LIGHT' | 'SYSTEM';
 }
 
 interface ProfileScreenProps {
+  /** Clarification counts for the Stats tab, derived from the assayer's live assignments. */
+  openQueries?: number;
+  resolvedQueries?: number;
   assayerName?: string;
   assayerCode?: string;
   profile: ProfileDataState;
@@ -59,7 +67,7 @@ interface ProfileScreenProps {
   onLogout?: () => void;
 }
 
-type SectionKey = 'PROFILE' | 'WORK' | 'APP';
+type SectionKey = 'PROFILE' | 'WORK' | 'STATS' | 'APP';
 
 /**
  * Profile and settings.
@@ -72,6 +80,8 @@ type SectionKey = 'PROFILE' | 'WORK' | 'APP';
  * anything — it now drives the real theme, and persists.
  */
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
+  openQueries = 0,
+  resolvedQueries = 0,
   assayerName = '',
   assayerCode = '',
   profile,
@@ -82,9 +92,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const t = useTheme();
   const [tab, setTab] = useState<SectionKey>('PROFILE');
-  const { liveTrackingEnabled, liveTrackingReady, setLiveTrackingEnabled } = useLocation();
 
-  const money = (n: number | string) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  /**
+   * Device settings, seeded from the persisted store rather than from the profile object.
+   *
+   * These were fields on `profile` that only ever lived in memory — nothing read them and
+   * nothing saved them, so every switch reset on relaunch and none changed the app's
+   * behaviour. Each is now backed by the device preference store and consulted where it
+   * matters (the chime, the sign-in screen).
+   */
+  const [soundAlerts, setSoundAlerts] = useState(() => getPreference('soundAlerts'));
+  const [biometrics, setBiometrics] = useState(() => getPreference('biometrics'));
+  const [pushEnabled, setPushEnabled] = useState(() => getPreference('pushEnabled'));
+  const [pushBusy, setPushBusy] = useState(false);
+  const { liveTrackingEnabled, liveTrackingReady, setLiveTrackingEnabled } = useLocation();
 
   const Field: React.FC<{
     label: string;
@@ -174,6 +195,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         {([
           { k: 'PROFILE' as const, label: 'Profile', icon: 'person-outline' as const },
           { k: 'WORK' as const, label: 'Work', icon: 'briefcase-outline' as const },
+          { k: 'STATS' as const, label: 'Stats', icon: 'stats-chart-outline' as const },
           { k: 'APP' as const, label: 'App', icon: 'settings-outline' as const },
         ]).map((s) => {
           const active = tab === s.k;
@@ -277,6 +299,19 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         </>
       )}
 
+      {/* Performance figures, all derived from counts the backend genuinely returns.
+          StatsScreen was written and then never reachable — it existed in the codebase with
+          no route into it, so an assayer could not see how they were doing. */}
+      {tab === 'STATS' && (
+        <StatsScreen
+          totalAssignments={profile.totalAssignments}
+          completedAssignments={profile.completedAssignments}
+          averageRating={profile.averageRating}
+          openQueries={openQueries ?? 0}
+          resolvedQueries={resolvedQueries ?? 0}
+        />
+      )}
+
       {tab === 'APP' && (
         <>
           <Section title="Appearance">
@@ -291,11 +326,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     <Tappable
                       key={o.key}
                       style={{ flex: 1 }}
-                      onPress={() => {
-                        t.setPreference(o.key);
-                        // Keep the persisted profile field in step with the live theme.
-                        onUpdateProfileField('appTheme', o.key.toUpperCase() as ProfileDataState['appTheme']);
-                      }}
+                      // ThemeProvider persists the choice itself (device preference store),
+                      // so there is nothing else to keep in step. This previously also wrote
+                      // an `appTheme` field on the profile object that nothing ever read.
+                      onPress={() => t.setPreference(o.key)}
                     >
                       <View style={{
                         alignItems: 'center', gap: 6, paddingVertical: t.space.lg, borderRadius: t.radius.md,
@@ -314,17 +348,34 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
           <Section title="Notifications">
             <Card level={1}>
+              {/* Registers or removes this handset's push token on the server. Delivery is
+                  decided server-side, so unregistering is the only thing that genuinely stops
+                  pushes — the old switch set a state field nothing read or persisted. */}
               <Toggle
                 label="Push notifications"
                 hint="New assignments, clarifications and payment updates"
-                value={profile.pushNotificationsEnabled !== false}
-                onChange={(v) => onUpdateProfileField('pushNotificationsEnabled', v)}
+                value={pushEnabled}
+                onChange={async (v) => {
+                  setPushBusy(true);
+                  try {
+                    const ok = v ? !!(await registerForPushNotificationsAsync()) : await unregisterPushNotificationsAsync();
+                    // Only reflect the switch if the server actually accepted the change,
+                    // so it never shows "on" while this device is unregistered.
+                    if (ok) { setPushEnabled(v); await setDevicePreference('pushEnabled', v); }
+                  } finally {
+                    setPushBusy(false);
+                  }
+                }}
               />
+              {pushBusy && (
+                <AppText variant="caption" tone="faint" style={{ marginTop: 4 }}>Updating this device with the server…</AppText>
+              )}
               <Divider spacing={t.space.xs} />
               <Toggle
                 label="Sound alerts"
-                value={!!profile.soundAlertsEnabled}
-                onChange={(v) => onUpdateProfileField('soundAlertsEnabled', v)}
+                hint="Play a chime when a notification arrives"
+                value={soundAlerts}
+                onChange={async (v) => { setSoundAlerts(v); await setDevicePreference('soundAlerts', v); }}
               />
             </Card>
           </Section>
@@ -351,11 +402,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
           <Section title="Security & Biometrics">
             <Card level={1} style={{ gap: t.space.md }}>
+              {/* Controls whether the sign-in screen offers the biometric option at all.
+                  Persisted to the device, so it survives a restart. */}
               <Toggle
                 label="Biometric Sign-In"
                 hint="Use fingerprint or face sensor to quickly sign into your assayer workspace"
-                value={profile.biometricsEnabled !== false}
-                onChange={(v) => onUpdateProfileField('biometricsEnabled', v)}
+                value={biometrics}
+                onChange={async (v) => { setBiometrics(v); await setDevicePreference('biometrics', v); }}
               />
               <Divider spacing={t.space.xs} />
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>

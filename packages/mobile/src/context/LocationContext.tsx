@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as Location from 'expo-location';
 import { MobileApiService } from '../services/api.service';
+import { calculateHaversineDistance } from '@fapoms/shared';
 
 export interface LocationCoords {
   latitude: number;
@@ -215,17 +216,8 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const current = location;
       if (!current) return null;
 
-      const R = 6371; // Earth's radius in km
-      const dLat = (targetLat - current.latitude) * (Math.PI / 180);
-      const dLon = (targetLng - current.longitude) * (Math.PI / 180);
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(current.latitude * (Math.PI / 180)) *
-          Math.cos(targetLat * (Math.PI / 180)) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return Math.round(R * c * 10) / 10;
+      const km = calculateHaversineDistance(current.latitude, current.longitude, targetLat, targetLng);
+      return Math.round(km * 10) / 10;
     },
     [location]
   );

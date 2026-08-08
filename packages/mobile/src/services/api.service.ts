@@ -1,6 +1,8 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
+import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
+import { readToken, writeToken, deleteToken, ALL_TOKEN_KEYS } from './token-store';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 import {
   getDefaultServerUrl,
@@ -48,24 +50,18 @@ export function getApiBaseUrl(): string {
   return API_BASE_URL;
 }
 
-const BACKEND_TO_MOBILE_STATUS: Record<string, string> = {
-  PENDING: 'PENDING',
-  ACCEPTED: 'ACCEPTED',
-  CHECKED_IN: 'CHECKED_IN',
-  IN_PROGRESS: 'IN_PROGRESS',
-  COMPLETED: 'COMPLETED',
-  REJECTED: 'REJECTED',
-  CANCELLED: 'CANCELLED',
-};
+/**
+ * Assignment statuses are the shared enum's values verbatim on both sides of the wire.
+ *
+ * Two identity maps used to sit here — BACKEND_TO_MOBILE_STATUS and MOBILE_TO_BACKEND_STATUS
+ * — mapping PENDING to PENDING and so on. They translated nothing, but the lookup fell back
+ * to `|| 'PENDING'`, so any status not in the hand-maintained list was silently relabelled as
+ * "Awaiting Response". CANCELLED was in one map and absent from the other, which is exactly
+ * how a cancelled assignment came back to the app looking like new work.
+ */
+const isAssignmentStatus = (v: unknown): v is AssignmentStatus =>
+  typeof v === 'string' && (Object.values(AssignmentStatus) as string[]).includes(v);
 
-const MOBILE_TO_BACKEND_STATUS: Record<string, string> = {
-  PENDING: 'PENDING',
-  ACCEPTED: 'ACCEPTED',
-  CHECKED_IN: 'CHECKED_IN',
-  IN_PROGRESS: 'IN_PROGRESS',
-  COMPLETED: 'COMPLETED',
-  REJECTED: 'REJECTED',
-};
 export class MobileApiService {
   static authToken: string | null = null;
   static refreshToken: string | null = null;
@@ -107,34 +103,32 @@ export class MobileApiService {
     if (userId) this.currentUserId = userId;
     if (userName) this.currentUserName = userName;
 
-    try {
-      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-      if (g.localStorage) {
-        g.localStorage.setItem('fapoms_assayer_token', token);
-        if (userId) g.localStorage.setItem('fapoms_assayer_userId', userId);
-        if (userName) g.localStorage.setItem('fapoms_assayer_userName', userName);
-      }
-    } catch (e) {}
+    // Fire-and-forget: the in-memory values above are what the current session uses, and the
+    // persisted copy only matters on the next launch.
+    void writeToken('fapoms_assayer_token', token);
+    if (userId) void writeToken('fapoms_assayer_userId', userId);
+    if (userName) void writeToken('fapoms_assayer_userName', userName);
   }
 
-  static restoreSession(): { token: string; userId?: string; userName?: string } | null {
-    try {
-      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-      if (g.localStorage) {
-        const token = g.localStorage.getItem('fapoms_assayer_token');
-        const userId = g.localStorage.getItem('fapoms_assayer_userId') || undefined;
-        const userName = g.localStorage.getItem('fapoms_assayer_userName') || undefined;
-        const refreshToken = g.localStorage.getItem('fapoms_assayer_refresh_token');
-        if (token) {
-          this.authToken = token;
-          if (refreshToken) this.refreshToken = refreshToken;
-          this.currentUserId = userId || null;
-          this.currentUserName = userName || null;
-          return { token, userId, userName };
-        }
-      }
-    } catch (e) {}
-    return null;
+  /**
+   * Async because the OS keystore is async. The caller must await it before deciding whether
+   * to show the login screen — the previous sync version could only ever read `localStorage`,
+   * so on device it always returned null and the app always showed login.
+   */
+  static async restoreSession(): Promise<{ token: string; userId?: string; userName?: string } | null> {
+    const [token, refreshToken, userId, userName] = await Promise.all([
+      readToken('fapoms_assayer_token'),
+      readToken('fapoms_assayer_refresh_token'),
+      readToken('fapoms_assayer_userId'),
+      readToken('fapoms_assayer_userName'),
+    ]);
+    if (!token) return null;
+
+    this.authToken = token;
+    if (refreshToken) this.refreshToken = refreshToken;
+    this.currentUserId = userId || null;
+    this.currentUserName = userName || null;
+    return { token, userId: userId || undefined, userName: userName || undefined };
   }
 
   static clearSession() {
@@ -142,15 +136,7 @@ export class MobileApiService {
     this.refreshToken = null;
     this.currentUserId = null;
     this.currentUserName = null;
-    try {
-      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-      if (g.localStorage) {
-        g.localStorage.removeItem('fapoms_assayer_token');
-        g.localStorage.removeItem('fapoms_assayer_userId');
-        g.localStorage.removeItem('fapoms_assayer_userName');
-        g.localStorage.removeItem('fapoms_assayer_refresh_token');
-      }
-    } catch (e) {}
+    ALL_TOKEN_KEYS.forEach((k) => void deleteToken(k));
   }
 
   static async validateSession(): Promise<boolean> {
@@ -192,23 +178,18 @@ export class MobileApiService {
 
   private static storeRefreshToken(token: string): void {
     this.refreshToken = token;
-    try {
-      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-      if (g.localStorage) {
-        g.localStorage.setItem('fapoms_assayer_refresh_token', token);
-      }
-    } catch (e) {}
+    void writeToken('fapoms_assayer_refresh_token', token);
   }
 
-  private static getRefreshToken(): string | null {
+  /**
+   * In-memory first, keystore second. Async so a cold start that has not yet run
+   * `restoreSession` can still find the token biometric sign-in depends on.
+   */
+  private static async getRefreshToken(): Promise<string | null> {
     if (this.refreshToken) return this.refreshToken;
-    try {
-      const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-      if (g.localStorage) {
-        return g.localStorage.getItem('fapoms_assayer_refresh_token') || null;
-      }
-    } catch (e) {}
-    return null;
+    const stored = await readToken('fapoms_assayer_refresh_token');
+    if (stored) this.refreshToken = stored;
+    return stored;
   }
 
   static async tryRefresh(): Promise<boolean> {
@@ -231,12 +212,9 @@ export class MobileApiService {
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success && data.data?.accessToken) {
         this.authToken = data.data.accessToken;
-        try {
-          const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-          if (g.localStorage) {
-            g.localStorage.setItem('fapoms_assayer_token', data.data.accessToken);
-          }
-        } catch (e) {}
+        // The rotated access token has to reach the keystore too, or a cold start after a
+        // refresh would restore the stale one and immediately 401.
+        void writeToken('fapoms_assayer_token', data.data.accessToken);
         if (data.data.refreshToken) {
           this.storeRefreshToken(data.data.refreshToken);
         }
@@ -807,7 +785,9 @@ export class MobileApiService {
           sequenceOrder: idx + 1,
           estimatedCustomerCount: item.customerCount || item.projectBranch?.packetCount || (item.customers && item.customers.length > 0 ? item.customers.length : 15),
           estimatedAuditHours: branch?.estimatedDurationHours != null ? Number(branch.estimatedDurationHours) : 0,
-          status: (BACKEND_TO_MOBILE_STATUS as any)[item.status] || 'PENDING',
+          // Unknown statuses surface as-is rather than being rewritten to PENDING; a status
+          // the app does not recognise is a bug to see, not one to disguise as new work.
+          status: isAssignmentStatus(item.status) ? item.status : item.status || AssignmentStatus.PENDING,
           proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
           // Null, not an invented 1200 — see utils/fees.ts. The server resolves this from the
           // assayer's commercial profile, so a missing value means "unknown", not "₹1200".
@@ -817,16 +797,10 @@ export class MobileApiService {
           distanceKm: (() => {
             const assayer = item.assayer;
             if (assayer && assayer.latitude != null && assayer.longitude != null && branch && branch.latitude != null && branch.longitude != null) {
-              const lat1 = Number(assayer.latitude);
-              const lon1 = Number(assayer.longitude);
-              const lat2 = Number(branch.latitude);
-              const lon2 = Number(branch.longitude);
-              const R = 6371;
-              const dLat = (lat2 - lat1) * (Math.PI / 180);
-              const dLon = (lon2 - lon1) * (Math.PI / 180);
-              const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-              return Math.round(R * c);
+              return Math.round(calculateHaversineDistance(
+                Number(assayer.latitude), Number(assayer.longitude),
+                Number(branch.latitude), Number(branch.longitude),
+              ));
             }
             return undefined;
           })(),
@@ -852,7 +826,7 @@ export class MobileApiService {
     reason?: string,
     counterFee?: number,
   ): Promise<boolean> {
-    const backendStatus = counterFee !== undefined ? 'COUNTER_OFFER' : ((MOBILE_TO_BACKEND_STATUS as any)[status] || status);
+    const backendStatus = counterFee !== undefined ? 'COUNTER_OFFER' : status;
     const body: any = { targetStatus: backendStatus };
     if (reason) body.reason = reason;
     if (counterFee !== undefined) {

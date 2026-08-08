@@ -5,7 +5,7 @@ import {
   AlertTriangle, CheckCircle2, Edit2, ArrowRightLeft, FileText, ClipboardList,
   CreditCard, MessageSquare, ExternalLink, ShieldCheck,
 } from 'lucide-react';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, formatRupees as money } from '@fapoms/shared';
 
 import { api } from '../services/api';
 import { connectSocket, getSocket } from '../services/socket';
@@ -75,7 +75,6 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
-const money = (n: any) => `₹${Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const fmtWhen = (d?: string | null) =>
