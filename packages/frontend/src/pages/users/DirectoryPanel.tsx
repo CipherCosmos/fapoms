@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { User, Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
+import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal } from '../../components/ui';
+import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { UserActivityList } from './ActivityFeed';
 
@@ -261,12 +261,6 @@ export const DirectoryPanel: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <PrimaryButton onClick={() => setShowCreateModal(true)} icon={<UserPlus size={16} />}>
-          <span>Add New User</span>
-        </PrimaryButton>
-      </div>
-
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
         <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={filteredUsers.length} label="Total Users" />
         <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active" />
@@ -286,9 +280,14 @@ export const DirectoryPanel: React.FC = () => {
           { value: 'LOCKED', label: 'Locked' },
         ]} />
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} users</span>
+        <div style={{ marginLeft: 'auto' }}>
+          <PrimaryButton onClick={() => setShowCreateModal(true)} icon={<UserPlus size={16} />}>
+            <span>Add User</span>
+          </PrimaryButton>
+        </div>
       </div>
 
-      <div className="responsive-grid-split" style={{ alignItems: 'start' }}>
+      <div>
         <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
           <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: '15px', fontWeight: 600 }}>Accounts</span>
@@ -440,13 +439,23 @@ export const DirectoryPanel: React.FC = () => {
           )}
         </div>
 
-        <div>
-          {editingUser ? (
-            <div className="glass-card" style={{ padding: '24px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '18px' }}>
-                <Shield size={18} style={{ color: 'var(--accent-primary)' }} />
-                <h4 style={{ fontSize: '16px', fontWeight: 600 }}>Edit {editingUser.displayName}{editingSelf && <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: 700, marginLeft: '6px' }}>(you)</span>}</h4>
-              </div>
+      </div>
+
+      {/* Edit / roles / reset / activity — a slide-in drawer instead of a side panel that used
+          to squeeze the accounts table to half width. */}
+      <DetailDrawer
+        open={!!editingUser}
+        onClose={() => setEditingUser(null)}
+        width={520}
+        title={editingUser ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Shield size={16} style={{ color: 'var(--accent-primary)' }} />
+            Edit {editingUser.displayName}{editingSelf && <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
+          </span>
+        ) : ''}
+      >
+        {editingUser && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
               {isLocked(editingUser) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '16px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled)' }}>
@@ -514,16 +523,9 @@ export const DirectoryPanel: React.FC = () => {
                 <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Recent Activity</div>
                 <UserActivityList userId={editingUser.id} />
               </div>
-            </div>
-          ) : (
-            <div className="glass-card" style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
-              <User size={32} style={{ marginBottom: '12px', color: 'var(--accent-primary)', opacity: 0.7 }} />
-              <h4 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>Profile Editor</h4>
-              <p style={{ fontSize: '12px' }}>Select an account from the left to edit their profile, roles, unlock them, or reset their password.</p>
-            </div>
-          )}
-        </div>
-      </div>
+          </div>
+        )}
+      </DetailDrawer>
 
       {showCreateModal && (
         <Modal open onClose={() => setShowCreateModal(false)} title="Add User Profile" width="480px" asForm onSubmit={handleCreateUser}
