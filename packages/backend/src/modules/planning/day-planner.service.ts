@@ -520,13 +520,23 @@ export class DayPlannerService {
 
   /** Returns why a date can't be worked, or null when it can. */
   private async describeDateBlocker(date: Date, states: string[]): Promise<string | null> {
+    /**
+     * Weekends are decided by the holiday calendar, not here.
+     *
+     * This used to reject every Saturday outright, while HolidayService — the rule assignment
+     * creation actually enforces — closes only the 2nd and 4th, because Indian banks trade on
+     * the 1st, 3rd and 5th. The planner was therefore discarding working days that the rest of
+     * the platform accepts, pushing plans forward for no reason, and the two components
+     * disagreed about what a working day is.
+     */
     const day = date.getDay();
     if (day === 0) return 'Falls on a Sunday';
-    if (day === 6) return 'Falls on a Saturday';
 
-    for (const state of states) {
+    // With no branch state to scope by, still apply the national rule.
+    for (const state of states.length > 0 ? states : ['']) {
       const result = await this.constraintEvaluator.checkHoliday(state, date);
       if (!result.passed) {
+        if (day === 6) return 'Falls on a bank-holiday Saturday (2nd or 4th)';
         return result.reason || `Public holiday in ${state}`;
       }
     }

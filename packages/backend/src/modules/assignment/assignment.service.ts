@@ -25,6 +25,7 @@ import { AssignmentStateMachine } from './assignment.state-machine';
 import { ProjectBranchStateMachine } from '../project/project.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { ProjectEntity } from '../project/project.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
@@ -425,13 +426,23 @@ export class AssignmentService {
     if (dto.proposedFee !== undefined) assignment.proposedFee = dto.proposedFee;
     if (dto.agreedFee !== undefined) assignment.agreedFee = dto.agreedFee;
     if (dto.scheduledDate !== undefined) {
+      // Same gate as scheduleAudit and assignment creation. This used to check holidays only,
+      // and via HolidayService directly rather than the evaluator, so an edit here could put an
+      // assayer on a date they were on leave for or already committed to.
       const scheduledDateObj = new Date(dto.scheduledDate);
-      const branchState = assignment.projectBranch?.branch?.state || assignment.assessment?.branch?.state || '';
-      const isHolidayConflict = await this.holidayService.isHoliday(scheduledDateObj, branchState);
-      if (isHolidayConflict) {
-        throw new BadRequestException(
-          `Holiday Conflict: ${dto.scheduledDate} is a national/bank holiday in ${branchState}.`
-        );
+      const projectForDate = assignment.projectBranch?.projectId
+        ? await this.dataSource.getRepository(ProjectEntity).findOne({ where: { id: assignment.projectBranch.projectId } })
+        : null;
+      const availability = await this.constraintEvaluator.checkDateAvailability({
+        assayer: assignment.assayer ?? null,
+        assayerId: assignment.assayerId,
+        project: projectForDate,
+        branchState: assignment.projectBranch?.branch?.state || assignment.assessment?.branch?.state || null,
+        scheduledDate: scheduledDateObj,
+        excludeAssignmentId: assignment.id,
+      });
+      if (!availability.passed) {
+        throw new BadRequestException(availability.reason);
       }
       assignment.scheduledDate = scheduledDateObj;
     }
@@ -798,6 +809,33 @@ export class AssignmentService {
 
   async scheduleAudit(id: string, userId: string, scheduledDate: string, remarks?: string): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
+
+    /**
+     * The single gate every scheduled-date write passes through.
+     *
+     * SchedulingService.create ran leave, timeline and holiday checks; SchedulingService
+     * .transition (the Reschedule button) ran none; and this function, which both of them
+     * funnel into, validated nothing. An audit could be moved onto a registered bank holiday
+     * or onto a date the assayer was on leave or already booked, and it was written to
+     * schedules, assignments, project_branches and assessments without objection. Guarding
+     * the funnel closes every one of those paths at once.
+     */
+    const scheduledDateObj = new Date(scheduledDate);
+    const project = assignment.projectBranch?.projectId
+      ? await this.dataSource.getRepository(ProjectEntity).findOne({ where: { id: assignment.projectBranch.projectId } })
+      : null;
+
+    const availability = await this.constraintEvaluator.checkDateAvailability({
+      assayer: assignment.assayer ?? null,
+      assayerId: assignment.assayerId,
+      project,
+      branchState: assignment.projectBranch?.branch?.state ?? null,
+      scheduledDate: scheduledDateObj,
+      excludeAssignmentId: assignment.id,
+    });
+    if (!availability.passed) {
+      throw new BadRequestException(availability.reason);
+    }
 
     if (assignment.projectBranch) {
       assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;

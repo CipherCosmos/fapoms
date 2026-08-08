@@ -32,9 +32,61 @@ export class ConstraintEvaluator {
   ) {}
 
   /**
+   * Every rule that decides whether one assayer may work one date, in one place.
+   *
+   * These four checks existed individually and each caller picked its own subset, so the
+   * answer to "can this assayer work this date?" depended on which screen asked. Creating an
+   * assignment checked holidays and double-booking; SchedulingService.create checked leave,
+   * project timeline and holidays; rescheduling checked none of them; and the candidate list
+   * used a fourth combination. An operator could therefore reschedule an audit onto a
+   * registered bank holiday, or onto a date the assayer was already booked or on leave, and
+   * it would be written to schedules, assignments, project_branches and assessments without
+   * objection.
+   *
+   * Returns the first failure so the caller reports the most specific reason, not a generic
+   * "unavailable". `excludeAssignmentId` lets a reschedule ignore the assignment being moved,
+   * which would otherwise double-book against itself.
+   */
+  async checkDateAvailability(params: {
+    assayer?: AssayerEntity | null;
+    assayerId?: string | null;
+    project?: ProjectEntity | null;
+    branchState?: string | null;
+    scheduledDate: Date;
+    excludeAssignmentId?: string;
+  }): Promise<ConstraintResult> {
+    const { assayer, project, scheduledDate, excludeAssignmentId } = params;
+    const assayerId = params.assayerId ?? assayer?.id ?? null;
+
+    const holiday = await this.checkHoliday(params.branchState || '', scheduledDate);
+    if (!holiday.passed) return holiday;
+
+    if (assayer) {
+      const leave = this.checkLeaves(assayer, scheduledDate);
+      if (!leave.passed) return leave;
+    }
+
+    if (project) {
+      const timeline = this.checkProjectTimeline(project, scheduledDate);
+      if (!timeline.passed) return timeline;
+    }
+
+    if (assayerId) {
+      const booking = await this.checkDoubleBooking(assayerId, scheduledDate, excludeAssignmentId);
+      if (!booking.passed) return booking;
+    }
+
+    return { passed: true };
+  }
+
+  /**
    * Evaluates if the assayer has a double-booking conflict on the scheduled date.
    */
-  async checkDoubleBooking(assayerId: string, scheduledDate: Date): Promise<ConstraintResult> {
+  async checkDoubleBooking(
+    assayerId: string,
+    scheduledDate: Date,
+    excludeAssignmentId?: string,
+  ): Promise<ConstraintResult> {
     const doubleBooked = await this.assignmentRepository.findOne({
       where: {
         assayerId,
@@ -43,6 +95,11 @@ export class ConstraintEvaluator {
         isActive: true,
       },
     });
+
+    // Moving an assignment must not collide with the assignment being moved.
+    if (doubleBooked && excludeAssignmentId && doubleBooked.id === excludeAssignmentId) {
+      return { passed: true };
+    }
 
     if (doubleBooked) {
       return {

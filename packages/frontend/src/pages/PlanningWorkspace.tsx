@@ -588,7 +588,11 @@ export const PlanningWorkspace: React.FC = () => {
           body: JSON.stringify({
             projectBranchId: branchMeta.id,
             assayerId: plan.assayerId,
-            scheduledDate: dayPlanTargetDate,
+            // The date the plan was actually built for, not the operator's raw request. The
+            // planner moves off weekends and holidays and reports the shift in the banner
+            // above; sending dayPlanTargetDate committed the rejected date instead, so an
+            // audit could be booked onto the very Saturday the planner had just refused.
+            scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
             remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
           }),
         });

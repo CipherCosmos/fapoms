@@ -45,27 +45,19 @@ export class SchedulingService {
 
     const scheduledDateObj = new Date(dto.scheduledDate);
 
-    // Validate Assayer leaves via ConstraintEvaluator
-    if (assignment.assayer) {
-      const leavesCheck = this.constraintEvaluator.checkLeaves(assignment.assayer, scheduledDateObj);
-      if (!leavesCheck.passed) {
-        throw new BadRequestException(leavesCheck.reason);
-      }
-    }
-
-    // Validate project timeline via ConstraintEvaluator
-    if (assignment.project) {
-      const timelineCheck = this.constraintEvaluator.checkProjectTimeline(assignment.project, scheduledDateObj);
-      if (!timelineCheck.passed) {
-        throw new BadRequestException(timelineCheck.reason);
-      }
-    }
-
-    // Validate Holiday conflict via ConstraintEvaluator
-    const stateCode = assignment.projectBranch?.branch?.state ?? 'MH';
-    const holidayCheck = await this.constraintEvaluator.checkHoliday(stateCode, scheduledDateObj);
-    if (!holidayCheck.passed) {
-      throw new BadRequestException(holidayCheck.reason);
+    // One gate, shared with rescheduling and with AssignmentService — see
+    // ConstraintEvaluator.checkDateAvailability. The three checks were previously spelled out
+    // here and nowhere else, which is why the reschedule path had none of them.
+    const availability = await this.constraintEvaluator.checkDateAvailability({
+      assayer: assignment.assayer ?? null,
+      assayerId: assignment.assayerId,
+      project: assignment.project ?? null,
+      branchState: assignment.projectBranch?.branch?.state ?? null,
+      scheduledDate: scheduledDateObj,
+      excludeAssignmentId: assignment.id,
+    });
+    if (!availability.passed) {
+      throw new BadRequestException(availability.reason);
     }
 
     const existingSchedule = await this.scheduleRepository.findOne({

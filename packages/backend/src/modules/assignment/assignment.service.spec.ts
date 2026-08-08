@@ -111,6 +111,7 @@ const mockNotificationService = {
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
     checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
     checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+    checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
     checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
@@ -289,6 +290,30 @@ const mockNotificationService = {
 
       const result = await service.scheduleAudit('asn-1', 'user-1', '2026-08-15');
       expect(result.scheduledDate).toEqual(new Date('2026-08-15'));
+    });
+
+    /**
+     * scheduleAudit is the funnel every scheduled-date write passes through — assignment
+     * creation, SchedulingService.create, and the Reschedule button, which previously reached
+     * it with no date validation at all. Guarding here closes all of them, so this test is
+     * what stops a reschedule onto a holiday or onto an assayer's leave.
+     */
+    it('refuses a date the assayer cannot work, whichever path asked', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED, assayerId: 'as-1',
+        projectBranch: { id: 'pb-1', branch: { state: 'Maharashtra' } },
+      });
+      mockConstraintEvaluator.checkDateAvailability.mockResolvedValueOnce({
+        passed: false,
+        reason: 'Holiday Conflict: 2026-08-15 is a national/bank holiday in Maharashtra.',
+      });
+
+      await expect(
+        service.scheduleAudit('asn-1', 'user-1', '2026-08-15'),
+      ).rejects.toThrow(/Holiday Conflict/);
+
+      // Nothing may be written when the date is rejected.
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
     });
   });
 

@@ -184,10 +184,42 @@ describe('DayPlannerService', () => {
       expect(plan.dateAdjustment?.reason).toMatch(/holiday/i);
     });
 
-    it('skips weekends', async () => {
-      const plan = await service.generateDayPlans(PROJECT.id, '2026-08-22'); // Saturday
+    /**
+     * Indian banks close on Sundays and on the 2nd and 4th Saturday, and trade on the 1st, 3rd
+     * and 5th. The planner used to reject every Saturday itself, which disagreed with the rule
+     * assignment creation enforces and threw away working days. It now defers to the holiday
+     * calendar, so this mock mirrors HolidayService.isHoliday rather than passing everything.
+     */
+    const bankCalendar = async (_state: string, date: Date) => {
+      const day = date.getDay();
+      const weekIndex = Math.ceil(date.getDate() / 7);
+      const closed = day === 0 || (day === 6 && (weekIndex === 2 || weekIndex === 4));
+      return closed ? { passed: false, reason: 'Holiday Conflict: Target date is a holiday.' } : { passed: true };
+    };
+
+    it('moves off a Saturday the banks are closed on', async () => {
+      mockConstraintEvaluator.checkHoliday.mockImplementation(bankCalendar);
+
+      const plan = await service.generateDayPlans(PROJECT.id, '2026-08-22'); // 4th Saturday
       expect(plan.targetDate).toBe('2026-08-24'); // Monday
       expect(plan.dateAdjustment?.reason).toMatch(/Saturday/);
+    });
+
+    it('plans a Saturday the banks are open on, instead of discarding it', async () => {
+      mockConstraintEvaluator.checkHoliday.mockImplementation(bankCalendar);
+
+      // 29 Aug 2026 is a 5th Saturday — a normal trading day for the branch being audited.
+      const plan = await service.generateDayPlans(PROJECT.id, '2026-08-29');
+      expect(plan.targetDate).toBe('2026-08-29');
+      expect(plan.dateAdjustment).toBeNull();
+    });
+
+    it('still refuses Sundays', async () => {
+      mockConstraintEvaluator.checkHoliday.mockImplementation(bankCalendar);
+
+      const plan = await service.generateDayPlans(PROJECT.id, '2026-08-23'); // Sunday
+      expect(plan.targetDate).toBe('2026-08-24');
+      expect(plan.dateAdjustment?.reason).toMatch(/Sunday/);
     });
 
     it('checks holidays per branch state, so one state\'s holiday still blocks the shared day', async () => {

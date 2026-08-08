@@ -42,6 +42,7 @@ describe('SchedulingService', () => {
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
     checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
     checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+    checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
     checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
