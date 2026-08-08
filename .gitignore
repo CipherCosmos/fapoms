@@ -72,3 +72,10 @@ service-account-key.json
 .expo/
 /packages/mobile/android/
 /packages/mobile/ios/
+
+# Compiled output must never sit beside the sources in packages/shared/src: a NodeNext
+# `./enums.js` import resolves to the stale artifact instead of enums.ts, so every export
+# added after the last stray compile appears missing. Build output belongs in dist/.
+packages/shared/src/*.js
+packages/shared/src/*.js.map
+packages/shared/src/*.d.ts

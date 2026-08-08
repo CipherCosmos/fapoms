@@ -1,6 +1,28 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
+
+/**
+ * Lets the shared package's own `./enums.js`-style imports resolve to the `.ts` files.
+ *
+ * `packages/shared` is compiled with NodeNext, so its sources import siblings with an explicit
+ * `.js` extension even though the file on disk is `.ts`. esbuild tolerates that during dev,
+ * but Rollup does not, so a production build failed with
+ * `"ProjectBranchStatus" is not exported by "../shared/src/enums.js"`.
+ *
+ * Scoped to importers inside shared/src so it cannot affect any other dependency.
+ */
+const sharedTsSource = {
+  name: 'shared-ts-source-resolver',
+  enforce: 'pre' as const,
+  resolveId(source: string, importer?: string) {
+    if (!importer || !importer.includes(`${path.sep}shared${path.sep}src${path.sep}`)) return null;
+    if (!source.startsWith('.') || !source.endsWith('.js')) return null;
+    const candidate = path.resolve(path.dirname(importer), source.replace(/\.js$/, '.ts'));
+    return fs.existsSync(candidate) ? candidate : null;
+  },
+};
 
 // In Docker, the backend service is reachable at http://backend:3000
 // Locally, it's http://localhost:3000
@@ -8,10 +30,25 @@ const API_TARGET = process.env.VITE_API_URL || 'http://localhost:3000';
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [sharedTsSource, react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      /**
+       * Resolve the shared workspace package to its TypeScript source, not its build output.
+       *
+       * `@fapoms/shared` used to resolve to `dist/`, and was additionally listed in
+       * `optimizeDeps.include`, so Vite pre-bundled it into a fixed chunk under
+       * `node_modules/.vite/deps`. Every time a new export was added to shared, that chunk
+       * kept serving the previous copy and the browser threw
+       * "does not provide an export named X" until the cache was deleted by hand — which had
+       * to be done inside the container, since that is where the dev server's node_modules
+       * lives. It also meant shared had to be rebuilt before the frontend could see any edit.
+       *
+       * Pointing at source removes the build step and the cache from the loop entirely: Vite
+       * treats shared as ordinary project code, so an edit hot-reloads like any other file.
+       */
+      '@fapoms/shared': path.resolve(__dirname, '../shared/src/index.ts'),
     },
   },
   server: {
@@ -38,14 +75,21 @@ export default defineConfig({
       usePolling: true,
       interval: 1000,
     },
+    fs: {
+      // Shared now resolves outside this package's root, so the dev server has to be allowed
+      // to serve it. Without this, importing it 403s instead of loading.
+      allow: [path.resolve(__dirname, '..')],
+    },
   },
   optimizeDeps: {
-    include: ['@fapoms/shared', 'pdfjs-dist'],
+    include: ['pdfjs-dist'],
+    // Never pre-bundle the workspace package — that is what made its exports go stale. It is
+    // source now, so it belongs in the module graph with the rest of the app.
+    exclude: ['@fapoms/shared'],
     esbuildOptions: {
-      // The shared package ships .d.ts next to .js in dist/ (and src/). esbuild
-      // prefers .d.ts over .js when resolving, which silently drops re-exported
-      // named exports (AssessmentStatus, SystemRole) from the pre-bundled module.
-      // Resolve real modules first so the enum exports are preserved.
+      // The shared package ships .d.ts next to .js in dist/ (and src/). esbuild prefers .d.ts
+      // over .js when resolving, which silently drops re-exported named exports. Kept for any
+      // other dependency with the same layout.
       resolveExtensions: ['.js', '.mjs', '.jsx', '.cjs', '.ts', '.tsx', '.json'],
     },
   },
