@@ -5,7 +5,8 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { IsOptional, IsString, IsArray, IsNumber, IsObject } from 'class-validator';
+import { IsOptional, IsString, IsArray, IsNumber, IsObject, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ValidationQueryService } from './validation-query.service';
 import { QueryThreadService } from './query-thread.service';
 import { QueryMessageAuthor } from './validation-query-message.entity';
@@ -29,11 +30,47 @@ const chatMulterOptions = {
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
 };
 
+/**
+ * One attachment on a thread message.
+ *
+ * Declared as a real class rather than an inline type. The global ValidationPipe runs with
+ * `whitelist: true`, which strips any property it has no validator metadata for — and an
+ * inline TypeScript type carries no metadata at runtime. Every attachment posted to a
+ * clarification was therefore emptied before it reached the database: the API answered 200,
+ * the row saved, and the files were simply gone. This affected the data-entry desk and the
+ * assayer app equally, because the loss happened server-side.
+ */
+class QueryAttachmentDto {
+  @IsString() url: string;
+  @IsString() fileName: string;
+  @IsString() fileType: string;
+  /**
+   * The upload endpoint returns these alongside the three required fields, and clients post
+   * the object back verbatim. They are declared so `forbidNonWhitelisted` accepts them rather
+   * than 400-ing a payload the server itself produced.
+   */
+  @IsOptional() @IsString() s3Key?: string;
+  @IsOptional() @IsNumber() size?: number;
+  @IsOptional() @IsString() uploadedBy?: string;
+  @IsOptional() @IsString() timestamp?: string;
+}
+
+class QueryRegionDto {
+  @IsNumber() x: number;
+  @IsNumber() y: number;
+  @IsNumber() w: number;
+  @IsNumber() h: number;
+}
+
 class PostQueryMessageDto {
   @IsOptional() @IsString() body?: string;
-  @IsOptional() @IsArray() attachments?: { url: string; fileName: string; fileType: string }[];
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => QueryAttachmentDto)
+  attachments?: QueryAttachmentDto[];
   @IsOptional() @IsNumber() pageNumber?: number;
-  @IsOptional() @IsObject() region?: { x: number; y: number; w: number; h: number };
+  @IsOptional() @ValidateNested() @Type(() => QueryRegionDto) region?: QueryRegionDto;
   @IsOptional() @IsString() snapshotPath?: string;
 }
 

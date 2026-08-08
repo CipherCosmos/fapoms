@@ -160,6 +160,23 @@ export interface ProjectDayPlan {
     idleHours: number;
     note: string;
   }>;
+  /**
+   * Branches whose own workload exceeds a single working day.
+   *
+   * The planner assumed every branch fits in one day, so anything larger fell into
+   * `unclusteredBranches` as "cluster exceeds daily capacity" and could never be planned — on
+   * this engagement that was 43 of 64 branches, the largest needing 40 hours. "This branch
+   * needs 4 assayer-days" is actionable coverage advice; "unclusterable" is a dead end that
+   * repeats every time ops opens the screen.
+   */
+  multiDayBranches: Array<{
+    branchId: string;
+    branchName: string;
+    packetCount: number | null;
+    auditHours: number;
+    daysRequired: number;
+    note: string;
+  }>;
   summary: {
     totalClusters: number;
     totalBranchesCovered: number;
@@ -224,27 +241,71 @@ export class DayPlannerService {
    *   client's floor is never bypassable by turning the operator's toggle off; it's a
    *   configured business/conflict-of-interest rule, not a UI convenience.
    */
+  /**
+   * Accepts one project id or several.
+   *
+   * Planning a day used to be locked to a single project, which does not match how the work
+   * actually happens: an assayer standing in a city with three branches nearby should audit
+   * all three, and whether those branches belong to one engagement or three is an accounting
+   * detail, not a routing one. Restricting to a project produced artificially short days and
+   * left neighbouring branches for a second trip.
+   *
+   * Everything client-specific therefore becomes per-branch rather than per-run. A cluster can
+   * legitimately span two banks, and each branch keeps its own client's audit-duration
+   * agreement and rate card. The conflict-of-interest floor is taken as the strictest across
+   * the clients in scope, so a branch is never offered to someone its own client excludes.
+   */
   async generateDayPlans(
-    projectId: string,
+    projectIdOrIds: string | string[],
     targetDate?: string,
     manualMinDistanceKm?: number,
   ): Promise<ProjectDayPlan> {
-    const project = await this.projectRepository.findOne({ where: { id: projectId } });
-    if (!project) throw new NotFoundException(`Project ${projectId} not found.`);
+    const projectIds = Array.isArray(projectIdOrIds) ? [...new Set(projectIdOrIds)] : [projectIdOrIds];
+    if (projectIds.length === 0) {
+      throw new NotFoundException('At least one project must be given to plan a day.');
+    }
 
-    const client = project.clientId
-      ? await this.clientRepository.findOne({ where: { id: project.clientId }, relations: ['configuration'] })
-      : null;
+    const projects = await this.projectRepository.find({ where: { id: In(projectIds) } });
+    if (projects.length === 0) {
+      throw new NotFoundException(`No project found for ${projectIds.join(', ')}.`);
+    }
+    const project = projects[0];
 
-    const effectiveMinDistanceKm = this.resolveMinDistanceKm(client, manualMinDistanceKm);
+    const clientIds = [...new Set(projects.map((p) => p.clientId).filter(Boolean))] as string[];
+    const clients = clientIds.length
+      ? await this.clientRepository.find({ where: { id: In(clientIds) }, relations: ['configuration'] })
+      : [];
 
-    // How long one packet takes to audit, per this client's agreement. This is what converts
-    // "how much work is at this branch this cycle" into hours — see resolveAuditHours().
-    const minutesPerPacket = Number(client?.planningPreferences?.minutesPerPacket) || DEFAULT_MINUTES_PER_PACKET;
+    const clientById = new Map(clients.map((c) => [c.id, c]));
+    const projectById = new Map(projects.map((p) => [p.id, p]));
+    /** The client that owns a given project, for per-branch configuration lookups. */
+    const clientForProject = (pid: string) => {
+      const cid = projectById.get(pid)?.clientId;
+      return cid ? clientById.get(cid) ?? null : null;
+    };
+    const client = clients[0] ?? null;
 
-    // 1. Get unassigned project branches with branch details
+    /**
+     * The conflict-of-interest floor is the strictest across every client in scope.
+     *
+     * Taking the loosest — or only the first client's — would let a branch be offered to an
+     * assayer that its own client's rule excludes, which is the entire point of the control.
+     */
+    const effectiveMinDistanceKm = clients.reduce<number | null>((strictest, c) => {
+      const resolved = this.resolveMinDistanceKm(c, manualMinDistanceKm);
+      if (resolved === null) return strictest;
+      return strictest === null ? resolved : Math.max(strictest, resolved);
+    }, this.resolveMinDistanceKm(null, manualMinDistanceKm));
+
+    // Audit duration is contractual, so it follows the branch's own client rather than being
+    // averaged or taken from whichever project happened to be listed first.
+    const minutesPerPacketForProject = (pid: string) =>
+      Number(clientForProject(pid)?.planningPreferences?.minutesPerPacket) || DEFAULT_MINUTES_PER_PACKET;
+    const minutesPerPacket = minutesPerPacketForProject(project.id);
+
+    // 1. Get unassigned project branches with branch details, across every project in scope
     const projectBranches = await this.projectBranchRepository.find({
-      where: { projectId, isActive: true },
+      where: { projectId: In(projectIds), isActive: true },
       relations: ['branch'],
     });
 
@@ -259,12 +320,27 @@ export class DayPlannerService {
       unassigned,
     );
 
+    // A plan spanning several engagements is labelled with all of them, so an operator is
+    // never shown one project's name over a day that also covers another's branches.
+    const planProjectId = projectIds.join(',');
+    const planProjectName = projects.length === 1
+      ? project.name
+      : projects.map((p) => p.name).join(' + ');
+
     if (unassigned.length === 0) {
-      return this.emptyPlan(projectId, project.name, dateStr);
+      return this.emptyPlan(planProjectId, planProjectName, dateStr);
     }
 
     // 3. Cluster branches by proximity, sizing each branch by THIS cycle's packet count
-    const clusters = this.clusterBranches(unassigned, minutesPerPacket);
+    // Per branch, not per run: audit duration is a contractual term of the branch's own
+    // client, and a cluster may legitimately span two of them.
+    const clusters = this.clusterBranches(unassigned, (pb) => minutesPerPacketForProject(pb.projectId));
+
+    // Which client owns each branch in scope, so a cluster spanning two engagements prices
+    // each branch against its own contract rather than whichever client came first.
+    const clientByProjectBranchId = new Map(
+      unassigned.map((pb) => [pb.id, clientForProject(pb.projectId)] as const),
+    );
 
     // 4. Get all active assayers
     const assayers = await this.assayerRepository.find({
@@ -276,9 +352,28 @@ export class DayPlannerService {
     const clusterResults: ProjectDayPlan['clusters'] = [];
     const unclusteredBranches: ProjectDayPlan['unclusteredBranches'] = [];
     const underutilizedBranches: ProjectDayPlan['underutilizedBranches'] = [];
+    const multiDayBranches: ProjectDayPlan['multiDayBranches'] = [];
 
     for (const cluster of clusters) {
       if (!cluster.feasibleForOneDay) {
+        // A lone branch that is itself larger than a working day is not a clustering failure —
+        // it is a branch that needs several assayer-days. Say so, with the number.
+        if (cluster.branches.length === 1) {
+          const only = cluster.branches[0];
+          const daysRequired = Math.ceil(cluster.totalEstimatedAuditHours / MAX_DAILY_WORK_HOURS);
+          multiDayBranches.push({
+            branchId: only.branchId,
+            branchName: only.branchName,
+            packetCount: only.packetCount,
+            auditHours: parseFloat(cluster.totalEstimatedAuditHours.toFixed(1)),
+            daysRequired,
+            note: only.durationFromStaticFallback
+              ? `~${cluster.totalEstimatedAuditHours.toFixed(1)}h of work needs about ${daysRequired} assayer-days. No packet count was recorded for this cycle, so this estimate comes from the branch default and may be inaccurate.`
+              : `${only.packetCount} packet(s) ≈ ${cluster.totalEstimatedAuditHours.toFixed(1)}h, about ${daysRequired} assayer-days. Split it across consecutive days or assign more than one assayer.`,
+          });
+          continue;
+        }
+
         for (const b of cluster.branches) {
           unclusteredBranches.push({
             branchId: b.branchId,
@@ -315,7 +410,7 @@ export class DayPlannerService {
       }
 
       let { dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
-        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm,
+        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, false, clientByProjectBranchId,
       );
 
       // Fallback: if no candidates found within client constraints, retry with relaxed
@@ -325,7 +420,7 @@ export class DayPlannerService {
       // every candidate is too close.
       if (dayPlans.length === 0) {
         ({ dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
-          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true,
+          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true, clientByProjectBranchId,
         ));
       }
 
@@ -366,14 +461,15 @@ export class DayPlannerService {
     };
 
     return {
-      projectId,
-      projectName: project.name,
+      projectId: planProjectId,
+      projectName: planProjectName,
       targetDate: dateStr,
       effectiveMinDistanceKm,
       dateAdjustment,
       clusters: clusterResults,
       unclusteredBranches,
       underutilizedBranches,
+      multiDayBranches,
       summary,
     };
   }
@@ -470,7 +566,15 @@ export class DayPlannerService {
    * Pick the first unvisited branch as cluster center,
    * then absorb all unvisited branches within CLUSTER_RADIUS_KM.
    */
-  private clusterBranches(projectBranches: ProjectBranchEntity[], minutesPerPacket: number): BranchCluster[] {
+  private clusterBranches(
+    projectBranches: ProjectBranchEntity[],
+    /**
+     * Resolves the packet-minutes agreement for one branch. A function rather than a number
+     * because a day plan can now span several projects, and each client's audit-duration term
+     * follows its own branches.
+     */
+    minutesPerPacketFor: (pb: ProjectBranchEntity) => number,
+  ): BranchCluster[] {
     const branchesWithCoords = projectBranches
       .filter((pb) => pb.branch?.latitude && pb.branch?.longitude)
       .map((pb) => {
@@ -478,7 +582,7 @@ export class DayPlannerService {
         // branches.estimated_duration_hours, so a branch with only a handful of packets this
         // month was still budgeted its historical full-day estimate — which is precisely how
         // an assayer ends up paid for a day they finish in two hours.
-        const { hours, packetCount, fromStaticFallback } = this.resolveAuditHours(pb, minutesPerPacket);
+        const { hours, packetCount, fromStaticFallback } = this.resolveAuditHours(pb, minutesPerPacketFor(pb));
         return {
           id: pb.id,
           branchId: pb.branchId,
@@ -625,6 +729,12 @@ export class DayPlannerService {
     scheduledDate: Date,
     effectiveMinDistanceKm: number | null,
     relaxDistance = false,
+    /**
+     * Owning client per branch. A day plan may now span several projects, so the base fee is
+     * quoted per branch against its own client's rate card while travel — a single physical
+     * route — is charged once for the day.
+     */
+    clientByProjectBranchId?: Map<string, ClientEntity | null>,
   ): Promise<{ dayPlans: DayPlanCandidate[]; excludedAssayers: ExcludedDayPlanCandidate[] }> {
     const planningPreferences = client?.planningPreferences || {};
     const requiredSkills: string[] = planningPreferences.requiredSkills || [];
@@ -793,18 +903,60 @@ export class DayPlannerService {
       // local `TRAVEL_FEE_PER_KM`, a 1500 base-fee default, and charged travel from the first
       // kilometre — none of which matched assignment.service.ts, so the day plan advertised
       // a price the server then declined to store.
-      const quote = await this.feePolicyService.quote({
-        assayerId: assayer.id,
-        clientId: client?.id ?? null,
-        configuration: client?.configuration ?? undefined,
-        distanceKm: totalTravelKm,
-        branchCount: cluster.branches.length,
-        onDate: scheduledDate,
-      });
+      /**
+       * Priced per branch against the contract that governs it.
+       *
+       * A cluster can now span projects, and therefore clients, so one rate card no longer
+       * covers the day. Each branch's base fee comes from its own client; travel is a single
+       * physical route and is charged once, against the client of the first stop, rather than
+       * once per branch.
+       */
+      const distinctClients = new Set(
+        cluster.branches.map((b) => clientByProjectBranchId?.get(b.id)?.id ?? client?.id ?? null),
+      );
 
-      const baseFee = quote.baseFee;
-      const travelFee = quote.travelFee;
-      const totalCost = quote.total;
+      let baseFee = 0;
+      let travelFee = 0;
+
+      if (distinctClients.size <= 1) {
+        // Single client — one quote covers the whole cluster, as before.
+        const quote = await this.feePolicyService.quote({
+          assayerId: assayer.id,
+          clientId: client?.id ?? null,
+          configuration: client?.configuration ?? undefined,
+          distanceKm: totalTravelKm,
+          branchCount: cluster.branches.length,
+          onDate: scheduledDate,
+        });
+        baseFee = quote.baseFee;
+        travelFee = quote.travelFee;
+      } else {
+        const perBranchQuotes = await Promise.all(
+          cluster.branches.map(async (b, index) => {
+            const owner = clientByProjectBranchId?.get(b.id) ?? client;
+            return this.feePolicyService.quote({
+              assayerId: assayer.id,
+              clientId: owner?.id ?? null,
+              configuration: owner?.configuration ?? undefined,
+              // Travel is attributed to the first stop only, so a shared journey is not
+              // billed once per branch.
+              distanceKm: index === 0 ? totalTravelKm : 0,
+              branchCount: 1,
+              onDate: scheduledDate,
+            });
+          }),
+        );
+        // Reported as the average per-branch rate, since the field is a single figure and the
+        // branches may genuinely sit on different rate cards.
+        baseFee = Math.round(
+          perBranchQuotes.reduce((sum, q) => sum + q.baseFee, 0) / Math.max(1, perBranchQuotes.length),
+        );
+        travelFee = perBranchQuotes.reduce((sum, q) => sum + q.travelFee, 0);
+      }
+
+      // Same arithmetic either way: base fee applies per branch audited, travel once for the
+      // route. (This matches what FeePolicyService.quote returns as `total` for one client.)
+      const totalCost = baseFee * cluster.branches.length + travelFee;
 
       // ─── Score: recommendation engine scores averaged across branches, from the
       // per-branch cache built above — no longer re-invoking the engine here. ───
@@ -968,6 +1120,7 @@ export class DayPlannerService {
       clusters: [],
       unclusteredBranches: [],
       underutilizedBranches: [],
+      multiDayBranches: [],
       summary: {
         totalClusters: 0,
         totalBranchesCovered: 0,

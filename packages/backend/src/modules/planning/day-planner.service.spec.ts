@@ -63,14 +63,25 @@ describe('DayPlannerService', () => {
           },
         },
         { provide: getRepositoryToken(ProjectBranchEntity), useValue: mockProjectBranchRepo },
-        { provide: getRepositoryToken(ProjectEntity), useValue: { findOne: jest.fn().mockResolvedValue(PROJECT) } },
+        {
+          provide: getRepositoryToken(ProjectEntity),
+          // find() as well as findOne(): a day plan can now span several projects, so the
+          // service loads them as a set.
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(PROJECT),
+            find: jest.fn().mockResolvedValue([PROJECT]),
+          },
+        },
         { provide: getRepositoryToken(BranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         // No assayers: these tests assert clustering/date logic, which runs before candidate
         // scoring and is unaffected by it.
         { provide: getRepositoryToken(AssayerEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
         {
           provide: getRepositoryToken(ClientEntity),
-          useValue: { findOne: jest.fn().mockResolvedValue({ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }) },
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }),
+            find: jest.fn().mockResolvedValue([{ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }]),
+          },
         },
         { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: { findOne: jest.fn() } },
         { provide: RoutingService, useValue: { optimizeRoute: jest.fn() } },

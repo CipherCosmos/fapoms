@@ -10,6 +10,7 @@ import {
   UseGuards,
   Req,
   ParseUUIDPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength } from 'class-validator';
@@ -563,6 +564,44 @@ export class PlanningController {
       // "nobody is suitable" from "everyone was blocked by one misconfigured rule".
       meta: { excluded: (recommendations as any).excluded || [] },
     };
+  }
+
+  /**
+   * Day plans across several engagements at once.
+   *
+   * The per-project route below still works and is unchanged. This exists because an assayer
+   * standing in a city with nearby branches should audit all of them, and whether those
+   * branches belong to one engagement or three is an accounting distinction, not a routing
+   * one. Planning one project at a time produced artificially short days and left neighbouring
+   * branches for a second trip.
+   *
+   * Each branch keeps its own client's audit-duration agreement and rate card, and the
+   * conflict-of-interest floor applied is the strictest across the clients in scope.
+   */
+  @Get('day-plans')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Generate day plans spanning several projects, so one assayer can cover nearby branches across engagements' })
+  async getMultiProjectDayPlans(
+    @Query('projectIds') projectIds: string,
+    @Query('targetDate') targetDate?: string,
+    @Query('minDistanceKm') minDistanceKm?: string,
+  ) {
+    const ids = (projectIds ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (ids.length === 0) {
+      throw new BadRequestException('projectIds is required — pass one or more comma-separated project ids.');
+    }
+
+    const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+    const plan = await this.dayPlannerService.generateDayPlans(
+      ids,
+      targetDate,
+      Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+    );
+    return { success: true, data: plan };
   }
 
   @Get('projects/:projectId/day-plans')
