@@ -46,6 +46,15 @@ export const Modal: React.FC<{
 }) => {
   const panelRef = React.useRef<HTMLDivElement>(null);
 
+  // Hold the latest onClose in a ref so the focus-management effect below does NOT depend on it.
+  // onClose is almost always an inline arrow at the call site, so it is a new reference on every
+  // render — if the effect depended on it, every keystroke inside the modal would re-run the
+  // effect, whose teardown restores focus to the element active before the modal opened and whose
+  // setup refocuses the panel. The cursor was therefore thrown out of the input after a single
+  // character, in every modal across the app. The effect now runs only when `open` changes.
+  const onCloseRef = React.useRef(onClose);
+  React.useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
   React.useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -54,7 +63,7 @@ export const Modal: React.FC<{
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === 'Tab' && panelRef.current) {
@@ -78,7 +87,9 @@ export const Modal: React.FC<{
       document.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus?.();
     };
-  }, [open, onClose]);
+    // Deliberately only [open]: see onCloseRef above. Re-running on onClose changes is what
+    // stole focus from every input on each keystroke.
+  }, [open]);
 
   if (!open) return null;
 

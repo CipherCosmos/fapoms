@@ -12,6 +12,12 @@ export const DetailDrawer: React.FC<{
 }> = ({ open, onClose, title, subtitle, footer, width = 560, children }) => {
   const panelRef = React.useRef<HTMLDivElement>(null);
 
+  // See Modal.tsx: onClose is an inline arrow at the call site, so depending on it re-runs this
+  // focus-management effect on every keystroke and throws the cursor out of any input in the
+  // drawer. Hold it in a ref and depend only on `open`.
+  const onCloseRef = React.useRef(onClose);
+  React.useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
   React.useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -20,7 +26,7 @@ export const DetailDrawer: React.FC<{
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -28,7 +34,7 @@ export const DetailDrawer: React.FC<{
       document.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
