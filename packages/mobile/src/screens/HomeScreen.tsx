@@ -2,7 +2,8 @@ import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } from '../components/ui/primitives';
-import { AssignmentStatus, assignmentStatusLabel, formatRupees as money } from '@fapoms/shared';
+import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, isAssignmentTerminal } from '@fapoms/shared';
+import { assignmentStatusTone } from '../utils/statusTone';
 import { StatsScreen } from './StatsScreen';
 import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
 
@@ -19,6 +20,9 @@ export interface HomeScreenProps {
   onNavigate: (a: AssayerAssignment) => void;
   onSeeSchedule: () => void;
   onSeeQueries: () => void;
+  /** Set when the list came from cache because the last refresh failed. */
+  stale?: boolean;
+  lastSyncedAt?: string | null;
 }
 
 const isSameDay = (iso: string, day: Date): boolean => {
@@ -58,6 +62,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onNavigate,
   onSeeSchedule,
   onSeeQueries,
+  stale,
+  lastSyncedAt,
 }) => {
   const t = useTheme();
 
@@ -70,7 +76,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     const inFlight = assignments.find((a) => a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS');
     const nextToday = todaysJobs.find((a) => a.status === 'ACCEPTED' || a.status === 'PENDING');
     const nextEver = [...assignments]
-      .filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED' && a.status !== 'CANCELLED')
+      .filter((a) => !isAssignmentTerminal(a.status))
       .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate))[0];
 
     const queries = assignments.flatMap((a) => a.queries || []);
@@ -107,6 +113,33 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           })}
         </AppText>
       </View>
+
+      {/*
+        Says plainly that the screen is not live. Without this an assayer in a vault cannot
+        tell "no work today" apart from "the app could not reach the server" — and those two
+        call for opposite actions.
+      */}
+      {stale && (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: t.space.sm,
+            padding: t.space.md,
+            borderRadius: t.radius.md,
+            backgroundColor: t.colors.warningSoft,
+          }}
+        >
+          <Icon name="cloud-offline-outline" size={16} color={t.colors.warning} />
+          <AppText variant="small" tone="warning" style={{ flex: 1 }}>
+            Showing your last synced schedule
+            {lastSyncedAt
+              ? ` from ${new Date(lastSyncedAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}`
+              : ''}
+            . Pull down to retry.
+          </AppText>
+        </View>
+      )}
 
       {current ? (
         <CurrentJobCard
@@ -175,21 +208,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   );
 };
 
-/**
- * Tone is a mobile-theme concern, so it stays here — but the *wording* comes from
- * `@fapoms/shared`, so an assignment reads the same on the assayer's phone as it does on the
- * operations desk. This file previously carried its own labels, which had already drifted:
- * CANCELLED was missing entirely.
- */
-const STATUS_TONE: Record<AssignmentStatus, 'success' | 'warning' | 'info' | 'neutral'> = {
-  [AssignmentStatus.PENDING]: 'warning',
-  [AssignmentStatus.ACCEPTED]: 'info',
-  [AssignmentStatus.CHECKED_IN]: 'success',
-  [AssignmentStatus.IN_PROGRESS]: 'success',
-  [AssignmentStatus.COMPLETED]: 'neutral',
-  [AssignmentStatus.REJECTED]: 'neutral',
-  [AssignmentStatus.CANCELLED]: 'neutral',
-};
 
 const CurrentJobCard: React.FC<{
   assignment: AssayerAssignment;
@@ -209,7 +227,7 @@ const CurrentJobCard: React.FC<{
         <View style={{ flex: 1, gap: t.space.xs }}>
           <Badge
             label={assignmentStatusLabel(assignment.status)}
-            tone={STATUS_TONE[assignment.status as AssignmentStatus] ?? 'neutral'}
+            tone={assignmentStatusTone(assignment.status)}
             dot
           />
           <AppText variant="h2">{assignment.branchName}</AppText>

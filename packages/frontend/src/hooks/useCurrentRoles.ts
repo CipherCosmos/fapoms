@@ -57,6 +57,20 @@ export function canDeleteProjects(roles: SystemRole[]): boolean {
   return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
 }
 
+/**
+ * Deleting a branch is admin-only on the backend (branch.controller.ts @Delete(':id')).
+ * Gating the button on canManageBranches showed it to operations managers, whose click could
+ * only ever return 403.
+ */
+export function canDeleteBranches(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
+/** Deleting a planning rule is admin-only on the backend, as above. */
+export function canDeleteRules(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
 /** Holidays: operations own audit scheduling, so they can maintain the calendar too. */
 export function canManageHolidays(roles: SystemRole[]): boolean {
   return roles.some((r) =>

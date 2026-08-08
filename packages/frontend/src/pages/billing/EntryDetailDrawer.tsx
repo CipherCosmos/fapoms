@@ -5,8 +5,8 @@ import { BILLING_STATE_TRANSITIONS } from '@fapoms/shared';
 import type { BillingState } from '@fapoms/shared';
 import { BillingEntityType } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { formatRupees as money } from '@fapoms/shared';
 
-const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
 const STATE_COLOR: Record<BillingState, string> = {
   NOT_BILLABLE: 'var(--text-muted)', PENDING_BILLING: 'var(--text-secondary)',
@@ -120,23 +120,23 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
 
       <div>
         <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Money</h4>
-        <Row label="Base amount" value={`₹${fmt(entry.baseAmount)}`} />
-        {entry.travelAmount ? <Row label="Travel" value={`₹${fmt(entry.travelAmount)}`} /> : null}
-        {entry.adjustmentAmount ? <Row label="Adjustment" value={`₹${fmt(entry.adjustmentAmount)}`} /> : null}
-        {entry.discountAmount ? <Row label="Discount" value={`-₹${fmt(entry.discountAmount)}`} /> : null}
-        {entry.taxAmount ? <Row label={`Tax (${entry.taxRate ?? ''}%)`} value={`₹${fmt(entry.taxAmount)}`} /> : null}
-        {entry.tdsAmount ? <Row label="TDS" value={`-₹${fmt(entry.tdsAmount)}`} /> : null}
-        <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>₹{fmt(entry.totalAmount)}</span>} />
-        <Row label="Billed" value={`₹${fmt(entry.billedAmount)}`} />
-        <Row label="Paid" value={`₹${fmt(entry.paidAmount)}`} />
-        <Row label="Outstanding" value={`₹${fmt(entry.outstandingAmount)}`} />
+        <Row label="Base amount" value={`${money(entry.baseAmount)}`} />
+        {entry.travelAmount ? <Row label="Travel" value={`${money(entry.travelAmount)}`} /> : null}
+        {entry.adjustmentAmount ? <Row label="Adjustment" value={`${money(entry.adjustmentAmount)}`} /> : null}
+        {entry.discountAmount ? <Row label="Discount" value={`-${money(entry.discountAmount)}`} /> : null}
+        {entry.taxAmount ? <Row label={`Tax (${entry.taxRate ?? ''}%)`} value={`${money(entry.taxAmount)}`} /> : null}
+        {entry.tdsAmount ? <Row label="TDS" value={`-${money(entry.tdsAmount)}`} /> : null}
+        <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{money(entry.totalAmount)}</span>} />
+        <Row label="Billed" value={`${money(entry.billedAmount)}`} />
+        <Row label="Paid" value={`${money(entry.paidAmount)}`} />
+        <Row label="Outstanding" value={`${money(entry.outstandingAmount)}`} />
       </div>
 
       {entry.rate != null && (
         <div>
           <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Pricing</h4>
           <Row label="Model" value={entry.pricingModel} />
-          <Row label="Rate" value={`₹${fmt(entry.rate)}`} />
+          <Row label="Rate" value={`${money(entry.rate)}`} />
           {entry.quantity != null ? <Row label="Quantity" value={String(entry.quantity)} /> : null}
         </div>
       )}

@@ -6,6 +6,7 @@ import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { PAYABLE_TRANSITIONS, AssayerPayableStatus } from '@fapoms/shared';
 import type { PaymentMethod } from '@fapoms/shared';
+import { formatRupees as money } from '@fapoms/shared';
 
 interface AssayerOption { id: string; name: string; displayName?: string; }
 
@@ -13,7 +14,6 @@ const STATUS_COLOR: Record<AssayerPayableStatus, string> = {
   PENDING: 'var(--warning)', APPROVED: 'var(--accent)', PAID: 'var(--success)', DISPUTED: 'var(--danger)', ON_HOLD: 'var(--text-muted)',
 };
 
-const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
 const selStyle: React.CSSProperties = {
   padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
@@ -149,7 +149,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
       {canDisburse && (
         <div style={{ background: 'var(--status-active-bg)', border: '1px solid var(--success)', borderRadius: 'var(--radius-sm)', padding: 12, marginBottom: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
-            Disburse — ₹{fmt(outstanding)} owed
+            Disburse — {money(outstanding)} owed
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
             <StyledInput placeholder="Payment reference *" value={payRef} onChange={(e) => setPayRef(e.target.value)} style={{ width: '100%' }} />
@@ -158,7 +158,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
             </select>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <StyledInput placeholder={`Amount (blank = full ₹${fmt(outstanding)})`} type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} style={{ flex: 1 }} />
+            <StyledInput placeholder={`Amount (blank = full ${money(outstanding)})`} type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} style={{ flex: 1 }} />
             <button onClick={doDisburse} disabled={disburse.isPending} className="btn btn-primary">
               {disburse.isPending ? 'Paying…' : 'Pay'}
             </button>
@@ -169,13 +169,13 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
         <Row label="Assayer" value={rec.assayerName ?? rec.assayerId} />
         {rec.projectName && <Row label="Project" value={rec.projectName} />}
         {rec.assignmentNumber && <Row label="Assignment" value={rec.assignmentNumber} />}
-        <Row label="Fee" value={`₹${fmt(rec.baseAmount)}`} />
-        {rec.travelAmount ? <Row label="Travel" value={`₹${fmt(rec.travelAmount)}`} /> : null}
-        {rec.taxAmount ? <Row label="Tax" value={`₹${fmt(rec.taxAmount)}`} /> : null}
-        {rec.tdsAmount ? <Row label="TDS" value={`-₹${fmt(rec.tdsAmount)}`} /> : null}
-        <Row label="Net payable" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>₹{fmt(rec.totalAmount)}</span>} />
-        <Row label="Paid" value={`₹${fmt(rec.paidAmount)}`} />
-        <Row label="Still owed" value={<span style={{ color: outstanding > 0 ? 'var(--warning)' : 'var(--success)' }}>₹{fmt(outstanding)}</span>} />
+        <Row label="Fee" value={`${money(rec.baseAmount)}`} />
+        {rec.travelAmount ? <Row label="Travel" value={`${money(rec.travelAmount)}`} /> : null}
+        {rec.taxAmount ? <Row label="Tax" value={`${money(rec.taxAmount)}`} /> : null}
+        {rec.tdsAmount ? <Row label="TDS" value={`-${money(rec.tdsAmount)}`} /> : null}
+        <Row label="Net payable" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{money(rec.totalAmount)}</span>} />
+        <Row label="Paid" value={`${money(rec.paidAmount)}`} />
+        <Row label="Still owed" value={<span style={{ color: outstanding > 0 ? 'var(--warning)' : 'var(--success)' }}>{money(outstanding)}</span>} />
         {rec.approvedAt && <Row label="Approved" value={new Date(rec.approvedAt).toLocaleDateString()} />}
         {rec.paidAt && <Row label="Paid" value={new Date(rec.paidAt).toLocaleDateString()} />}
       </div>

@@ -4,8 +4,8 @@ import { useBillingInvoice, useTransitionBillingInvoice, useRecordBillingPayment
 import { INVOICE_TRANSITIONS, PaymentMethod } from '@fapoms/shared';
 import type { InvoiceStatus } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { formatRupees as money } from '@fapoms/shared';
 
-const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 const METHODS = Object.values(PaymentMethod);
 
 const STATUS_COLOR: Record<InvoiceStatus, string> = {
@@ -92,7 +92,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
             <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <StyledInput placeholder={`Amount (outstanding ₹${fmt(invoice.outstandingAmount)}) *`} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <StyledInput placeholder={`Amount (outstanding ${money(invoice.outstandingAmount)}) *`} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
             <StyledInput placeholder="Received date" type="date" value={receivedDate} onChange={(e) => setReceivedDate(e.target.value)} />
           </div>
           <StyledInput placeholder="Notes" value={payNote} onChange={(e) => setPayNote(e.target.value)} />
@@ -102,12 +102,12 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
 
       <div>
         <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Amounts</h4>
-        <Row label="Subtotal" value={`₹${fmt(invoice.subtotal)}`} />
-        {invoice.taxAmount ? <Row label="Tax" value={`₹${fmt(invoice.taxAmount)}`} /> : null}
-        {invoice.discountAmount ? <Row label="Discount" value={`-₹${fmt(invoice.discountAmount)}`} /> : null}
-        <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>₹{fmt(invoice.total)}</span>} />
-        <Row label="Paid" value={`₹${fmt(invoice.paidAmount)}`} />
-        <Row label="Outstanding" value={`₹${fmt(invoice.outstandingAmount)}`} />
+        <Row label="Subtotal" value={`${money(invoice.subtotal)}`} />
+        {invoice.taxAmount ? <Row label="Tax" value={`${money(invoice.taxAmount)}`} /> : null}
+        {invoice.discountAmount ? <Row label="Discount" value={`-${money(invoice.discountAmount)}`} /> : null}
+        <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{money(invoice.total)}</span>} />
+        <Row label="Paid" value={`${money(invoice.paidAmount)}`} />
+        <Row label="Outstanding" value={`${money(invoice.outstandingAmount)}`} />
       </div>
 
       {invoice.entryIds && invoice.entryIds.length > 0 && (
@@ -127,7 +127,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
               <div key={p.id} style={{ background: 'var(--bg-tertiary)', padding: 8, borderRadius: 'var(--radius-sm)', fontSize: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontWeight: 600 }}>{p.paymentReference}</span>
-                  <span style={{ fontWeight: 700 }}>₹{fmt(p.amount)}</span>
+                  <span style={{ fontWeight: 700 }}>{money(p.amount)}</span>
                 </div>
                 <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{p.method} · {p.status} · {p.receivedDate ? new Date(p.receivedDate).toLocaleDateString() : new Date(p.updatedAt ?? p.createdAt ?? '').toLocaleDateString()}</div>
               </div>

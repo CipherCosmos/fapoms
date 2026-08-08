@@ -5,7 +5,7 @@ import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } 
 import { api } from '../services/api';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { connectSocket } from '../services/socket';
-import { useCurrentRoles, canManageBranches } from '../hooks/useCurrentRoles';
+import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
 import { userMessage } from '../services/errors';
 
 interface ClientOption {
@@ -126,7 +126,10 @@ export const Branches: React.FC = () => {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Audit and finance can open this page but hold no branch write permission —
   // showing them Add/Edit/Delete only produces a 403 when they click.
-  const canManage = canManageBranches(useCurrentRoles());
+  const roles = useCurrentRoles();
+  const canManage = canManageBranches(roles);
+  // Deletion is admin-only on the backend; showing it more widely only produced a 403 on click.
+  const canDelete = canDeleteBranches(roles);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
@@ -338,7 +341,7 @@ export const Branches: React.FC = () => {
                         <div style={{ display: 'flex', gap: '4px' }}>
                           {canManage && <>
                             <button aria-label="Edit branch" onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                            <button aria-label="Delete branch" onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--danger)' }}><Trash2 size={11} /></button>
+                            {canDelete && <button aria-label="Delete branch" onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--danger)' }}><Trash2 size={11} /></button>}
                           </>}
                         </div>
                       </td>

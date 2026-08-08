@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Trash2, Edit2, Shield, Sliders, AlertTriangle, Info } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton } from '../components/ui';
-import { useCurrentRoles, canManageRules } from '../hooks/useCurrentRoles';
+import { useCurrentRoles, canManageRules, canDeleteRules } from '../hooks/useCurrentRoles';
 
 /**
  * The business rule engine.
@@ -73,7 +73,10 @@ const emptyForm = {
 };
 
 export const Rules: React.FC = () => {
-  const canManage = canManageRules(useCurrentRoles());
+  const roles = useCurrentRoles();
+  const canManage = canManageRules(roles);
+  // Deletion is admin-only on the backend; showing it more widely only produced a 403 on click.
+  const canDelete = canDeleteRules(roles);
 
   const [rules, setRules] = useState<BusinessRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -250,7 +253,7 @@ export const Rules: React.FC = () => {
                   {canManage && (
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <button aria-label="Edit rule" onClick={() => openEdit(rule)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}><Edit2 size={14} /></button>
-                      <button aria-label="Delete rule" onClick={() => handleDelete(rule.id)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px' }}><Trash2 size={14} /></button>
+                      {canDelete && <button aria-label="Delete rule" onClick={() => handleDelete(rule.id)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px' }}><Trash2 size={14} /></button>}
                     </div>
                   )}
                 </div>

@@ -231,7 +231,11 @@ export class MobileApiService {
   }
 
   private static async doRefresh(): Promise<boolean> {
-    const refreshToken = this.getRefreshToken();
+    // Awaited: `getRefreshToken` became async when tokens moved to the OS keystore. Without
+    // this the call returned a Promise — truthy, so the guard below passed — and it was
+    // serialised into the request body as `{}`. Every refresh failed, so a session died the
+    // moment the 15-minute access token expired, and biometric sign-in never worked at all.
+    const refreshToken = await this.getRefreshToken();
     if (!refreshToken) return false;
     try {
       const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
@@ -328,7 +332,11 @@ export class MobileApiService {
    * biometric prompt itself (that happens on-device, before this is ever called).
    */
   static async biometricLogin(): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
-    const refreshToken = this.getRefreshToken();
+    // Awaited: `getRefreshToken` became async when tokens moved to the OS keystore. Without
+    // this the call returned a Promise — truthy, so the guard below passed — and it was
+    // serialised into the request body as `{}`. Every refresh failed, so a session died the
+    // moment the 15-minute access token expired, and biometric sign-in never worked at all.
+    const refreshToken = await this.getRefreshToken();
     if (!refreshToken) {
       return { success: false, error: 'No saved session found. Please sign in with your Assayer Code and password first.' };
     }

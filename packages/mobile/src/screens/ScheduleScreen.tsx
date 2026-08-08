@@ -5,7 +5,8 @@ import { MobileApiService } from '../services/api.service';
 import { getAssignmentTotalFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
-import { formatRupees as money } from '@fapoms/shared';
+import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal } from '@fapoms/shared';
+import { assignmentStatusTone } from '../utils/statusTone';
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
@@ -21,16 +22,6 @@ interface ScheduleScreenProps {
 
 type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
-const STATUS_META: Record<string, { label: string; tone: Tone }> = {
-  PENDING: { label: 'Awaiting your response', tone: 'warning' },
-  NEGOTIATION: { label: 'In negotiation', tone: 'accent' },
-  ACCEPTED: { label: 'Accepted', tone: 'info' },
-  CHECKED_IN: { label: 'On site', tone: 'primary' },
-  IN_PROGRESS: { label: 'In progress', tone: 'primary' },
-  COMPLETED: { label: 'Completed', tone: 'success' },
-  REJECTED: { label: 'Declined', tone: 'danger' },
-  CANCELLED: { label: 'Cancelled', tone: 'danger' },
-};
 
 const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' }) : 'Today';
@@ -98,8 +89,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   };
 
 
-  const active = assignments.filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED');
-  const done = assignments.filter((a) => a.status === 'COMPLETED' || a.status === 'REJECTED');
+  // CANCELLED was missing from this split, so a cancelled audit stayed under Active forever
+  // while HomeScreen had already dropped it from current work.
+  const active = assignments.filter((a) => !isAssignmentTerminal(a.status));
+  const done = assignments.filter((a) => isAssignmentTerminal(a.status));
   const shown = tab === 'ACTIVE' ? active : done;
 
   return (
@@ -123,7 +116,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
         />
       ) : (
         shown.map((a, i) => {
-          const meta = STATUS_META[a.status] ?? { label: a.status.replace(/_/g, ' '), tone: 'neutral' as Tone };
+          // Wording from @fapoms/shared, tone from the app's one tone map — this screen used
+          // to keep its own copy of both, and they had drifted from HomeScreen's.
+          const meta = { label: assignmentStatusLabel(a.status), tone: assignmentStatusTone(a.status) as Tone };
           const fee = getAssignmentTotalFee(a);
           const rounds = a.negotiationCount || 0;
 

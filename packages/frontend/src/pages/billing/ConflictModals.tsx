@@ -7,6 +7,7 @@ import {
   BillingEntityType,
 } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { formatRupees as money } from '@fapoms/shared';
 
 const SEVERITIES = Object.values(BillingConflictSeverity);
 const ENTITY_TYPES = Object.values(BillingEntityType);
@@ -24,7 +25,6 @@ const RESOLVE_STATUSES: BillingConflictStatus[] = [
   BillingConflictStatus.REASSIGNED, BillingConflictStatus.OVERRIDDEN, BillingConflictStatus.REJECTED, BillingConflictStatus.ON_HOLD,
 ];
 
-const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
 export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { toast } = useToast();
@@ -78,7 +78,7 @@ export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose 
               <input type="checkbox" checked={selectedIds.includes(en.id)} onChange={() => toggle(en.id)} />
               <span style={{ fontSize: 13, flex: 1 }}>{en.entryNumber}</span>
               <span style={{ fontSize: 12, color: STATUS_COLOR[en.state as unknown as BillingConflictStatus] ?? 'var(--text-muted)' }}>{en.state}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>₹{fmt(en.totalAmount)}</span>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{money(en.totalAmount)}</span>
             </label>
           ))}
         </div>

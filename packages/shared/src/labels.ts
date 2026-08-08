@@ -225,6 +225,24 @@ export const BRANCH_ACTIVE_COVERED_STATUSES: readonly ProjectBranchStatus[] = [
 ];
 
 /**
+ * Assignment statuses that have reached the end of their life.
+ *
+ * The mobile app split Active from History in one place and filtered "current work" in
+ * another, each with its own hand-written list, so an assignment could sit in Active on one
+ * screen and History on another. Terminal state is expressed by status alone — `isActive`
+ * means "not deleted", never "finished".
+ */
+export const ASSIGNMENT_TERMINAL_STATUSES: readonly AssignmentStatus[] = [
+  AssignmentStatus.COMPLETED,
+  AssignmentStatus.REJECTED,
+  AssignmentStatus.CANCELLED,
+];
+
+export function isAssignmentTerminal(status?: string | null): boolean {
+  return !!status && (ASSIGNMENT_TERMINAL_STATUSES as readonly string[]).includes(status);
+}
+
+/**
  * Local-timezone `YYYY-MM-DD` key. Using `new Date().toISOString().split('T')[0]`
  * returns the *UTC* date, which is a day behind the user's local "today" for any
  * timezone ahead of UTC — so "today"'s schedules silently moved to the wrong day.

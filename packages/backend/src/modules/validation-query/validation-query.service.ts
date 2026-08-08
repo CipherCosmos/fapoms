@@ -86,7 +86,12 @@ export class ValidationQueryService {
       entityType: 'VALIDATION_QUERY',
       entityId: saved.id,
       userId,
-      remarks: `Raised query to assayer ${dto.assayerId}: "${dto.queryText}"`,
+      // The assayer the query was actually saved against. This recorded `dto.assayerId`, which
+      // is optional — when the caller omits it (or sends the zero-UUID sentinel) the recipient
+      // is resolved from the branch's active assignment above, and the trail named "undefined"
+      // while the row named a real person.
+      remarks: `Raised query to assayer ${resolvedAssayerId}: "${dto.queryText}"`,
+      metadata: { assayerId: resolvedAssayerId, validationCaseId: dto.validationCaseId, targetField: dto.targetField ?? null },
     });
 
     // Create persistent text & push notification for the Assayer

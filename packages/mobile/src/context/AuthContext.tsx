@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { MobileApiService } from '../services/api.service';
+import { clearCache } from '../services/token-store';
 
 interface AuthUser {
   id: string;
@@ -160,6 +161,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     MobileApiService.clearSession();
+    // One assayer's cached schedule must not survive into the next person's session on a
+    // shared handset.
+    void clearCache();
     setIsAuthenticated(false);
     setUser(null);
   };

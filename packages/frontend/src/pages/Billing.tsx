@@ -36,8 +36,8 @@ import { CreatePayableModal, PayableDetailDrawer } from './billing/PayableModals
 import { RaiseConflictModal, ConflictDetailDrawer } from './billing/ConflictModals';
 import { useToast } from '../components/ui';
 import { userMessage } from '../services/errors';
+import { formatRupees as money } from '@fapoms/shared';
 
-const fmt = (n?: number) => (n ?? 0).toLocaleString('en-IN');
 
 type Tab = 'finance' | 'overview' | 'hierarchy' | 'entries' | 'invoices' | 'payables' | 'conflicts' | 'history';
 
@@ -295,20 +295,20 @@ export const Billing: React.FC = () => {
           {dashboard.data && (
             <>
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Billed" value={`₹${fmt(dashboard.data.totals.billed)}`} color="var(--accent)" />
-                <MoneyStat label="Paid" value={`₹${fmt(dashboard.data.totals.paid)}`} color="var(--success)" />
-                <MoneyStat label="Outstanding" value={`₹${fmt(dashboard.data.totals.outstanding)}`} color="var(--warning)" />
-                <MoneyStat label="Unbilled Revenue" value={`₹${fmt(dashboard.data.totals.unbilledRevenue ?? dashboard.data.totals.pending)}`} color="var(--accent)" />
-                <MoneyStat label="Disputed" value={`₹${fmt(dashboard.data.totals.disputed)}`} color="var(--danger)" />
+                <MoneyStat label="Billed" value={`${money(dashboard.data.totals.billed)}`} color="var(--accent)" />
+                <MoneyStat label="Paid" value={`${money(dashboard.data.totals.paid)}`} color="var(--success)" />
+                <MoneyStat label="Outstanding" value={`${money(dashboard.data.totals.outstanding)}`} color="var(--warning)" />
+                <MoneyStat label="Unbilled Revenue" value={`${money(dashboard.data.totals.unbilledRevenue ?? dashboard.data.totals.pending)}`} color="var(--accent)" />
+                <MoneyStat label="Disputed" value={`${money(dashboard.data.totals.disputed)}`} color="var(--danger)" />
               </div>
               {/* Revenue vs what we owe assayers — the cost-per-audit question this
                   platform exists to answer, which billing could not previously show. */}
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Net Revenue" value={`₹${fmt(dashboard.data.totals.revenue)}`} color="var(--accent)" />
-                <MoneyStat label="Assayer Cost" value={`₹${fmt(dashboard.data.totals.assayerCost)}`} color="var(--warning)" />
+                <MoneyStat label="Net Revenue" value={`${money(dashboard.data.totals.revenue)}`} color="var(--accent)" />
+                <MoneyStat label="Assayer Cost" value={`${money(dashboard.data.totals.assayerCost)}`} color="var(--warning)" />
                 <MoneyStat
                   label="Margin"
-                  value={`₹${fmt(dashboard.data.totals.margin)}${dashboard.data.totals.marginPct != null ? ` (${dashboard.data.totals.marginPct}%)` : ''}`}
+                  value={`${money(dashboard.data.totals.margin)}${dashboard.data.totals.marginPct != null ? ` (${dashboard.data.totals.marginPct}%)` : ''}`}
                   color={(dashboard.data.totals.margin ?? 0) < 0 ? 'var(--danger)' : 'var(--success)'}
                 />
               </div>
@@ -324,7 +324,7 @@ export const Billing: React.FC = () => {
                       <div key={lvl} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Badge color={levelColor[lvl]}>{lvl}</Badge>
                         <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                          ₹{fmt(d.billed)} billed · ₹{fmt(d.paid)} paid · ₹{fmt(d.outstanding)} outstanding
+                          {money(d.billed)} billed · {money(d.paid)} paid · {money(d.outstanding)} outstanding
                         </span>
                       </div>
                     );
@@ -333,10 +333,10 @@ export const Billing: React.FC = () => {
               </Card>
               <Card title="Assayer Payables">
                 <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                  <MoneyStat label="Pending" value={`₹${fmt(dashboard.data.payable.pending)}`} color="var(--warning)" />
-                  <MoneyStat label="Approved" value={`₹${fmt(dashboard.data.payable.approved)}`} color="var(--accent)" />
-                  <MoneyStat label="Paid" value={`₹${fmt(dashboard.data.payable.paid)}`} color="var(--success)" />
-                  <MoneyStat label="Disputed" value={`₹${fmt(dashboard.data.payable.disputed)}`} color="var(--danger)" />
+                  <MoneyStat label="Pending" value={`${money(dashboard.data.payable.pending)}`} color="var(--warning)" />
+                  <MoneyStat label="Approved" value={`${money(dashboard.data.payable.approved)}`} color="var(--accent)" />
+                  <MoneyStat label="Paid" value={`${money(dashboard.data.payable.paid)}`} color="var(--success)" />
+                  <MoneyStat label="Disputed" value={`${money(dashboard.data.payable.disputed)}`} color="var(--danger)" />
                 </div>
               </Card>
             </>
@@ -425,11 +425,11 @@ export const Billing: React.FC = () => {
                 <Badge color={STATE_BADGE[e.state]}>{e.state}</Badge>
                 <Badge color={PAY_STATE_BADGE[e.paymentState]}>{e.paymentState}</Badge>
               </span>,
-              <span key={e.id}>₹{fmt(e.taxableAmount ?? e.baseAmount)}</span>,
-              <span key={e.id} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>₹{fmt(e.taxAmount)}</span>,
-              <span key={e.id} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>−₹{fmt(e.tdsAmount)}</span>,
-              <span key={e.id} style={{ fontWeight: 600 }}>₹{fmt(e.totalAmount)}</span>,
-              <span key={e.id} style={{ color: 'var(--warning)' }}>₹{fmt(e.outstandingAmount)}</span>,
+              <span key={e.id}>{money(e.taxableAmount ?? e.baseAmount)}</span>,
+              <span key={e.id} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{money(e.taxAmount)}</span>,
+              <span key={e.id} style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>−{money(e.tdsAmount)}</span>,
+              <span key={e.id} style={{ fontWeight: 600 }}>{money(e.totalAmount)}</span>,
+              <span key={e.id} style={{ color: 'var(--warning)' }}>{money(e.outstandingAmount)}</span>,
             ])}
             empty={entries.data && entries.data.length === 0}
             loading={entries.isLoading}
@@ -446,11 +446,11 @@ export const Billing: React.FC = () => {
             <strong key={inv.id}>{inv.invoiceNumber}</strong>,
             <Badge key={inv.id} color={INV_BADGE[inv.status]}>{inv.status}</Badge>,
             <span key={inv.id} style={{ fontSize: '12px' }}>{inv.type}</span>,
-            <span key={inv.id}>₹{fmt(inv.subtotal)}</span>,
-            <span key={inv.id}>₹{fmt(inv.taxAmount)}</span>,
-            <span key={inv.id} style={{ fontWeight: 600 }}>₹{fmt(inv.total)}</span>,
-            <span key={inv.id} style={{ color: 'var(--success)' }}>₹{fmt(inv.paidAmount)}</span>,
-            <span key={inv.id} style={{ color: 'var(--warning)' }}>₹{fmt(inv.outstandingAmount)}</span>,
+            <span key={inv.id}>{money(inv.subtotal)}</span>,
+            <span key={inv.id}>{money(inv.taxAmount)}</span>,
+            <span key={inv.id} style={{ fontWeight: 600 }}>{money(inv.total)}</span>,
+            <span key={inv.id} style={{ color: 'var(--success)' }}>{money(inv.paidAmount)}</span>,
+            <span key={inv.id} style={{ color: 'var(--warning)' }}>{money(inv.outstandingAmount)}</span>,
           ])}
           empty={invoices.data && invoices.data.length === 0}
           loading={invoices.isLoading}
@@ -474,11 +474,11 @@ export const Billing: React.FC = () => {
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.projectName ?? ''}</div>
             </span>,
             <Badge key={p.id} color={PAYABLE_BADGE[p.status]}>{p.status}</Badge>,
-            <span key={p.id}>₹{fmt(p.baseAmount)}</span>,
-            <span key={p.id}>₹{fmt(p.travelAmount)}</span>,
-            <span key={p.id} style={{ color: 'var(--text-secondary)' }}>−₹{fmt(p.tdsAmount)}</span>,
-            <span key={p.id} style={{ fontWeight: 600 }}>₹{fmt(p.totalAmount)}</span>,
-            <span key={p.id} style={{ color: 'var(--success)' }}>₹{fmt(p.paidAmount)}</span>,
+            <span key={p.id}>{money(p.baseAmount)}</span>,
+            <span key={p.id}>{money(p.travelAmount)}</span>,
+            <span key={p.id} style={{ color: 'var(--text-secondary)' }}>−{money(p.tdsAmount)}</span>,
+            <span key={p.id} style={{ fontWeight: 600 }}>{money(p.totalAmount)}</span>,
+            <span key={p.id} style={{ color: 'var(--success)' }}>{money(p.paidAmount)}</span>,
           ])}
           empty={payables.data && payables.data.length === 0}
           loading={payables.isLoading}
