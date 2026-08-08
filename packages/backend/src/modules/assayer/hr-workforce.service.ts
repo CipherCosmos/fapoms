@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { canonicalState } from '../planning/command-center.service';
+import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -449,19 +450,23 @@ export class HrWorkforceService {
 
     const completed = HrWorkforceService.num(performance.completedAssignments);
 
-    // Live per-assayer utilisation: committed work vs weekly capacity. This is
-    // the "who is over-worked / who is idle" read, distinct from the "how old is
-    // the last job" idle query above — one is capacity pressure, the other is
-    // engagement. Capacity comes from the assayer's own max_weekly_workload
-    // (defaulting to 15 like the planning engines) so the numbers agree with
-    // what planning will actually assign.
+    // Live per-assayer utilisation: work in flight vs weekly capacity. This is the "who is
+    // over-worked / who is idle" read, distinct from the "how old is the last job" idle query
+    // above — one is capacity pressure, the other is engagement.
+    //
+    // This deliberately includes PENDING offers, because a manager looking at someone's plate
+    // needs to see work that has been offered but not yet answered. Planning's capacity gate
+    // counts only COMMITTED_ASSIGNMENT_STATUSES, so this figure can legitimately read higher
+    // than the number planning enforces — the two answer different questions. See
+    // modules/assignment/assignment-workload.ts. (This comment previously claimed the numbers
+    // agreed with planning; they never did.)
     const utilizationRows = await this.dataSource.query(`
       SELECT a.id, a.assayer_code AS "assayerCode", a.display_name AS "displayName",
              a.state, a.district, a.max_weekly_workload AS "maxWeeklyWorkload",
              a.last_assignment_date AS "lastAssignmentDate",
              (SELECT COUNT(*) FROM assignments asg
                WHERE asg.assayer_id = a.id AND asg.is_active = true
-                 AND asg.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')
+                 AND asg.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})
              ) AS "currentAllocation"
       FROM assayers a
       WHERE a.lifecycle_status = 'ACTIVE' AND a.exit_date IS NULL AND a.termination_date IS NULL

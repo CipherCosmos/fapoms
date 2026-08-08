@@ -10,6 +10,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerStatus } from '@fapoms/shared';
+import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 
 @Injectable()
 export class PlanningAntiCorruptionLayer
@@ -66,15 +67,28 @@ export class PlanningAntiCorruptionLayer
   }
 
   async getAssayerCurrentWorkloads(assayerIds: string[]): Promise<Record<string, number>> {
-    const assignments = await this.assignmentRepository.find({
-      where: { isActive: true },
-    });
+    if (assayerIds.length === 0) return {};
+
+    /**
+     * Committed work only. This used to load every assignment with `isActive = true` and no
+     * status filter, then count them — and because terminal states deliberately keep isActive
+     * set, completed, rejected and cancelled work all counted as current load. The coverage
+     * planner hard-filters candidates on this number, so assayers were being dropped from
+     * plans for work they had already delivered.
+     */
+    const rows = await this.assignmentRepository
+      .createQueryBuilder('a')
+      .select('a.assayerId', 'assayerId')
+      .addSelect('COUNT(*)', 'count')
+      .where('a.assayerId IN (:...assayerIds)', { assayerIds })
+      .andWhere('a.status IN (:...statuses)', { statuses: COMMITTED_ASSIGNMENT_STATUSES })
+      .andWhere('a.isActive = true')
+      .groupBy('a.assayerId')
+      .getRawMany();
 
     const counts: Record<string, number> = {};
-    for (const a of assignments) {
-      if (assayerIds.includes(a.assayerId)) {
-        counts[a.assayerId] = (counts[a.assayerId] || 0) + 1;
-      }
+    for (const r of rows) {
+      counts[r.assayerId] = Number(r.count);
     }
     return counts;
   }

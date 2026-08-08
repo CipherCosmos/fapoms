@@ -27,7 +27,9 @@ describe('PlanningAntiCorruptionLayer', () => {
       { id: 'as-1', displayName: 'Vijay Shankar', status: 'ACTIVE', latitude: 19.0, longitude: 72.0, effectiveLatitude: 19.0, effectiveLongitude: 72.0, skills: ['Gold'] },
     ]),
   };
-  const mockAssignmentRepo = {};
+  const mockAssignmentRepo = {
+    createQueryBuilder: jest.fn(),
+  };
   const mockProjectBranchRepo = {
     find: jest.fn().mockResolvedValue([
       {
@@ -66,4 +68,44 @@ describe('PlanningAntiCorruptionLayer', () => {
     expect(assayers[0].displayName).toBe('Vijay Shankar');
     expect(assayers[0].location.latitude).toBe(19.0);
   });
+
+  /**
+   * The coverage planner hard-filters candidates on this number. It used to load every
+   * assignment with isActive = true and no status filter, and since terminal states keep
+   * isActive set, delivered, rejected and cancelled work counted as current load — one assayer
+   * read 15 of 16 while holding no committed work at all, and was one branch from being
+   * silently dropped from every plan.
+   */
+  describe('getAssayerCurrentWorkloads', () => {
+    it('counts only committed work, and asks the database to do the counting', async () => {
+      const qb: any = {
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        groupBy: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([{ assayerId: 'as-1', count: '2' }]),
+      };
+      mockAssignmentRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const counts = await acl.getAssayerCurrentWorkloads(['as-1', 'as-2']);
+
+      expect(counts).toEqual({ 'as-1': 2 });
+      // as-2 has no committed work and must be absent rather than inheriting someone's count.
+      expect(counts['as-2']).toBeUndefined();
+
+      const statusFilter = qb.andWhere.mock.calls.find((c: any[]) => String(c[0]).includes('status'));
+      expect(statusFilter).toBeDefined();
+      expect(statusFilter[1].statuses).toEqual(['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS']);
+      expect(statusFilter[1].statuses).not.toContain('COMPLETED');
+      expect(statusFilter[1].statuses).not.toContain('PENDING');
+    });
+
+    it('returns nothing without querying when asked about no assayers', async () => {
+      mockAssignmentRepo.createQueryBuilder.mockClear();
+      await expect(acl.getAssayerCurrentWorkloads([])).resolves.toEqual({});
+      expect(mockAssignmentRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+  });
+
 });

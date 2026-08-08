@@ -14,6 +14,7 @@ import { ConfigurationResolver } from '../platform/configuration/configuration.r
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
+import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 
 /**
  * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
@@ -219,7 +220,7 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       : await this.assignmentRepository.count({
           where: {
             assayerId: assayer.id,
-            status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
+            status: In(COMMITTED_ASSIGNMENT_STATUSES),
             isActive: true,
           },
         });
@@ -257,7 +258,7 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       : await this.assignmentRepository.count({
           where: {
             assayerId: assayer.id,
-            status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
+            status: In(COMMITTED_ASSIGNMENT_STATUSES),
             isActive: true,
           },
         });
@@ -357,10 +358,12 @@ export class WorkloadScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    // Committed work, matching every other capacity reader. Counting ACCEPTED alone treated an
+    // assayer who was checked in at a branch, or mid-audit, as completely free.
     const activeCount = await this.assignmentRepository.count({
       where: {
         assayerId: assayer.id,
-        status: In([AssignmentStatus.ACCEPTED]),
+        status: In(COMMITTED_ASSIGNMENT_STATUSES),
         isActive: true,
       },
     });
@@ -1018,7 +1021,7 @@ export class RecommendationEngine {
         .addSelect('COUNT(*)::int', 'count')
         .where('a.isActive = true')
         .andWhere('a.status IN (:...statuses)', {
-          statuses: [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS],
+          statuses: COMMITTED_ASSIGNMENT_STATUSES,
         })
         .andWhere('a.assayerId IN (:...ids)', { ids: assayers.map((a) => a.id) })
         .groupBy('a.assayerId')

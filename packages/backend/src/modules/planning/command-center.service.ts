@@ -15,6 +15,7 @@ import { DataSource } from 'typeorm';
 // exact same canonicalisation when matching a state-scoped holiday against a
 // branch's state — re-exported here so existing imports keep working.
 import { canonicalState } from '@fapoms/shared';
+import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 export { canonicalState };
 
 /** A working day an assayer can actually sell, in hours. */
@@ -95,7 +96,7 @@ export class CommandCenterService {
               COALESCE(cp.base_fee, 0) AS base_fee,
               (SELECT COUNT(*) FROM assignments asg
                 WHERE asg.assayer_id = a.id AND asg.is_active = true
-                  AND asg.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')) AS open_assignments
+                  AND asg.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})) AS open_assignments
          FROM assayers a
          LEFT JOIN LATERAL (
            SELECT base_fee FROM assayer_commercial_profiles
