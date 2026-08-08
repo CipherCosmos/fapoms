@@ -1,4 +1,4 @@
-import { Module, OnModuleInit, Logger } from '@nestjs/common';
+import { Module, forwardRef, OnModuleInit, Logger } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule, InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -26,7 +26,7 @@ import { AssignmentModule } from '../assignment/assignment.module';
     StorageModule,
     OcrModule,
     ValidationModule,
-    AssignmentModule,
+    forwardRef(() => AssignmentModule),
   ],
   controllers: [DocumentController],
   providers: [DocumentService, DocumentDispatchWorker, DocumentAccessTokenService, ChunkedUploadService],

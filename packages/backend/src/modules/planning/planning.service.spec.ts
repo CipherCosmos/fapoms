@@ -7,6 +7,7 @@ import { RoutingService } from '../geo/routing.provider';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AssayerService } from '../assayer/assayer.service';
+import { AuditService } from '../../core/audit/audit.service';
 
 describe('PlanningService', () => {
   let service: PlanningService;
@@ -47,6 +48,7 @@ describe('PlanningService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanningService,
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) } },
         {
           provide: BranchQueryService,
           useValue: mockBranchQueryService,

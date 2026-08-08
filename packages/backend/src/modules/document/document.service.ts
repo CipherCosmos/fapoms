@@ -93,6 +93,10 @@ export class DocumentService {
     if (doc.type !== DocumentType.AUDITED_RETURN_PDF) {
       throw new BadRequestException('Only returned audit packets are delegated to data entry.');
     }
+    // Captured before the transition below, or the audit row would record the new status
+    // as both the previous and the new one.
+    const previousStatus = doc.status;
+
     doc.assignedToUserId = assigneeId;
     doc.assignedAt = new Date();
     doc.assignedBy = actorId;
@@ -103,6 +107,28 @@ export class DocumentService {
     }
     doc.updatedBy = actorId;
     const saved = await this.documentRepository.save(doc);
+
+    /**
+     * Chain of custody.
+     *
+     * These five transitions move an audited return between hands — dispatched to an
+     * assayer, received back, delegated to a data-entry member, handed back, sent to an
+     * external OCR provider. None of them recorded anything, so the document's own status
+     * column was the only evidence of where a packet had been, and it holds one value: the
+     * latest. For a firm whose product is audit evidence, who held a packet and when is
+     * exactly the question that has to be answerable years later.
+     */
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'DOCUMENT_DELEGATED_TO_DATA_ENTRY',
+      entityType: 'DOCUMENT',
+      entityId: saved.id,
+      previousState: previousStatus,
+      newState: saved.status,
+      userId: actorId,
+      remarks: `Packet ${saved.fileName} delegated to user ${assigneeId}.`,
+      metadata: { assigneeId, projectBranchId: doc.projectBranchId ?? null },
+    }).catch(() => { /* custody record must not fail the delegation itself */ });
 
     // Opens the case (at PENDING) as soon as work starts, not only at hand-back,
     // so the member has somewhere to raise a clarification while still processing.
@@ -130,6 +156,16 @@ export class DocumentService {
     doc.dataEntryCompletedAt = new Date();
     doc.updatedBy = actorId;
     const saved = await this.documentRepository.save(doc);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'DOCUMENT_DATA_ENTRY_COMPLETED',
+      entityType: 'DOCUMENT',
+      entityId: saved.id,
+      userId: actorId,
+      remarks: `Packet ${saved.fileName} handed back by user ${doc.assignedToUserId}.`,
+      metadata: { assignedToUserId: doc.assignedToUserId, projectBranchId: doc.projectBranchId ?? null },
+    }).catch(() => { /* see the note in assignForDataEntry */ });
 
     if (doc.projectBranchId) {
       try {
@@ -720,6 +756,55 @@ export class DocumentService {
         lastDispatchedAt,
       },
     };
+  }
+
+  /**
+   * The same readiness verdict as `findDispatchedForAssayer`, for many branches at once.
+   *
+   * The mobile app previously showed a "Packet PDF" button on every checked-in assignment and
+   * only discovered whether anything existed *after* the assayer tapped it — so the common
+   * case (paperwork not dispatched yet) looked like a broken download rather than a state.
+   * Gating the button needs readiness up front for the whole list, and one query per
+   * assignment would be an N+1 on the app's main screen.
+   */
+  async readinessForBranches(
+    projectBranchIds: string[],
+  ): Promise<Record<string, { state: 'READY' | 'PREPARING' | 'NONE'; dispatchedCount: number; message: string }>> {
+    const out: Record<string, { state: 'READY' | 'PREPARING' | 'NONE'; dispatchedCount: number; message: string }> = {};
+    const ids = [...new Set(projectBranchIds.filter(Boolean))];
+    if (ids.length === 0) return out;
+
+    const rows = await this.documentRepository.find({
+      where: { projectBranchId: In(ids), type: In(DocumentService.ASSAYER_VISIBLE_TYPES) },
+      select: { id: true, projectBranchId: true, status: true },
+    });
+
+    for (const id of ids) {
+      const mine = rows.filter((d) => d.projectBranchId === id);
+      const dispatched = mine.filter((d) => DocumentService.DISPATCHED_STATUSES.includes(d.status));
+      const awaiting = mine.filter((d) => d.status === DocumentStatus.UPLOADED);
+
+      if (dispatched.length > 0) {
+        out[id] = {
+          state: 'READY',
+          dispatchedCount: dispatched.length,
+          message: `${dispatched.length} document${dispatched.length === 1 ? '' : 's'} ready to download.`,
+        };
+      } else if (awaiting.length > 0) {
+        out[id] = {
+          state: 'PREPARING',
+          dispatchedCount: 0,
+          message: 'Your paperwork is prepared and will be sent by operations shortly.',
+        };
+      } else {
+        out[id] = {
+          state: 'NONE',
+          dispatchedCount: 0,
+          message: 'No audit paperwork has been prepared for this branch yet.',
+        };
+      }
+    }
+    return out;
   }
 
   /**

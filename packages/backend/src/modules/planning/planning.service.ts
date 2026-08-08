@@ -15,6 +15,8 @@ import { AssayerService } from '../assayer/assayer.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { RoutingService } from '../geo/routing.provider';
 import { generateExplanation, ExplanationReason } from './explainability.mapper';
+import { AuditService } from '../../core/audit/audit.service';
+import { EventCategory } from '@fapoms/shared';
 
 export interface AssayerRecommendation {
   id: string;
@@ -72,6 +74,7 @@ export class PlanningService {
     private readonly assayerService: AssayerService,
     private readonly recommendationEngine: RecommendationEngine,
     private readonly routingService: RoutingService,
+    private readonly auditService: AuditService,
   ) {}
 
   async getRecommendedCandidates(branchId: string): Promise<AssayerRecommendation[]> {
@@ -136,13 +139,34 @@ export class PlanningService {
   }
 
   // Rule management methods
+  /**
+   * Business rules decide who is allowed to audit what — required certifications, capacity
+   * ceilings, client restrictions, no-repeat-auditor rotation. Changing one silently changes
+   * the independence controls the whole engagement rests on, so every change is recorded with
+   * the rule's before and after state.
+   *
+   * None of these three recorded anything. A rule could be relaxed, an assignment made under
+   * it, and the rule put back, leaving no evidence the control had ever been lifted.
+   */
   async createRule(dto: CreateBusinessRuleDto, userId: string): Promise<BusinessRuleEntity> {
     const rule = this.ruleRepository.create({
       ...dto,
       createdBy: userId,
       updatedBy: userId,
     });
-    return this.ruleRepository.save(rule);
+    const saved = await this.ruleRepository.save(rule);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BUSINESS_RULE_CREATED',
+      entityType: 'BUSINESS_RULE',
+      entityId: saved.id,
+      userId,
+      remarks: `Created rule "${saved.name ?? saved.id}".`,
+      metadata: { rule: saved },
+    }).catch(() => { /* the rule change stands even if its audit row fails */ });
+
+    return saved;
   }
 
   async updateRule(id: string, dto: UpdateBusinessRuleDto, userId: string): Promise<BusinessRuleEntity> {
@@ -150,9 +174,24 @@ export class PlanningService {
     if (!rule) {
       throw new NotFoundException(`Business rule ${id} not found.`);
     }
+    // Captured before the merge so the audit row shows what the rule actually was.
+    const before = { ...rule };
+
     Object.assign(rule, dto);
     rule.updatedBy = userId;
-    return this.ruleRepository.save(rule);
+    const saved = await this.ruleRepository.save(rule);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BUSINESS_RULE_UPDATED',
+      entityType: 'BUSINESS_RULE',
+      entityId: saved.id,
+      userId,
+      remarks: `Updated rule "${saved.name ?? saved.id}".`,
+      metadata: { before, after: saved, changedFields: Object.keys(dto ?? {}) },
+    }).catch(() => { /* see createRule */ });
+
+    return saved;
   }
 
   async deleteRule(id: string, userId: string): Promise<void> {
@@ -163,6 +202,16 @@ export class PlanningService {
     rule.isActive = false;
     rule.updatedBy = userId;
     await this.ruleRepository.save(rule);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BUSINESS_RULE_DELETED',
+      entityType: 'BUSINESS_RULE',
+      entityId: rule.id,
+      userId,
+      remarks: `Deactivated rule "${rule.name ?? rule.id}". It no longer constrains assignment.`,
+      metadata: { rule },
+    }).catch(() => { /* see createRule */ });
   }
 
   async getRules(scope?: string): Promise<BusinessRuleEntity[]> {

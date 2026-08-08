@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Inject, forwardRef, Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, In, Not, EntityManager } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -27,6 +27,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
+import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance } from '@fapoms/shared';
 
@@ -93,6 +94,8 @@ export class AssignmentService {
     private readonly routingService: RoutingService,
     private readonly validationService: ValidationService,
     private readonly feePolicyService: FeePolicyService,
+    @Inject(forwardRef(() => DocumentService))
+    private readonly documentService: DocumentService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -657,6 +660,9 @@ export class AssignmentService {
         return manager.save(assignment);
       });
     }
+    // Captured before the overwrite: a fee negotiation's audit value is the movement.
+    const previousFee = assignment.proposedFee;
+
     assignment.negotiationCount = currentCount + 1;
     assignment.proposedFee = counterFee;
     assignment.remarks = remarks ?? `Counter offer #${assignment.negotiationCount} proposed: ₹${counterFee}`;
@@ -670,6 +676,27 @@ export class AssignmentService {
       }
       return manager.save(assignment);
     });
+
+    /**
+     * A counter-offer changes what this audit will cost, so it is a money decision and needs
+     * a record. Nothing was written here: the assignment kept only the latest proposedFee, so
+     * a negotiation that moved 1,200 -> 1,800 -> 1,500 left one number and no history of how
+     * it got there or who moved it.
+     */
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSIGNMENT_COUNTER_OFFERED',
+      entityType: 'ASSIGNMENT',
+      entityId: saved.id,
+      userId,
+      remarks: `Counter offer #${saved.negotiationCount}: ₹${previousFee ?? 'unset'} → ₹${counterFee}.`,
+      metadata: {
+        previousFee: previousFee ?? null,
+        counterFee,
+        negotiationRound: saved.negotiationCount,
+        assayerId: saved.assayerId,
+      },
+    }).catch(() => { /* the counter-offer stands even if its audit row fails */ });
 
     try {
       this.eventPublisher.publish('assignment:counter-offered', {
@@ -925,7 +952,22 @@ export class AssignmentService {
     const queryRepo = this.dataSource.getRepository(ValidationQueryEntity);
     const caseRepo = this.dataSource.getRepository(ValidationCaseEntity);
 
+    /**
+     * Whether the branch's audit packet has actually been dispatched.
+     *
+     * Sent with the assignment so the field app can *gate* the download affordance instead of
+     * offering it unconditionally and reporting "not available yet" only after the assayer
+     * taps it. Batched into one query — this is the app's main list.
+     */
+    const readiness = await this.documentService.readinessForBranches(
+      assignments.map((a) => a.projectBranchId).filter(Boolean) as string[],
+    );
+
     for (const assignment of assignments) {
+      (assignment as any).documentReadiness =
+        readiness[assignment.projectBranchId as string] ??
+        { state: 'NONE', dispatchedCount: 0, message: 'No audit paperwork has been prepared for this branch yet.' };
+
       // Named distinctly from proposedFee/agreedFee (the actual negotiated total for this
       // assignment, immutable once set) — this is only the assayer's CURRENT going rate,
       // for reference, and must never be conflated with what was actually agreed historically.
@@ -966,6 +1008,11 @@ export class AssignmentService {
     return assignments;
   }
 
+  /**
+   * Comments are the operational narrative on an assignment — why a date moved, what a branch
+   * manager said. They were stored but never audited, so a comment could be added and the
+   * comment row later removed with nothing showing it had existed.
+   */
   async addComment(assignmentId: string, comment: string, userId: string, userName: string): Promise<AssignmentCommentEntity> {
     const assignment = await this.findOne(assignmentId);
     const commentRecord = this.dataSource.getRepository(AssignmentCommentEntity).create({
@@ -977,6 +1024,16 @@ export class AssignmentService {
       updatedBy: userId,
     });
     const saved = await this.dataSource.getRepository(AssignmentCommentEntity).save(commentRecord);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSIGNMENT_COMMENT_ADDED',
+      entityType: 'ASSIGNMENT',
+      entityId: assignmentId,
+      userId,
+      remarks: comment.length > 200 ? `${comment.slice(0, 200)}…` : comment,
+      metadata: { commentId: saved.id, authorName: userName },
+    }).catch(() => { /* the comment stands even if its audit row fails */ });
 
     try {
       this.eventPublisher.publish('comment:added', {

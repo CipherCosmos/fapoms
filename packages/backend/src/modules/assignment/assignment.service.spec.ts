@@ -21,6 +21,7 @@ import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
+import { DocumentService } from '../document/document.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -117,6 +118,14 @@ const mockNotificationService = {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AssignmentService,
+        {
+          provide: DocumentService,
+          useValue: {
+            findByProjectBranch: jest.fn().mockResolvedValue([]),
+            findDispatchedForAssayer: jest.fn().mockResolvedValue({ documents: [], readiness: {} }),
+            dispatchDocument: jest.fn(),
+          },
+        },
         {
           provide: FeePolicyService,
           useValue: {
