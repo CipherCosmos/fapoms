@@ -62,6 +62,19 @@ describe('RecommendationEngine', () => {
     findOne: jest.fn(),
     count: jest.fn(),
     find: jest.fn(),
+    /**
+     * recommend() now resolves committed workload for the whole candidate pool in one grouped
+     * count instead of one count per assayer. Returning an empty set here means "nobody has
+     * committed work", which is what these fixtures already assumed.
+     */
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    })),
   };
 
   const mockCommercialRepo = {
@@ -163,8 +176,13 @@ describe('RecommendationEngine', () => {
     }).compile();
 
     engine = module.get<RecommendationEngine>(RecommendationEngine);
-    mockAssignmentRepo.find.mockResolvedValue([]);
     jest.clearAllMocks();
+    // Defaults restored after clearAllMocks, which wipes implementations. `findOne` must
+    // resolve rather than return undefined: recommend() now awaits it as part of resolving
+    // the branch facts it shares across candidates.
+    mockAssignmentRepo.find.mockResolvedValue([]);
+    mockAssignmentRepo.findOne.mockResolvedValue(null);
+    mockAssignmentRepo.count.mockResolvedValue(0);
   });
 
   it('should filter out inactive assayers', async () => {

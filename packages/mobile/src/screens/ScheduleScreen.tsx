@@ -70,10 +70,19 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
         setDownloadMsg({ id: a.id, tone: 'warn', text: error || 'The audit packet is not available yet. You will be notified when it is sent.' });
         return;
       }
-      const doc =
-        data.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF') ||
-        data.find((d: any) => d.type === 'CUSTOMER_MASTER_DATA') ||
-        data[0];
+      /**
+       * Only the branch's own packet.
+       *
+       * The CUSTOMER_MASTER_DATA fallback that used to sit here asked for the client's master
+       * file, which covers *every* branch scheduled that day — the backend excludes it from
+       * `ASSAYER_VISIBLE_TYPES` for exactly that reason, so this was requesting other
+       * branches' customer records and only failing because the server refused.
+       */
+      const doc = data.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF');
+      if (!doc) {
+        setDownloadMsg({ id: a.id, tone: 'warn', text: 'The audit packet has not been sent for this branch yet.' });
+        return;
+      }
       const res = await MobileApiService.getDocumentDownloadUrl(doc.id);
       if (!res.ok) {
         setDownloadMsg({ id: a.id, tone: 'warn', text: res.message || 'This document is not available to download right now.' });
@@ -193,23 +202,41 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
                 {(a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS') && (
                   <View style={{ gap: t.space.sm }}>
+                    {/*
+                      One action, not two. "Scan audit sheets" and "Upload" used to sit side by
+                      side as if they were alternatives; scanning *is* how the return is
+                      produced, and the scanner already offers "Attach file" for the case where
+                      a PDF exists on the device. Two doors to one room made the assayer choose
+                      between them with nothing to go on.
+                    */}
                     <Button
-                      label="Scan audit sheets"
+                      label="Scan & submit audited return"
                       icon="scan"
                       onPress={() => (onOpenScanner ? onOpenScanner(a) : onOpenPdfDocs(a))}
                       full
                     />
-                    <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+
+                    {/*
+                      The packet download appears only once operations has actually dispatched
+                      it. `documentReadiness` comes down with the assignment, so this is decided
+                      before the button is drawn rather than discovered after a failed tap.
+                    */}
+                    {a.documentReadiness?.state === 'READY' && (
                       <Button
-                        label={downloadingId === a.id ? 'Opening…' : 'Packet PDF'}
+                        label={downloadingId === a.id ? 'Opening…' : 'Download audit packet'}
                         icon="download-outline"
                         variant="neutral"
                         disabled={downloadingId !== null}
                         onPress={() => handleDownloadPdf(a)}
-                        style={{ flex: 1 }}
+                        full
                       />
-                      <Button label="Upload" icon="cloud-upload-outline" variant="neutral" onPress={() => onOpenPdfDocs(a)} style={{ flex: 1 }} />
-                    </View>
+                    )}
+                    {a.documentReadiness?.state === 'PREPARING' && (
+                      <AppText variant="small" tone="muted">
+                        {a.documentReadiness.message}
+                      </AppText>
+                    )}
+
                     {downloadMsg && downloadMsg.id === a.id && (
                       <AppText variant="small" style={{ color: downloadMsg.tone === 'ok' ? t.colors.success : t.colors.warning }}>
                         {downloadMsg.text}

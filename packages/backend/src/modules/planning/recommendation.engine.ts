@@ -32,6 +32,25 @@ export interface PlanningContext {
   client: ClientEntity | null;
   scheduledDate: Date;
   weights: Record<string, number>;
+  /**
+   * Facts about the branch itself, resolved once per recommendation rather than once per
+   * candidate.
+   *
+   * Several filters and scorers issue their own query for every assayer in the pool, and some
+   * of those queries do not depend on the assayer at all — the no-repeat-auditor rule looks up
+   * *this branch's* most recent assignment identically for all of them. With a national
+   * workforce that is one wasted round trip per assayer, per recommendation, and it grows with
+   * headcount rather than with anything meaningful.
+   *
+   * Optional so a filter used outside recommend() still works standalone; each consumer falls
+   * back to querying when it is absent.
+   */
+  branchFacts?: {
+    /** Most recent assignment on this branch, or null if it has never been audited. */
+    lastAssignment: { assayerId: string; status: AssignmentStatus } | null;
+    /** Committed workload per assayer id, for every candidate in the pool. */
+    activeWorkloadByAssayer: Record<string, number>;
+  };
 }
 
 export interface CandidateFilter {
@@ -85,15 +104,19 @@ export class ConsecutiveBranchAuditFilter implements CandidateFilter {
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     if (!context.branch?.id) return true;
 
-    // Find the most recent assignment for this branch
-    const lastAssignment = await this.assignmentRepository.findOne({
-      where: {
-        projectBranch: { branchId: context.branch.id },
-        isActive: true,
-      },
-      order: { createdAt: 'DESC' },
-      relations: ['projectBranch'],
-    });
+    // The branch's last assignment is the same answer for every candidate, so recommend()
+    // resolves it once and passes it here. Falling back to the query keeps this filter usable
+    // on its own.
+    const lastAssignment = context.branchFacts
+      ? context.branchFacts.lastAssignment
+      : await this.assignmentRepository.findOne({
+          where: {
+            projectBranch: { branchId: context.branch.id },
+            isActive: true,
+          },
+          order: { createdAt: 'DESC' },
+          relations: ['projectBranch'],
+        });
 
     if (!lastAssignment) return true; // No prior audit recorded for this branch
 
@@ -151,13 +174,17 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
     // A CAPACITY rule compares against `activeWorkload`, which was never supplied here — so it
     // always read 0 and no capacity limit could ever trigger. Counting committed work makes
     // that rule type enforceable.
-    const activeWorkload = await this.assignmentRepository.count({
-      where: {
-        assayerId: assayer.id,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
-        isActive: true,
-      },
-    });
+    // One grouped count for the whole pool is resolved by recommend() and read from context;
+    // this per-candidate count is the standalone fallback.
+    const activeWorkload = context.branchFacts
+      ? (context.branchFacts.activeWorkloadByAssayer[assayer.id] ?? 0)
+      : await this.assignmentRepository.count({
+          where: {
+            assayerId: assayer.id,
+            status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
+            isActive: true,
+          },
+        });
 
     const results = await this.ruleEngine.evaluate({
       subject: {
@@ -185,13 +212,17 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
    */
   async explain(assayerEntity: AssayerEntity, context: PlanningContext): Promise<string[]> {
     const assayer = assayerEntity as AssayerWithWorkforceAttributes;
-    const activeWorkload = await this.assignmentRepository.count({
-      where: {
-        assayerId: assayer.id,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
-        isActive: true,
-      },
-    });
+    // One grouped count for the whole pool is resolved by recommend() and read from context;
+    // this per-candidate count is the standalone fallback.
+    const activeWorkload = context.branchFacts
+      ? (context.branchFacts.activeWorkloadByAssayer[assayer.id] ?? 0)
+      : await this.assignmentRepository.count({
+          where: {
+            assayerId: assayer.id,
+            status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]),
+            isActive: true,
+          },
+        });
     const results = await this.ruleEngine.evaluate({
       subject: {
         id: assayer.id,
@@ -868,6 +899,44 @@ export class RecommendationEngine {
       });
       await this.assayerService.hydrateAllWorkforceAttributes(assayers);
     }
+
+    /**
+     * Resolve, once, the two things several filters and scorers were each querying per
+     * candidate: this branch's most recent assignment (identical for everyone) and the
+     * committed workload of every assayer in the pool (one grouped count instead of N).
+     *
+     * With a national workforce the per-candidate versions made the cost of a single
+     * recommendation grow with total headcount rather than with anything about the branch.
+     */
+    const [lastAssignment, workloadRows] = await Promise.all([
+      this.assignmentRepository.findOne({
+        where: { projectBranch: { branchId: branch.id }, isActive: true },
+        order: { createdAt: 'DESC' },
+        relations: ['projectBranch'],
+      }).catch(() => null),
+      this.assignmentRepository
+        .createQueryBuilder('a')
+        .select('a.assayerId', 'assayerId')
+        .addSelect('COUNT(*)::int', 'count')
+        .where('a.isActive = true')
+        .andWhere('a.status IN (:...statuses)', {
+          statuses: [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS],
+        })
+        .andWhere('a.assayerId IN (:...ids)', { ids: assayers.map((a) => a.id) })
+        .groupBy('a.assayerId')
+        .getRawMany()
+        .catch(() => []),
+    ]);
+
+    context.branchFacts = {
+      lastAssignment: lastAssignment
+        ? { assayerId: lastAssignment.assayerId, status: lastAssignment.status }
+        : null,
+      activeWorkloadByAssayer: (workloadRows as any[]).reduce<Record<string, number>>((acc, r) => {
+        acc[r.assayerId] = Number(r.count) || 0;
+        return acc;
+      }, {}),
+    };
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this
     // branch, so they can still be surfaced as a candidate (e.g. as their own backup reference,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { connectMobileSocket } from '../services/socket';
 import { DocumentScanner, readAsBase64 } from './DocumentScanner';
+import { QueryThread } from './QueryThread';
 import { useTheme } from '../theme/ThemeProvider';
 import { useFeedback } from './ui/Feedback';
 import { AppText, Icon, IconButton, Tappable } from './ui/primitives';
@@ -36,6 +37,8 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   const feedback = useFeedback();
   const [queries, setQueries] = useState<any[]>([]);
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
+  /** Bumped by the socket listeners so an open thread reloads when the desk replies. */
+  const [threadVersion, setThreadVersion] = useState(0);
   const [responseText, setResponseText] = useState('');
   const [attachments, setAttachments] = useState<{ url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -45,7 +48,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
     if (visible && assignment) {
       loadQueries();
       const socket = connectMobileSocket();
-      const handleQueryUpdate = () => loadQueries();
+      const handleQueryUpdate = () => {
+        loadQueries();
+        setThreadVersion((v) => v + 1);
+      };
       socket?.on('query:raised', handleQueryUpdate);
       socket?.on('query:responded', handleQueryUpdate);
       return () => {
@@ -100,49 +106,59 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   const [replyToMessage, setReplyToMessage] = useState<{ sender: string; text: string } | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
 
-  const handlePickAttachment = async () => {
+  type Attachment = { url: string; fileName: string; fileType: string };
+
+  /**
+   * Picks and uploads files, returning what was stored so the composer can stage them.
+   *
+   * The web branch previously did its work inside an `onchange` callback, so the values could
+   * never reach the caller — on web the picked file uploaded and then vanished. Wrapping the
+   * DOM input in a promise is what lets both platforms return the same thing.
+   */
+  const handlePickAttachment = useCallback(async (): Promise<Attachment[]> => {
     try {
       const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
 
-      // Web browser DOM fallback for file picking
       if (Platform.OS === 'web' && g.document) {
-        const input = g.document.createElement('input');
-        input.type = 'file';
-        input.multiple = true;
-        input.onchange = async (e: any) => {
-          const files = Array.from(e.target?.files || []);
-          for (const file of files as any[]) {
-            const uploadRes = await MobileApiService.uploadChatAttachment(file);
-            if (uploadRes && uploadRes.length > 0) {
-              setAttachments((prev) => [...prev, ...uploadRes]);
-            } else {
-              feedback.error('Upload failed', `${file.name} was not attached. Please retry.`);
+        return await new Promise<Attachment[]>((resolve) => {
+          const input = g.document.createElement('input');
+          input.type = 'file';
+          input.multiple = true;
+          // Resolves empty if the picker is dismissed, so the caller never hangs.
+          input.oncancel = () => resolve([]);
+          input.onchange = async (e: any) => {
+            const files = Array.from(e.target?.files || []) as any[];
+            const out: Attachment[] = [];
+            for (const file of files) {
+              const uploaded = await MobileApiService.uploadChatAttachment(file);
+              if (uploaded && uploaded.length > 0) out.push(...uploaded);
+              else feedback.error('Upload failed', `${file.name} was not attached.`);
             }
-          }
-        };
-        input.click();
-        return;
+            resolve(out);
+          };
+          input.click();
+        });
       }
 
-      // Native mobile Expo DocumentPicker
       const result = await DocumentPicker.getDocumentAsync({
         type: ['*/*'],
         copyToCacheDirectory: true,
+        multiple: true,
       });
+      if (result.canceled || !result.assets?.length) return [];
 
-      if (!result.canceled && result.assets?.[0]) {
-        const asset = result.assets[0];
-        const uploadRes = await MobileApiService.uploadChatAttachment(asset);
-        if (uploadRes && uploadRes.length > 0) {
-          setAttachments((prev) => [...prev, ...uploadRes]);
-        } else {
-          feedback.error('Upload failed', `${asset.name} was not attached. Please retry.`);
-        }
+      const out: Attachment[] = [];
+      for (const asset of result.assets) {
+        const uploaded = await MobileApiService.uploadChatAttachment(asset);
+        if (uploaded && uploaded.length > 0) out.push(...uploaded);
+        else feedback.error('Upload failed', `${asset.name} was not attached.`);
       }
+      return out;
     } catch (err: any) {
       feedback.error('Attachment failed', err?.message || 'The file could not be selected.');
+      return [];
     }
-  };
+  }, [feedback]);
 
   const removePendingAttachment = (index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
@@ -182,6 +198,8 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
     }
   };
 
+  const activeQuery = queries.find((q: any) => q.id === activeQueryId) ?? null;
+
   if (!visible || !assignment) return null;
 
   return (
@@ -215,215 +233,24 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           </View>
         </View>
 
-        <ScrollView
-          ref={scrollViewRef}
-          style={styles.chatArea}
-          contentContainerStyle={styles.chatContent}
-          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
-        >
-          <View style={styles.encryptedBanner}>
-            <Icon name="lock-closed" size={10} color="#ffe596" />
-            <Text style={styles.encryptedText}>
-              Messages & files are end-to-end encrypted within FAPOMS. No third-party access.
-            </Text>
-          </View>
-
-          {/* Queries / Messages stream across ALL queries for this audit */}
-          {queries.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Icon name="chatbubble" size={36} color="#8696a0" />
-              <Text style={styles.emptyStateText}>No active queries for this branch.</Text>
-            </View>
-          ) : (
-            <View style={{ gap: 12 }}>
-              {/* Sort all queries chronologically (oldest first, newest at bottom) */}
-              {[...queries]
-                .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-                .map((q: any) => (
-                  <View key={q.id} style={{ gap: 8 }}>
-                    {/* Data Entry Query (Left Bubble - Incoming) */}
-                      {/* Incoming Query Bubble — hide placeholder when attachments exist */}
-                      {q.queryText && (q.queryText !== 'Sent attachment(s)' || (!q.attachments || q.attachments.length === 0)) && (
-                        <TouchableOpacity
-                          activeOpacity={0.8}
-                          onPress={() => {
-                            setActiveQueryId(q.id);
-                            setReplyToMessage({ sender: 'Data Entry', text: q.queryText });
-                          }}
-                          style={styles.incomingBubble}
-                        >
-                          <Text style={styles.senderName}>Data Entry Team</Text>
-                          <Text style={styles.messageText}>{q.queryText}</Text>
-                          <View style={styles.timeRow}>
-                            <Text style={styles.messageTime}>
-                              {new Date(q.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </Text>
-                            <Text style={styles.tapToReplyHint}> • Tap to reply</Text>
-                          </View>
-                        </TouchableOpacity>
-                      )}
-
-                    {/* Assayer Responses (Right Bubble - Outgoing) */}
-                      {q.assayerResponse ? (
-                      q.assayerResponse.split('\n').map((line: string, idx: number) => {
-                        const cleanLine = line.replace(/^\[.*?\]\s*/, '');
-                        const isQuote = cleanLine.startsWith('> ↩️ Replying to');
-                        if (cleanLine === 'Sent attachment(s)' && q.attachments && q.attachments.length > 0) return null;
-                        return (
-                          <TouchableOpacity
-                            key={idx}
-                            activeOpacity={0.8}
-                            onPress={() => {
-                              setActiveQueryId(q.id);
-                              setReplyToMessage({ sender: 'Assayer', text: cleanLine });
-                            }}
-                            style={styles.outgoingBubble}
-                          >
-                            {isQuote ? (
-                              <View style={styles.quoteBox}>
-                                <Text style={styles.quoteText}>{cleanLine.split('\n')[0]}</Text>
-                              </View>
-                            ) : null}
-                            <Text style={styles.outgoingMessageText}>
-                              {isQuote ? cleanLine.split('\n').slice(1).join('\n') : cleanLine}
-                            </Text>
-                            <View style={styles.outgoingTimeRow}>
-                              <Text style={styles.outgoingMessageTime}>
-                                {q.respondedAt
-                                  ? new Date(q.respondedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                                  : 'Just now'}
-                              </Text>
-                              <Icon name="checkmark-done" size={10} color="#53bdeb" />
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })
-                    ) : null}
-
-                    {/* Attachments for this Query */}
-                    {q.attachments && q.attachments.length > 0 && (
-                      q.attachments.flat(Infinity).filter((att: any) => att && (att.url || typeof att === 'string')).map((att: any, idx: number) => {
-                        const rawUrl = typeof att === 'string' ? att : att.url;
-                        const fileName = att.fileName || `Attachment #${idx + 1}`;
-                        const fileType = att.fileType || '';
-                        const isOutgoing = att.uploadedBy === 'ASSAYER' || !att.uploadedBy;
-                        
-                        // Resolve the full URL with session auth token appended
-                        const fullUrl = MobileApiService.resolveAttachmentUrl(rawUrl);
-
-                        const handleDownloadFile = () => {
-                          try {
-                            if (!fullUrl) return;
-                            const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
-                            if (g.window) {
-                              const link = g.document.createElement('a');
-                              link.href = fullUrl;
-                              link.download = fileName;
-                              link.target = '_blank';
-                              g.document.body.appendChild(link);
-                              link.click();
-                              setTimeout(() => g.document.body.removeChild(link), 500);
-                            }
-                          } catch (err: any) {
-                            feedback.error('Download failed', err?.message || 'The file could not be downloaded.');
-                          }
-                        };
-
-                        return (
-                          <TouchableOpacity
-                            key={idx}
-                            activeOpacity={0.7}
-                            onPress={handleDownloadFile}
-                            style={isOutgoing ? styles.outgoingBubble : styles.incomingBubble}
-                          >
-                            {att.fileType?.startsWith('image/') ? (
-                              <Image source={{ uri: fullUrl }} style={styles.imagePreview} />
-                            ) : (
-                              <View style={styles.fileDocRow}>
-                                <Icon name="document-text" size={24} color="#e9edef" />
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.fileName}>{att.fileName || `Document #${idx + 1}`}</Text>
-                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                                    <Icon name="download" size={10} color="#34d399" />
-                                    <Text style={{ fontSize: 10, color: '#34d399', fontWeight: '700' }}>Tap to Save / Download</Text>
-                                  </View>
-                                </View>
-                              </View>
-                            )}
-                            <View style={isOutgoing ? styles.outgoingTimeRow : styles.timeRow}>
-                              <Text style={isOutgoing ? styles.outgoingMessageTime : styles.messageTime}>
-                                {new Date(att.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </Text>
-                              {isOutgoing && <Icon name="checkmark-done" size={10} color="#53bdeb" />}
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })
-                    )}
-                  </View>
-                ))}
-            </View>
-          )}
-        </ScrollView>
-
-        {/* Tagged Reply Banner */}
-        {replyToMessage && (
-          <View style={styles.replyBanner}>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Icon name="return-down-back" size={12} color="#00a884" />
-                <Text style={styles.replySender}>Replying to {replyToMessage.sender}</Text>
-              </View>
-              <Text style={styles.replyPreview} numberOfLines={1}>{replyToMessage.text}</Text>
-            </View>
-            <TouchableOpacity onPress={() => setReplyToMessage(null)}>
-              <Icon name="close" size={16} color="#ff6b6b" />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Pending Attachment Preview Bar */}
-        {attachments.length > 0 && (
-          <View style={styles.pendingBar}>
-            {attachments.map((att, idx) => (
-              <View key={idx} style={styles.pendingTag}>
-                <Icon name="attach" size={11} color="#e9edef" />
-                <Text style={styles.pendingTagText}>{att.fileName}</Text>
-                <TouchableOpacity onPress={() => removePendingAttachment(idx)}>
-                  <Icon name="close" size={11} color="#ff6b6b" />
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Bottom Input Area */}
-        {activeQueryId && (
-          <View style={styles.inputBar}>
-            <TouchableOpacity onPress={handlePickAttachment} style={styles.iconBtn}>
-              <Icon name="attach" size={22} color="#8696a0" />
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={() => setIsCameraActive(true)} style={styles.iconBtn}>
-              <Icon name="camera" size={22} color="#8696a0" />
-            </TouchableOpacity>
-
-            <TextInput
-              style={styles.textInput}
-              placeholder="Type a message..."
-              placeholderTextColor="#8696a0"
-              value={responseText}
-              onChangeText={setResponseText}
-              multiline
-            />
-
-            <TouchableOpacity
-              style={[styles.sendCircleBtn, isSubmitting && { opacity: 0.5 }]}
-              onPress={handleSendResponse}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? <Text style={styles.sendIcon}>...</Text> : <Icon name="send" size={16} color="#fff" />}
-            </TouchableOpacity>
+        {/*
+          The thread itself. This replaced ~200 lines that rendered `queryText` and a single
+          `assayerResponse` as if they were a conversation, plus a composer that could only ever
+          POST one reply. The desk was already using the real message thread, so anything they
+          sent after the assayer's first answer never reached the phone.
+        */}
+        {activeQuery ? (
+          <QueryThread
+            query={activeQuery}
+            refreshKey={threadVersion}
+            onAttach={handlePickAttachment}
+            onScan={() => setIsCameraActive(true)}
+          />
+        ) : (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: t.space.xl }}>
+            <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>
+              No clarifications have been raised for this branch.
+            </AppText>
           </View>
         )}
 

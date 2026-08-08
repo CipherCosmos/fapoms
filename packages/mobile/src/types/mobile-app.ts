@@ -126,6 +126,14 @@ export interface AssayerAssignment {
   instructions?: string;
   negotiationCount?: number;
   remarks?: string;
+  /**
+   * Whether this branch's audit packet has actually been dispatched, from the server.
+   *
+   * The app used to offer a "Packet PDF" button on every checked-in assignment and only find
+   * out whether anything existed after the assayer tapped it — so the ordinary case (ops has
+   * not sent the paperwork yet) presented as a failed download.
+   */
+  documentReadiness?: { state: 'READY' | 'PREPARING' | 'NONE'; dispatchedCount: number; message: string };
   customers: CustomerRecord[];
   queries: ValidationQuery[];
   expenses: AssayerExpense[];
@@ -155,4 +163,18 @@ export interface AssayerProfile {
   queryResolutionRatePercent: number;
   totalEarnings: number;
   pendingEarnings: number;
+}
+
+/** One message in a clarification thread (`/validation-queries/:id/messages`). */
+export interface QueryMessage {
+  id: string;
+  authorType: 'STAFF' | 'ASSAYER';
+  authorId: string;
+  authorName: string | null;
+  body: string | null;
+  attachments: { url: string; fileName: string; fileType: string }[];
+  /** Set when the desk anchored the question to a region of the audit PDF. */
+  pageNumber: number | null;
+  region: { x: number; y: number; w: number; h: number } | null;
+  createdAt: string;
 }

@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
 import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
 import { readToken, writeToken, deleteToken, ALL_TOKEN_KEYS } from './token-store';
-import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
+import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement, QueryMessage } from '../types/mobile-app';
 import {
   getDefaultServerUrl,
   loadStoredServerUrl,
@@ -727,6 +727,54 @@ export class MobileApiService {
   }
 
   /**
+   * The full clarification thread for a query.
+   *
+   * The app used to render only `queryText` and `assayerResponse` — two frozen fields — and
+   * POST a single `respond`. The desk, meanwhile, was using this endpoint and holding a real
+   * back-and-forth conversation the assayer could not see: any follow-up after the first reply
+   * was invisible on the phone. Both sides now read and write the same thread.
+   */
+  static async getQueryMessages(queryId: string): Promise<QueryMessage[]> {
+    try {
+      const res = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/messages`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) return [];
+      return (data.data || []).map((m: any) => ({
+        id: m.id,
+        authorType: m.authorType === 'ASSAYER' ? 'ASSAYER' : 'STAFF',
+        authorId: m.authorId,
+        authorName: m.authorName ?? null,
+        body: m.body ?? null,
+        attachments: Array.isArray(m.attachments) ? m.attachments : [],
+        pageNumber: m.pageNumber ?? null,
+        region: m.region ?? null,
+        createdAt: m.createdAt,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Appends a message. The server moves the query's status to match who spoke. */
+  static async postQueryMessage(
+    queryId: string,
+    body: string,
+    attachments: { url: string; fileName: string; fileType: string }[] = [],
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ body: body || undefined, attachments }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success) return { success: true };
+      return { success: false, error: data?.message || 'The message could not be sent.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error sending the message.' };
+    }
+  }
+
+  /**
    * The signed-in assayer's own expense claims.
    *
    * `submitExpense` above has always existed, but nothing ever read the claims back — an
@@ -852,6 +900,7 @@ export class MobileApiService {
             }
             return undefined;
           })(),
+          documentReadiness: item.documentReadiness ?? { state: 'NONE', dispatchedCount: 0, message: '' },
           negotiationCount: item.negotiationCount != null ? Number(item.negotiationCount) : 0,
           remarks: item.remarks || '',
           customers: item.customers || [],
