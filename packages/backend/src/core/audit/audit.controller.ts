@@ -1,6 +1,7 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
+import { UnifiedAuditService } from './unified-audit.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../../modules/auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
@@ -20,7 +21,37 @@ import { SystemRole } from '@fapoms/shared';
 @RequirePermissions('audit_log:view:platform')
 @Controller('audit-log')
 export class AuditLogController {
-  constructor(private readonly auditService: AuditService) {}
+  constructor(
+    private readonly auditService: AuditService,
+    private readonly unifiedAuditService: UnifiedAuditService,
+  ) {}
+
+  /**
+   * Every recorded event for one record, from every trail this system writes to.
+   *
+   * `/entity` below reads `audit_events` alone, which is three of four trails short — an
+   * auditor got a chronological, authoritative-looking answer that silently omitted workflow
+   * transitions, assayer activity and every billing movement. This is the endpoint to use
+   * when the question is "what happened to this", and `countsBySource` states plainly where
+   * the evidence came from.
+   */
+  @Get('trail')
+  @ApiOperation({ summary: 'Unified audit trail for one entity, merged across every history table' })
+  async getUnifiedTrail(
+    @Query('entityId') entityId: string,
+    @Query('entityType') entityType?: string,
+    @Query('limit') limit = 200,
+  ) {
+    if (!entityId) {
+      throw new BadRequestException('entityId is required.');
+    }
+    const { entries, countsBySource } = await this.unifiedAuditService.getTrail(
+      entityId,
+      entityType,
+      Math.min(Number(limit) || 200, 500),
+    );
+    return { success: true, data: entries, meta: { total: entries.length, countsBySource } };
+  }
 
   @Get('entity')
   @ApiOperation({ summary: 'Audit history for one entity, e.g. entityType=USER&entityId=:id' })

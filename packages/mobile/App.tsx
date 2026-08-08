@@ -254,6 +254,18 @@ function AppMain() {
     setStatement(stmt);
   }, [user?.id]);
 
+  /**
+   * Re-reads everything a server-side mutation can move.
+   *
+   * Uploading an audited return completes the assignment, may create a payable, and can clear
+   * a query — three different screens go stale at once. Pulling them together keeps Home,
+   * Schedule and Earnings from disagreeing about what has already been filed.
+   */
+  const refreshAfterServerChange = useCallback(async () => {
+    await Promise.all([loadAssignments(), loadAssayerProfile(), loadExpenseSummary()]);
+  }, [loadAssignments, loadAssayerProfile, loadExpenseSummary]);
+
+
   useEffect(() => {
     if (isAuthenticated) {
       registerForPushNotificationsAsync();
@@ -461,6 +473,7 @@ function AppMain() {
         if (res?.success) {
           setStagedPdf({ name, base64 });
           feedback.success('Upload Complete', `${name} was uploaded successfully.`);
+          void refreshAfterServerChange();
         } else {
           feedback.error('Upload Failed', res?.error || 'The document could not be uploaded.');
         }
@@ -740,6 +753,10 @@ function AppMain() {
 
               if (res?.success) {
                 feedback.success('Upload complete', `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} uploaded as ${doc.fileName}.`);
+                // Filing the return moves the assignment on server-side (see
+                // completeAssignmentForReturn). Without this the app kept showing the job as
+                // still needing a scan, and the assayer could upload the same packet twice.
+                await refreshAfterServerChange();
               } else {
                 feedback.error(
                   'Upload failed',
@@ -771,6 +788,8 @@ function AppMain() {
                 failed.push(pg.pageNumber);
               }
             }
+
+            await refreshAfterServerChange();
 
             if (failed.length === 0) {
               feedback.success('Upload complete', `All ${total} page${total === 1 ? '' : 's'} were uploaded.`);

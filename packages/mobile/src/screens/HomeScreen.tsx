@@ -201,6 +201,7 @@ const CurrentJobCard: React.FC<{
   const t = useTheme();
   const when = new Date(assignment.scheduledDate);
   const checkedIn = assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS';
+  const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
 
   return (
     <Card level={2} style={{ gap: t.space.lg }}>
@@ -212,10 +213,16 @@ const CurrentJobCard: React.FC<{
             dot
           />
           <AppText variant="h2">{assignment.branchName}</AppText>
-          <AppText variant="small" tone="muted">
-            {assignment.bankName}
-            {assignment.branchCode ? ` · ${assignment.branchCode}` : ''}
-          </AppText>
+          {/*
+            Only the parts that exist get joined. Interpolating both unconditionally rendered a
+            stranded "· 203" whenever the branch had no bank name on it — which is the case for
+            real branches in this data, so the separator was visible on the very first card.
+          */}
+          {subtitle ? (
+            <AppText variant="small" tone="muted">
+              {subtitle}
+            </AppText>
+          ) : null}
         </View>
       </View>
 
