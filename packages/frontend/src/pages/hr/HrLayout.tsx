@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
-  Users, UserPlus, ShieldCheck, MapPin, Activity, ClipboardList, TrendingDown, Wallet, Award,
+  Users, UserPlus, ShieldCheck, MapPin, Activity, ClipboardList, TrendingDown, Wallet, Award, FileCheck,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
@@ -38,6 +38,7 @@ const PAGES = [
   { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length },
   { to: '/hr/compliance', label: 'Compliance', icon: ShieldCheck, badge: (d: HrWorkforceOverview) => d.compliance.incompleteCount },
   { to: '/hr/capability', label: 'Capability', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired },
+  { to: '/hr/documents', label: 'Documents', icon: FileCheck, badge: (d: HrWorkforceOverview) => d.compliance.roster - d.compliance.governmentDocuments.withGovDoc },
   { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null },
   { to: '/hr/deployment', label: 'Deployment', icon: MapPin, badge: () => null },
   { to: '/hr/utilisation', label: 'Utilisation', icon: TrendingDown, badge: () => null },
@@ -48,7 +49,7 @@ const PAGES = [
 const LEGACY_TABS: Record<string, string> = {
   overview: '/hr', roster: '/hr/roster', onboarding: '/hr/onboarding', records: '/hr/records',
   compliance: '/hr/compliance', capability: '/hr/capability', deployment: '/hr/deployment',
-  utilisation: '/hr/utilisation', activity: '/hr/activity',
+  documents: '/hr/documents', utilisation: '/hr/utilisation', activity: '/hr/activity',
 };
 
 export const HrLayout: React.FC = () => {

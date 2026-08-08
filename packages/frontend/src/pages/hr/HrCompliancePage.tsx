@@ -1,5 +1,5 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { card, label, Stat, Empty, Table, OpenLink, ExpiryChip, fmtDate } from './hr-ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
@@ -34,7 +34,7 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
             <strong>No identity document has been recorded for anyone on the roster.</strong>
             <div style={{ color: 'var(--text-muted)', marginTop: '3px' }}>
               Field staff visit client bank branches; identity verification is normally a precondition of that access.
-              Upload documents from each assayer's profile to start the verification trail.
+              {' '}<Link to="/hr/documents" style={{ color: 'var(--accent)', fontWeight: 600 }}>Open the document register</Link> to record and verify them.
             </div>
           </div>
         </div>
