@@ -318,6 +318,9 @@ export class DayPlannerService {
     const { scheduledDate, dateStr, dateAdjustment } = await this.resolveWorkingDate(
       targetDate ? new Date(targetDate) : new Date(),
       unassigned,
+      // Strictest calendar across the engagements in scope: a day only works if it works for
+      // every client whose branches the plan covers.
+      clients.map((c) => c.id),
     );
 
     // A plan spanning several engagements is labelled with all of them, so an operator is
@@ -487,13 +490,14 @@ export class DayPlannerService {
   private async resolveWorkingDate(
     requested: Date,
     branches: ProjectBranchEntity[],
+    clientIds: string[] = [],
   ): Promise<{ scheduledDate: Date; dateStr: string; dateAdjustment: ProjectDayPlan['dateAdjustment'] }> {
     const states = [...new Set(branches.map((pb) => pb.branch?.state).filter(Boolean))] as string[];
     const requestedStr = requested.toISOString().split('T')[0];
 
     const candidate = new Date(requested);
     for (let attempt = 0; attempt <= MAX_DATE_LOOKAHEAD_DAYS; attempt++) {
-      const blocker = await this.describeDateBlocker(candidate, states);
+      const blocker = await this.describeDateBlocker(candidate, states, clientIds);
       if (!blocker) {
         const dateStr = candidate.toISOString().split('T')[0];
         return {
@@ -501,7 +505,7 @@ export class DayPlannerService {
           dateStr,
           dateAdjustment: dateStr === requestedStr
             ? null
-            : { requestedDate: requestedStr, reason: (await this.describeDateBlocker(requested, states)) || 'Not a working day' },
+            : { requestedDate: requestedStr, reason: (await this.describeDateBlocker(requested, states, clientIds)) || 'Not a working day' },
         };
       }
       candidate.setDate(candidate.getDate() + 1);
@@ -519,7 +523,7 @@ export class DayPlannerService {
   }
 
   /** Returns why a date can't be worked, or null when it can. */
-  private async describeDateBlocker(date: Date, states: string[]): Promise<string | null> {
+  private async describeDateBlocker(date: Date, states: string[], clientIds: string[] = []): Promise<string | null> {
     /**
      * Weekends are decided by the holiday calendar, not here.
      *
@@ -532,12 +536,15 @@ export class DayPlannerService {
     const day = date.getDay();
     if (day === 0) return 'Falls on a Sunday';
 
-    // With no branch state to scope by, still apply the national rule.
-    for (const state of states.length > 0 ? states : ['']) {
-      const result = await this.constraintEvaluator.checkHoliday(state, date);
-      if (!result.passed) {
-        if (day === 6) return 'Falls on a bank-holiday Saturday (2nd or 4th)';
-        return result.reason || `Public holiday in ${state}`;
+    // Every client in scope must be able to work the day, and with no branch state to scope by
+    // the national rule still applies.
+    for (const clientId of clientIds.length > 0 ? clientIds : [undefined]) {
+      for (const state of states.length > 0 ? states : ['']) {
+        const result = await this.constraintEvaluator.checkHoliday(state, date, clientId);
+        if (!result.passed) {
+          if (day === 6) return 'Not a working Saturday for this client';
+          return result.reason || `Public holiday in ${state}`;
+        }
       }
     }
     return null;

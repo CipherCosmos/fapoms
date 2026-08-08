@@ -480,6 +480,7 @@ export class AssignmentService {
         assayerId: assignment.assayerId,
         project: projectForDate,
         branchState: assignment.projectBranch?.branch?.state || assignment.assessment?.branch?.state || null,
+        clientId: projectForDate?.clientId ?? null,
         scheduledDate: scheduledDateObj,
         excludeAssignmentId: assignment.id,
       });
@@ -872,6 +873,7 @@ export class AssignmentService {
       assayerId: assignment.assayerId,
       project,
       branchState: assignment.projectBranch?.branch?.state ?? null,
+      clientId: project?.clientId ?? null,
       scheduledDate: scheduledDateObj,
       excludeAssignmentId: assignment.id,
     });

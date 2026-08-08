@@ -52,13 +52,15 @@ export class ConstraintEvaluator {
     assayerId?: string | null;
     project?: ProjectEntity | null;
     branchState?: string | null;
+    /** The client whose configured working days apply to this date. */
+    clientId?: string | null;
     scheduledDate: Date;
     excludeAssignmentId?: string;
   }): Promise<ConstraintResult> {
     const { assayer, project, scheduledDate, excludeAssignmentId } = params;
     const assayerId = params.assayerId ?? assayer?.id ?? null;
 
-    const holiday = await this.checkHoliday(params.branchState || '', scheduledDate);
+    const holiday = await this.checkHoliday(params.branchState || '', scheduledDate, params.clientId ?? undefined);
     if (!holiday.passed) return holiday;
 
     if (assayer) {
@@ -161,8 +163,10 @@ export class ConstraintEvaluator {
   /**
    * Evaluates if the scheduled date is a regional holiday for the branch.
    */
-  async checkHoliday(state: string, scheduledDate: Date): Promise<ConstraintResult> {
-    const isHoliday = await this.holidayService.isHoliday(scheduledDate, state);
+  async checkHoliday(state: string, scheduledDate: Date, clientId?: string): Promise<ConstraintResult> {
+    // clientId matters: the client's own configured working days decide whether the date is
+    // workable at all, before any holiday row is consulted.
+    const isHoliday = await this.holidayService.isHoliday(scheduledDate, state, clientId);
     if (isHoliday) {
       return {
         passed: false,

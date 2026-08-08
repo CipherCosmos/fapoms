@@ -13,6 +13,7 @@ import { HolidayEntity } from './holiday.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, canonicalState } from '@fapoms/shared';
+import { ClientConfigurationEntity } from '../client/client-configuration.entity';
 
 export interface CreateHolidayDto {
   name: string;
@@ -27,6 +28,8 @@ export class HolidayService {
   constructor(
     @InjectRepository(HolidayEntity)
     private readonly holidayRepository: Repository<HolidayEntity>,
+    @InjectRepository(ClientConfigurationEntity)
+    private readonly clientConfigRepository: Repository<ClientConfigurationEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
   ) {}
@@ -129,24 +132,50 @@ export class HolidayService {
     return { holidays, total };
   }
 
+  private readonly workingDaysCache = new Map<string, number[] | null>();
+
+  /** The client's configured working days (0 = Sunday), or null when they have set none. */
+  private async workingDaysFor(clientId: string): Promise<number[] | null> {
+    if (this.workingDaysCache.has(clientId)) return this.workingDaysCache.get(clientId) ?? null;
+    const config = await this.clientConfigRepository
+      .findOne({ where: { clientId } })
+      .catch(() => null);
+    const days = Array.isArray(config?.workingDays) && config!.workingDays.length > 0
+      ? config!.workingDays.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+      : null;
+    this.workingDaysCache.set(clientId, days);
+    return days;
+  }
+
   /**
-   * Helper: checks if a given date is a holiday in the specified state and client.
-   * Enforces standard rules:
-   * 1. Every Sunday (day 0) is a holiday.
-   * 2. 2nd & 4th Saturday of every month (bank holiday rule) is a holiday.
-   * 3. Specific registered holidays in database.
+   * Whether a date cannot be worked, for a given state and client.
+   *
+   * Rules, in order:
+   * 1. The client's own configured working days, when they have set any. This is stored on
+   *    client_configurations.working_days and settable through the client API, but until now
+   *    nothing read it — a client who worked Saturdays, or who did not work Mondays, was
+   *    scheduled against the platform default regardless of what they had configured.
+   * 2. Every Sunday, and the 2nd and 4th Saturday, per the Indian bank calendar. These apply
+   *    when the client has expressed no preference of their own.
+   * 3. Specific registered holidays, national or state-scoped.
    */
   async isHoliday(date: Date, stateCode?: string, clientId?: string): Promise<boolean> {
     const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
     const dayOfMonth = date.getDate();
 
-    // 1. Every Sunday
-    if (dayOfWeek === 0) return true;
+    const workingDays = clientId ? await this.workingDaysFor(clientId) : null;
+    if (workingDays && workingDays.length > 0) {
+      // The client's own calendar wins: it is a contract term, not a default to be overridden.
+      if (!workingDays.includes(dayOfWeek)) return true;
+    } else {
+      // 1. Every Sunday
+      if (dayOfWeek === 0) return true;
 
-    // 2. 2nd and 4th Saturday (Bank / Public Holiday)
-    if (dayOfWeek === 6) {
-      const weekIndex = Math.ceil(dayOfMonth / 7);
-      if (weekIndex === 2 || weekIndex === 4) return true;
+      // 2. 2nd and 4th Saturday (Bank / Public Holiday)
+      if (dayOfWeek === 6) {
+        const weekIndex = Math.ceil(dayOfMonth / 7);
+        if (weekIndex === 2 || weekIndex === 4) return true;
+      }
     }
 
     const formattedDate = date.toISOString().split('T')[0];

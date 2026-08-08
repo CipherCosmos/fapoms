@@ -152,4 +152,35 @@ describe('ConstraintEvaluator', () => {
       expect(evaluator.checkSkillsAndCertifications(assayer, project, AUDIT_DATE).passed).toBe(true);
     });
   });
+
+  describe("the client's own working days", () => {
+    it('treats a day the client does not work as unworkable', async () => {
+      // HolidayService owns this rule; the evaluator's job is to pass the client through so it
+      // can be applied at all. Before this, working_days was stored, settable through the API,
+      // and read by nothing.
+      mockHolidayService.isHoliday.mockImplementation(
+        async (_d: Date, _s?: string, clientId?: string) => clientId === 'client-sat-off',
+      );
+
+      const blocked = await evaluator.checkHoliday('Maharashtra', AUDIT_DATE, 'client-sat-off');
+      expect(blocked.passed).toBe(false);
+
+      const allowed = await evaluator.checkHoliday('Maharashtra', AUDIT_DATE, 'client-sat-on');
+      expect(allowed.passed).toBe(true);
+    });
+
+    it('passes the client through from the composite availability gate', async () => {
+      mockHolidayService.isHoliday.mockResolvedValue(false);
+
+      await evaluator.checkDateAvailability({
+        assayerId: 'as-1',
+        branchState: 'Maharashtra',
+        clientId: 'client-1',
+        scheduledDate: AUDIT_DATE,
+      });
+
+      expect(mockHolidayService.isHoliday).toHaveBeenCalledWith(AUDIT_DATE, 'Maharashtra', 'client-1');
+    });
+  });
+
 });

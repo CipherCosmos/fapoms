@@ -53,6 +53,7 @@ export class SchedulingService {
       assayerId: assignment.assayerId,
       project: assignment.project ?? null,
       branchState: assignment.projectBranch?.branch?.state ?? null,
+      clientId: assignment.project?.clientId ?? null,
       scheduledDate: scheduledDateObj,
       excludeAssignmentId: assignment.id,
     });
