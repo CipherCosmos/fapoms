@@ -836,13 +836,29 @@ export class CustomerDensityScoreCalculator implements ScoreCalculator {
   name = 'customerDensity';
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    const customerCount = Number(context.branch.riskScore || 20);
+    /**
+     * How heavy this branch is, measured in packets — the same figure the day planner sizes a
+     * branch's working hours from.
+     *
+     * This read `context.branch.riskScore` as if it were a customer count and divided it by a
+     * weekly assignment capacity: a 0-10 risk rating over a count of assignments, two different
+     * units, producing a number that meant nothing. Every branch in the database carries the
+     * same risk score, so in practice the scorer returned a near-constant for everybody.
+     */
+    const packetCount = Number(context.branchFacts?.projectBranch?.packetCount ?? 0);
+    if (!Number.isFinite(packetCount) || packetCount <= 0) {
+      // Nothing recorded for this cycle — say "no signal" rather than inventing a ranking.
+      return 50;
+    }
+
     // Deliberately the platform default, not the 50 that used to sit here: this is the same
     // "how much can this assayer take on" figure every other engine uses, and a second default
     // meant a capacity-less assayer scored as three times roomier here than anywhere else.
     const maxCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
-    // Score increases when high-customer-density branches are assigned to high-capacity assayers
-    return Math.min(100, (customerCount / maxCapacity) * 100);
+
+    // A heavy branch is better given to an assayer with room for it, so the score rises with
+    // capacity relative to the load and is capped at 100.
+    return Math.max(0, Math.min(100, (maxCapacity / packetCount) * 100));
   }
 }
 

@@ -3,7 +3,7 @@ import L from 'leaflet';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { api } from '../services/api';
 import { MapLayerControls } from './MapLayerControls';
-import { branchStatusColor } from '../utils/statusLabels';
+import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
 
 interface MapBranch {
   id: string;
@@ -699,14 +699,13 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#6366f1' }} />
               <span>Selected Target</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }} />
-              <span>Planning Queue</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
-              <span>Scheduled/Confirmed</span>
-            </div>
+            {/* Branch pin colours, generated from the same buckets that draw them. */}
+            {BRANCH_STATUS_LEGEND.map((entry) => (
+              <div key={entry.bucket} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: entry.hex }} />
+                <span>{entry.label}</span>
+              </div>
+            ))}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#a855f7' }} />
               <span>Assayer (Auditor)</span>

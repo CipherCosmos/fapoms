@@ -28,52 +28,85 @@ export {
 /** Semantic tone for a branch status — single source of truth for badge colours. */
 export interface StatusTone { bg: string; color: string; }
 
-export function branchStatusTone(status?: string | null): StatusTone {
+/**
+ * One bucket per branch status, so a badge and a map pin can never disagree.
+ *
+ * These were two independent switch statements and had already drifted: IMPORTED and PLANNING
+ * fell through `branchStatusColor`'s default to amber while `branchStatusTone` rendered them
+ * grey, so a branch nobody had started work on looked "in progress" on the map and "not
+ * planned" in the table.
+ */
+export type BranchStatusBucket = 'covered' | 'inFlight' | 'blocked' | 'seeking' | 'notPlanned';
+
+export function branchStatusBucket(status?: string | null): BranchStatusBucket {
   switch (status) {
     case ProjectBranchStatus.CLOSED:
     case ProjectBranchStatus.ASSIGNMENT_CONFIRMED:
-      return { bg: 'var(--status-active-bg)', color: 'var(--success)' };
+      return 'covered';
     case ProjectBranchStatus.SCHEDULED:
     case ProjectBranchStatus.AUDIT_COMPLETED:
     case ProjectBranchStatus.VALIDATION_COMPLETED:
-      return { bg: 'rgba(216,174,71,0.15)', color: 'var(--accent)' };
+      return 'inFlight';
     case ProjectBranchStatus.UNABLE_TO_COVER:
     case ProjectBranchStatus.CANCELLED:
-      return { bg: 'var(--status-cancelled-bg)', color: 'var(--danger)' };
+      return 'blocked';
     case ProjectBranchStatus.CANDIDATE_SEARCH:
     case ProjectBranchStatus.CONTACT_INITIATED:
     case ProjectBranchStatus.NEGOTIATION:
-      return { bg: 'var(--status-pending-bg)', color: 'var(--warning)' };
+      return 'seeking';
     case ProjectBranchStatus.ON_HOLD:
-      return { bg: 'var(--border-hair)', color: 'var(--text-muted)' };
     case ProjectBranchStatus.IMPORTED:
     case ProjectBranchStatus.PLANNING:
     default:
-      return { bg: 'var(--border-hair)', color: 'var(--text-muted)' };
+      return 'notPlanned';
   }
 }
 
-/** Hex marker colour for the Leaflet map (SVG fill needs a raw colour, not a CSS var). */export function branchStatusColor(status?: string | null): string {
-  switch (status) {
-    case ProjectBranchStatus.CLOSED:
-    case ProjectBranchStatus.ASSIGNMENT_CONFIRMED:
-      return '#10b981';
-    case ProjectBranchStatus.SCHEDULED:
-    case ProjectBranchStatus.AUDIT_COMPLETED:
-    case ProjectBranchStatus.VALIDATION_COMPLETED:
-      return '#f59e0b';
-    case ProjectBranchStatus.UNABLE_TO_COVER:
-    case ProjectBranchStatus.CANCELLED:
-      return '#ef4444';
-    case ProjectBranchStatus.ON_HOLD:
-      return '#9ca3af';
-    case ProjectBranchStatus.IMPORTED:
-    case ProjectBranchStatus.PLANNING:
-    case ProjectBranchStatus.CANDIDATE_SEARCH:
-    case ProjectBranchStatus.CONTACT_INITIATED:
-    case ProjectBranchStatus.NEGOTIATION:
-    default:
-      return '#f59e0b';
-  }
+const BUCKET_TONE: Record<BranchStatusBucket, StatusTone> = {
+  covered: { bg: 'var(--status-active-bg)', color: 'var(--success)' },
+  inFlight: { bg: 'rgba(216,174,71,0.15)', color: 'var(--accent)' },
+  blocked: { bg: 'var(--status-cancelled-bg)', color: 'var(--danger)' },
+  seeking: { bg: 'var(--status-pending-bg)', color: 'var(--warning)' },
+  notPlanned: { bg: 'var(--border-hair)', color: 'var(--text-muted)' },
+};
+
+/** Raw hex, because a Leaflet SVG fill cannot take a CSS variable. */
+const BUCKET_HEX: Record<BranchStatusBucket, string> = {
+  covered: '#10b981',
+  inFlight: '#f59e0b',
+  blocked: '#ef4444',
+  seeking: '#f59e0b',
+  notPlanned: '#9ca3af',
+};
+
+/** Human-readable bucket names, for a map legend that cannot drift from the pins. */
+export const BRANCH_BUCKET_LABEL: Record<BranchStatusBucket, string> = {
+  covered: 'Assigned or closed',
+  inFlight: 'Scheduled and later',
+  blocked: 'Cannot be covered',
+  seeking: 'Finding an assayer',
+  notPlanned: 'Not yet planned',
+};
+
+export function branchStatusTone(status?: string | null): StatusTone {
+  return BUCKET_TONE[branchStatusBucket(status)];
 }
+
+export function branchStatusColor(status?: string | null): string {
+  return BUCKET_HEX[branchStatusBucket(status)];
+}
+
+/**
+ * The map legend, derived from the same buckets that colour the pins.
+ *
+ * The legend used to be hand-written and disagreed with what was drawn: it labelled green
+ * "Scheduled/Confirmed" when SCHEDULED renders amber, and omitted the red and grey pins
+ * entirely, so two of the five colours on screen were unexplained.
+ */
+export const BRANCH_STATUS_LEGEND: Array<{ bucket: BranchStatusBucket; label: string; hex: string }> =
+  (Object.keys(BUCKET_HEX) as BranchStatusBucket[]).map((bucket) => ({
+    bucket,
+    label: BRANCH_BUCKET_LABEL[bucket],
+    hex: BUCKET_HEX[bucket],
+  }));
 

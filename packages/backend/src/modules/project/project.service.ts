@@ -69,6 +69,21 @@ export interface CreateProjectDto {
   status?: string;
 }
 
+
+/**
+ * A 0-10 risk rating derived from the client's stated risk category, used when the import sheet
+ * carries no explicit score. Ten is the top of the scale the planning map reads (>= 7 = high).
+ */
+function riskScoreFromCategory(category: string): number {
+  switch (category) {
+    case 'CRITICAL': return 9;
+    case 'HIGH': return 7;
+    case 'MEDIUM': return 4;
+    case 'LOW': return 2;
+    default: return 2;
+  }
+}
+
 @Injectable()
 export class ProjectService implements OnModuleInit {
   constructor(
@@ -422,7 +437,7 @@ export class ProjectService implements OnModuleInit {
       // Optional, but each one removes guesswork the system otherwise has to do
       'Pincode', 'Latitude', 'Longitude',
       'Branch Manager', 'Branch Phone', 'Branch Email',
-      'Risk Category', 'Complexity', 'Estimated Hours',
+      'Risk Category', 'Risk Score', 'Complexity', 'Estimated Hours',
     ];
 
     // Prefill existing branches if any
@@ -472,6 +487,7 @@ export class ProjectService implements OnModuleInit {
       { Field: 'Branch Phone', Required: 'No', Description: 'Branch contact number, shown to the assayer before the visit.' },
       { Field: 'Branch Email', Required: 'No', Description: 'Branch email for correspondence.' },
       { Field: 'Risk Category', Required: 'No', Description: 'LOW / MEDIUM / HIGH / CRITICAL. Higher-risk branches are preferentially matched to more experienced assayers.' },
+      { Field: 'Risk Score', Required: 'No', Description: '0-10 rating. Leave blank to derive it from Risk Category. Branches scoring 7 or above are highlighted for attention on the planning map.' },
       { Field: 'Complexity', Required: 'No', Description: 'SIMPLE / STANDARD / COMPLEX. Feeds the same matching, and the time allowance per branch.' },
       { Field: 'Estimated Hours', Required: 'No', Description: 'Override the audit duration for this branch. Normally leave blank — it is calculated from Packets, which stays accurate as packet counts change each cycle.' },
     ];
@@ -562,7 +578,13 @@ export class ProjectService implements OnModuleInit {
           managerName,
           phone,
           email: (row['Branch Email'] || '').toString().trim() || null,
-          riskScore: 2.0,
+          // Taken from the sheet when the client supplies it, otherwise derived from the risk
+          // category they did supply. This was the literal 2.0 for every branch ever imported,
+          // which is why all 72 branches in the database score identically and the map's
+          // "high risk" highlight (>= 7) could never fire for anybody.
+          riskScore: parseFloat(String(row['Risk Score'] ?? '')) || riskScoreFromCategory(
+            (row['Risk Category'] || '').toString().trim().toUpperCase(),
+          ),
           // Optional operational attributes: taken from the sheet when the client
           // supplies them, otherwise sensible defaults. These feed assayer matching,
           // so a real value here produces a better-matched assayer than the default.
