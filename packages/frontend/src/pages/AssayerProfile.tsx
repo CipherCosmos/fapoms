@@ -5,7 +5,7 @@ import {
   AlertTriangle, CheckCircle2, Edit2, ArrowRightLeft, FileText, ClipboardList,
   CreditCard, MessageSquare, ExternalLink, ShieldCheck,
 } from 'lucide-react';
-import { AssayerLifecycleStatus, formatRupees as money } from '@fapoms/shared';
+import { formatRupees as money, nextAssayerLifecycleStates } from '@fapoms/shared';
 
 import { api } from '../services/api';
 import { connectSocket, getSocket } from '../services/socket';
@@ -47,15 +47,6 @@ interface ProfileData extends Assayer {
   activeCommercialProfile: any | null;
 }
 
-const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION],
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [AssayerLifecycleStatus.TRAINING],
-  [AssayerLifecycleStatus.TRAINING]: [AssayerLifecycleStatus.ACTIVE],
-  [AssayerLifecycleStatus.ACTIVE]: [AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.RESIGNED, AssayerLifecycleStatus.TERMINATED],
-  [AssayerLifecycleStatus.ON_LEAVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.RESIGNED],
-  [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
-};
 
 const CRITICAL: { key: keyof Assayer; label: string; why: string }[] = [
   { key: 'panNumber', label: 'PAN', why: 'TDS and statutory filing' },
@@ -158,7 +149,7 @@ export const AssayerProfile: React.FC = () => {
     [p],
   );
 
-  const transitions = p ? LIFECYCLE_TRANSITIONS[p.lifecycleStatus] ?? [] : [];
+  const transitions = p ? nextAssayerLifecycleStates(p.lifecycleStatus) : [];
 
   const move = async () => {
     if (!target || !id) return;

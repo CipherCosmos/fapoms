@@ -4,7 +4,7 @@ import {
   Plus, Search, X, ChevronUp, ChevronDown, ExternalLink, Edit2, Trash2,
   AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal,
 } from 'lucide-react';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, assayerLifecyclePath } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { connectSocket } from '../../services/socket';
@@ -45,35 +45,10 @@ const ONBOARDING_STAGES: string[] = [
 ];
 
 /** Legal next steps per stage, mirroring the backend state machine. */
-const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION],
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [AssayerLifecycleStatus.TRAINING],
-  [AssayerLifecycleStatus.TRAINING]: [AssayerLifecycleStatus.ACTIVE],
-  [AssayerLifecycleStatus.ACTIVE]: [AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.RESIGNED, AssayerLifecycleStatus.TERMINATED],
-  [AssayerLifecycleStatus.ON_LEAVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.RESIGNED],
-  [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
-};
 
 /** Ordered path from `from` to `target` walking only legal transitions; [] if
  *  already there, null if unreachable. Mirrors the backend state machine so the
  *  roster can offer the same destinations the API will accept. */
-function findPathTo(from: string, target: string): string[] | null {
-  if (from === target) return [];
-  const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
-  const visited = new Set<string>([from]);
-  while (queue.length) {
-    const { stage, path } = queue.shift()!;
-    for (const next of LIFECYCLE_TRANSITIONS[stage] ?? []) {
-      if (next === target) return [...path, next];
-      if (!visited.has(next)) {
-        visited.add(next);
-        queue.push({ stage: next, path: [...path, next] });
-      }
-    }
-  }
-  return null;
-}
 
 /** One-click views onto the questions HR ask most. */
 const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[] = [
@@ -210,7 +185,7 @@ export const AssayerRoster: React.FC = () => {
     for (const a of selected) {
       for (const s of Object.values(AssayerLifecycleStatus)) {
         if (s === a.lifecycleStatus) continue;
-        if (findPathTo(a.lifecycleStatus, s) !== null) reachable.add(s);
+        if (assayerLifecyclePath(a.lifecycleStatus, s) !== null) reachable.add(s);
       }
     }
     return Object.values(AssayerLifecycleStatus).filter((s) => reachable.has(s));

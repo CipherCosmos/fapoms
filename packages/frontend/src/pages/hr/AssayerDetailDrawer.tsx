@@ -4,7 +4,7 @@ import {
   X, ExternalLink, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin,
 } from 'lucide-react';
-import { AssayerLifecycleStatus, formatRupees } from '@fapoms/shared';
+import { formatRupees, nextAssayerLifecycleStates } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import type { Assayer } from './assayer-shared';
@@ -23,15 +23,6 @@ import { CommercialProfileModal, type CommercialProfile } from './CommercialProf
  * not pay for five extra requests per row.
  */
 
-const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION],
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [AssayerLifecycleStatus.TRAINING],
-  [AssayerLifecycleStatus.TRAINING]: [AssayerLifecycleStatus.ACTIVE],
-  [AssayerLifecycleStatus.ACTIVE]: [AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.RESIGNED, AssayerLifecycleStatus.TERMINATED],
-  [AssayerLifecycleStatus.ON_LEAVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.RESIGNED],
-  [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
-};
 
 const CRITICAL: { key: keyof Assayer; label: string; why: string }[] = [
   { key: 'panNumber', label: 'PAN', why: 'TDS and statutory filing' },
@@ -112,7 +103,7 @@ export const AssayerDetailDrawer: React.FC<{
     [a],
   );
 
-  const transitions = a ? LIFECYCLE_TRANSITIONS[a.lifecycleStatus] ?? [] : [];
+  const transitions = a ? nextAssayerLifecycleStates(a.lifecycleStatus) : [];
 
   const move = async () => {
     if (!target) return;

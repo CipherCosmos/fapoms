@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { AssayerEntity } from './assayer.entity';
-import { AssayerLifecycleStatus, AssayerStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus, ASSAYER_LIFECYCLE_TRANSITIONS } from '@fapoms/shared';
 import {
   AssayerDocumentVerificationStartedEvent,
   AssayerBackgroundCheckInitiatedEvent,
@@ -14,18 +14,9 @@ import {
   AssayerArchivedEvent,
 } from '../../core/events/domain-events';
 
-const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [AssayerLifecycleStatus.TRAINING, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.TRAINING]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.ACTIVE]: [AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.INACTIVE, AssayerLifecycleStatus.RESIGNED],
-  [AssayerLifecycleStatus.ON_LEAVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
-  [AssayerLifecycleStatus.INACTIVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ARCHIVED],
-  [AssayerLifecycleStatus.RESIGNED]: [AssayerLifecycleStatus.ARCHIVED],
-  [AssayerLifecycleStatus.TERMINATED]: [AssayerLifecycleStatus.ARCHIVED],
-};
+/** The one lifecycle definition, shared with the frontend so the UI cannot offer an edge
+ * this machine will refuse. See packages/shared/src/assayer-lifecycle.ts. */
+const LIFECYCLE_TRANSITIONS = ASSAYER_LIFECYCLE_TRANSITIONS;
 
 function mapLifecycleToOperationalStatus(lifecycle: string): AssayerStatus {
   if (lifecycle === AssayerLifecycleStatus.ACTIVE || lifecycle === AssayerLifecycleStatus.ON_LEAVE) return AssayerStatus.ACTIVE;
