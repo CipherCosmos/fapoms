@@ -421,7 +421,7 @@ export class ClientService {
     const saved = await this.clientRepository.save(client);
 
     await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: 'CLIENT_LIFECYCLE_CHANGED',
       entityType: 'CLIENT',
       entityId: id,
@@ -840,10 +840,25 @@ export class ClientService {
     if (!billing) {
       throw new NotFoundException('Billing profile not found for this client.');
     }
-    return this.recordBillingHistory(clientId, userId, {
+    const entry = await this.recordBillingHistory(clientId, userId, {
       eventType: ClientBillingEventType.REMARK,
       remarks,
     });
+
+    // Billing status changes reach audit_events; a remark against the same billing profile did
+    // not, so a note explaining why an invoice was held existed only in the billing history and
+    // was invisible to the client's unified trail.
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_BILLING_REMARK_ADDED',
+      entityType: 'CLIENT',
+      entityId: clientId,
+      userId,
+      remarks,
+      metadata: { billingHistoryId: entry.id },
+    });
+
+    return entry;
   }
 
   async findBillingHistory(clientId: string): Promise<ClientBillingHistoryEntity[]> {

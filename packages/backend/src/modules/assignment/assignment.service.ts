@@ -617,7 +617,7 @@ export class AssignmentService {
       }
 
       await this.auditService.recordEventSafe({
-        category: EventCategory.OPERATIONAL,
+        category: EventCategory.WORKFLOW,
         eventType: `ASSIGNMENT_${targetStatus}`,
         entityType: 'ASSIGNMENT',
         entityId: savedAssign.id,

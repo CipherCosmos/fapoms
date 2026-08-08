@@ -749,9 +749,9 @@ export class AssayerService implements OnModuleInit {
       [],
       async () => {
         const saved = await this.assayerRepository.save(assayer);
-        await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+        await this.recordActivity(saved.id, 'ASSAYER_LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
         await this.auditService.recordEvent({
-          category: EventCategory.OPERATIONAL,
+          category: EventCategory.WORKFLOW,
           eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
           entityType: 'ASSAYER',
           entityId: saved.id,
@@ -1312,7 +1312,7 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Created commercial profile for assayer ${assayerId} with base fee ₹${dto.baseFee}`,
     });
-    await this.recordActivity(assayerId, 'COMMERCIAL_PROFILE_CREATED', null, null, userId, `Commercial profile created with base fee ₹${dto.baseFee}`);
+    await this.recordActivity(assayerId, 'ASSAYER_COMMERCIAL_PROFILE_CREATED', null, null, userId, `Commercial profile created with base fee ₹${dto.baseFee}`);
     return saved;
   }
 
@@ -1338,7 +1338,7 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Updated commercial profile ${profileId}`,
     });
-    await this.recordActivity(profile.assayerId, 'COMMERCIAL_PROFILE_UPDATED', null, null, userId, `Commercial profile updated`);
+    await this.recordActivity(profile.assayerId, 'ASSAYER_COMMERCIAL_PROFILE_UPDATED', null, null, userId, `Commercial profile updated`);
     return saved;
   }
 
@@ -1413,7 +1413,7 @@ export class AssayerService implements OnModuleInit {
     await this.workforceAttributeRepository.save(attr);
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
-      eventType: 'WORKFORCE_ATTRIBUTE_DELETED',
+      eventType: 'WORKFORCE_ATTRIBUTE_REMOVED',
       entityType: 'WORKFORCE_ATTRIBUTE',
       entityId: attributeId,
       userId,
@@ -1766,7 +1766,7 @@ export class AssayerService implements OnModuleInit {
       remarks: 'Assayer changed their own password.',
     });
 
-    await this.recordActivity(assayerId, 'PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
+    await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
   }
 
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
@@ -1796,7 +1796,7 @@ export class AssayerService implements OnModuleInit {
       remarks: 'Password reset by staff. The assayer must choose a new one at next sign-in.',
     });
 
-    await this.recordActivity(assayerId, 'PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
+    await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
   }
 
   /**

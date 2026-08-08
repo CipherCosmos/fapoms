@@ -197,7 +197,7 @@ export class ExpenseService {
     const saved = await this.expenseRepository.save(expense);
 
     await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: approve ? 'EXPENSE_APPROVED' : 'EXPENSE_REJECTED',
       entityType: 'EXPENSE',
       entityId: saved.id,

@@ -15,6 +15,21 @@ import { AuditEventEntity } from './audit-event.entity';
 import { EventCategory } from '@fapoms/shared';
 
 export interface CreateAuditEventDto {
+  /**
+   * Which lens the event belongs under, and therefore which filter chip surfaces it.
+   *
+   * The convention, previously unstated and unevenly applied:
+   *   WORKFLOW    — a business entity moved between states. Anything that sets previousState
+   *                 and newState on an operational entity belongs here. Half of these were
+   *                 filed as OPERATIONAL, so the WORKFLOW filter showed an auditor only some
+   *                 of the state changes that had occurred.
+   *   OPERATIONAL — a business action that is not itself a state transition: something was
+   *                 created, edited, removed, dispatched, priced.
+   *   USER        — account and access changes. A user being suspended carries previousState
+   *                 and newState too, but it is an access event, not a business workflow, and
+   *                 stays under USER deliberately.
+   *   SYSTEM      — automated housekeeping with no human actor.
+   */
   category: EventCategory;
   eventType: string;
   entityType: string;
@@ -27,6 +42,9 @@ export interface CreateAuditEventDto {
   remarks?: string;
   metadata?: Record<string, unknown>;
 }
+
+/** Postgres uuid form; anything else cannot be an actor id. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class AuditService {
@@ -49,7 +67,12 @@ export class AuditService {
       entityId: dto.entityId,
       previousState: dto.previousState ?? null,
       newState: dto.newState ?? null,
-      userId: dto.userId ?? null,
+      // `user_id` is a uuid column, so a non-uuid actor (the string 'system', an assayer code,
+      // an empty string) makes the INSERT throw — and a throw here means the trail entry is
+      // lost, which is the one failure this system must not have. Null is the single
+      // representation of "no human actor"; the original value is kept in the remarks/metadata
+      // the caller supplied, so nothing is hidden.
+      userId: UUID_PATTERN.test(dto.userId ?? '') ? (dto.userId as string) : null,
       userDisplayName: dto.userDisplayName ?? null,
       ipAddress: dto.ipAddress ?? null,
       remarks: dto.remarks ?? null,

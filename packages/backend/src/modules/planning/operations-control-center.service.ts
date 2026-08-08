@@ -125,7 +125,7 @@ export class OperationsControlCenterService {
     const saved = await this.taskRepository.save(task);
 
     await this.auditService.recordEventSafe({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: 'OPERATIONS_TASK_RESOLVED',
       entityType: 'OPERATIONS_TASK',
       entityId: saved.id,
@@ -187,7 +187,7 @@ export class OperationsControlCenterService {
     const saved = await this.exceptionRepository.save(exc);
 
     await this.auditService.recordEventSafe({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: 'OPERATIONS_EXCEPTION_RESOLVED',
       entityType: 'OPERATIONS_EXCEPTION',
       entityId: saved.id,

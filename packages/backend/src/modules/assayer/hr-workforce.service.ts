@@ -162,7 +162,10 @@ export class HrWorkforceService {
                ) AS performed_by_name
         FROM assayer_activities act
         LEFT JOIN users u ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND u.id = act.performed_by::uuid
-        WHERE act.event_type = 'LIFECYCLE_TRANSITION'
+        -- Both spellings: the activity trail wrote the unprefixed name until the two trails
+        -- were aligned on ASSAYER_LIFECYCLE_TRANSITION, and the 204 rows already recorded under
+        -- the old name are still part of the history this query reports.
+        WHERE act.event_type IN ('LIFECYCLE_TRANSITION', 'ASSAYER_LIFECYCLE_TRANSITION')
         ORDER BY act.assayer_id, act.occurred_at DESC
       )
       SELECT a.id, a.assayer_code AS "assayerCode", a.display_name AS "displayName",

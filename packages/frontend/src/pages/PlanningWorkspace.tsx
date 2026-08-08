@@ -1927,7 +1927,7 @@ export const PlanningWorkspace: React.FC = () => {
                                   <div style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
                                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>₹{detailAssayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                    Travel: ₹{detailAssayer.activeCommercialProfile.travelReimbursement || 0}/km | Daily: ₹{detailAssayer.activeCommercialProfile.dailyRate || 0}
+                                    Travel: ₹{detailAssayer.activeCommercialProfile.travelReimbursement || 0} | Daily: ₹{detailAssayer.activeCommercialProfile.dailyRate || 0}
                                   </div>
                                 </div>
                               )}

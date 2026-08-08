@@ -21,7 +21,7 @@ const NUMERIC_FIELDS: { key: string; label: string; hint?: string }[] = [
   { key: 'baseFee', label: 'Base fee (per audit)', hint: 'Flat rate for one audit visit' },
   { key: 'hourlyRate', label: 'Hourly rate' },
   { key: 'dailyRate', label: 'Daily rate' },
-  { key: 'travelReimbursement', label: 'Travel reimbursement' },
+  { key: 'travelReimbursement', label: 'Travel reimbursement', hint: 'Flat amount per trip. The per-kilometre allowance is a client contract term, not a per-assayer rate.' },
   { key: 'accommodationAllowance', label: 'Accommodation allowance' },
   { key: 'mealAllowance', label: 'Meal allowance' },
 ];

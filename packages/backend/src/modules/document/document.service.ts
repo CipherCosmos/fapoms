@@ -119,7 +119,7 @@ export class DocumentService {
      * exactly the question that has to be answerable years later.
      */
     await this.auditService.recordEventSafe({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: 'DOCUMENT_DELEGATED_TO_DATA_ENTRY',
       entityType: 'DOCUMENT',
       entityId: saved.id,
@@ -323,7 +323,7 @@ export class DocumentService {
     const saved = await this.documentRepository.save(doc);
 
     await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: `DOCUMENT_${status}`,
       entityType: 'DOCUMENT',
       entityId: saved.id,

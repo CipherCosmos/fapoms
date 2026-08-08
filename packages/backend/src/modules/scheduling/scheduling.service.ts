@@ -208,7 +208,7 @@ export class SchedulingService {
     const saved = await this.scheduleRepository.save(schedule);
 
     await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: `SCHEDULE_${targetStatus}`,
       entityType: 'SCHEDULE',
       entityId: saved.id,
