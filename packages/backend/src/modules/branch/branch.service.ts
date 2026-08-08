@@ -424,6 +424,16 @@ export class BranchService {
     contact.isActive = false;
     contact.updatedBy = userId;
     await this.contactRepository.save(contact);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_CONTACT_REMOVED',
+      entityType: 'BRANCH',
+      entityId: contact.branchId,
+      userId,
+      remarks: `Removed contact ${contact.name} from branch`,
+      metadata: { contactId: contact.id, name: contact.name, designation: contact.designation ?? null, email: contact.email ?? null, phone: contact.phone ?? null },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -472,6 +482,16 @@ export class BranchService {
     doc.isActive = false;
     doc.updatedBy = userId;
     await this.documentRepository.save(doc);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_DOCUMENT_REMOVED',
+      entityType: 'BRANCH',
+      entityId: doc.branchId,
+      userId,
+      remarks: `Removed document ${doc.fileName} from branch`,
+      metadata: { documentId: doc.id, fileName: doc.fileName, category: doc.category, filePath: doc.filePath },
+    });
   }
 
   // -----------------------------------------------------------------------

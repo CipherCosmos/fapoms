@@ -172,7 +172,7 @@ export interface QueryMessage {
   authorId: string;
   authorName: string | null;
   body: string | null;
-  attachments: { url: string; fileName: string; fileType: string }[];
+  attachments: { url: string; fileName: string; fileType: string; s3Key?: string }[];
   /** Set when the desk anchored the question to a region of the audit PDF. */
   pageNumber: number | null;
   region: { x: number; y: number; w: number; h: number } | null;

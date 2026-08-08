@@ -566,6 +566,16 @@ export class ClientService {
     contact.isActive = false;
     contact.updatedBy = userId;
     await this.contactRepository.save(contact);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_CONTACT_REMOVED',
+      entityType: 'CLIENT',
+      entityId: contact.clientId,
+      userId,
+      remarks: `Removed contact ${contact.name} from client`,
+      metadata: { contactId: contact.id, name: contact.name, designation: contact.designation ?? null, email: contact.email ?? null, phone: contact.phone ?? null },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -656,6 +666,25 @@ export class ClientService {
     contract.isActive = false;
     contract.updatedBy = userId;
     await this.contractRepository.save(contract);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_CONTRACT_REMOVED',
+      entityType: 'CLIENT',
+      entityId: contract.clientId,
+      userId,
+      remarks: `Removed contract ${contract.contractNumber} - ${contract.title}`,
+      metadata: {
+        contractId: contract.id,
+        contractNumber: contract.contractNumber,
+        title: contract.title,
+        effectiveFrom: contract.effectiveFrom,
+        effectiveTo: contract.effectiveTo ?? null,
+        value: contract.value ?? null,
+        currency: contract.currency,
+        status: contract.status,
+      },
+    });
   }
 
   // -----------------------------------------------------------------------

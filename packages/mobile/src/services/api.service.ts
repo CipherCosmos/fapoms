@@ -148,16 +148,37 @@ export class MobileApiService {
     ALL_TOKEN_KEYS.forEach((k) => void deleteToken(k));
   }
 
-  static async validateSession(): Promise<boolean> {
+  /**
+   * Whether the stored session is still good.
+   *
+   * Three outcomes, not two. This used to return a bare boolean and treat *every* failure —
+   * including a timeout or a dropped connection — as "your session is invalid", then call
+   * `clearSession()` and destroy the tokens. An Android permission dialog pauses the app, so
+   * the in-flight request times out, and the assayer was signed out simply for being asked
+   * whether the app could use their location. The same happened on any brief signal loss at a
+   * branch, which is where this app spends its life.
+   *
+   * Only an actual rejection from the server ends a session. Not being able to ask is not an
+   * answer.
+   */
+  static async validateSession(): Promise<'valid' | 'invalid' | 'unreachable'> {
     const id = this.currentUserId;
-    if (!id || !this.authToken) return false;
+    if (!id || !this.authToken) return 'invalid';
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/profile`, {}, 5000);
-      if (response.ok) return true;
-      this.clearSession();
-      return false;
+      if (response.ok) return 'valid';
+
+      // fetchWithAuth already tried a token refresh before surfacing a 401/403, so an auth
+      // failure here means the credentials are genuinely finished.
+      if (response.status === 401 || response.status === 403) {
+        this.clearSession();
+        return 'invalid';
+      }
+
+      // A 5xx or anything else is the server having a bad moment, not the user being logged out.
+      return 'unreachable';
     } catch {
-      return false;
+      return 'unreachable';
     }
   }
 
@@ -727,6 +748,29 @@ export class MobileApiService {
   }
 
   /**
+   * A short-lived signed URL for viewing a chat attachment.
+   *
+   * The attachment route is `@Public()` but validates a signed HMAC token, and it rejects a
+   * plain JWT in the query string — so `resolveAttachmentUrl`'s `?token=<jwt>` returned 403 and
+   * every attachment in the app was unopenable. `attachment-token` is the endpoint built for
+   * exactly this and was called by nothing on either surface.
+   */
+  static async getAttachmentUrl(s3Key: string): Promise<string | null> {
+    if (!s3Key) return null;
+    try {
+      const res = await this.fetchWithAuth(
+        `${API_BASE_URL}/validation-queries/attachment-token?key=${encodeURIComponent(s3Key)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) return null;
+      const path = data.data?.downloadUrl;
+      return path ? `${this.getApiOrigin()}${path}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The full clarification thread for a query.
    *
    * The app used to render only `queryText` and `assayerResponse` — two frozen fields — and
@@ -745,7 +789,16 @@ export class MobileApiService {
         authorId: m.authorId,
         authorName: m.authorName ?? null,
         body: m.body ?? null,
-        attachments: Array.isArray(m.attachments) ? m.attachments : [],
+        attachments: (Array.isArray(m.attachments) ? m.attachments : [])
+          // Pre-fix rows stored `[[]]` — an array of empty arrays — because the server DTO
+          // stripped them. Filter those out rather than rendering a nameless empty card.
+          .filter((a: any) => a && !Array.isArray(a) && (a.url || a.s3Key))
+          .map((a: any) => ({
+            url: a.url,
+            fileName: a.fileName || 'Attachment',
+            fileType: a.fileType || 'application/octet-stream',
+            s3Key: a.s3Key,
+          })),
         pageNumber: m.pageNumber ?? null,
         region: m.region ?? null,
         createdAt: m.createdAt,

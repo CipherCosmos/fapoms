@@ -56,10 +56,26 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
   const [pending, setPending] = useState<{ url: string; fileName: string; fileType: string }[]>([]);
   const [sending, setSending] = useState(false);
 
+  /**
+   * Signed URLs for every attachment in the thread, keyed by s3Key.
+   *
+   * The stored `url` points at a route that only accepts a signed HMAC token — a plain JWT in
+   * the query string is rejected — so rendering it directly showed a broken image and an
+   * unopenable file. Resolving once per load keeps it off the render path.
+   */
+  const [signed, setSigned] = useState<Record<string, string>>({});
+
   const load = useCallback(async () => {
     const list = await MobileApiService.getQueryMessages(query.id);
     setMessages(list);
     setLoading(false);
+
+    const keys = [...new Set(list.flatMap((m) => m.attachments.map((a) => a.s3Key).filter(Boolean)))] as string[];
+    if (keys.length === 0) return;
+    const pairs = await Promise.all(
+      keys.map(async (k) => [k, await MobileApiService.getAttachmentUrl(k)] as const),
+    );
+    setSigned(Object.fromEntries(pairs.filter(([, v]) => !!v) as [string, string][]));
   }, [query.id]);
 
   useEffect(() => {
@@ -106,7 +122,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
 
   const open = useCallback(
     async (url: string) => {
-      const resolved = MobileApiService.resolveAttachmentUrl(url);
+      const resolved = url;
       if (!resolved) return;
       const ok = await Linking.canOpenURL(resolved).catch(() => false);
       if (!ok) {
@@ -173,7 +189,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                 </AppText>
               </View>
               {g.items.map((m) => (
-                <Bubble key={m.id} message={m} onOpenAttachment={open} />
+                <Bubble key={m.id} message={m} signed={signed} onOpenAttachment={open} />
               ))}
             </View>
           ))
@@ -274,10 +290,11 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
   );
 };
 
-const Bubble: React.FC<{ message: QueryMessage; onOpenAttachment: (url: string) => void }> = ({
-  message,
-  onOpenAttachment,
-}) => {
+const Bubble: React.FC<{
+  message: QueryMessage;
+  signed: Record<string, string>;
+  onOpenAttachment: (url: string) => void;
+}> = ({ message, signed, onOpenAttachment }) => {
   const t = useTheme();
   const mine = message.authorType === 'ASSAYER';
 
@@ -304,11 +321,13 @@ const Bubble: React.FC<{ message: QueryMessage; onOpenAttachment: (url: string) 
 
         {message.body ? <AppText variant="body">{message.body}</AppText> : null}
 
-        {message.attachments.map((a, i) => (
-          <Tappable key={`${a.url}-${i}`} onPress={() => onOpenAttachment(a.url)}>
-            {isImage(a.fileType, a.fileName) ? (
+        {message.attachments.map((a, i) => {
+          const href = (a.s3Key && signed[a.s3Key]) || '';
+          return (
+          <Tappable key={`${a.url}-${i}`} onPress={() => href && onOpenAttachment(href)}>
+            {isImage(a.fileType, a.fileName) && href ? (
               <Image
-                source={{ uri: MobileApiService.resolveAttachmentUrl(a.url) }}
+                source={{ uri: href }}
                 style={{ width: 200, height: 150, borderRadius: t.radius.md, marginTop: 2 }}
                 resizeMode="cover"
               />
@@ -331,7 +350,8 @@ const Bubble: React.FC<{ message: QueryMessage; onOpenAttachment: (url: string) 
               </View>
             )}
           </Tappable>
-        ))}
+          );
+        })}
 
         {/* The desk can anchor a question to a page of the audit PDF; say so. */}
         {message.pageNumber != null ? (

@@ -42,8 +42,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // learns whether a session survived the last launch.
     const session = await MobileApiService.restoreSession();
     if (session && session.token) {
-      const valid = await MobileApiService.validateSession();
-      if (valid) {
+      /**
+       * Keeps the session unless the server actually rejected it.
+       *
+       * `unreachable` means we could not ask — a permission dialog pausing the app, or no
+       * signal at the branch. Signing someone out for that is both wrong and expensive: they
+       * are standing in a bank vault and now need their password to carry on.
+       */
+      const verdict = await MobileApiService.validateSession();
+      if (verdict !== 'invalid') {
         setIsAuthenticated(true);
         setUser({
           id: session.userId || MobileApiService.getCurrentUserId() || '',
