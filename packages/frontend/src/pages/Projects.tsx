@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
-import { ProjectStatus, Priority } from '@fapoms/shared';
+import { ProjectStatus, Priority, projectStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
@@ -107,7 +107,13 @@ const PIPELINE: ProjectStatus[] = [
 /** States that sit outside the flow; shown only when something is actually in them. */
 const OFF_PIPELINE: ProjectStatus[] = [ProjectStatus.ON_HOLD, ProjectStatus.ARCHIVED, ProjectStatus.CANCELLED];
 
-const STAGE_TONE: Record<string, string> = {
+/**
+ * One colour per project status. The lifecycle strip and the status badge each kept their own
+ * map, so the same status could be tinted differently depending on which control drew it —
+ * COMPLETED was `--success` on the strip and `--accent-secondary` on the badge. The badge needs
+ * a background as well as a foreground, so it adds one; the accent colour comes from here.
+ */
+const STATUS_ACCENT: Record<string, string> = {
   [ProjectStatus.DRAFT]: 'var(--text-muted)',
   [ProjectStatus.PLANNING]: 'var(--accent)',
   [ProjectStatus.SCHEDULING]: 'var(--accent)',
@@ -118,6 +124,9 @@ const STAGE_TONE: Record<string, string> = {
   [ProjectStatus.ARCHIVED]: 'var(--text-muted)',
   [ProjectStatus.CANCELLED]: 'var(--danger)',
 };
+
+/** Kept as an alias so the lifecycle strip reads naturally at its call sites. */
+const STAGE_TONE = STATUS_ACCENT;
 
 /** Live states where a deadline still means something. */
 const LIVE_STATES: string[] = [
@@ -158,21 +167,23 @@ const getInitialProjectForm = (clientId = ''): FormData => {
   };
 };
 
-const statusBadge = (status: ProjectStatus) => {
-  const map: Record<string, { bg: string; color: string }> = {
-    [ProjectStatus.DRAFT]: { bg: 'var(--status-draft-bg)', color: 'var(--status-draft)' },
-    [ProjectStatus.PLANNING]: { bg: 'rgba(216,174,71,0.1)', color: 'var(--accent-primary)' },
-    [ProjectStatus.SCHEDULING]: { bg: 'var(--status-pending-bg)', color: 'var(--status-pending)' },
-    [ProjectStatus.EXECUTION]: { bg: 'var(--status-active-bg)', color: 'var(--status-active)' },
-    [ProjectStatus.VALIDATION]: { bg: 'rgba(216,174,71,0.1)', color: 'var(--accent)' },
-    [ProjectStatus.COMPLETED]: { bg: 'var(--status-active-bg)', color: 'var(--accent-secondary)' },
-    [ProjectStatus.ARCHIVED]: { bg: 'var(--border-hair)', color: 'var(--text-muted)' },
-    [ProjectStatus.ON_HOLD]: { bg: 'var(--status-pending-bg)', color: 'var(--warning)' },
-    [ProjectStatus.CANCELLED]: { bg: 'var(--status-cancelled-bg)', color: 'var(--danger)' },
-  };
-  const s = map[status] || { bg: 'var(--status-pending-bg)', color: 'var(--status-pending)' };
-  return { background: s.bg, color: s.color };
+const STATUS_BADGE_BG: Record<string, string> = {
+  [ProjectStatus.DRAFT]: 'var(--status-draft-bg)',
+  [ProjectStatus.PLANNING]: 'rgba(216,174,71,0.1)',
+  [ProjectStatus.SCHEDULING]: 'var(--status-pending-bg)',
+  [ProjectStatus.EXECUTION]: 'var(--status-active-bg)',
+  [ProjectStatus.VALIDATION]: 'rgba(216,174,71,0.1)',
+  [ProjectStatus.COMPLETED]: 'var(--status-active-bg)',
+  [ProjectStatus.ARCHIVED]: 'var(--border-hair)',
+  [ProjectStatus.ON_HOLD]: 'var(--status-pending-bg)',
+  [ProjectStatus.CANCELLED]: 'var(--status-cancelled-bg)',
 };
+
+const statusBadge = (status: ProjectStatus) => ({
+  background: STATUS_BADGE_BG[status] ?? 'var(--status-pending-bg)',
+  // Same accent the lifecycle strip uses, so one status is one colour on this page.
+  color: STATUS_ACCENT[status] ?? 'var(--status-pending)',
+});
 
 export const Projects: React.FC = () => {
   const navigate = useNavigate();
@@ -667,7 +678,7 @@ export const Projects: React.FC = () => {
                   }}>
                   <div style={{ fontSize: '19px', fontWeight: 700, color: n > 0 ? s : 'var(--text-muted)', lineHeight: 1 }}>{n}</div>
                   <div style={{ fontSize: '9.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    {stage.replace(/_/g, ' ')}
+                    {projectStatusLabel(stage)}
                   </div>
                 </button>
               </React.Fragment>
@@ -688,7 +699,7 @@ export const Projects: React.FC = () => {
                     border: `1px solid ${on ? STAGE_TONE[stage] : 'var(--border-color)'}`,
                     color: STAGE_TONE[stage],
                   }}>
-                  {stage.replace(/_/g, ' ')} {n}
+                  {projectStatusLabel(stage)} {n}
                 </button>
               );
             })}

@@ -23,6 +23,7 @@ import {
   ClientType,
   ContractStatus,
   ClientBillingStatus,
+  ProjectStatus,
 } from './enums';
 
 /** Where a branch sits in the audit lifecycle. */
@@ -133,6 +134,28 @@ function humanize(value: string): string {
     .split('_')
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
     .join(' ');
+}
+
+/**
+ * Project lifecycle wording. The Projects page rendered these with
+ * `status.replace(/_/g, ' ')`, so ON_HOLD read "ON HOLD" there while every other surface in the
+ * product writes status names in sentence case.
+ */
+const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+  [ProjectStatus.DRAFT]: 'Draft',
+  [ProjectStatus.PLANNING]: 'Planning',
+  [ProjectStatus.SCHEDULING]: 'Scheduling',
+  [ProjectStatus.EXECUTION]: 'Execution',
+  [ProjectStatus.VALIDATION]: 'Validation',
+  [ProjectStatus.COMPLETED]: 'Completed',
+  [ProjectStatus.ARCHIVED]: 'Archived',
+  [ProjectStatus.CANCELLED]: 'Cancelled',
+  [ProjectStatus.ON_HOLD]: 'On Hold',
+};
+
+export function projectStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return PROJECT_STATUS_LABELS[status as ProjectStatus] ?? humanize(status);
 }
 
 export function branchStatusLabel(status?: string | null): string {

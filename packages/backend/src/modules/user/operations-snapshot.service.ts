@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { branchStatusLabel, ProjectBranchStatus } from '@fapoms/shared';
 
 /**
  * The operational home view: what is stuck, what is due, and what it is worth.
@@ -81,18 +82,26 @@ export class OperationsSnapshotService {
     // ── The funnel: where every branch in the book currently sits ──────────
     // Ordered by the lifecycle rather than alphabetically, so a pile-up at one
     // stage is visible as a shape rather than having to be read off.
-    const STAGES = [
-      { key: 'IMPORTED', label: 'Imported' },
-      { key: 'PLANNING', label: 'Planning' },
-      { key: 'CANDIDATE_SEARCH', label: 'Finding assayer' },
-      { key: 'CONTACT_INITIATED', label: 'Contacting' },
-      { key: 'NEGOTIATION', label: 'Negotiating' },
-      { key: 'ASSIGNMENT_CONFIRMED', label: 'Assayer confirmed' },
-      { key: 'SCHEDULED', label: 'Scheduled' },
-      { key: 'AUDIT_COMPLETED', label: 'Audited' },
-      { key: 'VALIDATION_COMPLETED', label: 'Validated' },
-      { key: 'CLOSED', label: 'Closed' },
+    /**
+     * Ordering is a lifecycle fact and belongs here; the wording is not, and belongs to
+     * @fapoms/shared. These labels were written out by hand and six of the ten disagreed with
+     * the canon — "Assayer confirmed" against "Assigned", "Audited" against "Audit Completed" —
+     * so the dashboard funnel named the same stage differently from every table and badge that
+     * showed it.
+     */
+    const STAGE_ORDER: ProjectBranchStatus[] = [
+      ProjectBranchStatus.IMPORTED,
+      ProjectBranchStatus.PLANNING,
+      ProjectBranchStatus.CANDIDATE_SEARCH,
+      ProjectBranchStatus.CONTACT_INITIATED,
+      ProjectBranchStatus.NEGOTIATION,
+      ProjectBranchStatus.ASSIGNMENT_CONFIRMED,
+      ProjectBranchStatus.SCHEDULED,
+      ProjectBranchStatus.AUDIT_COMPLETED,
+      ProjectBranchStatus.VALIDATION_COMPLETED,
+      ProjectBranchStatus.CLOSED,
     ];
+    const STAGES = STAGE_ORDER.map((key) => ({ key, label: branchStatusLabel(key) }));
 
     const [funnelRows, dueRows, docRows, moneyRows, capacityRows, projectRows, activityRows] = await Promise.all([
       this.dataSource.query(`
