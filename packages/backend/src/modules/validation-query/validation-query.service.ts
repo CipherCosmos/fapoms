@@ -322,6 +322,54 @@ export class ValidationQueryService {
     });
   }
 
+  /**
+   * Every clarification across all cases, enriched for a worklist: who it is with (the branch's
+   * assayer), which branch/case, whether the ball is with us or the assayer, and its SLA state.
+   *
+   * The board only ever drew an aggregate open count and per-branch chips, so there was no way
+   * to answer "which clarifications are open, whose court are they in, and which are overdue"
+   * without walking every case. This is that list.
+   */
+  async getClarificationWorklist(): Promise<Array<{
+    id: string;
+    validationCaseId: string;
+    projectBranchId: string | null;
+    status: string;
+    queryText: string;
+    targetField: string | null;
+    branchName: string | null;
+    assayerName: string | null;
+    assayerCode: string | null;
+    createdAt: string;
+    lastMessageAt: string | null;
+    slaDueDate: string | null;
+    slaOverdue: boolean;
+    awaiting: 'US' | 'ASSAYER' | 'DONE';
+  }>> {
+    const rows = await this.queryRepository.manager.query(
+      `SELECT q.id, q.validation_case_id AS "validationCaseId", vc.project_branch_id AS "projectBranchId", q.status,
+              q.query_text AS "queryText", q.target_field AS "targetField",
+              q.created_at AS "createdAt", q.last_message_at AS "lastMessageAt",
+              q.sla_due_date AS "slaDueDate",
+              b.name AS "branchName", a.display_name AS "assayerName", a.assayer_code AS "assayerCode"
+         FROM validation_queries q
+         LEFT JOIN validation_cases vc ON vc.id = q.validation_case_id
+         LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
+         LEFT JOIN branches b ON b.id = pb.branch_id
+         LEFT JOIN assayers a ON a.id = q.assayer_id
+        WHERE q.is_active = true
+        ORDER BY q.sla_due_date ASC NULLS LAST, q.created_at DESC`,
+    );
+    const now = Date.now();
+    return rows.map((r: any) => {
+      // OPEN → we are waiting on the assayer; RESPONDED → the assayer answered, our move;
+      // RESOLVED → done. This split is the whole point of the worklist.
+      const awaiting = r.status === 'OPEN' ? 'ASSAYER' : r.status === 'RESPONDED' ? 'US' : 'DONE';
+      const slaOverdue = !!r.slaDueDate && r.status !== 'RESOLVED' && new Date(r.slaDueDate).getTime() < now;
+      return { ...r, awaiting, slaOverdue };
+    });
+  }
+
   async findAllQueries(): Promise<ValidationQueryEntity[]> {
     return this.queryRepository.find({
       where: { isActive: true },

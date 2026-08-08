@@ -37,6 +37,8 @@ import { HrDeploymentPage } from './pages/hr/HrDeploymentPage';
 import { HrUtilisationPage } from './pages/hr/HrUtilisationPage';
 import { HrActivityPage } from './pages/hr/HrActivityPage';
 import DataEntryDesk from './pages/dataentry/DataEntryDesk';
+import { DataEntryLayout } from './pages/dataentry/DataEntryLayout';
+import { ClarificationsPage } from './pages/dataentry/ClarificationsPage';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 
 interface UserProfile {
@@ -147,7 +149,10 @@ export const App: React.FC = () => {
         <Route path="/assignments" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Assignments /></ProtectedRoute>} />
         <Route path="/scheduling" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Scheduling /></ProtectedRoute>} />
         <Route path="/documents" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Documents /></ProtectedRoute>} />
-        <Route path="/data-entry" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><DataEntryDesk /></ProtectedRoute>} />
+        <Route path="/data-entry" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><DataEntryLayout /></ProtectedRoute>}>
+          <Route index element={<DataEntryDesk />} />
+          <Route path="clarifications" element={<ClarificationsPage />} />
+        </Route>
         {/* Validation is now part of the merged data-entry board. */}
         <Route path="/validation" element={<Navigate to="/data-entry" replace />} />
         <Route path="/users" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Users /></ProtectedRoute>} />

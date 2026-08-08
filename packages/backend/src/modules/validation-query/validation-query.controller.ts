@@ -277,6 +277,12 @@ export class ValidationQueryController {
   // ───────────────────────────────────────────────────────────────────────────
 
   @Roles(...STAFF_ROLES)
+  @Get('worklist')
+  @ApiOperation({ summary: 'All clarifications enriched for a worklist (branch, assayer, SLA, whose court)' })
+  async worklist() {
+    return { success: true, data: await this.validationQueryService.getClarificationWorklist() };
+  }
+
   @Get()
   @ApiOperation({ summary: 'List validation queries' })
   async findAll(@Query('assayerId') assayerId?: string) {

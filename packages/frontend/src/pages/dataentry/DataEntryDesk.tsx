@@ -221,21 +221,13 @@ export const DataEntryDesk: React.FC = () => {
   const openClarifications = queries.filter((q) => q.status !== 'RESOLVED').length;
 
   return (
-    <div style={{ padding: '18px 22px', maxWidth: '1600px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '14px', flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={{ fontSize: '21px', fontWeight: 700, margin: 0 }}>Data entry &amp; validation</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '3px' }}>
-            Returned packets end to end: assign, process, review, approve, submit.
-          </p>
+    <div>
+      {isHead && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px', marginBottom: '4px' }}>
+          <button onClick={() => setMineOnly(false)} className={mineOnly ? 'btn btn-secondary' : 'btn btn-primary'} style={{ fontSize: '12px', padding: '7px 12px' }}>Whole desk</button>
+          <button onClick={() => setMineOnly(true)} className={mineOnly ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: '12px', padding: '7px 12px' }}>Mine</button>
         </div>
-        {isHead && (
-          <div style={{ display: 'flex', gap: '4px' }}>
-            <button onClick={() => setMineOnly(false)} className={mineOnly ? 'btn btn-secondary' : 'btn btn-primary'} style={{ fontSize: '12px', padding: '7px 12px' }}>Whole desk</button>
-            <button onClick={() => setMineOnly(true)} className={mineOnly ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: '12px', padding: '7px 12px' }}>Mine</button>
-          </div>
-        )}
-      </div>
+      )}
 
       {err && (
         <div style={{ margin: '12px 0', padding: '9px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12.5px', display: 'flex', gap: '7px', alignItems: 'center' }}>

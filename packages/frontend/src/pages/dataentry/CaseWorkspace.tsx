@@ -60,7 +60,16 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   projectBranchId, onBack, onChanged,
 }) => {
   const roles = useCurrentRoles();
-  const canDecide = roles.some((r) =>
+  /**
+   * Two levels of authority, matching what the backend already permits and the real division of
+   * labour: a VALIDATOR verifies the keyed output — approve, or send back for correction — while
+   * only a manager or head SUBMITS the finished report to the client. The validator used to be
+   * excluded from every control despite the backend allowing their transitions, so the role the
+   * board is built for was effectively read-only.
+   */
+  const canReview = roles.some((r) =>
+    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR].includes(r));
+  const canSubmit = roles.some((r) =>
     [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.VALIDATION_MANAGER].includes(r));
 
   const [docs, setDocs] = useState<DocRow[] | null>(null);
@@ -232,7 +241,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                   </pre>
                 </details>
               )}
-              {canDecide && status !== 'SUBMITTED' && (
+              {canReview && status !== 'SUBMITTED' && (
                 <>
                   <textarea
                     value={notes}
@@ -258,11 +267,14 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                         <RotateCcw size={12} /> Request correction
                       </button>
                     )}
-                    {status === 'APPROVED' && (
+                    {status === 'APPROVED' && canSubmit && (
                       <button onClick={() => decide('SUBMITTED')} disabled={busy} className="btn btn-primary"
                         style={{ fontSize: '11.5px', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                         <SubmitIcon size={12} /> Submit to client
                       </button>
+                    )}
+                    {status === 'APPROVED' && !canSubmit && (
+                      <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', alignSelf: 'center' }}>Approved — a manager submits to the client.</span>
                     )}
                   </div>
                 </>
