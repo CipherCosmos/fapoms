@@ -48,6 +48,8 @@ import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker'
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
 import { RedisClientModule } from './infrastructure/redis/redis-client.module';
+import { CacheModule } from './infrastructure/cache/cache.module';
+import { ObservabilityModule } from './infrastructure/observability/observability.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -119,6 +121,14 @@ import { APP_GUARD } from '@nestjs/core';
     // Global Redis client (ioredis) — used by ChunkedUploadService for
     // multipart upload session state and any other direct Redis consumers.
     RedisClientModule,
+
+    // Global fault-tolerant JSON cache over the Redis client (RBAC principals,
+    // reference/config data). Imported after RedisClientModule so the REDIS_CLIENT
+    // token it depends on is available.
+    CacheModule,
+
+    // Prometheus metrics: /metrics endpoint + global HTTP timing interceptor.
+    ObservabilityModule,
 
     // Core modules
     AuditModule,

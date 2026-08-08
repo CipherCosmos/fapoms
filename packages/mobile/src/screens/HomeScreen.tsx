@@ -5,6 +5,7 @@ import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } fro
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, isAssignmentTerminal } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { StatsScreen } from './StatsScreen';
+import { countOpenQueries, countResolvedQueries } from '../utils/queries';
 import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
 
 export interface HomeScreenProps {
@@ -79,20 +80,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       .filter((a) => !isAssignmentTerminal(a.status))
       .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate))[0];
 
-    const queries = assignments.flatMap((a) => a.queries || []);
-
     return {
       current: inFlight || nextToday || nextEver || null,
       todays: todaysJobs,
-      /**
-       * Three states, counted as three.
-       *
-       * `!== 'OPEN'` previously folded RESPONDED in with RESOLVED, so a query the assayer had
-       * answered but nobody had closed was reported back to them as resolved — and the
-       * resolution rate on the stats card counted work that is still outstanding.
-       */
-      openQueries: queries.filter((q) => q.status === 'OPEN').length,
-      resolvedQueries: queries.filter((q) => q.status === 'RESOLVED').length,
+      // Both from the shared helper — the tab badge reads the same one.
+      openQueries: countOpenQueries(assignments),
+      resolvedQueries: countResolvedQueries(assignments),
     };
   }, [assignments]);
 
@@ -264,8 +257,16 @@ const CurrentJobCard: React.FC<{
         ) : (
           <Button label="Check in at branch" icon="location-outline" onPress={onCheckIn} full />
         )}
+        {/*
+          Directions disappear once the assayer is checked in — they are standing in the
+          branch, so a route to it is the one thing they cannot need. It was offered at every
+          status, which put a live control on the card for a journey already finished. The
+          schedule list already worked this way; this card did not.
+        */}
         <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-          <Button label="Navigate" icon="navigate" variant="neutral" onPress={onNavigate} style={{ flex: 1 }} />
+          {!checkedIn && (
+            <Button label="Navigate" icon="navigate" variant="neutral" onPress={onNavigate} style={{ flex: 1 }} />
+          )}
           <Button label="Details" icon="chevron-forward" variant="neutral" onPress={onOpen} style={{ flex: 1 }} />
         </View>
       </View>

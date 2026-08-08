@@ -9,7 +9,7 @@ try {
   Notifications = require('expo-notifications');
   Device = require('expo-device');
 } catch (err) {
-  console.log('Optional Expo notifications modules not loaded in bundle');
+  if (__DEV__) console.log('Optional Expo notifications modules not loaded in bundle');
 }
 
 if (Notifications && Notifications.setNotificationHandler) {
@@ -30,7 +30,7 @@ if (Notifications && Notifications.setNotificationHandler) {
 
 if (Platform.OS === 'android' && Notifications && Notifications.setNotificationChannelAsync) {
   Notifications.setNotificationChannelAsync('fapoms_audit_alerts', {
-    name: 'FAPOMS Audit Assignment Alerts',
+    name: 'Audit Assignment Alerts',
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 500, 250, 500],
     lightColor: '#FF6B00',
@@ -76,7 +76,7 @@ export function playNotificationSound() {
       osc2.stop(ctx.currentTime + 0.5);
     }
   } catch (e) {
-    console.log('Audio chime play error:', e);
+    if (__DEV__) console.log('Audio chime play error:', e);
   }
 }
 
@@ -101,7 +101,7 @@ export function triggerAlertNotification(title: string, body: string, data?: any
         renotify: true,
       });
     } catch (e) {
-      console.log('Web notification trigger error:', e);
+      if (__DEV__) console.log('Web notification trigger error:', e);
     }
   }
 
@@ -115,12 +115,12 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
       if (g.Notification.permission !== 'granted') {
         const perm = await g.Notification.requestPermission();
         if (perm === 'granted') {
-          console.log('Web Notification permission granted');
+          if (__DEV__) console.log('Web Notification permission granted');
         }
       }
       return 'web-simulated-push-token';
     } catch (e) {
-      console.log('Web notification setup failed:', e);
+      if (__DEV__) console.log('Web notification setup failed:', e);
     }
   }
 
@@ -196,7 +196,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 
     return token;
   } catch (err) {
-    console.log('Push notification registration error:', err);
+    if (__DEV__) console.log('Push notification registration error:', err);
     return null;
   }
 }
@@ -227,7 +227,7 @@ export async function unregisterPushNotificationsAsync(): Promise<boolean> {
     });
     return response.ok;
   } catch (err) {
-    console.log('Push unregister failed:', err);
+    if (__DEV__) console.log('Push unregister failed:', err);
     return false;
   }
 }

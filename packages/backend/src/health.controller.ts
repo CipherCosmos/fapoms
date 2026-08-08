@@ -1,21 +1,30 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Inject, Optional } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import type { Redis } from 'ioredis';
+import { REDIS_CLIENT } from './infrastructure/redis/redis-client.module';
 
 /**
- * Unauthenticated liveness check.
+ * Unauthenticated liveness/readiness checks.
  *
  * Deliberately outside the auth guards: its callers are things that cannot hold a token —
  * the mobile app's "test this server address" button, container healthchecks, and load
- * balancers. It reports only whether the process is up and whether the database answers,
- * and nothing about the data itself, so exposing it discloses nothing.
+ * balancers. It reports only whether the process is up and whether its backing services
+ * answer, and nothing about the data itself, so exposing it discloses nothing.
  */
 @ApiTags('Health')
 @Controller('health')
 export class HealthController {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional() @Inject(REDIS_CLIENT) private readonly redis?: Redis,
+  ) {}
 
+  /**
+   * Liveness — is the process up and can it reach its database? Kept cheap and
+   * dependency-light so a load balancer can hammer it.
+   */
   @Get()
   @ApiOperation({ summary: 'Liveness and database connectivity check' })
   async check() {
@@ -26,5 +35,39 @@ export class HealthController {
       database = 'down';
     }
     return { status: database === 'up' ? 'ok' : 'degraded', database };
+  }
+
+  /**
+   * Readiness — should this replica receive traffic? It checks every backing
+   * service the replica needs to serve requests correctly (DB + Redis, the latter
+   * powering rate limiting, caching and multi-node realtime). An orchestrator uses
+   * this to drain a replica whose Redis link has dropped rather than route to it.
+   */
+  @Get('ready')
+  @ApiOperation({ summary: 'Readiness check across backing services (DB, Redis)' })
+  async ready() {
+    const [database, redis] = await Promise.all([
+      this.dataSource
+        .query('SELECT 1')
+        .then(() => 'up')
+        .catch(() => 'down'),
+      this.pingRedis(),
+    ]);
+
+    // Redis absent (not configured) is treated as "not blocking readiness" so a
+    // single-node deployment without Redis still reports ready; a configured-but-
+    // unreachable Redis reports down.
+    const ready = database === 'up' && redis !== 'down';
+    return { status: ready ? 'ok' : 'degraded', database, redis };
+  }
+
+  private async pingRedis(): Promise<'up' | 'down' | 'absent'> {
+    if (!this.redis) return 'absent';
+    try {
+      await this.redis.ping();
+      return 'up';
+    } catch {
+      return 'down';
+    }
   }
 }

@@ -5,6 +5,10 @@ import { Repository, IsNull } from 'typeorm';
 import { ClientConfigurationEntity } from '../client/client-configuration.entity';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectEntity } from '../project/project.entity';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+
+/** Rate cards change rarely (contract renegotiations); a short TTL bounds staleness cheaply. */
+const RATES_CACHE_TTL_SECONDS = 300;
 
 /**
  * The single source of truth for what a field audit costs.
@@ -66,6 +70,7 @@ export class FeePolicyService {
     private readonly commercialRepository: Repository<AssayerCommercialProfileEntity>,
     @InjectRepository(ProjectEntity)
     private readonly projectRepository: Repository<ProjectEntity>,
+    private readonly cache: CacheService,
   ) {}
 
   /**
@@ -86,13 +91,22 @@ export class FeePolicyService {
    * `ratesFromConfiguration` instead of paying for another query.
    */
   async getRates(clientId?: string | null): Promise<FeeRates> {
-    if (!clientId) return this.ratesFromConfiguration(null);
+    // Read on every fee quote; cache the resolved rate card so a hot quoting path
+    // doesn't hit the configuration table each time. Read-through, so a cache miss
+    // (including Redis being down) simply resolves from the database as before.
+    if (!clientId) {
+      return this.cache.wrap('ref:rates:default', RATES_CACHE_TTL_SECONDS, async () =>
+        this.ratesFromConfiguration(null),
+      );
+    }
 
-    const config = await this.clientConfigRepository
-      .findOne({ where: { clientId }, order: { effectiveFrom: 'DESC' } })
-      .catch(() => null);
+    return this.cache.wrap(`ref:rates:client:${clientId}`, RATES_CACHE_TTL_SECONDS, async () => {
+      const config = await this.clientConfigRepository
+        .findOne({ where: { clientId }, order: { effectiveFrom: 'DESC' } })
+        .catch(() => null);
 
-    return this.ratesFromConfiguration(config);
+      return this.ratesFromConfiguration(config);
+    });
   }
 
   /** Same resolution, for callers that already loaded the configuration row. */

@@ -14,6 +14,10 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, canonicalState } from '@fapoms/shared';
 import { ClientConfigurationEntity } from '../client/client-configuration.entity';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+
+/** Holidays change rarely; a modest TTL keeps scheduling checks fast while bounding staleness. */
+const HOLIDAY_CACHE_TTL_SECONDS = 600;
 
 export interface CreateHolidayDto {
   name: string;
@@ -32,7 +36,13 @@ export class HolidayService {
     private readonly clientConfigRepository: Repository<ClientConfigurationEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly cache: CacheService,
   ) {}
+
+  /** Drop every cached holiday lookup after any write, so scheduling never reads a stale calendar. */
+  private async invalidateHolidayCache(): Promise<void> {
+    await this.cache.delByPattern('ref:holidays:*');
+  }
 
   async create(dto: CreateHolidayDto, userId: string): Promise<HolidayEntity> {
     const holidayDate = new Date(dto.date);
@@ -48,6 +58,7 @@ export class HolidayService {
     });
 
     const saved = await this.holidayRepository.save(holiday);
+    await this.invalidateHolidayCache();
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -91,6 +102,7 @@ export class HolidayService {
     holiday.updatedBy = userId;
 
     const saved = await this.holidayRepository.save(holiday);
+    await this.invalidateHolidayCache();
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -112,24 +124,27 @@ export class HolidayService {
   }
 
   async findAll(page = 1, limit = 50, year?: number, clientId?: string): Promise<{ holidays: HolidayEntity[]; total: number }> {
-    const query = this.holidayRepository.createQueryBuilder('holiday')
-      .where('holiday.is_active = :isActive', { isActive: true });
+    const cacheKey = `ref:holidays:list:${clientId ?? 'all'}:${year ?? 'all'}:${page}:${limit}`;
+    return this.cache.wrap(cacheKey, HOLIDAY_CACHE_TTL_SECONDS, async () => {
+      const query = this.holidayRepository.createQueryBuilder('holiday')
+        .where('holiday.is_active = :isActive', { isActive: true });
 
-    if (year) {
-      query.andWhere('holiday.year = :year', { year });
-    }
+      if (year) {
+        query.andWhere('holiday.year = :year', { year });
+      }
 
-    if (clientId) {
-      query.andWhere('(holiday.client_id = :clientId OR holiday.client_id IS NULL)', { clientId });
-    }
+      if (clientId) {
+        query.andWhere('(holiday.client_id = :clientId OR holiday.client_id IS NULL)', { clientId });
+      }
 
-    const [holidays, total] = await query
-      .orderBy('holiday.date', 'ASC')
-      .take(limit)
-      .skip((page - 1) * limit)
-      .getManyAndCount();
+      const [holidays, total] = await query
+        .orderBy('holiday.date', 'ASC')
+        .take(limit)
+        .skip((page - 1) * limit)
+        .getManyAndCount();
 
-    return { holidays, total };
+      return { holidays, total };
+    });
   }
 
   private readonly workingDaysCache = new Map<string, number[] | null>();
@@ -179,15 +194,21 @@ export class HolidayService {
     }
 
     const formattedDate = date.toISOString().split('T')[0];
-    const query = this.holidayRepository.createQueryBuilder('holiday')
-      .where('holiday.is_active = :isActive', { isActive: true })
-      .andWhere('holiday.date = :date', { date: formattedDate });
+    // Scheduling checks the same dates repeatedly; cache the registered-holiday lookup for
+    // this exact date + client. Only .length and .applicableStates are read below, both of
+    // which survive a JSON round-trip, so a cache hit behaves identically to a fresh query.
+    const holidaysCacheKey = `ref:holidays:${clientId ?? 'all'}:${formattedDate}`;
+    const holidays = await this.cache.wrap(holidaysCacheKey, HOLIDAY_CACHE_TTL_SECONDS, () => {
+      const query = this.holidayRepository.createQueryBuilder('holiday')
+        .where('holiday.is_active = :isActive', { isActive: true })
+        .andWhere('holiday.date = :date', { date: formattedDate });
 
-    if (clientId) {
-      query.andWhere('(holiday.client_id = :clientId OR holiday.client_id IS NULL)', { clientId });
-    }
+      if (clientId) {
+        query.andWhere('(holiday.client_id = :clientId OR holiday.client_id IS NULL)', { clientId });
+      }
 
-    const holidays = await query.getMany();
+      return query.getMany();
+    });
 
     if (holidays.length === 0) return false;
 
@@ -213,6 +234,7 @@ export class HolidayService {
     holiday.isActive = false;
     holiday.updatedBy = userId;
     await this.holidayRepository.save(holiday);
+    await this.invalidateHolidayCache();
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,

@@ -10,6 +10,10 @@ import { getPreference, setPreference as setDevicePreference } from '../services
 import { MobileApiService, NotificationPreference } from '../services/api.service';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
+import Constants from 'expo-constants';
+import * as LocalAuthentication from 'expo-local-authentication';
+
+const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
 /**
  * The assayer's record as the app holds it.
@@ -118,6 +122,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
    */
   const [soundAlerts, setSoundAlerts] = useState(() => getPreference('soundAlerts'));
   const [biometrics, setBiometrics] = useState(() => getPreference('biometrics'));
+  const [sensor, setSensor] = useState<'checking' | 'ready' | 'not-enrolled' | 'none'>('checking');
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [hasHardware, isEnrolled] = await Promise.all([
+        LocalAuthentication.hasHardwareAsync().catch(() => false),
+        LocalAuthentication.isEnrolledAsync().catch(() => false),
+      ]);
+      if (cancelled) return;
+      setSensor(!hasHardware ? 'none' : isEnrolled ? 'ready' : 'not-enrolled');
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [pushEnabled, setPushEnabled] = useState(() => getPreference('pushEnabled'));
   const [pushBusy, setPushBusy] = useState(false);
 
@@ -238,6 +256,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     </View>
   );
 
+  /**
+   * The details the back office needs before this assayer can be paid or dispatched.
+   *
+   * Ordered by consequence: without a bank account and PAN the billing run cannot pay them at
+   * all, and without a phone number the desk cannot reach them at a branch.
+   */
+  const missingFields = ([
+    { value: profile.bankAccountNumber, label: 'Bank account number', tab: 'WORK' as const },
+    { value: profile.ifscCode, label: 'IFSC code', tab: 'WORK' as const },
+    { value: profile.panNumber, label: 'PAN number', tab: 'WORK' as const },
+    { value: profile.phone, label: 'Phone number', tab: 'PROFILE' as const },
+    { value: profile.emergencyPhone, label: 'Emergency contact', tab: 'PROFILE' as const },
+  ]).filter((f) => !String(f.value ?? '').trim());
+
   const THEME_OPTIONS: { key: ThemePreference; label: string; icon: 'contrast-outline' | 'sunny-outline' | 'moon-outline' }[] = [
     { key: 'system', label: 'System', icon: 'contrast-outline' },
     { key: 'light', label: 'Light', icon: 'sunny-outline' },
@@ -246,15 +278,52 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   return (
     <View style={{ gap: t.space.xl }}>
-      {/* Identity */}
-      <Card level={2} style={{ alignItems: 'center', gap: t.space.md }}>
-        <Avatar name={assayerName || 'Assayer'} size={72} />
-        <View style={{ alignItems: 'center', gap: 4 }}>
-          <AppText variant="h2">{assayerName || 'Field Assayer'}</AppText>
-          {(assayerCode || profile.assayerCode) ? (
-            <Badge label={assayerCode || profile.assayerCode} tone="primary" icon="id-card-outline" />
-          ) : null}
+      {/*
+        Identity, and what is stopping this record from being usable.
+
+        The header was an avatar and a name — decorative space at the top of the one screen an
+        assayer visits to fix their own details. The gap it should have been closing is that
+        payouts stall on missing bank or PAN details and nothing in the app ever said so; the
+        assayer found out when money did not arrive.
+      */}
+      <Card level={2} style={{ gap: t.space.lg }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg }}>
+          <Avatar name={assayerName || 'Assayer'} size={64} />
+          <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+            <AppText variant="h2" numberOfLines={1}>{assayerName || 'Field Assayer'}</AppText>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
+              {(assayerCode || profile.assayerCode) ? (
+                <Badge label={assayerCode || profile.assayerCode} tone="primary" icon="id-card-outline" />
+              ) : null}
+              {profile.employmentType ? (
+                <Badge label={profile.employmentType === 'INTERNAL' ? 'In-house' : 'Contract'} tone="neutral" />
+              ) : null}
+            </View>
+          </View>
         </View>
+
+        {missingFields.length > 0 ? (
+          <Tappable onPress={() => setTab(missingFields[0].tab)}>
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+              padding: t.space.md, borderRadius: t.radius.md, backgroundColor: t.colors.warningSoft,
+            }}>
+              <Icon name="alert-circle-outline" size={18} color={t.colors.warning} />
+              <AppText variant="small" tone="warning" style={{ flex: 1 }}>
+                {missingFields.length === 1
+                  ? `${missingFields[0].label} is missing.`
+                  : `${missingFields.length} details missing, including ${missingFields[0].label.toLowerCase()}.`}
+                {' '}Payments and assignments can be held up without these.
+              </AppText>
+              <Icon name="chevron-forward" size={16} color={t.colors.warning} />
+            </View>
+          </Tappable>
+        ) : (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
+            <Icon name="checkmark-circle" size={18} color={t.colors.success} />
+            <AppText variant="small" tone="muted">Your record is complete.</AppText>
+          </View>
+        )}
       </Card>
 
       <StatStrip>
@@ -272,7 +341,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           { k: 'PROFILE' as const, label: 'Profile', icon: 'person-outline' as const },
           { k: 'WORK' as const, label: 'Work', icon: 'briefcase-outline' as const },
           { k: 'STATS' as const, label: 'Stats', icon: 'stats-chart-outline' as const },
-          { k: 'APP' as const, label: 'App', icon: 'settings-outline' as const },
+          { k: 'APP' as const, label: 'Settings', icon: 'settings-outline' as const },
         ]).map((s) => {
           const active = tab === s.k;
           return (
@@ -502,21 +571,40 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
           <Section title="Security & Biometrics">
             <Card level={1} style={{ gap: t.space.md }}>
-              {/* Controls whether the sign-in screen offers the biometric option at all.
-                  Persisted to the device, so it survives a restart. */}
+              {/* Controls the lock over a restored session, and whether the sign-in screen
+                  offers the biometric option. Persisted to the device, so it survives a
+                  restart. */}
               <Toggle
-                label="Biometric Sign-In"
-                hint="Use fingerprint or face sensor to quickly sign into your assayer workspace"
+                label="Biometric Lock"
+                hint="Require your fingerprint or face to open Karat, and after two minutes away from the app"
                 value={biometrics}
                 onChange={async (v) => { setBiometrics(v); await setDevicePreference('biometrics', v); }}
               />
               <Divider spacing={t.space.xs} />
+              {/*
+                Reports what the handset actually has. This row rendered a hardcoded "ACTIVE"
+                badge and the words "Biometric hardware ready" on every device — including one
+                with no sensor, or a sensor with no fingerprint enrolled, where the lock cannot
+                engage at all. It told the assayer their session was protected when it was not.
+              */}
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <View style={{ gap: 2, flex: 1 }}>
-                  <AppText variant="small">Hardware Sensor</AppText>
-                  <AppText variant="caption" tone="faint">Biometric hardware ready (Fingerprint / Face ID)</AppText>
+                  <AppText variant="small">Hardware sensor</AppText>
+                  <AppText variant="caption" tone="faint">
+                    {sensor === 'ready'
+                      ? 'Fingerprint or face recognition enrolled on this device'
+                      : sensor === 'not-enrolled'
+                        ? 'Sensor present, but no fingerprint or face is enrolled. Add one in your phone settings.'
+                        : sensor === 'none'
+                          ? 'This device has no biometric sensor. Sign in with your password.'
+                          : 'Checking…'}
+                  </AppText>
                 </View>
-                <Badge label="ACTIVE" tone="success" icon="shield-checkmark-outline" />
+                <Badge
+                  label={sensor === 'ready' ? 'READY' : sensor === 'checking' ? '…' : 'UNAVAILABLE'}
+                  tone={sensor === 'ready' ? 'success' : 'neutral'}
+                  icon={sensor === 'ready' ? 'shield-checkmark-outline' : 'alert-circle-outline'}
+                />
               </View>
             </Card>
           </Section>
@@ -568,36 +656,41 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </Card>
           </Section>
 
-          <Section title="Operations Desk & Hotline">
-            <Card level={1} style={{ gap: t.space.md }}>
-              <AppText variant="caption" tone="muted">
-                Need immediate assistance during a branch audit? Contact operations dispatch desk directly.
-              </AppText>
-              <View style={{ flexDirection: 'row', gap: t.space.md }}>
-                <View style={{ flex: 1 }}>
-                  <Button label="Ops Hotline" icon="call-outline" variant="neutral" size="sm" full />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Button label="Emergency SOS" icon="alert-circle-outline" variant="danger" size="sm" full />
-                </View>
-              </View>
-            </Card>
-          </Section>
+          {/*
+            An "Operations Desk & Hotline" card sat here with "Ops Hotline" and "Emergency SOS"
+            buttons. Neither had an onPress — they were painted controls. In a field app the
+            emergency button is the one thing that must never be decorative, so it is removed
+            rather than left looking available. Queries to the desk go through the thread on
+            the assignment itself, which is a real channel with a record.
+          */}
         </>
       )}
 
-      <Button
-        label={savingProfile ? 'Saving…' : 'Save changes'}
-        icon="save-outline"
-        onPress={onSaveProfile}
-        loading={savingProfile}
-        size="lg"
-        full
-      />
+      {/* Only on the tabs that hold editable fields. On Stats and Settings it was a primary
+          action that saved nothing the user had touched. */}
+      {(tab === 'PROFILE' || tab === 'WORK') && (
+        <Button
+          label={savingProfile ? 'Saving…' : 'Save changes'}
+          icon="save-outline"
+          onPress={onSaveProfile}
+          loading={savingProfile}
+          size="lg"
+          full
+        />
+      )}
 
       <View style={{ alignItems: 'center', paddingVertical: t.space.sm, gap: 2 }}>
-        <AppText variant="caption" tone="faint">FAPOMS Field Assayer Suite • v2.4.12-release</AppText>
-        <AppText variant="caption" tone="faint">AES-256 Encrypted • TLS 1.3 Secure Connection</AppText>
+        {/*
+          Read from the build rather than typed in. This said "v2.4.12-release" while the app
+          it shipped in was 1.0.0 — a support call asking "which version are you on?" would
+          have been answered with a number that never existed.
+
+          The line under it used to claim "AES-256 Encrypted • TLS 1.3 Secure Connection".
+          Neither was true of what the app does: it talks to a configurable host over plain
+          HTTP on the LAN, and nothing here encrypts at rest beyond the OS keystore holding the
+          session token. A false security claim in a bank audit tool is worse than no claim.
+        */}
+        <AppText variant="caption" tone="faint">Karat Field Assayer • v{appVersion}</AppText>
       </View>
 
       {onLogout && (

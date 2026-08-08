@@ -26,17 +26,29 @@ export function connectMobileSocket(): Socket | null {
     auth: (cb) => cb({ token: MobileApiService.getAuthToken() }),
     transports: ['websocket', 'polling'],
     reconnection: true,
-    reconnectionAttempts: 10,
+    /**
+     * Never stop trying.
+     *
+     * This was 10 attempts with a 5-second ceiling, so the socket gave up for good after
+     * roughly a minute offline and stayed dead for the rest of the session. That is precisely
+     * the field pattern: an assayer spends twenty minutes in a bank vault with no signal,
+     * comes out, and the app has silently stopped receiving anything live until it is force
+     * closed and reopened.
+     */
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
+    // Backed off further so a long outage across a whole roster does not turn into every
+    // handset retrying twelve times a minute against the same server.
+    reconnectionDelayMax: 30000,
+    randomizationFactor: 0.5,
   });
 
   socket.on('connect', () => {
-    console.log('[MobileSocket] Connected:', socket?.id);
+    if (__DEV__) console.log('[MobileSocket] Connected:', socket?.id);
   });
 
   socket.on('disconnect', (reason) => {
-    console.log('[MobileSocket] Disconnected:', reason);
+    if (__DEV__) console.log('[MobileSocket] Disconnected:', reason);
   });
 
   socket.on('error', async (err) => {

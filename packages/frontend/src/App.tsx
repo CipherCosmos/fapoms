@@ -1,45 +1,69 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { Dashboard } from './pages/Dashboard';
-import { ExecutiveMap } from './pages/ExecutiveMap';
-import { Projects } from './pages/Projects';
-import { Branches } from './pages/Branches';
-import { PlanningWorkspace } from './pages/PlanningWorkspace';
-import { Assignments } from './pages/Assignments';
-import { Scheduling } from './pages/Scheduling';
-import { Documents } from './pages/Documents';
-import { Users } from './pages/Users';
-import { AssayerProfile } from './pages/AssayerProfile';
-import { Clients } from './pages/Clients';
-import { Billing } from './pages/Billing';
-import { LedgerPage } from './pages/billing/LedgerPage';
-import { ClientBillingSettingsPage } from './pages/billing/ClientBillingSettingsPage';
-import { AssayerStatementPage } from './pages/billing/AssayerStatementPage';
-import { Rules } from './pages/Rules';
-import { Notifications } from './pages/Notifications';
-import { Holidays } from './pages/Holidays';
-import Settings from './pages/Settings';
 import { api } from './services/api';
-import { HrLayout } from './pages/hr/HrLayout';
-import { HrOverviewPage } from './pages/hr/HrOverviewPage';
-import { HrRosterPage } from './pages/hr/HrRosterPage';
-import { HrOnboardingPage } from './pages/hr/HrOnboardingPage';
-import { HrRecordsPage } from './pages/hr/HrRecordsPage';
-import { HrCompliancePage } from './pages/hr/HrCompliancePage';
-import { HrCapabilityPage } from './pages/hr/HrCapabilityPage';
-import { HrDocumentsPage } from './pages/hr/HrDocumentsPage';
-import { HrPayPage } from './pages/hr/HrPayPage';
-import { HrDeploymentPage } from './pages/hr/HrDeploymentPage';
-import { HrUtilisationPage } from './pages/hr/HrUtilisationPage';
-import { HrActivityPage } from './pages/hr/HrActivityPage';
-import DataEntryDesk from './pages/dataentry/DataEntryDesk';
-import { DataEntryLayout } from './pages/dataentry/DataEntryLayout';
-import { ClarificationsPage } from './pages/dataentry/ClarificationsPage';
 import ForcePasswordChange from './pages/ForcePasswordChange';
+
+/**
+ * Route pages are code-split so the initial bundle carries only the login/shell critical path.
+ *
+ * Each page becomes its own chunk that Rollup loads on demand when its route is first visited,
+ * keeping heavy views (PlanningWorkspace, billing, HR, the pdf.js-backed data-entry desk) out of
+ * the entry bundle. Pages that already have a default export are imported directly; the rest are
+ * named exports, so the promise is mapped to `{ default }` for React.lazy.
+ */
+const Dashboard = React.lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.Dashboard })));
+const ExecutiveMap = React.lazy(() => import('./pages/ExecutiveMap').then((m) => ({ default: m.ExecutiveMap })));
+const Projects = React.lazy(() => import('./pages/Projects').then((m) => ({ default: m.Projects })));
+const Branches = React.lazy(() => import('./pages/Branches').then((m) => ({ default: m.Branches })));
+const PlanningWorkspace = React.lazy(() => import('./pages/PlanningWorkspace').then((m) => ({ default: m.PlanningWorkspace })));
+const Assignments = React.lazy(() => import('./pages/Assignments').then((m) => ({ default: m.Assignments })));
+const Scheduling = React.lazy(() => import('./pages/Scheduling').then((m) => ({ default: m.Scheduling })));
+const Documents = React.lazy(() => import('./pages/Documents').then((m) => ({ default: m.Documents })));
+const Users = React.lazy(() => import('./pages/Users'));
+const AssayerProfile = React.lazy(() => import('./pages/AssayerProfile'));
+const Clients = React.lazy(() => import('./pages/Clients').then((m) => ({ default: m.Clients })));
+const Billing = React.lazy(() => import('./pages/Billing').then((m) => ({ default: m.Billing })));
+const LedgerPage = React.lazy(() => import('./pages/billing/LedgerPage').then((m) => ({ default: m.LedgerPage })));
+const ClientBillingSettingsPage = React.lazy(() => import('./pages/billing/ClientBillingSettingsPage').then((m) => ({ default: m.ClientBillingSettingsPage })));
+const AssayerStatementPage = React.lazy(() => import('./pages/billing/AssayerStatementPage').then((m) => ({ default: m.AssayerStatementPage })));
+const Rules = React.lazy(() => import('./pages/Rules'));
+const Notifications = React.lazy(() => import('./pages/Notifications'));
+const Holidays = React.lazy(() => import('./pages/Holidays'));
+const Settings = React.lazy(() => import('./pages/Settings'));
+const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
+const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
+const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
+const HrOnboardingPage = React.lazy(() => import('./pages/hr/HrOnboardingPage').then((m) => ({ default: m.HrOnboardingPage })));
+const HrRecordsPage = React.lazy(() => import('./pages/hr/HrRecordsPage').then((m) => ({ default: m.HrRecordsPage })));
+const HrCompliancePage = React.lazy(() => import('./pages/hr/HrCompliancePage').then((m) => ({ default: m.HrCompliancePage })));
+const HrCapabilityPage = React.lazy(() => import('./pages/hr/HrCapabilityPage').then((m) => ({ default: m.HrCapabilityPage })));
+const HrDocumentsPage = React.lazy(() => import('./pages/hr/HrDocumentsPage').then((m) => ({ default: m.HrDocumentsPage })));
+const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
+const HrDeploymentPage = React.lazy(() => import('./pages/hr/HrDeploymentPage').then((m) => ({ default: m.HrDeploymentPage })));
+const HrUtilisationPage = React.lazy(() => import('./pages/hr/HrUtilisationPage').then((m) => ({ default: m.HrUtilisationPage })));
+const HrActivityPage = React.lazy(() => import('./pages/hr/HrActivityPage').then((m) => ({ default: m.HrActivityPage })));
+const DataEntryDesk = React.lazy(() => import('./pages/dataentry/DataEntryDesk'));
+const DataEntryLayout = React.lazy(() => import('./pages/dataentry/DataEntryLayout').then((m) => ({ default: m.DataEntryLayout })));
+const ClarificationsPage = React.lazy(() => import('./pages/dataentry/ClarificationsPage').then((m) => ({ default: m.ClarificationsPage })));
+
+/** Lightweight fallback shown while a route chunk is fetched. Mirrors ProtectedRoute's loader. */
+const RouteFallback: React.FC = () => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: '60vh',
+      color: 'var(--text-muted)',
+    }}
+  >
+    Loading…
+  </div>
+);
 
 interface UserProfile {
   displayName: string;
@@ -140,6 +164,7 @@ export const App: React.FC = () => {
 
   return (
     <Layout onLogout={handleLogout} user={currentUser || undefined}>
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route path="/dashboard" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Dashboard /></ProtectedRoute>} />
         <Route path="/executive-map" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><ExecutiveMap /></ProtectedRoute>} />
@@ -185,6 +210,7 @@ export const App: React.FC = () => {
         
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      </Suspense>
     </Layout>
   );
 };

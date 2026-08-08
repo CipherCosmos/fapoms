@@ -421,11 +421,27 @@ export class ValidationQueryService {
     });
   }
 
-  async findAllQueries(): Promise<ValidationQueryEntity[]> {
-    return this.queryRepository.find({
+  /**
+   * Paginated list of active validation queries, newest first.
+   *
+   * This table is append-only and never pruned, so an unbounded `find()` grew
+   * heavier with every clarification ever raised. Defaults to the first 50 rows;
+   * `limit` is clamped to a sane 1..200 window so a caller can't ask for the
+   * whole table back in one request.
+   */
+  async findAllQueries(
+    page = 1,
+    limit = 50,
+  ): Promise<{ items: ValidationQueryEntity[]; total: number; page: number; limit: number }> {
+    const safeLimit = Math.min(Math.max(Math.trunc(Number(limit)) || 50, 1), 200);
+    const safePage = Math.max(Math.trunc(Number(page)) || 1, 1);
+    const [items, total] = await this.queryRepository.findAndCount({
       where: { isActive: true },
       order: { createdAt: 'DESC' },
+      take: safeLimit,
+      skip: (safePage - 1) * safeLimit,
     });
+    return { items, total, page: safePage, limit: safeLimit };
   }
 
   async findByAssayer(assayerId: string): Promise<ValidationQueryEntity[]> {

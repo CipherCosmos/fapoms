@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text } from 'react-native';
+import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text, BackHandler, AppState } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
@@ -11,6 +11,8 @@ import {
   triggerAlertNotification,
 } from './src/services/notification.service';
 import { getAssignmentTotalFee } from './src/utils/fees';
+import { connectMobileSocket } from './src/services/socket';
+import { countOpenQueries } from './src/utils/queries';
 import { assetToBase64 } from './src/utils/pickDocument';
 
 // Context Providers
@@ -21,12 +23,13 @@ import { AssignmentProvider, useAssignments } from './src/context/AssignmentCont
 
 // UI Shell
 import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
-import { AppText, Button } from './src/components/ui/primitives';
+import { AppText, Button, Icon, Tappable } from './src/components/ui/primitives';
 import { FeedbackProvider, useFeedback } from './src/components/ui/Feedback';
 
 // Screens
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ChangePasswordScreen } from './src/screens/ChangePasswordScreen';
+import { LockScreen } from './src/screens/LockScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ScheduleScreen } from './src/screens/ScheduleScreen';
 import { PdfDocsScreen } from './src/screens/PdfDocsScreen';
@@ -52,9 +55,9 @@ const DEEP_LINK_MAX_AGE_MS = 10 * 60 * 1000;
 
 function AppMain() {
   const theme = useTheme();
-  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword } = useAuth();
+  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock } = useAuth();
   const { location, refreshLocation } = useLocation();
-  const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense } = useAssignments();
+  const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt } = useAssignments();
 
   const [selectedTab, setSelectedTab] = useState<TabType>('HOME');
   const [refreshing, setRefreshing] = useState(false);
@@ -201,6 +204,9 @@ function AppMain() {
     const assignmentId: string | undefined =
       data.entityId || (typeof data.link === 'string' ? data.link.replace('/assignments/', '') : undefined);
     if (!assignmentId) return;
+    // Dismiss any open detail view too, or the tab change lands behind it and the tapped
+    // notification appears to do nothing.
+    setPdfDocsAssignment(null);
     setSelectedTab('SCHEDULE');
     setPendingNotificationTarget({ assignmentId, category: data.category });
   }, []);
@@ -273,15 +279,54 @@ function AppMain() {
       loadAssayerProfile();
       loadExpenseSummary();
 
-      // Silent background auto-refresh every 30 seconds
+      const socket = connectMobileSocket();
+
+      /**
+       * The unread count, live.
+       *
+       * The bell badge only moved when something else happened to call `loadNotifications` —
+       * a 30-second poll, or opening the panel. The backend has always emitted
+       * `notification:new` straight to this assayer's own room; nothing subscribed to it.
+       */
+      const onNotification = () => loadNotifications();
+
+      /** A validated payable changes the balance on Home and Earnings, not the schedule. */
+      const onBilling = () => {
+        loadAssayerProfile();
+        loadExpenseSummary();
+      };
+
+      socket?.on('notification:new', onNotification);
+      socket?.on('billing:created', onBilling);
+      socket?.on('expense:decided', onBilling);
+
+      /**
+       * A safety net, not the delivery mechanism.
+       *
+       * This polled every 30 seconds — two requests per handset per half-minute, running
+       * whether or not anything had changed and whether or not the app was even on screen.
+       * Across a full field roster that is a constant load floor that grows with headcount,
+       * and it was the only thing making most updates appear at all.
+       *
+       * With the socket subscriptions above carrying the real changes, this exists solely to
+       * recover from a missed event, so it can be far slower — and it skips entirely while the
+       * app is backgrounded, where a refresh benefits nobody and costs the assayer battery
+       * and mobile data.
+       */
       const timer = setInterval(() => {
+        if (AppState.currentState !== 'active') return;
         loadAssignments();
         loadNotifications();
-      }, 30000);
+      }, 5 * 60 * 1000);
 
-      return () => clearInterval(timer);
+      return () => {
+        clearInterval(timer);
+        socket?.off('notification:new', onNotification);
+        socket?.off('billing:created', onBilling);
+        socket?.off('expense:decided', onBilling);
+      };
     }
-  }, [isAuthenticated, loadNotifications, loadAssayerProfile, loadAssignments]);
+  }, [isAuthenticated, loadNotifications, loadAssayerProfile, loadAssignments, loadExpenseSummary]);
 
   // Push reliability across app state: this is the piece that was entirely missing.
   // `registerForPushNotificationsAsync` above got a token registered, but nothing was ever
@@ -449,6 +494,58 @@ function AppMain() {
     setUploadingPdf(false);
   }, []);
 
+  /**
+   * The assignment detail view replaces the whole tab body, so it needs a way out.
+   *
+   * It had none: no back control was rendered, and switching tabs did not clear it either —
+   * `pdfDocsAssignment` stayed set, so the detail view kept winning over whichever tab was
+   * selected. Opening any assignment left the app with no route back short of force-closing it.
+   */
+  /**
+   * Every tab shares one ScrollView, so its offset carried over between them: scrolling to the
+   * bottom of the schedule and then opening Earnings landed you halfway down a screen you had
+   * never scrolled, with the top of it — the balance — off-screen.
+   */
+  const scrollRef = useRef<ScrollView>(null);
+
+  const handleSelectTab = useCallback((tab: TabType) => {
+    setPdfDocsAssignment(null);
+    setSelectedTab(tab);
+    // Tapping the tab you are already on returns you to the top of it, which is the
+    // convention everywhere else and the only way back up a long schedule without dragging.
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }, []);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [selectedTab, pdfDocsAssignment]);
+
+  /**
+   * Android hardware/gesture back, resolved in one place.
+   *
+   * Back is the motion a user makes before looking for a control, and it previously only did
+   * something inside the assignment detail view. From any tab other than Home it fell through
+   * to the OS and closed the app — so an assayer glancing at Earnings and swiping back lost
+   * the screen entirely and had to cold-start to get back to work.
+   *
+   * The order below is the reverse of how the screen was reached: detail first, then back to
+   * Home, and only from Home does it leave the app.
+   */
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (pdfDocsAssignment) {
+        handleClosePdfDocs();
+        return true;
+      }
+      if (selectedTab !== 'HOME') {
+        setSelectedTab('HOME');
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [pdfDocsAssignment, handleClosePdfDocs, selectedTab]);
+
   const handleSelectPdfFile = useCallback(async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -508,7 +605,7 @@ function AppMain() {
   if (!isAuthenticated) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
-        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
+        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
         <LoginScreen
           onLogin={async (u, p) => {
             // An empty form is an empty form. This used to substitute a real assayer's
@@ -530,6 +627,21 @@ function AppMain() {
   }
 
   /**
+   * A restored session stays behind the biometric gate until it is unlocked.
+   *
+   * Placed after the authentication check and before everything else so no assignment data
+   * mounts underneath it — the schedule carries branch addresses and gold-packet detail.
+   */
+  if (locked) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
+        <LockScreen name={assayerName} onUnlock={unlock} onSignOut={logout} />
+      </SafeAreaView>
+    );
+  }
+
+  /**
    * An account still holding an issued password sees only the change-password screen.
    *
    * Placed after the authentication gate because changing a password requires a session, and
@@ -539,13 +651,14 @@ function AppMain() {
   if (user?.mustChangePassword) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
-        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
+        <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
         <ChangePasswordScreen onChanged={clearMustChangePassword} onLogout={logout} />
       </SafeAreaView>
     );
   }
 
-  const queryCount = assignments.filter((a) => (a.queries || []).some((q) => q.status !== 'RESOLVED')).length;
+  // Same helper Home uses, so the badge and the row beneath it can never disagree.
+  const queryCount = countOpenQueries(assignments);
 
   const totalEarnings = assignments
     .filter((a) => a.status === 'COMPLETED')
@@ -557,7 +670,7 @@ function AppMain() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
-      <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
 
       {/* Header */}
       <TopBar
@@ -565,12 +678,12 @@ function AppMain() {
         subtitle={profile.assayerCode ? `Code: ${profile.assayerCode}` : (user?.assayerCode ? `Code: ${user.assayerCode}` : 'Field Assayer')}
         unreadCount={unreadNotifCount}
         onNotifications={() => { loadNotifications(); setNotifModalVisible(true); }}
-        onRefresh={handleRefresh}
-        refreshing={refreshing}
+        onOpenProfile={() => handleSelectTab('MY_PROFILE')}
       />
 
       {/* Main Content Area */}
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingHorizontal: theme.space.lg,
@@ -590,6 +703,21 @@ function AppMain() {
         }
       >
         {pdfDocsAssignment ? (
+          <>
+          <Tappable
+            onPress={handleClosePdfDocs}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.space.sm,
+              paddingVertical: theme.space.md,
+            }}
+          >
+            <Icon name="arrow-back" size={20} color={theme.colors.primary} />
+            <AppText variant="bodyStrong" tone="primary">
+              {pdfDocsAssignment.branchName || 'Back'}
+            </AppText>
+          </Tappable>
           <PdfDocsScreen
             activeAssignment={pdfDocsAssignment}
             uploadedPdfName={stagedPdf?.name ?? null}
@@ -602,6 +730,7 @@ function AppMain() {
             onSubmitCompletedPdf={handleSubmitCompletedPdf}
             onOpenExpenseModal={() => setExpenseModalVisible(true)}
           />
+          </>
         ) : (
         <>
         {selectedTab === 'HOME' && (
@@ -621,6 +750,8 @@ function AppMain() {
             onNavigate={(a) => setNavAssignment(a)}
             onSeeSchedule={() => setSelectedTab('SCHEDULE')}
             onSeeQueries={() => setSelectedTab('QUERIES')}
+            stale={stale}
+            lastSyncedAt={lastSyncedAt}
           />
         )}
 
@@ -697,7 +828,7 @@ function AppMain() {
       </ScrollView>
 
       {/* Floating Animated Navigation Dock */}
-      <TabDock selected={selectedTab} onSelect={setSelectedTab} queryCount={queryCount} />
+      <TabDock selected={selectedTab} onSelect={handleSelectTab} queryCount={queryCount} />
 
       {/* Modals */}
       <RejectionModal
@@ -937,7 +1068,7 @@ class AppErrorBoundary extends React.Component<
           <StatusBar barStyle="light-content" />
           <View style={{ gap: 12, alignItems: 'center' }}>
             <ActivityIndicator size="large" color="#FF6B00" />
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>FAPOMS Field Assayer</Text>
+            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>Karat</Text>
             <Text style={{ color: '#ef4444', textAlign: 'center', marginVertical: 10 }}>
               {String(this.state.error?.message || this.state.error || 'App encountered an error')}
             </Text>

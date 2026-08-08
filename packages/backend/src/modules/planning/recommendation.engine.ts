@@ -930,6 +930,30 @@ export interface RecommendationPreload {
   assayers: AssayerEntity[];
 }
 
+/**
+ * Coarse geographic pre-filter for the candidate pool.
+ *
+ * Before any scoring, the candidate set is narrowed to assayers whose registered home is within
+ * this many kilometres of the branch (plus anyone sharing a live location — see
+ * findNearbyActiveAssayerIds). This bounds an otherwise O(branches × all-assayers) pass: every
+ * branch previously scored, routed, and ran seven eligibility filters against every active
+ * assayer in the country, so at national headcount the cost of one recommendation grew with total
+ * workforce size rather than with anything about the branch.
+ *
+ * It is deliberately generous — far wider than the ~50 km serviceability radius the day planner
+ * and the distance scorers work in — because this is only a "could this person conceivably be
+ * considered?" bound, not a serviceability decision. Distance still ranks candidates
+ * (DistanceScoreCalculator / TravelTimeScoreCalculator) and the client's min-distance floor still
+ * excludes them (DistancePolicyFilter); this only keeps the pool from spanning the whole country.
+ * The effective radius is max(this, the client's configured defaultRadius), so a client that
+ * widens its serviceability radius past this is never pruned inside it.
+ *
+ * Additive and reversible: if the branch has no coordinates, nobody falls in range, or the
+ * spatial query fails, the engine falls back to the full active pool exactly as before, so
+ * coverage is never silently reduced.
+ */
+const CANDIDATE_PREFILTER_RADIUS_KM = 200;
+
 @Injectable()
 export class RecommendationEngine {
   private static readonly logger = new Logger(RecommendationEngine.name);
@@ -1043,6 +1067,55 @@ export class RecommendationEngine {
     return { client, assayers };
   }
 
+  /**
+   * IDs of the active assayers worth scoring for a given branch: those whose registered home is
+   * within `radiusKm` of the branch, plus any assayer sharing a live location. Returns null to
+   * signal "no usable pre-filter" — the branch has no coordinates, nobody fell in range, or the
+   * spatial query failed — in which case the caller keeps the full active pool exactly as before,
+   * so this can only ever shrink the pool, never silently empty it.
+   *
+   * Home coordinates (latitude/longitude) are used deliberately, matching the conflict-of-interest
+   * floor in DistancePolicyFilter: a candidate pool that moved with someone's phone would not be a
+   * stable notion of "near this branch". Live-enabled assayers are kept unconditionally so an
+   * opted-in mobile auditor whose home is far away is never dropped by a stale home coordinate —
+   * their effective (live) position is what the scorers actually route from.
+   *
+   * ST_DistanceSphere on ST_SetSRID(ST_MakePoint(lng, lat), 4326) mirrors the existing spatial
+   * queries in RoutingService and CommandCenterService (metres, computed from the lat/long columns
+   * rather than the optional `location` geometry, which some rows may not have populated).
+   */
+  private async findNearbyActiveAssayerIds(
+    branch: BranchEntity,
+    radiusKm: number,
+  ): Promise<Set<string> | null> {
+    if (branch.latitude == null || branch.longitude == null) return null;
+
+    const radiusMeters = radiusKm * 1000;
+    const rows: Array<{ id: string }> | null = await this.assayerRepository
+      .query(
+        `SELECT a.id AS id
+           FROM assayers a
+          WHERE a.is_active = true
+            AND a.status = $1
+            AND (
+              a.is_live_enabled = true
+              OR (
+                a.latitude IS NOT NULL AND a.longitude IS NOT NULL
+                AND ST_DistanceSphere(
+                  ST_SetSRID(ST_MakePoint(a.longitude, a.latitude), 4326),
+                  ST_SetSRID(ST_MakePoint($2, $3), 4326)
+                ) <= $4
+              )
+            )`,
+        [AssayerStatus.ACTIVE, Number(branch.longitude), Number(branch.latitude), radiusMeters],
+      )
+      .catch(() => null);
+
+    if (!rows) return null; // query failed — fall back to the full pool
+    if (rows.length === 0) return null; // nobody in range — fall back rather than return empty
+    return new Set(rows.map((r) => r.id));
+  }
+
   async recommend(
     branch: BranchEntity,
     scheduledDate: Date,
@@ -1068,13 +1141,39 @@ export class RecommendationEngine {
       weights: resolvedConfig.weights,
     };
 
+    // Bound the candidate pool by geography before any scoring — see CANDIDATE_PREFILTER_RADIUS_KM.
+    // The effective radius never drops below the client's configured serviceability radius, so the
+    // pre-filter can only ever be wider than what scoring already tolerates. `nearbyIds` is null
+    // when there is no usable pre-filter (no branch coordinates, nobody in range, or the query
+    // failed), in which case the full active pool is kept exactly as before.
+    const prefilterRadiusKm = Math.max(
+      CANDIDATE_PREFILTER_RADIUS_KM,
+      Number(resolvedConfig.defaultRadius) || 0,
+    );
+    const nearbyIds = await this.findNearbyActiveAssayerIds(branch, prefilterRadiusKm);
+
     // Reused from the preload when a batch caller supplied one; hydration is idempotent and
     // the scorers only read these, so sharing one list across branches is safe.
     let assayers = preloaded?.assayers;
-    if (!assayers) {
-      assayers = await this.assayerRepository.find({
-        where: { isActive: true, status: AssayerStatus.ACTIVE },
-      });
+    if (assayers) {
+      // Batch path: the preloaded pool is already loaded and hydrated. Narrow it in memory to the
+      // branch's neighbourhood; if the narrowing would empty it, keep the full pool (safe fallback).
+      if (nearbyIds) {
+        const narrowed = assayers.filter((a) => nearbyIds.has(a.id));
+        if (narrowed.length > 0) assayers = narrowed;
+      }
+    } else {
+      // Non-batch path: load only the in-range assayers when we have a pre-filter, otherwise the
+      // full active pool. The isActive/status predicate is identical to before in both branches;
+      // `nearbyIds` was itself resolved under the same predicate, so the set is unchanged apart
+      // from the geographic bound.
+      assayers = nearbyIds
+        ? await this.assayerRepository.find({
+            where: { id: In([...nearbyIds]), isActive: true, status: AssayerStatus.ACTIVE },
+          })
+        : await this.assayerRepository.find({
+            where: { isActive: true, status: AssayerStatus.ACTIVE },
+          });
       await this.assayerService.hydrateAllWorkforceAttributes(assayers);
     }
 

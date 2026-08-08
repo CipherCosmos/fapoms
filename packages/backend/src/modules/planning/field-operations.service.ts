@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { FieldVisitEntity, FieldVisitStatus } from './field-visit.entity';
 import { FieldIncidentEntity, IncidentStatus, IncidentSeverity } from './field-incident.entity';
 import { AuditService } from '../../core/audit/audit.service';
@@ -216,7 +216,19 @@ export class FieldOperationsService {
    */
   async getFieldOperationsDashboard(coveragePlanId: string): Promise<FieldDashboardSummary> {
     const visits = await this.visitRepository.find({ where: { coveragePlanId } });
-    const incidents = await this.incidentRepository.find();
+
+    // Incidents belong to this coverage plan through its visits. Scope to those
+    // visit ids instead of scanning every incident ever recorded, order newest
+    // first, and cap the result so this ever-growing, never-pruned table can't
+    // turn the dashboard into an unbounded full-table load.
+    const visitIds = visits.map((v) => v.id);
+    const incidents = visitIds.length
+      ? await this.incidentRepository.find({
+          where: { visitId: In(visitIds) },
+          order: { createdAt: 'DESC' },
+          take: 200,
+        })
+      : [];
 
     const inProgress = visits.filter((v) => v.status === FieldVisitStatus.AUDIT_STARTED || v.status === FieldVisitStatus.EVIDENCE_COLLECTION).length;
     const completed = visits.filter((v) => v.status === FieldVisitStatus.AUDIT_COMPLETED || v.status === FieldVisitStatus.SUBMITTED || v.status === FieldVisitStatus.HANDOVER_READY).length;

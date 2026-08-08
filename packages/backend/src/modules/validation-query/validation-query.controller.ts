@@ -284,14 +284,25 @@ export class ValidationQueryController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List validation queries' })
-  async findAll(@Query('assayerId') assayerId?: string) {
+  @ApiOperation({ summary: 'List validation queries (paginated; page/limit, default limit 50)' })
+  async findAll(
+    @Query('assayerId') assayerId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
     if (assayerId) {
       const list = await this.validationQueryService.findByAssayer(assayerId);
       return { success: true, data: list };
     }
-    const list = await this.validationQueryService.findAllQueries();
-    return { success: true, data: list };
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 50;
+    const { items, total, page: resolvedPage, limit: resolvedLimit } =
+      await this.validationQueryService.findAllQueries(pageNum, limitNum);
+    return {
+      success: true,
+      data: items,
+      pagination: { page: resolvedPage, limit: resolvedLimit, total },
+    };
   }
 
   @Post()

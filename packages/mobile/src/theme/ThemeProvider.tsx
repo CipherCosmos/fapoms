@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import { Platform, useColorScheme } from 'react-native';
 import { Mode, Palette, palettes, space, radius, type as typeScale, elevation, motion } from './tokens';
 import { readPreference, writePreference } from '../services/token-store';
 
@@ -84,6 +84,30 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [preference]);
 
   const mode: Mode = preference === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : preference;
+
+  /**
+   * Keeps the Android navigation bar in step with the theme.
+   *
+   * With the window drawing edge to edge, Android supplies its own contrast scrim behind a
+   * transparent navigation bar — and because the native AppTheme inherits from a Light parent,
+   * that scrim came out white under a dark app, leaving a bright band across the bottom of
+   * every screen. Setting it explicitly, and flipping the gesture pill to match, is the only
+   * way to keep the bottom edge consistent in both modes.
+   */
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    // Required lazily rather than imported at the top of the file. `expo-navigation-bar` is
+    // Android-only and ships no web implementation, so a static import made the Metro web
+    // bundle fail to resolve it and took the whole web build down — on a screen that would
+    // never have called it.
+    try {
+      const NavigationBar = require('expo-navigation-bar');
+      void NavigationBar.setBackgroundColorAsync(palettes[mode].bg).catch(() => {});
+      void NavigationBar.setButtonStyleAsync(mode === 'dark' ? 'light' : 'dark').catch(() => {});
+    } catch {
+      // A handset without the module keeps the system default bar rather than failing to theme.
+    }
+  }, [mode]);
 
   const setPreference = useCallback((p: ThemePreference) => setPreferenceState(p), []);
   const cyclePreference = useCallback(() => {

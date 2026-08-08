@@ -31,6 +31,30 @@ const API_TARGET = process.env.VITE_API_URL || 'http://localhost:3000';
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [sharedTsSource, react()],
+  build: {
+    rollupOptions: {
+      output: {
+        /**
+         * Split the heavy vendor libraries into their own chunks.
+         *
+         * Route pages are already code-split via React.lazy in App.tsx, but their bulky
+         * dependencies (the pdf.js renderer, the Leaflet map, react-query, the realtime client)
+         * would otherwise be duplicated or dragged into whichever page-chunk touched them first.
+         * Pinning each to a named chunk keeps them cacheable and out of the entry bundle.
+         */
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('pdfjs-dist')) return 'pdf';
+          if (id.includes('leaflet')) return 'map';
+          if (id.includes('@tanstack')) return 'query';
+          if (id.includes('socket.io') || id.includes('engine.io')) return 'realtime';
+          if (id.includes('react-router')) return 'router';
+          if (id.includes('/react-dom/') || id.includes('/react/') || id.includes('/scheduler/')) return 'react';
+          return 'vendor';
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

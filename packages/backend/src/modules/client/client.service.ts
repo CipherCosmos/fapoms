@@ -14,6 +14,7 @@ import { ClientBillingEntity } from './client-billing.entity';
 import { ClientBillingHistoryEntity } from './client-billing-history.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 import { EventCategory, ClientLifecycleStatus, ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
 
 export interface CreateClientDto {
@@ -197,6 +198,7 @@ export class ClientService {
     private readonly billingHistoryRepository: Repository<ClientBillingHistoryEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly cache: CacheService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -373,6 +375,12 @@ export class ClientService {
 
     client.updatedBy = userId;
     const saved = await this.clientRepository.save(client);
+
+    // A changed rate card (defaultBaseFee / travelFeePerKm / freeTravelAllowanceKm) must not
+    // be served stale by FeePolicyService.getRates, which caches under ref:rates:client:{id}.
+    if (dto.configuration) {
+      await this.cache.del(`ref:rates:client:${id}`);
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,

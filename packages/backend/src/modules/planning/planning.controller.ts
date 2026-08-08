@@ -13,6 +13,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength } from 'class-validator';
 
 import { CommandCenterService } from './command-center.service';
@@ -513,6 +514,9 @@ export class PlanningController {
   }
 
   @Post('coverage-plans/:planId/execute')
+  // Engine-heavy and write-heavy (spawns assignments across a whole project). Capped
+  // well below the global default so one caller cannot pin the CPU with repeated runs.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Deploy approved plan and automatically spawn operational assignments' })
@@ -540,6 +544,9 @@ export class PlanningController {
   }
 
   @Post('projects/:projectId/optimize')
+  // Runs the scoring engine across every branch × candidate for a project — the most
+  // CPU-intensive endpoint in the system. Tightly throttled.
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate optimized project-wide assayer matching and routing deployment plan' })
@@ -552,6 +559,9 @@ export class PlanningController {
   }
 
   @Post('scenarios/simulate')
+  // What-if simulation runs the full optimizer without persisting; heavy CPU, so it
+  // gets the same tight budget as optimize.
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' })

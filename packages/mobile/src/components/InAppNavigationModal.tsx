@@ -193,6 +193,20 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   const [remainingKm, setRemainingKm] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [passedIndex, setPassedIndex] = useState(0);
+  /**
+   * Whether the full map has been asked for.
+   *
+   * Tapping "Navigate" used to throw a full-screen map over everything, which is a heavy answer
+   * to what is usually a light question — an assayer checking how far the branch is and how
+   * long it will take before deciding when to leave. The sheet answers that in place; the map
+   * is one tap further for the times it is actually wanted.
+   */
+  const [expanded, setExpanded] = useState(false);
+
+  // A reopen should start from the summary again rather than wherever the last visit ended.
+  useEffect(() => {
+    if (!visible) setExpanded(false);
+  }, [visible]);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const stepEndsRef = useRef<LatLng[]>([]);
   const progressIdxRef = useRef(0);
@@ -551,10 +565,147 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
     }
   };
 
+  /**
+   * Starts guidance inside the app.
+   *
+   * Kept in-app deliberately: the assignment, the check-in and the query thread all live here,
+   * and an assayer who is bounced out to another app to drive has to find their way back to
+   * do any of them. The sheet stays the default answer for "how far is it"; this is the step
+   * for when they are actually setting off.
+   */
+  const startNavigation = useCallback(() => {
+    setExpanded(true);
+    setNavigating(true);
+  }, []);
+
   if (!visible) return null;
 
+  /**
+   * The default: a sheet over whatever the assayer was looking at, not a takeover.
+   *
+   * One action only. The first version of this carried "Start navigation", "Route map" and
+   * "Close" side by side — two ways to open the same map, plus a button for something the
+   * backdrop and the back gesture already do. The assignment card's own Navigate button is
+   * what opened this, so repeating that choice here asked the assayer to decide twice.
+   */
+  if (!expanded) {
+    const canNavigate = steps.length > 0;
+
+    return (
+      <RNModal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }}>
+          <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel="Dismiss">
+            <View style={{ flex: 1 }} />
+          </Tappable>
+
+          <View style={{
+            backgroundColor: t.colors.bg,
+            borderTopLeftRadius: t.radius.xl,
+            borderTopRightRadius: t.radius.xl,
+            paddingHorizontal: t.space.xl,
+            paddingTop: t.space.md,
+            paddingBottom: t.space['2xl'],
+            gap: t.space.xl,
+          }}>
+            <View style={{ alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: t.colors.border }} />
+
+            <View style={{ gap: t.space.xs }}>
+              <AppText variant="h2" numberOfLines={1}>{assignment?.branchName || 'Branch'}</AppText>
+              {assignment?.branchAddress ? (
+                <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                  <Icon name="location-outline" size={14} color={t.colors.textFaint} style={{ marginTop: 3 }} />
+                  <AppText variant="small" tone="muted" style={{ flex: 1 }} numberOfLines={3}>
+                    {assignment.branchAddress}
+                  </AppText>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Time and distance as a pair of tiles: they are the two numbers the sheet exists
+                to answer, and they were previously two bare labels lost against the address. */}
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              {([
+                { label: 'TRAVEL TIME', value: travelSeconds != null ? formatDuration(travelSeconds) : '—', icon: 'time-outline' },
+                { label: 'DISTANCE', value: distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—', icon: 'navigate-outline' },
+              ]).map((tile) => (
+                <View
+                  key={tile.label}
+                  style={{
+                    flex: 1, gap: 4, padding: t.space.lg,
+                    borderRadius: t.radius.lg, backgroundColor: t.colors.surface,
+                    borderWidth: 1, borderColor: t.colors.border,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Icon name={tile.icon} size={13} color={t.colors.textFaint} />
+                    <AppText variant="overline" tone="faint">{tile.label}</AppText>
+                  </View>
+                  {loading
+                    ? <ActivityIndicator size="small" color={t.colors.primary} style={{ alignSelf: 'flex-start' }} />
+                    : <AppText variant="h2">{tile.value}</AppText>}
+                </View>
+              ))}
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+              <View style={{
+                flexDirection: 'row', backgroundColor: t.colors.surface, borderRadius: t.radius.pill,
+                padding: 4, borderWidth: 1, borderColor: t.colors.border,
+              }}>
+                {(['driving', 'transit'] as RouteMode[]).map((m) => {
+                  const active = mode === m;
+                  return (
+                    <Tappable key={m} onPress={() => setMode(m)}>
+                      <View style={{
+                        flexDirection: 'row', alignItems: 'center', gap: 6,
+                        paddingHorizontal: t.space.lg, paddingVertical: t.space.sm,
+                        borderRadius: t.radius.pill,
+                        backgroundColor: active ? t.colors.primarySoft : 'transparent',
+                      }}>
+                        <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? t.colors.primary : t.colors.textFaint} />
+                        <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
+                          {m === 'driving' ? 'Drive' : 'Transit'}
+                        </AppText>
+                      </View>
+                    </Tappable>
+                  );
+                })}
+              </View>
+              {fare && mode === 'transit' && <Badge label={fare.text || `₹${fare.value}`} tone="success" />}
+              {usingFallback && !loading && <Badge label="ESTIMATE" tone="warning" />}
+            </View>
+
+            {usingFallback && !loading && (
+              <AppText variant="caption" tone="muted">
+                Straight-line estimate — no route service reachable. The real drive will be longer.
+              </AppText>
+            )}
+
+            {error && <AppText variant="caption" tone="danger">{error}</AppText>}
+
+            <View style={{ gap: t.space.sm }}>
+              <Button
+                label="Start navigation"
+                icon="navigate"
+                onPress={startNavigation}
+                size="lg"
+                full
+                disabled={!canNavigate}
+              />
+              {!canNavigate && !loading && (
+                <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+                  Turn-by-turn needs your location and a reachable route service.
+                </AppText>
+              )}
+            </View>
+          </View>
+        </View>
+      </RNModal>
+    );
+  }
+
   return (
-    <RNModal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
+    <RNModal visible={visible} animationType="slide" transparent={false} onRequestClose={() => { setNavigating(false); setExpanded(false); }}>
       <View style={{ flex: 1, backgroundColor: '#090d16' }}>
         {/* Header */}
         <View
@@ -573,7 +724,13 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
             <AppText variant="h3" numberOfLines={1}>{assignment?.branchName || 'In-App Navigation'}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment?.branchAddress || ''}</AppText>
           </View>
-          <Button label="Close" variant="danger" icon="close" onPress={onClose} size="sm" />
+          <Button
+            label="Back"
+            variant="neutral"
+            icon="chevron-back"
+            onPress={() => { setNavigating(false); setExpanded(false); }}
+            size="sm"
+          />
         </View>
 
         {/* Live turn-by-turn banner */}

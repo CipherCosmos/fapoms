@@ -315,7 +315,7 @@ export class MobileApiService {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.success) {
-        return { verified: false, error: data?.message || 'Unable to reach FAPOMS.' };
+        return { verified: false, error: data?.message || 'Unable to reach the server.' };
       }
       if (!data.data?.verified) {
         return { verified: false, error: 'That identifier was not recognised.' };

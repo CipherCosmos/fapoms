@@ -85,32 +85,96 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => { cancelled = true; };
   }, [isAuthenticated]);
 
+  /**
+   * Every server-side change that alters this list, delivered live.
+   *
+   * Only `assignment:status-changed` and `assignment:counter-offered` were subscribed, out of
+   * the set the backend already emits to this assayer's own room. So a newly offered job, an
+   * agreed fee, a packet dispatched to the branch, a query raised by the desk and a validated
+   * payable all landed on the server and sat there until the assayer happened to pull to
+   * refresh — which, for a new assignment, means the offer is invisible until they think to
+   * look for it.
+   *
+   * The reload is debounced rather than fired per event: the backend commonly emits several
+   * around one desk action (status, fee, notification), and at branch-rollout scale a burst
+   * would otherwise become a burst of identical GETs from every handset at once.
+   */
   useEffect(() => {
-    if (isAuthenticated) {
-      loadAssignments();
-      const socket = connectMobileSocket();
+    if (!isAuthenticated) return;
 
-      const handleStatusChange = (data: any) => {
+    loadAssignments();
+    const socket = connectMobileSocket();
+    if (!socket) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reloadSoon = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
         loadAssignments();
-        scheduleLocalNotification(
-          'Assignment Update',
-          `An assignment status has been updated to ${data?.status || 'NEW'}`,
-          data
-        );
-      };
+      }, 400);
+    };
 
-      if (socket) {
-        socket.on('assignment:status-changed', handleStatusChange);
-        socket.on('assignment:counter-offered', handleStatusChange);
-      }
+    const handleStatusChange = (data: any) => {
+      reloadSoon();
+      scheduleLocalNotification(
+        'Assignment Update',
+        `An assignment status has been updated to ${data?.status || 'NEW'}`,
+        data,
+      );
+    };
 
-      return () => {
-        if (socket) {
-          socket.off('assignment:status-changed', handleStatusChange);
-          socket.off('assignment:counter-offered', handleStatusChange);
-        }
-      };
-    }
+    const handleNewAssignment = (data: any) => {
+      reloadSoon();
+      scheduleLocalNotification(
+        'New assignment offered',
+        data?.branchName ? `${data.branchName} — open the app to accept or decline.` : 'Open the app to accept or decline.',
+        data,
+      );
+    };
+
+    /**
+     * Quiet reloads. These change what the screen should show but do not warrant interrupting
+     * someone mid-audit with a banner — the desk's own notification covers anything that
+     * genuinely needs attention.
+     */
+    const QUIET_EVENTS = [
+      'assignment:fee-updated',
+      'query:raised',
+      'query:responded',
+      'query:resolved',
+      'document:dispatched',
+      'document:received',
+      'document:uploaded',
+      'document:status-changed',
+      'billing:created',
+    ];
+
+    socket.on('assignment:status-changed', handleStatusChange);
+    socket.on('assignment:counter-offered', handleStatusChange);
+    socket.on('assignment:created', handleNewAssignment);
+    QUIET_EVENTS.forEach((e) => socket.on(e, reloadSoon));
+
+    /**
+     * A dropped connection is the case that silently breaks live updates: the socket comes
+     * back, but everything that happened while it was down was never delivered, so the screen
+     * stays wrong until something else triggers a fetch.
+     *
+     * Hooked to `connect` rather than `reconnect` deliberately — in socket.io-client v4
+     * reconnection events live on the manager (`socket.io.on('reconnect')`), so a
+     * `socket.on('reconnect')` handler is never called at all. `connect` fires on every
+     * successful (re)connection, which is exactly the moment a refetch is needed.
+     */
+    socket.on('connect', reloadSoon);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      socket.off('assignment:status-changed', handleStatusChange);
+      socket.off('assignment:counter-offered', handleStatusChange);
+      socket.off('assignment:created', handleNewAssignment);
+      QUIET_EVENTS.forEach((e) => socket.off(e, reloadSoon));
+      socket.off('connect', reloadSoon);
+    };
   }, [isAuthenticated, loadAssignments]);
 
   const updateAssignmentStatus = async (

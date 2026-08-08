@@ -195,7 +195,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               style={{ width: 130, height: 100, resizeMode: 'contain' }}
               accessibilityLabel="Sumeru Global"
             />
+            {/*
+              Sumeru Global's mark identifies the company; the product name sits under it, so
+              an assayer with several bank apps installed can tell at the sign-in screen which
+              one they have opened.
+            */}
             <View style={{ alignItems: 'center', gap: 2 }}>
+              <AppText variant="h1">Karat</AppText>
               <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>FIELD AUDIT OPERATIONS</AppText>
             </View>
           </View>

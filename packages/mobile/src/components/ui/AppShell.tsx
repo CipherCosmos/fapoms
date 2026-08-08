@@ -20,16 +20,16 @@ export type TabType = 'HOME' | 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE
 /** Safe top padding without pulling in react-native-safe-area-context. */
 const TOP_INSET = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 10, default: 16 });
 /** Home-indicator clearance on iOS; Android nav bars are handled by the OS. */
-export const BOTTOM_INSET = Platform.select({ ios: 26, android: 12, default: 12 });
+export const BOTTOM_INSET = Platform.select({ ios: 26, android: 24, default: 12 });
 
 export const TopBar: React.FC<{
   name: string;
   subtitle?: string;
   unreadCount: number;
   onNotifications: () => void;
-  onRefresh?: () => void;
-  refreshing?: boolean;
-}> = ({ name, subtitle, unreadCount, onNotifications, onRefresh, refreshing }) => {
+  /** Opens the profile. The avatar is the control — the tab that used to do this is gone. */
+  onOpenProfile?: () => void;
+}> = ({ name, subtitle, unreadCount, onNotifications, onOpenProfile }) => {
   const t = useTheme();
 
   return (
@@ -38,27 +38,30 @@ export const TopBar: React.FC<{
       backgroundColor: t.colors.bg,
       flexDirection: 'row', alignItems: 'center', gap: t.space.md,
     }}>
-      <Avatar name={name} size={44} />
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <AppText variant="h3" numberOfLines={1}>{name || 'Field Assayer'}</AppText>
-        <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? 'Field Assayer'}</AppText>
-      </View>
+      {/*
+        Identity is the way into the profile, which is how nearly every app of this shape
+        works — so the fifth dock slot is free for the four things an assayer does all day.
+      */}
+      <Tappable
+        onPress={onOpenProfile}
+        accessibilityLabel="Open your profile"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, flex: 1, minWidth: 0 }}
+      >
+        <Avatar name={name} size={44} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <AppText variant="h3" numberOfLines={1}>{name || 'Field Assayer'}</AppText>
+          <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? 'Field Assayer'}</AppText>
+        </View>
+      </Tappable>
 
-      {/* Light/dark is a lighting decision, not a settings decision — an assayer moves from
-          bright sunlight to a dim branch back office during a single visit. It was reachable
-          only three levels deep (Profile > App tab), so it is surfaced here as one tap.
-          Cycles system -> light -> dark. */}
-      <IconButton
-        icon={t.preference === 'system' ? 'contrast-outline' : t.mode === 'dark' ? 'moon' : 'sunny'}
-        onPress={t.cyclePreference}
-        accessibilityLabel={`Theme: ${t.preference}. Tap to change.`}
-      />
-      {onRefresh && (
-        <IconButton
-          icon="refresh-outline"
-          onPress={onRefresh}
-        />
-      )}
+      {/*
+        No refresh button. Every scrollable screen already pulls to refresh, so this was a
+        second control for the same action taking permanent space in the header — and the one
+        an assayer reaches for by reflex is the pull.
+
+        The theme toggle that also lived here has moved to Profile > App > Appearance, where
+        the rest of the app's settings are.
+      */}
       <IconButton icon="notifications-outline" onPress={onNotifications} badge={unreadCount} />
     </View>
   );
@@ -82,7 +85,8 @@ export const TabDock: React.FC<{
     { key: 'SCHEDULE', label: 'Route', icon: 'map-outline', iconActive: 'map' },
     { key: 'QUERIES', label: 'Queries', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', badge: queryCount },
     { key: 'EARNINGS', label: 'Earnings', icon: 'wallet-outline', iconActive: 'wallet' },
-    { key: 'MY_PROFILE', label: 'Profile', icon: 'person-outline', iconActive: 'person' },
+    // Profile is deliberately absent: it is reached by tapping your own avatar in the header.
+    // Four slots give the tabs an assayer actually works in room to breathe.
   ];
 
   const [width, setWidth] = React.useState(0);

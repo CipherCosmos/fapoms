@@ -3,10 +3,11 @@
  */
 
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { setupBullBoard } from './infrastructure/queue/bull-board.setup';
+import { RedisIoAdapter } from './infrastructure/realtime/redis-io.adapter';
 
 import * as express from 'express';
 import * as compression from 'compression';
@@ -64,7 +65,31 @@ export function assertProductionSafeConfig(): void {
 async function bootstrap() {
   assertProductionSafeConfig();
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bufferLogs: false });
+  const logger = new Logger('Bootstrap');
+
+  // ── Multi-node realtime ───────────────────────────────────────────────────────
+  // Back Socket.IO with the Redis adapter so room-scoped emits reach clients on
+  // every replica, not just the one that produced the event. Without it the API is
+  // capped at a single instance for anything realtime. If Redis is unreachable at
+  // boot we log and fall back to the in-memory adapter, which is correct for one node
+  // and lets local/test runs work without Redis.
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const redisIoAdapter = new RedisIoAdapter(app);
+      await redisIoAdapter.connectToRedis();
+      app.useWebSocketAdapter(redisIoAdapter);
+    } catch (err: any) {
+      logger.warn(
+        `Redis Socket.IO adapter unavailable (${err?.message}); falling back to single-node in-memory adapter. Do not run more than one replica in this state.`,
+      );
+    }
+  }
+
+  // Close DB pools, Redis clients, Bull queues and open sockets cleanly on SIGTERM/
+  // SIGINT so rolling deploys and autoscaling drain in-flight work instead of
+  // dropping connections mid-request.
+  app.enableShutdownHooks();
 
   // ── Response compression ──────────────────────────────────────────────────────
   // Field assayers work on rural 2G/weak-3G links, and the app polls JSON constantly

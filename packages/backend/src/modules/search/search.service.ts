@@ -23,7 +23,22 @@ export class SearchService {
   ) {}
 
   async searchAll(q: string) {
-    const term = `%${q}%`;
+    // A single character (or an empty/whitespace-only query) yields no trigram, so
+    // pg_trgm's GIN index cannot help and Postgres would fall back to a full scan of
+    // every searched table. Such a query also matches almost everything and is never
+    // a useful global search, so short-circuit before touching the database.
+    const trimmed = (q ?? '').trim();
+    if (trimmed.length < 2) {
+      return {
+        branches: [],
+        assayers: [],
+        projects: [],
+        clients: [],
+        assignments: [],
+      };
+    }
+
+    const term = `%${trimmed}%`;
 
     const [branches, assayers, projects, clients, assignments] = await Promise.all([
       this.branchRepo.find({
