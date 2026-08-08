@@ -77,6 +77,13 @@ export interface PlanningContext {
     queryCountByAssayer: Record<string, number>;
     /** Lifetime assignment counts per assayer: everything dispatched, and everything taken. */
     assignmentTotalsByAssayer: Record<string, { total: number; accepted: number }>;
+    /**
+     * Assayers already committed on the scheduled date, mapped to the assignment that holds
+     * them. Double-booking was one findOne per candidate asking the same date question.
+     */
+    doubleBookedByAssayer: Record<string, string>;
+    /** Recent completed assignments per assayer, for the delivery-speed score. */
+    completedByAssayer: Record<string, Array<{ completionDate: Date | null; createdAt: Date }>>;
   };
 }
 
@@ -104,9 +111,13 @@ export class AvailabilityFilter implements CandidateFilter {
     }
 
     // 1. Check double booking
-    const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
-    if (!dbResult.passed) {
-      return false;
+    // Resolved for the whole pool in one query when recommend() supplied the facts; the
+    // per-candidate check remains for standalone use.
+    if (context.branchFacts) {
+      if (context.branchFacts.doubleBookedByAssayer[assayer.id]) return false;
+    } else {
+      const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
+      if (!dbResult.passed) return false;
     }
 
     // 2. Check leaves
@@ -415,15 +426,19 @@ export class DeliverySpeedScoreCalculator implements ScoreCalculator {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
   ) {}
 
-  async calculate(assayer: AssayerEntity): Promise<number> {
-    const completedAssignments = await this.assignmentRepository.find({
-      where: {
-        assayerId: assayer.id,
-        status: AssignmentStatus.COMPLETED,
-        isActive: true,
-      },
-      take: 20,
-    });
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    // The whole pool's completed history arrives in one query; this per-candidate fetch stays
+    // for standalone use.
+    const completedAssignments = context?.branchFacts
+      ? (context.branchFacts.completedByAssayer[assayer.id] ?? [])
+      : await this.assignmentRepository.find({
+          where: {
+            assayerId: assayer.id,
+            status: AssignmentStatus.COMPLETED,
+            isActive: true,
+          },
+          take: 20,
+        });
 
     if (completedAssignments.length === 0) return 80;
 
@@ -1030,7 +1045,7 @@ export class RecommendationEngine {
      * 4N round trips producing values that a single grouped query returns in one.
      */
     const assayerIds = assayers.map((a) => a.id);
-    const [profileRows, queryRows, totalRows, acceptedRows] = await Promise.all([
+    const [profileRows, queryRows, totalRows, acceptedRows, doubleBookedRows, completedRows] = await Promise.all([
       assayerIds.length
         ? this.commercialRepositoryForFacts.find({
             where: { assayerId: In(assayerIds), isActive: true },
@@ -1073,7 +1088,44 @@ export class RecommendationEngine {
             .getRawMany()
             .catch(() => [])
         : Promise.resolve([]),
+      // Who is already committed on this date. One query answers it for the whole pool; it
+      // was previously a findOne per candidate asking the same date question.
+      assayerIds.length
+        ? this.assignmentRepository.find({
+            where: {
+              assayerId: In(assayerIds),
+              scheduledDate,
+              status: In([AssignmentStatus.ACCEPTED]),
+              isActive: true,
+            },
+            select: ['assayerId', 'assignmentNumber'] as any,
+          }).catch(() => [])
+        : Promise.resolve([]),
+      // Completed history for the delivery-speed score.
+      assayerIds.length
+        ? this.assignmentRepository.find({
+            where: {
+              assayerId: In(assayerIds),
+              status: AssignmentStatus.COMPLETED,
+              isActive: true,
+            },
+            select: ['assayerId', 'completionDate', 'createdAt'] as any,
+            order: { createdAt: 'DESC' },
+          }).catch(() => [])
+        : Promise.resolve([]),
     ]);
+
+    const doubleBookedByAssayer = (doubleBookedRows as any[]).reduce<Record<string, string>>((acc, r) => {
+      acc[r.assayerId] = r.assignmentNumber ?? 'an existing assignment';
+      return acc;
+    }, {});
+
+    // Capped at 20 per assayer, matching the `take: 20` the per-candidate query applied.
+    const completedByAssayer = (completedRows as any[]).reduce<Record<string, any[]>>((acc, r) => {
+      const list = (acc[r.assayerId] ||= []);
+      if (list.length < 20) list.push({ completionDate: r.completionDate ?? null, createdAt: r.createdAt });
+      return acc;
+    }, {});
 
     const commercialProfilesByAssayer = (profileRows as any[]).reduce<Record<string, any[]>>((acc, p) => {
       (acc[p.assayerId] ||= []).push(p);
@@ -1111,6 +1163,8 @@ export class RecommendationEngine {
       commercialProfilesByAssayer,
       queryCountByAssayer,
       assignmentTotalsByAssayer,
+      doubleBookedByAssayer,
+      completedByAssayer,
     };
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this

@@ -239,6 +239,20 @@ describe('RecommendationEngine', () => {
       },
     ]);
 
+    /**
+     * Double-booking is now resolved for the whole pool in one query rather than per
+     * candidate, so the fixture answers that query instead of the old per-assayer findOne.
+     * The rule under test is unchanged: an assayer already committed on the scheduled date
+     * must not be offered a second branch that day.
+     */
+    mockAssignmentRepo.find.mockImplementation(async (opts: any) => {
+      const status = opts?.where?.status;
+      const isDoubleBookingProbe = status && JSON.stringify(status).includes('ACCEPTED');
+      return isDoubleBookingProbe
+        ? [{ assayerId: 'a-1', assignmentNumber: 'ASN-EXISTING' }]
+        : [];
+    });
+    // Kept so the standalone (non-batched) path is still covered by this fixture.
     mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing-assignment' });
 
     const branch = {

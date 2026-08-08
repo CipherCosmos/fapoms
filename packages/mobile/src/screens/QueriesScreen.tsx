@@ -68,7 +68,9 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
                   <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
                     <AppText variant="h3" numberOfLines={1}>{a.branchName}</AppText>
                     <AppText variant="caption" tone="faint" numberOfLines={1}>
-                      {a.bankName ?? '—'}{a.branchCode ? ` · ${a.branchCode}` : ''}
+                      {/* Joined, not interpolated: branches with no bank name rendered a
+                          stranded "· 291" here, the same defect as the Home card. */}
+                      {[a.bankName, a.branchCode].filter(Boolean).join(' · ') || '—'}
                     </AppText>
                   </View>
                   <Badge label={`${count}`} tone={meta.tone} icon="chatbubble-outline" />

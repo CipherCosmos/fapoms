@@ -199,6 +199,50 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           POST one reply. The desk was already using the real message thread, so anything they
           sent after the assayer's first answer never reached the phone.
         */}
+        {/*
+          A branch can carry several clarifications. `activeQueryId` was only ever set
+          automatically to the first open one and never changed after, so on an assignment with
+          three questions the assayer could reach exactly one and the other two were
+          unanswerable from the app.
+        */}
+        {queries.length > 1 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ flexGrow: 0, borderBottomWidth: 1, borderColor: t.colors.border }}
+            contentContainerStyle={{ padding: t.space.md, gap: t.space.sm }}
+          >
+            {queries.map((q: any, i: number) => {
+              const active = q.id === activeQueryId;
+              const open = q.status === 'OPEN';
+              return (
+                <Tappable key={q.id} onPress={() => setActiveQueryId(q.id)}>
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      paddingVertical: 7,
+                      paddingHorizontal: t.space.md,
+                      borderRadius: t.radius.pill,
+                      backgroundColor: active ? t.colors.primarySoft : t.colors.surfaceAlt,
+                      borderWidth: 1,
+                      borderColor: active ? t.colors.primary : t.colors.border,
+                    }}
+                  >
+                    {open && (
+                      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.colors.warning }} />
+                    )}
+                    <AppText variant="caption" tone={active ? 'primary' : 'muted'} numberOfLines={1}>
+                      {q.customerName || q.accountNumber || `Query ${i + 1}`}
+                    </AppText>
+                  </View>
+                </Tappable>
+              );
+            })}
+          </ScrollView>
+        )}
+
         {activeQuery ? (
           <QueryThread
             query={activeQuery}
