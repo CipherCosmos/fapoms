@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
-import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary } from '../types/mobile-app';
+import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 import {
   getDefaultServerUrl,
   loadStoredServerUrl,
@@ -641,6 +641,62 @@ export class MobileApiService {
       return { success: false, error: data?.message || 'The upload could not be finalised.' };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error finalising the upload.' };
+    }
+  }
+
+  /**
+   * The assayer's financial statement, straight from the billing engine.
+   *
+   * `GET /billing-engine/assayers/:assayerId/statement` has always been open to the ASSAYER
+   * role and was never called. The earnings screen instead summed `agreedBaseFee +
+   * agreedTravelFee` across whatever assignments happened to be loaded — a figure that omits
+   * TDS, ignores part-payments, counts on-hold work as earned, and silently drops anything
+   * older than the current assignment fetch. This is the number finance actually holds.
+   */
+  static async getAssayerStatement(assayerId: string): Promise<AssayerStatement | null> {
+    try {
+      const response = await this.fetchWithAuth(
+        `${API_BASE_URL}/billing-engine/assayers/${assayerId}/statement`,
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success || !data.data) return null;
+
+      const d = data.data;
+      const num = (v: any) => Number(v) || 0;
+      return {
+        totals: {
+          earned: num(d.totals?.earned),
+          paid: num(d.totals?.paid),
+          outstanding: num(d.totals?.outstanding),
+          awaitingApproval: num(d.totals?.awaitingApproval),
+          onHoldOrDisputed: num(d.totals?.onHoldOrDisputed),
+          payableCount: num(d.totals?.payableCount),
+        },
+        payables: (d.payables || []).map((p: any) => ({
+          id: p.id,
+          payableNumber: p.payableNumber,
+          status: p.status,
+          assignmentId: p.assignmentId,
+          baseAmount: num(p.baseAmount),
+          travelAmount: num(p.travelAmount),
+          tdsAmount: num(p.tdsAmount),
+          totalAmount: num(p.totalAmount),
+          paidAmount: num(p.paidAmount),
+          outstanding: num(p.outstanding),
+          createdAt: p.createdAt,
+        })),
+        payments: (d.payments || []).map((pm: any) => ({
+          id: pm.id,
+          paymentReference: pm.paymentReference,
+          method: pm.method,
+          amount: num(pm.amount),
+          paidDate: pm.paidDate,
+          balanceAfter: pm.balanceAfter == null ? null : num(pm.balanceAfter),
+          notes: pm.notes,
+        })),
+      };
+    } catch {
+      return null;
     }
   }
 

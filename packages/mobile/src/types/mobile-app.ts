@@ -42,6 +42,50 @@ export interface AssayerExpense {
   createdAt?: string;
 }
 
+/**
+ * The assayer's financial statement from the billing engine.
+ *
+ * These are the figures finance works from. The earnings screen previously derived its own
+ * totals by summing agreed fees off the loaded assignments, which could not see TDS, part
+ * payments, or anything on hold — so the app and the desk disagreed about what was owed.
+ */
+export interface AssayerPayable {
+  id: string;
+  payableNumber: string;
+  status: string;
+  assignmentId?: string;
+  baseAmount: number;
+  travelAmount: number;
+  tdsAmount: number;
+  totalAmount: number;
+  paidAmount: number;
+  outstanding: number;
+  createdAt: string;
+}
+
+export interface AssayerPayment {
+  id: string;
+  paymentReference: string;
+  method: string;
+  amount: number;
+  paidDate: string;
+  balanceAfter: number | null;
+  notes?: string;
+}
+
+export interface AssayerStatement {
+  totals: {
+    earned: number;
+    paid: number;
+    outstanding: number;
+    awaitingApproval: number;
+    onHoldOrDisputed: number;
+    payableCount: number;
+  };
+  payables: AssayerPayable[];
+  payments: AssayerPayment[];
+}
+
 /** Claim totals from `/expenses/mine/summary`, in rupees. */
 export interface ExpenseSummary {
   pending: number;
@@ -65,7 +109,10 @@ export interface AssayerAssignment {
   sequenceOrder: number;
   estimatedCustomerCount: number;
   estimatedAuditHours: number;
-  status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED';
+  // Mirrors AssignmentStatus in @fapoms/shared. CANCELLED was missing here even though
+  // BACKEND_TO_MOBILE_STATUS already passes it through, so a cancelled job fell through
+  // every status map and rendered as a raw uppercase string.
+  status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
   proposedFee: number;
   standardBaseFee?: number;
   agreedBaseFee: number;

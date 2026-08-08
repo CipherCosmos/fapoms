@@ -233,7 +233,24 @@ export class CoveragePlanningEngine {
       projectId,
       projectName: project.name,
       coveragePercentage,
-      estimatedDurationDays: Math.ceil(totalBranchesCount / 4) || 1, // Mock formula
+      /**
+       * Working days to cover the plan, derived from the workforce actually assigned.
+       *
+       * Was `branches / 4` — a flat assumption that every assayer audits exactly four
+       * branches a day, ignoring how many assayers were matched and what capacity they have
+       * left. It produced the same answer for one assayer as for thirty.
+       *
+       * The honest basis is the capacity already computed above: each assayer's weekly
+       * allowance spread over a five-day week gives a daily rate, and only the assayers this
+       * plan actually assigns count toward it. Falls back to the branch count itself when no
+       * assayer could be matched — that is a plan with no throughput, not a one-day plan.
+       */
+      estimatedDurationDays: (() => {
+        const assigned = workforceCapacity.filter((w) => assignedAssayerIds.has(w.assayerId));
+        if (assigned.length === 0 || matchedCount === 0) return totalBranchesCount || 1;
+        const branchesPerDay = assigned.reduce((sum, w) => sum + w.weeklyCapacity / 5, 0);
+        return branchesPerDay > 0 ? Math.max(1, Math.ceil(matchedCount / branchesPerDay)) : totalBranchesCount || 1;
+      })(),
       estimatedOperationalCost: totalEstimatedCost,
       requiredWorkforceCount: assignedAssayerIds.size,
       availableWorkforceCount: activeAssayers.length,

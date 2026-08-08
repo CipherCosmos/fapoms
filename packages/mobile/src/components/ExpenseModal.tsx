@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
@@ -34,11 +34,26 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 }) => {
   const t = useTheme();
 
-  if (!visible) return null;
-
   const [internalCat, setInternalCat] = useState<ExpenseCategory>('TRAVEL_KM');
   const [internalAmt, setInternalAmt] = useState('');
   const [internalDesc, setInternalDesc] = useState('');
+
+  // Clear the form each time the sheet opens, so a claim is never pre-filled with the
+  // previous one's amount and silently filed against a different assignment.
+  useEffect(() => {
+    if (!visible) return;
+    setInternalCat('TRAVEL_KM');
+    setInternalAmt('');
+    setInternalDesc('');
+  }, [visible]);
+
+  /**
+   * After the hooks, not before.
+   *
+   * The early return sat above these `useState` calls, so React saw a different hook count
+   * depending on `visible` — "rendered fewer hooks than expected" the moment the sheet closed.
+   */
+  if (!visible) return null;
 
   const cat = controlledCat !== undefined ? controlledCat : internalCat;
   const amt = controlledAmt !== undefined ? controlledAmt : internalAmt;

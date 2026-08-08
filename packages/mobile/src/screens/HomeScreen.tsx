@@ -71,7 +71,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     const inFlight = assignments.find((a) => a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS');
     const nextToday = todaysJobs.find((a) => a.status === 'ACCEPTED' || a.status === 'PENDING');
     const nextEver = [...assignments]
-      .filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED')
+      .filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED' && a.status !== 'CANCELLED')
       .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate))[0];
 
     const queries = assignments.flatMap((a) => a.queries || []);
@@ -79,8 +79,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     return {
       current: inFlight || nextToday || nextEver || null,
       todays: todaysJobs,
+      /**
+       * Three states, counted as three.
+       *
+       * `!== 'OPEN'` previously folded RESPONDED in with RESOLVED, so a query the assayer had
+       * answered but nobody had closed was reported back to them as resolved — and the
+       * resolution rate on the stats card counted work that is still outstanding.
+       */
       openQueries: queries.filter((q) => q.status === 'OPEN').length,
-      resolvedQueries: queries.filter((q) => q.status !== 'OPEN').length,
+      resolvedQueries: queries.filter((q) => q.status === 'RESOLVED').length,
     };
   }, [assignments]);
 
@@ -176,6 +183,7 @@ const STATUS_TONE: Record<string, 'success' | 'warning' | 'info' | 'neutral'> = 
   IN_PROGRESS: 'success',
   COMPLETED: 'neutral',
   REJECTED: 'neutral',
+  CANCELLED: 'neutral',
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -185,6 +193,7 @@ const STATUS_LABEL: Record<string, string> = {
   IN_PROGRESS: 'In progress',
   COMPLETED: 'Completed',
   REJECTED: 'Declined',
+  CANCELLED: 'Cancelled',
 };
 
 const CurrentJobCard: React.FC<{

@@ -556,15 +556,32 @@ export class AssayerService implements OnModuleInit {
    * engine when the assayer has also opted in (`isLiveEnabled === true`).
    */
   async updateLiveLocation(id: string, latitude: number, longitude: number, userId?: string): Promise<AssayerEntity> {
-    const assayer = await this.findOne(id);
+    // Existence check only — the row itself is updated by column below, never written back
+    // wholesale.
+    await this.findOne(id);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       throw new BadRequestException('Invalid live coordinates');
     }
-    assayer.liveLatitude = latitude;
-    assayer.liveLongitude = longitude;
-    assayer.liveLocation = { type: 'Point', coordinates: [longitude, latitude] };
-    assayer.updatedBy = userId ?? id;
-    return this.assayerRepository.save(assayer);
+    /**
+     * A targeted column update, not a whole-entity save.
+     *
+     * This previously loaded the full assayer and called `save()`, which writes back every
+     * column from the in-memory copy. Live position is reported continuously while an
+     * assayer is in the field (one row here reached version 53), so any column changed by
+     * something else between the read and the write was silently reverted to its stale
+     * value. That included security state: a forced-password-change flag, a lockout, or a
+     * failed-attempt counter set while the worker's phone was reporting its position would
+     * simply disappear. Observed in practice — a `must_change_password` flag set by the
+     * rotation script was cleared moments later by a location ping.
+     */
+    await this.assayerRepository.update(id, {
+      liveLatitude: latitude,
+      liveLongitude: longitude,
+      liveLocation: { type: 'Point', coordinates: [longitude, latitude] } as any,
+      updatedBy: userId ?? id,
+    });
+
+    return this.findOne(id);
   }
 
   /**
@@ -572,10 +589,14 @@ export class AssayerService implements OnModuleInit {
    * keeps any last live coordinate but the engine no longer uses it.
    */
   async setLiveTracking(id: string, enabled: boolean, userId?: string): Promise<AssayerEntity> {
-    const assayer = await this.findOne(id);
-    assayer.isLiveEnabled = !!enabled;
-    assayer.updatedBy = userId ?? id;
-    return this.assayerRepository.save(assayer);
+    await this.findOne(id); // existence check
+    // Same reasoning as updateLiveLocation: touch only the column being changed.
+    await this.assayerRepository.update(id, {
+      isLiveEnabled: !!enabled,
+      updatedBy: userId ?? id,
+    });
+
+    return this.findOne(id);
   }
 
   async remove(id: string, userId: string): Promise<void> {

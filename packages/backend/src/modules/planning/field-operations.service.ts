@@ -158,7 +158,20 @@ export class FieldOperationsService {
 
     return {
       visitsInProgress: inProgress,
-      visitsDelayed: 0, // Mock delayed visits calculations
+      // A visit whose planned date has passed without reaching a completed state. This was
+      // hardcoded to 0, so the operations dashboard reported "no delays" no matter how many
+      // visits had slipped — the one number on this panel that should prompt action never
+      // could. `plannedDate` is a date column, so the comparison is date-only: a visit planned
+      // for today is not late until today is over.
+      visitsDelayed: visits.filter((v) => {
+        const terminal = [
+          FieldVisitStatus.AUDIT_COMPLETED,
+          FieldVisitStatus.SUBMITTED,
+          FieldVisitStatus.HANDOVER_READY,
+        ].includes(v.status);
+        if (terminal || !v.plannedDate) return false;
+        return String(v.plannedDate).slice(0, 10) < new Date().toISOString().slice(0, 10);
+      }).length,
       awaitingSubmission: visits.filter((v) => v.status === FieldVisitStatus.AUDIT_COMPLETED).length,
       awaitingEvidence: visits.filter((v) => !v.evidenceReadiness.documentsCollected).length,
       activeIncidentsCount: activeIncidents.length,

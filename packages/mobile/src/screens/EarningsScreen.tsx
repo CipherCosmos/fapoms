@@ -1,6 +1,7 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AssayerAssignment, AssayerExpense, ExpenseSummary } from '../types/mobile-app';
+import { AssayerPayableStatus } from '@fapoms/shared';
+import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 import { getAssignmentTotalFee, hasResolvedFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import {
@@ -24,29 +25,31 @@ interface EarningsScreenProps {
    */
   claims?: AssayerExpense[];
   claimSummary?: ExpenseSummary;
-  qualityScore?: number | null;
-  queryResolutionRate?: number;
-  avgAuditHours?: number | null;
-  billingEntries?: any[];
+  /**
+   * The billing engine's own statement. Replaces `billingEntries?: any[]`, which was never
+   * passed, and the `qualityScore` / `queryResolutionRate` / `avgAuditHours` props, which had
+   * no backing field on the assayer record or anywhere in the API.
+   */
+  statement?: AssayerStatement | null;
 }
 
 type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
-const BILLING_STATE: Record<string, { label: string; tone: Tone }> = {
-  PENDING_BILLING: { label: 'Pending', tone: 'neutral' },
-  READY_FOR_BILLING: { label: 'Ready for billing', tone: 'info' },
-  DRAFT: { label: 'Draft', tone: 'neutral' },
-  SUBMITTED: { label: 'Submitted', tone: 'info' },
-  UNDER_REVIEW: { label: 'Under review', tone: 'warning' },
-  APPROVED: { label: 'Approved', tone: 'info' },
-  INVOICED: { label: 'Invoiced', tone: 'info' },
-  PARTIALLY_PAID: { label: 'Partially paid', tone: 'warning' },
-  PAID: { label: 'Paid', tone: 'success' },
-  ON_HOLD: { label: 'On hold', tone: 'warning' },
-  DISPUTED: { label: 'Disputed', tone: 'danger' },
-  CANCELLED: { label: 'Cancelled', tone: 'neutral' },
-  ADJUSTED: { label: 'Adjusted', tone: 'neutral' },
-  REJECTED: { label: 'Rejected', tone: 'danger' },
+/**
+ * The five statuses a payable can actually hold, keyed off the shared enum so the app cannot
+ * drift from the backend.
+ *
+ * The previous map invented fourteen: PENDING_BILLING, READY_FOR_BILLING, DRAFT, SUBMITTED,
+ * UNDER_REVIEW, INVOICED, PARTIALLY_PAID, CANCELLED, ADJUSTED and REJECTED do not exist in
+ * `AssayerPayableStatus`. Worse, the one status every seeded payable actually carries —
+ * PENDING — was missing, so real rows fell through to a raw uppercase string with no tone.
+ */
+const PAYABLE_STATE: Record<AssayerPayableStatus, { label: string; tone: Tone }> = {
+  [AssayerPayableStatus.PENDING]: { label: 'Awaiting approval', tone: 'warning' },
+  [AssayerPayableStatus.APPROVED]: { label: 'Approved', tone: 'info' },
+  [AssayerPayableStatus.PAID]: { label: 'Paid', tone: 'success' },
+  [AssayerPayableStatus.ON_HOLD]: { label: 'On hold', tone: 'warning' },
+  [AssayerPayableStatus.DISPUTED]: { label: 'Disputed', tone: 'danger' },
 };
 
 /** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */
@@ -78,7 +81,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   earningsPaid,
   earningsAwaitingApproval,
   assignments,
-  billingEntries,
+  statement,
   onOpenExpenseModal,
   claims,
   claimSummary,
@@ -88,9 +91,19 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   const expenses = claims?.length ? claims : assignments.flatMap((a) => a.expenses ?? []);
   const totalExpenses =
     claimSummary?.totalClaimed ?? expenses.reduce((s, e) => s + (e?.amount ?? 0), 0);
-  const owed = runningBalance ?? pendingEarnings ?? 0;
-  const paid = earningsPaid ?? 0;
-  const awaiting = earningsAwaitingApproval ?? 0;
+  /**
+   * The billing engine's figures win when the statement has loaded.
+   *
+   * The profile fields kept as the fallback are a denormalised snapshot refreshed when the
+   * profile is read; the statement is computed from the payables themselves, so it is the one
+   * that agrees with what finance sees. Falling back rather than blanking keeps the screen
+   * useful when the statement request fails.
+   */
+  const owed = statement?.totals.outstanding ?? runningBalance ?? pendingEarnings ?? 0;
+  const paid = statement?.totals.paid ?? earningsPaid ?? 0;
+  const awaiting = statement?.totals.awaitingApproval ?? earningsAwaitingApproval ?? 0;
+  const lifetime = statement?.totals.earned ?? totalEarnings;
+  const onHold = statement?.totals.onHoldOrDisputed ?? 0;
 
   const completed = assignments
     .filter((a) => a.status === 'COMPLETED')
@@ -117,35 +130,77 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
       </Card>
 
       <StatStrip>
-        <StatTile label="Lifetime earned" value={money(totalEarnings)} icon="trending-up" tone="primary" />
+        <StatTile label="Lifetime earned" value={money(lifetime)} icon="trending-up" tone="primary" />
+        {onHold > 0 && (
+          <StatTile
+            label="On hold"
+            value={money(onHold)}
+            icon="pause-circle-outline"
+            tone="warning"
+            hint="disputed or held"
+          />
+        )}
         <StatTile label="Expenses claimed" value={money(totalExpenses)} icon="receipt-outline" />
         <StatTile label="Audits completed" value={completed.length} icon="checkmark-done" tone="success" />
       </StatStrip>
 
       <Button label="Log an expense" icon="add-circle-outline" variant="neutral" onPress={onOpenExpenseModal} full />
 
-      {billingEntries && billingEntries.length > 0 && (
-        <Section title="Billing status">
-          {billingEntries.slice(0, 8).map((e: any, i: number) => {
-            const state = BILLING_STATE[e.state] ?? { label: String(e.state ?? 'Unknown'), tone: 'neutral' as Tone };
+      {statement && statement.payables.length > 0 && (
+        <Section title="Payables">
+          {statement.payables.slice(0, 8).map((p, i) => {
+            const state = PAYABLE_STATE[p.status as AssayerPayableStatus]
+              ?? { label: String(p.status), tone: 'neutral' as Tone };
             return (
-              <FadeIn key={e.id ?? i} delay={Math.min(i, 6) * 40}>
-                <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-                  <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                    <AppText variant="bodyStrong" numberOfLines={1}>
-                      {e.branchName ?? e.description ?? 'Audit fee'}
-                    </AppText>
-                    <View style={{ flexDirection: 'row' }}>
-                      <Badge label={state.label} tone={state.tone} dot />
+              <FadeIn key={p.id} delay={Math.min(i, 6) * 40}>
+                <Card level={1} style={{ gap: t.space.sm }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+                    <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                      <AppText variant="bodyStrong" numberOfLines={1}>{p.payableNumber}</AppText>
+                      <View style={{ flexDirection: 'row' }}>
+                        <Badge label={state.label} tone={state.tone} dot />
+                      </View>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <AppText variant="h3">{money(p.totalAmount)}</AppText>
+                      {p.outstanding > 0 && p.outstanding !== p.totalAmount && (
+                        <AppText variant="caption" tone="muted">{money(p.outstanding)} outstanding</AppText>
+                      )}
                     </View>
                   </View>
-                  <AppText variant="h3" tone={state.tone === 'success' ? 'success' : 'default'}>
-                    {money(e.totalAmount ?? e.baseAmount ?? 0)}
-                  </AppText>
+                  {/* The breakdown finance works from. Deriving a single fee off the
+                      assignment could never show TDS or a part payment. */}
+                  <Divider />
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <AppText variant="caption" tone="faint">Base {money(p.baseAmount)}</AppText>
+                    <AppText variant="caption" tone="faint">Travel {money(p.travelAmount)}</AppText>
+                    {p.tdsAmount > 0 && (
+                      <AppText variant="caption" tone="faint">TDS -{money(p.tdsAmount)}</AppText>
+                    )}
+                  </View>
                 </Card>
               </FadeIn>
             );
           })}
+        </Section>
+      )}
+
+      {statement && statement.payments.length > 0 && (
+        <Section title="Payments received">
+          {statement.payments.slice(0, 8).map((pm, i) => (
+            <FadeIn key={pm.id} delay={Math.min(i, 6) * 40}>
+              <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+                <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                  <AppText variant="bodyStrong" numberOfLines={1}>{pm.paymentReference}</AppText>
+                  <AppText variant="caption" tone="faint">
+                    {pm.method}
+                    {pm.paidDate ? ` \u00b7 ${new Date(pm.paidDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}
+                  </AppText>
+                </View>
+                <AppText variant="h3" tone="success">{money(pm.amount)}</AppText>
+              </Card>
+            </FadeIn>
+          ))}
         </Section>
       )}
 

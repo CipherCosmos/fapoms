@@ -39,9 +39,9 @@ export class OperationsExecutionService {
     });
     group = await this.groupRepository.save(group);
 
-    // Relate targeted assignment records to the newly created group
-
-    // Mock update execution relation for actual targeted IDs
+    // Relate the targeted assignments to the new group. (The comment here previously read
+    // "Mock update execution relation" — the code below is a real persisted update, so the
+    // label was stale and misleading rather than describing a stub.)
     for (const aid of dto.assignmentIds) {
       const assignment = await this.assignmentRepository.findOne({ where: { id: aid } });
       if (assignment) {

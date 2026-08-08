@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
@@ -18,12 +18,36 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
 }) => {
   const t = useTheme();
 
-  if (!visible) return null;
-
-  const [feeText, setFeeText] = useState(String(currentFee || 1800));
+  /**
+   * Seeded from the assignment's own fee, never from an invented figure.
+   *
+   * This defaulted to `currentFee || 1800`. An assignment whose fee had not been resolved yet
+   * pre-filled the counter-offer box with ₹1800 — a number that appears nowhere in the fee
+   * policy — and an assayer who tapped submit without editing sent that to Operations as
+   * their asking price. An empty box asks the question instead of answering it wrongly.
+   */
+  const [feeText, setFeeText] = useState(currentFee > 0 ? String(currentFee) : '');
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Re-seed each time the sheet opens, so opening it for a second assignment does not carry
+  // over the previous one's figure — `useState` only reads its initial value on first mount.
+  useEffect(() => {
+    if (!visible) return;
+    setFeeText(currentFee > 0 ? String(currentFee) : '');
+    setRemarks('');
+    setErrorMsg(null);
+  }, [visible, currentFee]);
+
+  /**
+   * Placed after the hooks, not before them.
+   *
+   * The early return used to sit above every `useState` in this component, so React saw a
+   * different number of hooks depending on `visible` — the rules-of-hooks violation that
+   * throws "rendered fewer hooks than expected" as soon as the sheet is dismissed.
+   */
+  if (!visible) return null;
 
   const handleSubmit = async () => {
     setErrorMsg(null);

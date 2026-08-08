@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary } from './src/types/mobile-app';
+import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import {
   registerForPushNotificationsAsync,
@@ -66,6 +66,7 @@ function AppMain() {
    * from a rejected one.
    */
   const [claims, setClaims] = useState<AssayerExpense[]>([]);
+  const [statement, setStatement] = useState<AssayerStatement | null>(null);
   const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary>({
     pending: 0,
     approved: 0,
@@ -242,12 +243,14 @@ function AppMain() {
 
   const loadExpenseSummary = useCallback(async () => {
     if (!user?.id) return;
-    const [summary, mine] = await Promise.all([
+    const [summary, mine, stmt] = await Promise.all([
       MobileApiService.getMyExpenseSummary(),
       MobileApiService.getMyExpenses(),
+      MobileApiService.getAssayerStatement(user.id),
     ]);
     setExpenseSummary(summary);
     setClaims(mine);
+    setStatement(stmt);
   }, [user?.id]);
 
   useEffect(() => {
@@ -657,6 +660,7 @@ function AppMain() {
             assignments={assignments}
             claims={claims}
             claimSummary={expenseSummary}
+            statement={statement}
             onOpenExpenseModal={() => setExpenseModalVisible(true)}
           />
         )}

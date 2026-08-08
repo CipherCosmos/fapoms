@@ -24,6 +24,7 @@ describe('AssayerService', () => {
     findOne: jest.fn(),
     findAndCount: jest.fn(),
     find: jest.fn(),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
 
   const mockCommercialRepo = {
@@ -421,6 +422,50 @@ describe('AssayerService', () => {
       const result = await service.addWorkforceAttribute('asr-1', { type: 'SKILL', name: 'Communication' }, 'user-1');
 
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+  });
+
+  describe('live location writes', () => {
+    /**
+     * These previously loaded the whole assayer and called save(), writing back every column
+     * from a stale in-memory copy. Position is reported continuously from the field, so any
+     * column changed in between was silently reverted — including must_change_password,
+     * locked_until and failed_login_attempts. Observed in practice: a forced-rotation flag
+     * set by the rotation script was cleared moments later by a location ping.
+     */
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'a-1', isActive: true });
+      mockAssayerRepo.update.mockClear();
+      mockAssayerRepo.save.mockClear();
+    });
+
+    it('updates only the position columns, never the whole row', async () => {
+      await service.updateLiveLocation('a-1', 19.07, 72.87, 'a-1');
+
+      expect(mockAssayerRepo.save).not.toHaveBeenCalled();
+      expect(mockAssayerRepo.update).toHaveBeenCalledTimes(1);
+
+      const [, patch] = mockAssayerRepo.update.mock.calls[0];
+      expect(Object.keys(patch).sort()).toEqual(
+        ['liveLatitude', 'liveLocation', 'liveLongitude', 'updatedBy'].sort(),
+      );
+      // Nothing security-related may ride along on a location ping.
+      for (const forbidden of ['mustChangePassword', 'lockedUntil', 'failedLoginAttempts', 'status', 'passwordHash']) {
+        expect(patch).not.toHaveProperty(forbidden);
+      }
+    });
+
+    it('toggles live sharing without rewriting the rest of the record', async () => {
+      await service.setLiveTracking('a-1', true, 'a-1');
+
+      expect(mockAssayerRepo.save).not.toHaveBeenCalled();
+      const [, patch] = mockAssayerRepo.update.mock.calls[0];
+      expect(Object.keys(patch).sort()).toEqual(['isLiveEnabled', 'updatedBy'].sort());
+    });
+
+    it('rejects a non-finite coordinate rather than storing it', async () => {
+      await expect(service.updateLiveLocation('a-1', NaN, 72.87)).rejects.toThrow();
+      expect(mockAssayerRepo.update).not.toHaveBeenCalled();
     });
   });
 });

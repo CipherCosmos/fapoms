@@ -72,4 +72,42 @@ describe('FieldOperationsService', () => {
     expect(pkg.visitId).toBe('v-1');
     expect(pkg.evidenceMetadata.hasFormPayload).toBe(true);
   });
+
+  describe('getFieldOperationsDashboard — delayed visits', () => {
+    const day = (offset: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return d.toISOString().slice(0, 10);
+    };
+
+    const visit = (status: string, plannedDate: string) => ({
+      status,
+      plannedDate,
+      evidenceReadiness: { documentsCollected: true },
+    });
+
+    it('counts visits whose planned date has passed and are not finished', async () => {
+      // `visitsDelayed` was hardcoded to 0, so this panel reported "no delays" however many
+      // visits had actually slipped — the one number here meant to prompt action.
+      mockVisitRepository.find.mockResolvedValue([
+        visit('DISPATCHED', day(-3)),
+        visit('AUDIT_STARTED', day(-1)),
+        visit('DISPATCHED', day(+2)),
+        visit('AUDIT_COMPLETED', day(-5)),
+        visit('SUBMITTED', day(-9)),
+      ]);
+      mockIncidentRepository.find.mockResolvedValue([]);
+
+      const summary = await service.getFieldOperationsDashboard('cp-1');
+      expect(summary.visitsDelayed).toBe(2);
+    });
+
+    it('does not treat a visit planned for today as late', async () => {
+      mockVisitRepository.find.mockResolvedValue([visit('DISPATCHED', day(0))]);
+      mockIncidentRepository.find.mockResolvedValue([]);
+
+      const summary = await service.getFieldOperationsDashboard('cp-1');
+      expect(summary.visitsDelayed).toBe(0);
+    });
+  });
 });

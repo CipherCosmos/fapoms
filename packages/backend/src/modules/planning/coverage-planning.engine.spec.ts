@@ -127,4 +127,41 @@ describe('CoveragePlanningEngine', () => {
       }
     });
   });
+
+  describe('estimatedDurationDays', () => {
+    /**
+     * Twelve branches and one assayer allowed 15 a week (3 a working day).
+     * Capacity-based  => ceil(12 / 3) = 4 days.
+     * Old flat guess  => ceil(12 / 4) = 3 days, regardless of who is available.
+     * Asserting 4 is what makes this test fail if the flat formula returns.
+     */
+    const twelveBranches = Array.from({ length: 12 }, (_, i) => ({
+      branchId: { value: `b-${i}` },
+      name: `Branch ${i}`,
+      // Same coordinates so they cluster together and all get matched.
+      location: { latitude: 19.0, longitude: 72.0 },
+      requiredSkills: { values: ['Gold'] },
+    }));
+
+    it('derives days from the assigned workforce capacity', async () => {
+      mockBranchProvider.getBranchesForPlanning.mockResolvedValueOnce(twelveBranches);
+      mockProjectQueryService.findOne.mockResolvedValueOnce({ id: 'p-1', name: 'Project Alpha', clientId: 'c-1' });
+
+      const plan = await engine.generateCoveragePlan('p-1');
+
+      expect(plan.requiredWorkforceCount).toBe(1);
+      expect(plan.estimatedDurationDays).toBe(4);
+    });
+
+    it('does not claim a one-day plan when nothing could be matched', async () => {
+      mockRecommendationEngine.recommend.mockResolvedValue([]);
+      const plan = await engine.generateCoveragePlan('p-1');
+      expect(plan.coveragePercentage).toBe(0);
+      expect(plan.estimatedDurationDays).toBeGreaterThanOrEqual(1);
+      // Restore for any later test in this file.
+      mockRecommendationEngine.recommend.mockResolvedValue([
+        { assayer: { id: 'a-1', displayName: 'Vijay Shankar' }, score: 90, breakdown: {} },
+      ]);
+    });
+  });
 });
