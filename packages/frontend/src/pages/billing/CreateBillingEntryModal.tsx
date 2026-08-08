@@ -36,7 +36,11 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
     travelAmount: '',
     adjustmentAmount: '',
     discountAmount: '',
-    taxRate: '18',
+    // Blank means "use the client's contracted rate", which the backend resolves
+    // (dto.taxRate ?? contract.gstRate). This used to default to a literal '18', which the
+    // backend takes as an explicit override — so a client contracted at a different GST rate
+    // was silently billed 18%. TDS was already blank; GST now behaves the same way.
+    taxRate: '',
     tdsRate: '',
     billingPeriodStart: '',
     billingPeriodEnd: '',
@@ -164,13 +168,13 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
         </select>
         <StyledInput {...inputProps} placeholder="Rate" type="number" value={form.rate} onChange={(e) => set('rate', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Quantity" type="number" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} />
-        <StyledInput {...inputProps} placeholder="Tax rate %" type="number" value={form.taxRate} onChange={(e) => set('taxRate', e.target.value)} />
+        <StyledInput {...inputProps} placeholder="GST % (blank = client contract)" type="number" value={form.taxRate} onChange={(e) => set('taxRate', e.target.value)} />
 
         <StyledInput {...inputProps} placeholder="Base amount" type="number" value={form.baseAmount} onChange={(e) => set('baseAmount', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Travel amount" type="number" value={form.travelAmount} onChange={(e) => set('travelAmount', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Adjustment (+/-)" type="number" value={form.adjustmentAmount} onChange={(e) => set('adjustmentAmount', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Discount" type="number" value={form.discountAmount} onChange={(e) => set('discountAmount', e.target.value)} />
-        <StyledInput {...inputProps} placeholder="TDS rate %" type="number" value={form.tdsRate} onChange={(e) => set('tdsRate', e.target.value)} />
+        <StyledInput {...inputProps} placeholder="TDS % (blank = client contract)" type="number" value={form.tdsRate} onChange={(e) => set('tdsRate', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Period start" type="date" value={form.billingPeriodStart} onChange={(e) => set('billingPeriodStart', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Period end" type="date" value={form.billingPeriodEnd} onChange={(e) => set('billingPeriodEnd', e.target.value)} />
 

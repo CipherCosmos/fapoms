@@ -68,6 +68,11 @@ describe('BillingEngineService', () => {
     manager: { query: managerQuery },
   };
 
+  const assignmentRepo: any = {
+    create: jest.fn((d) => d), save: jest.fn(async (d) => ({ id: 'x', ...d })),
+    find: jest.fn(async () => []), findOne: jest.fn(async () => null),
+  };
+
   const simpleRepo = () => ({
     create: jest.fn((d) => d), save: jest.fn(async (d) => ({ id: 'x', ...d })),
     find: jest.fn(async () => []), findOne: jest.fn(async () => null),
@@ -85,7 +90,7 @@ describe('BillingEngineService', () => {
         { provide: getRepositoryToken(AssayerPayableEntity), useValue: payableRepo },
         { provide: getRepositoryToken(BillingConflictEntity), useValue: conflictRepo },
         { provide: getRepositoryToken(BillingHistoryEntity), useValue: simpleRepo() },
-        { provide: getRepositoryToken(AssignmentEntity), useValue: simpleRepo() },
+        { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: simpleRepo() },
         { provide: DomainEventPublisher, useValue: { publish: jest.fn(), subscribe: jest.fn() } },
       ],
@@ -182,6 +187,35 @@ describe('BillingEngineService', () => {
         { id: 'b', clientId: 'client-1', entryNumber: 'BE-B', paidAmount: 0, invoiceId: null },
       ]);
       await expect(service.mergeEntries(['a', 'b'], 'user-1')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('payable rate snapshot', () => {
+    it('records the agreed fee it actually booked, not the profile standard rate', async () => {
+      // Completed assignment agreed at 2000; the assayer's standard profile rate is 3406.
+      assignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',
+        assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000, proposedFee: 2100,
+      });
+      payableRepo.findOne.mockResolvedValue(null);
+      // The commercial-profile lookup (via manager.query) returns the standard rate.
+      const q = payableRepo.manager.query as jest.Mock;
+      q.mockImplementation(async (sql: string) => {
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '3406', travel_reimbursement: '313', daily_rate: '5000' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        return [];
+      });
+      let captured: any = null;
+      payableRepo.save.mockImplementation(async (d: any) => { captured = d; return { id: 'payable-1', ...d }; });
+
+      await service.syncPayableForAssignment('asn-1', 'user-1');
+
+      // The payable is booked at the agreed fee, and the snapshot must justify that number.
+      expect(Number(captured.baseAmount)).toBe(2000);
+      expect(Number(captured.rateSnapshot.baseFee)).toBe(2000);
+      // The profile's standard rate is kept for context, clearly separated, never conflated
+      // with the amount actually paid.
+      expect(Number(captured.rateSnapshot.profileStandardBaseFee)).toBe(3406);
     });
   });
 

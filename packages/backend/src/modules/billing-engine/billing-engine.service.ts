@@ -496,9 +496,22 @@ export class BillingEngineService implements OnModuleInit {
       // them, and no GST is added on our side unless they are registered.
       taxRate: 0,
       tdsRate: 10,
-      rateSnapshot: rateCard
-        ? { source: 'assayer_commercial_profiles', baseFee: Number(rateCard.base_fee), travelReimbursement: travel, dailyRate: Number(rateCard.daily_rate), capturedAt: new Date().toISOString() }
-        : { source: 'assignment.agreedFee', note: 'no active commercial profile', capturedAt: new Date().toISOString() },
+      // The snapshot must justify the amount actually booked. The payable is booked at the
+      // assignment's agreed fee, so `baseFee` here is that fee — not the assayer's standard
+      // profile rate, which was recorded before and disagreed with every payable (base_amount
+      // 2000 against a snapshot claiming 3406). The standard profile rate is kept alongside as
+      // context, clearly labelled, so "why did we pay this?" resolves to the agreed fee and the
+      // profile it was compared against, both immutable on the payable.
+      rateSnapshot: {
+        source: 'assignment.agreedFee',
+        baseFee: fee,
+        travelReimbursement: travel,
+        agreedFee: fee,
+        proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
+        profileStandardBaseFee: rateCard ? Number(rateCard.base_fee) : null,
+        profileDailyRate: rateCard ? Number(rateCard.daily_rate) : null,
+        capturedAt: new Date().toISOString(),
+      },
       remarks: `Auto-generated on completion of ${a.assignmentNumber}.`,
     }, userId);
 
