@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Plus, AlertTriangle, Banknote, FileText, RefreshCw } from 'lucide-react';
 import {
   useBillingDashboard,
@@ -287,6 +288,11 @@ export const Billing: React.FC = () => {
         <TabButton active={tab === 'payables'} onClick={() => setTab('payables')}>Assayer Payables</TabButton>
         <TabButton active={tab === 'conflicts'} onClick={() => setTab('conflicts')}>Conflicts</TabButton>
         <TabButton active={tab === 'history'} onClick={() => setTab('history')}>History</TabButton>
+        {/* New standalone pages surfacing capability the backend always had. */}
+        <Link to={clientId ? `/billing/ledger?type=client&id=${clientId}` : '/billing/ledger'}
+          style={{ padding: '7px 13px', fontSize: 13, fontWeight: 600, borderRadius: 8, textDecoration: 'none', color: 'var(--accent)', border: '1px solid var(--border-color)' }}>Ledger →</Link>
+        <Link to={clientId ? `/billing/settings?client=${clientId}` : '/billing/settings'}
+          style={{ padding: '7px 13px', fontSize: 13, fontWeight: 600, borderRadius: 8, textDecoration: 'none', color: 'var(--accent)', border: '1px solid var(--border-color)' }}>Rate cards →</Link>
       </div>
 
       {tab === 'overview' && (

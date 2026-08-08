@@ -16,6 +16,8 @@ import { Users } from './pages/Users';
 import { AssayerProfile } from './pages/AssayerProfile';
 import { Clients } from './pages/Clients';
 import { Billing } from './pages/Billing';
+import { LedgerPage } from './pages/billing/LedgerPage';
+import { ClientBillingSettingsPage } from './pages/billing/ClientBillingSettingsPage';
 import { Rules } from './pages/Rules';
 import { Notifications } from './pages/Notifications';
 import { Holidays } from './pages/Holidays';
@@ -167,6 +169,8 @@ export const App: React.FC = () => {
         <Route path="/assayers/:id" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerProfile /></ProtectedRoute>} />
         <Route path="/clients" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Clients /></ProtectedRoute>} />
         <Route path="/billing" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Billing /></ProtectedRoute>} />
+        <Route path="/billing/ledger" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><LedgerPage /></ProtectedRoute>} />
+        <Route path="/billing/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><ClientBillingSettingsPage /></ProtectedRoute>} />
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
         <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />

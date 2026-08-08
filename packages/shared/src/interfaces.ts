@@ -122,6 +122,10 @@ export interface ClientConfiguration {
   maxResponseTimeHours?: number;
   penaltyRate?: number;
   serviceHours?: Record<string, unknown>;
+  // Client rate card — what the client is billed per audit.
+  defaultBaseFee?: number;
+  travelFeePerKm?: number;
+  freeTravelAllowanceKm?: number;
   effectiveFrom: string;        // ISO 8601
   effectiveTo?: string;         // ISO 8601
 }
@@ -166,6 +170,8 @@ export interface ClientBilling extends AuditMetadata {
   bankName?: string;
   ifscCode?: string;
   notes?: string;
+  gstRate?: number;
+  tdsRate?: number;
   status: ClientBillingStatus;
 }
 

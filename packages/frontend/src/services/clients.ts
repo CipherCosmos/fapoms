@@ -49,6 +49,10 @@ export interface ClientConfigurationPayload {
   maxResponseTimeHours?: number;
   penaltyRate?: number;
   serviceHours?: Record<string, unknown>;
+  // Client rate card — what the client is billed, distinct from the assayer's own profile.
+  defaultBaseFee?: number;
+  travelFeePerKm?: number;
+  freeTravelAllowanceKm?: number;
 }
 
 export interface CreateClientPayload {
@@ -105,6 +109,8 @@ export interface UpdateBillingPayload {
   bankName?: string;
   ifscCode?: string;
   notes?: string;
+  gstRate?: number;
+  tdsRate?: number;
 }
 
 async function listClients(params: ClientListParams = {}): Promise<ClientListResult> {
