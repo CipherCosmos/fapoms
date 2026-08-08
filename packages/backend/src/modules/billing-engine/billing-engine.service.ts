@@ -1696,8 +1696,12 @@ export class BillingEngineService implements OnModuleInit {
     const billed = sum(entries, 'billedAmount');
     const paid = sum(entries, 'paidAmount');
     const outstanding = sum(entries, 'outstandingAmount');
+    // The one definition of unbilled — the shared UNBILLED_STATES, which every other finance
+    // figure uses. This inlined a 5-state list that omitted APPROVED, so the moment finance
+    // approved an entry the Overview KPI dropped it while the Finance tab still counted it: the
+    // same rupees, two numbers, on two tabs of one screen.
     const pending = sum(
-      entries.filter((e) => [BillingState.PENDING_BILLING, BillingState.READY_FOR_BILLING, BillingState.DRAFT, BillingState.SUBMITTED, BillingState.UNDER_REVIEW].includes(e.state)),
+      entries.filter((e) => UNBILLED_STATES.includes(e.state)),
       'totalAmount',
     );
     const disputed = sum(entries.filter((e) => e.state === BillingState.DISPUTED), 'disputedAmount');

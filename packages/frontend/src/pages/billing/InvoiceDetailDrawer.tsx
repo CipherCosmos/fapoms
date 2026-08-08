@@ -105,6 +105,9 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         <Row label="Subtotal" value={`${money(invoice.subtotal)}`} />
         {invoice.taxAmount ? <Row label="Tax" value={`${money(invoice.taxAmount)}`} /> : null}
         {invoice.discountAmount ? <Row label="Discount" value={`-${money(invoice.discountAmount)}`} /> : null}
+        {/* TDS is withheld by the client, so total = subtotal + GST − TDS. Omitting it left
+            Subtotal + Tax not adding up to Total with nothing on screen to explain the gap. */}
+        {invoice.tdsAmount ? <Row label="TDS withheld" value={`-${money(invoice.tdsAmount)}`} /> : null}
         <Row label="Total" value={<span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{money(invoice.total)}</span>} />
         <Row label="Paid" value={`${money(invoice.paidAmount)}`} />
         <Row label="Outstanding" value={`${money(invoice.outstandingAmount)}`} />

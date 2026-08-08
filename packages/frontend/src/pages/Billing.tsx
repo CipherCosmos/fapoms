@@ -445,7 +445,7 @@ export const Billing: React.FC = () => {
 
       {tab === 'invoices' && (
         <Table
-          columns={['Invoice #', 'Status', 'Type', 'Subtotal', 'Tax', 'Total', 'Paid', 'Outstanding']}
+          columns={['Invoice #', 'Status', 'Type', 'Subtotal', 'GST', 'TDS', 'Total', 'Paid', 'Outstanding']}
           rowIds={invoices.data?.map((i) => i.id)}
           onRowClick={(id) => setOpenInvoiceId(id)}
           rows={invoices.data?.map((inv: BillingInvoice) => [
@@ -454,6 +454,7 @@ export const Billing: React.FC = () => {
             <span key={inv.id} style={{ fontSize: '12px' }}>{inv.type}</span>,
             <span key={inv.id}>{money(inv.subtotal)}</span>,
             <span key={inv.id}>{money(inv.taxAmount)}</span>,
+            <span key={inv.id} style={{ color: 'var(--text-muted)' }}>−{money(inv.tdsAmount)}</span>,
             <span key={inv.id} style={{ fontWeight: 600 }}>{money(inv.total)}</span>,
             <span key={inv.id} style={{ color: 'var(--success)' }}>{money(inv.paidAmount)}</span>,
             <span key={inv.id} style={{ color: 'var(--warning)' }}>{money(inv.outstandingAmount)}</span>,
@@ -474,6 +475,10 @@ export const Billing: React.FC = () => {
             <span key={p.id}>
               <strong>{p.assayerName ?? 'Unknown assayer'}</strong>
               {p.assayerCode && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.assayerCode}</div>}
+              {p.assayerId && (
+                <Link to={`/billing/statement?assayer=${p.assayerId}`} onClick={(e) => e.stopPropagation()}
+                  style={{ fontSize: '11px', color: 'var(--accent)', textDecoration: 'none' }}>Statement →</Link>
+              )}
             </span>,
             <span key={p.id} style={{ fontSize: '12px' }}>
               <div>{p.assignmentNumber ?? '—'}</div>
