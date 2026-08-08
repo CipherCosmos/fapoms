@@ -507,6 +507,31 @@ function getCityTierMultiplier(city?: string): number {
   return 1.0;
 }
 
+/**
+ * The commercial profile governing an assayer on a given date.
+ *
+ * This is the same rule FeePolicyService.resolveBaseFee applies (effective on the date, most
+ * recent start wins), stated once so the scorers cannot drift from the calculator that
+ * actually bills the work. The Cost and Profitability scorers previously disagreed: Cost
+ * selected the profile effective on the audit date, Profitability took whichever profile was
+ * newest regardless of date. An assayer with a future rate change was therefore scored as
+ * cheap by one and expensive by the other in the same recommendation.
+ *
+ * `profiles` must be ordered by effectiveStartDate DESC, matching both the batched preload and
+ * the per-candidate query fallback.
+ */
+function selectProfileEffectiveOn(
+  profiles: AssayerCommercialProfileEntity[],
+  onDate: Date,
+): AssayerCommercialProfileEntity | null {
+  for (const p of profiles) {
+    const startsBy = new Date(p.effectiveStartDate) <= onDate;
+    const notEnded = !p.effectiveEndDate || new Date(p.effectiveEndDate) >= onDate;
+    if (startsBy && notEnded) return p;
+  }
+  return null;
+}
+
 @Injectable()
 export class CostScoreCalculator implements ScoreCalculator {
   name = 'cost';
@@ -524,14 +549,7 @@ export class CostScoreCalculator implements ScoreCalculator {
           order: { effectiveStartDate: 'DESC' },
         });
 
-    let activeProfile: AssayerCommercialProfileEntity | null = null;
-    const targetDate = context.scheduledDate;
-    for (const p of profiles) {
-      if (p.effectiveStartDate <= targetDate && (!p.effectiveEndDate || p.effectiveEndDate >= targetDate)) {
-        activeProfile = p;
-        break;
-      }
-    }
+    const activeProfile = selectProfileEffectiveOn(profiles, context.scheduledDate);
 
     if (!activeProfile) {
       return 50;
@@ -786,13 +804,16 @@ export class ProfitabilityScoreCalculator implements ScoreCalculator {
     const budget = context.client?.budget ? Number(context.client.budget) : 0;
     if (budget <= 0) return 100; // No budget constraint
 
-    // Newest first in the shared list, which is exactly what findOne with this ordering gave.
-    const profile = context.branchFacts
-      ? ((context.branchFacts.commercialProfilesByAssayer[assayer.id] ?? [])[0] ?? null)
-      : await this.commercialRepository.findOne({
+    // Same selection as the Cost scorer and FeePolicyService: the profile in force on the
+    // audit date. This used to take the newest profile outright, so a rate change dated in the
+    // future priced this assayer differently here than everywhere else in the platform.
+    const profiles = context.branchFacts
+      ? (context.branchFacts.commercialProfilesByAssayer[assayer.id] ?? [])
+      : await this.commercialRepository.find({
           where: { assayerId: assayer.id, isActive: true },
           order: { effectiveStartDate: 'DESC' },
         });
+    const profile = selectProfileEffectiveOn(profiles, context.scheduledDate);
 
     if (!profile) return 50;
 

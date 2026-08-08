@@ -67,6 +67,23 @@ export class RolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
+    /**
+     * `@Public()` is honoured here as well as in JwtAuthGuard.
+     *
+     * Only JwtAuthGuard checked it, so on any controller that also applies this guard a public
+     * route passed authentication and was then refused by the deny-by-default rule below —
+     * always 403, never reachable. That is why signed attachment links could not be opened:
+     * the download route is deliberately public and token-authenticated, and this guard
+     * rejected it before the handler ever ran.
+     *
+     * The deny-by-default posture is unchanged for every route that is not explicitly public.
+     */
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (isPublic) return true;
+
     const requiredRoles = this.reflector.getAllAndOverride<string[]>(
       ROLES_KEY,
       [context.getHandler(), context.getClass()],
@@ -134,6 +151,13 @@ export class PermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
+    // Same reasoning as RolesGuard: an explicitly public route must not be gated here.
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (isPublic) return true;
+
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
