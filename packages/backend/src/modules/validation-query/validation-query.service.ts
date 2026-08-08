@@ -71,6 +71,9 @@ export class ValidationQueryService {
       assayerId: resolvedAssayerId,
       queryText: dto.queryText,
       targetField: dto.targetField ?? null,
+      // Who on the desk raised it — this was never set, so no clarification could be attributed
+      // to a staffer or counted toward their throughput.
+      raisedByUserId: userId,
       attachments: rawAttachments.length > 0 ? rawAttachments : null,
       status: ValidationQueryStatus.OPEN,
       slaDueDate,

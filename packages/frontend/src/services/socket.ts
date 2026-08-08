@@ -33,12 +33,28 @@ export function connectSocket(): Socket | null {
   if (socket) return socket;
 
   socket = io(WS_URL, {
-    auth: { token },
+    /**
+     * Read fresh on every (re)connection attempt.
+     *
+     * `auth: { token }` captures the token once, at connect time. After the access token
+     * rotates, every reconnection keeps presenting the old one and the server rejects it — so
+     * a desk session that has been open past one token lifetime silently stops receiving
+     * live updates and only recovers on a full page reload. The mobile client was fixed for
+     * this; the web client was not.
+     */
+    auth: (cb: (data: { token: string | null }) => void) => cb({ token: getSocketToken() }),
     transports: ['websocket', 'polling'],
     reconnection: true,
-    reconnectionAttempts: 10,
+    /**
+     * Never give up. Ten attempts with a 5-second ceiling meant the socket died for good
+     * after about a minute — a closed laptop lid, a Wi-Fi switch or a brief VPN drop was
+     * enough to leave an operations desk looking at a screen that had quietly stopped
+     * updating, with nothing on it saying so.
+     */
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
+    reconnectionDelayMax: 30000,
+    randomizationFactor: 0.5,
   });
 
   socket.on('connect', () => {

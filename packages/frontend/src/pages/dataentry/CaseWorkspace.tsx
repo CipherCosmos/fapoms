@@ -77,6 +77,8 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   const [queries, setQueries] = useState<QueryRow[] | null>(null);
   const [selectedQuery, setSelectedQuery] = useState<string | null>(null);
   const [newQueryText, setNewQueryText] = useState('');
+  const [newQueryField, setNewQueryField] = useState('');
+  const [newQueryUrgent, setNewQueryUrgent] = useState(false);
   const [showNewQuery, setShowNewQuery] = useState(false);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -160,9 +162,18 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
       }
       const created = await api.request<QueryRow>('/validation-queries', {
         method: 'POST',
-        body: JSON.stringify({ validationCaseId: caseId, queryText: newQueryText.trim() }),
+        body: JSON.stringify({
+          validationCaseId: caseId,
+          queryText: newQueryText.trim(),
+          // Anchoring the question to a field lets the assayer jump straight to the disputed
+          // value instead of hunting for it. Urgency tightens the SLA the worklist sorts by.
+          targetField: newQueryField.trim() || undefined,
+          slaHours: newQueryUrgent ? 2 : undefined,
+        }),
       });
       setNewQueryText('');
+      setNewQueryField('');
+      setNewQueryUrgent(false);
       setShowNewQuery(false);
       await loadQueries(caseId!);
       setSelectedQuery((created as any).id);
@@ -306,17 +317,28 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           </div>
 
           {showNewQuery && (
-            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', gap: '8px' }}>
+            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <input
                 value={newQueryText}
                 onChange={(e) => setNewQueryText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') raiseQuery(); }}
                 placeholder="Type your question for the assayer… e.g. Gross weight mismatch on row 3"
-                style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
+                style={{ padding: '8px 11px', fontSize: '12.5px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
               />
-              <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px', fontWeight: 600 }}>
-                {busy ? <Loader2 size={13} className="spin" /> : 'Start Thread'}
-              </button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  value={newQueryField}
+                  onChange={(e) => setNewQueryField(e.target.value)}
+                  placeholder="Field (optional) — e.g. Gross weight"
+                  style={{ flex: '1 1 180px', padding: '7px 10px', fontSize: '12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
+                />
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={newQueryUrgent} onChange={(e) => setNewQueryUrgent(e.target.checked)} /> Urgent (2h)
+                </label>
+                <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px', fontWeight: 600, marginLeft: 'auto' }}>
+                  {busy ? <Loader2 size={13} className="spin" /> : 'Start Thread'}
+                </button>
+              </div>
             </div>
           )}
 
