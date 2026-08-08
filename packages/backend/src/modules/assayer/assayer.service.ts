@@ -1405,6 +1405,38 @@ export class AssayerService implements OnModuleInit {
     return null;
   }
 
+  /**
+   * Every assayer's commercial terms as they stand today, in one query.
+   *
+   * The pay screen needs the whole roster's rate card at once — to compare terms, and to see
+   * who has no active profile and therefore falls back to the client's default fee. Loading it
+   * one assayer at a time (the only route that existed) is 26+ round trips for one table.
+   *
+   * "As they stand today" uses the same rule the fee calculator and the recommendation scorers
+   * use: the profile effective on the date, newest start winning. A profile dated in the future
+   * is not yet in force and is reported as such rather than as the current rate.
+   */
+  async getRosterCommercialProfiles(onDate: Date = new Date()):
+    Promise<Array<{ assayerId: string; profile: AssayerCommercialProfileEntity | null; hasFutureProfile: boolean }>> {
+    const assayers = await this.assayerRepository.find({ select: { id: true } });
+    const all = await this.commercialRepository.find({
+      where: { isActive: true },
+      order: { effectiveStartDate: 'DESC' },
+    });
+
+    const byAssayer = new Map<string, AssayerCommercialProfileEntity[]>();
+    for (const p of all) {
+      (byAssayer.get(p.assayerId) ?? byAssayer.set(p.assayerId, []).get(p.assayerId)!).push(p);
+    }
+
+    return assayers.map((a) => {
+      const rows = byAssayer.get(a.id) ?? [];
+      const inForce = rows.find((p) => p.effectiveStartDate <= onDate && (!p.effectiveEndDate || p.effectiveEndDate >= onDate)) ?? null;
+      const hasFutureProfile = rows.some((p) => p.effectiveStartDate > onDate);
+      return { assayerId: a.id, profile: inForce, hasFutureProfile };
+    });
+  }
+
   // ---- Workforce Attributes ----
 
   async addWorkforceAttribute(assayerId: string, dto: any, userId: string): Promise<WorkforceAttributeEntity> {

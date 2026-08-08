@@ -49,7 +49,7 @@ const PAGES = [
 const LEGACY_TABS: Record<string, string> = {
   overview: '/hr', roster: '/hr/roster', onboarding: '/hr/onboarding', records: '/hr/records',
   compliance: '/hr/compliance', capability: '/hr/capability', deployment: '/hr/deployment',
-  documents: '/hr/documents', utilisation: '/hr/utilisation', activity: '/hr/activity',
+  documents: '/hr/documents', pay: '/hr/pay', utilisation: '/hr/utilisation', activity: '/hr/activity',
 };
 
 export const HrLayout: React.FC = () => {

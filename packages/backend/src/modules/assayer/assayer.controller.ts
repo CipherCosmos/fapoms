@@ -807,6 +807,13 @@ export class AssayerController {
   }
 
   // Commercial Profile CRUD APIs
+  @Get('commercial/roster')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.FINANCE_MANAGER)
+  @ApiOperation({ summary: "Every assayer's commercial terms in force today, in one call" })
+  async getRosterCommercialProfiles() {
+    return { success: true, data: await this.assayerService.getRosterCommercialProfiles() };
+  }
+
   @Post(':assayerId/commercial')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)

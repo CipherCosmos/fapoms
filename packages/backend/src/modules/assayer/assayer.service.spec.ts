@@ -118,6 +118,40 @@ describe('AssayerService', () => {
    * caller sends. That is fine for the kind the caller sent, and destructive for the ones it did
    * not — which is what an edit form offering one field at a time inevitably does.
    */
+  describe('getRosterCommercialProfiles', () => {
+    const onDate = new Date('2026-08-20');
+
+    it('reports the profile in force on the date and flags a future one', async () => {
+      mockAssayerRepo.find.mockResolvedValue([{ id: 'a-current' }, { id: 'a-future' }, { id: 'a-none' }]);
+      mockCommercialRepo.find.mockResolvedValue([
+        // a-current: one profile started this year — in force.
+        { id: 'p1', assayerId: 'a-current', baseFee: 2000, effectiveStartDate: new Date('2026-01-01'), effectiveEndDate: null },
+        // a-future: only a profile starting in December — not yet in force.
+        { id: 'p2', assayerId: 'a-future', baseFee: 3000, effectiveStartDate: new Date('2026-12-01'), effectiveEndDate: null },
+      ]);
+
+      const rows = await service.getRosterCommercialProfiles(onDate);
+      const byId = Object.fromEntries(rows.map((r) => [r.assayerId, r]));
+
+      expect(byId['a-current'].profile?.id).toBe('p1');
+      expect(byId['a-future'].profile).toBeNull();
+      expect(byId['a-future'].hasFutureProfile).toBe(true);
+      // Every assayer appears, including one with no profile at all — it is priced at the default.
+      expect(byId['a-none'].profile).toBeNull();
+      expect(byId['a-none'].hasFutureProfile).toBe(false);
+    });
+
+    it('does not treat an expired profile as in force', async () => {
+      mockAssayerRepo.find.mockResolvedValue([{ id: 'a-1' }]);
+      mockCommercialRepo.find.mockResolvedValue([
+        { id: 'p-old', assayerId: 'a-1', baseFee: 1500, effectiveStartDate: new Date('2025-01-01'), effectiveEndDate: new Date('2025-12-31') },
+      ]);
+
+      const [row] = await service.getRosterCommercialProfiles(onDate);
+      expect(row.profile).toBeNull();
+    });
+  });
+
   describe('resetPasswordByStaff', () => {
     beforeEach(() => {
       mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1' });
