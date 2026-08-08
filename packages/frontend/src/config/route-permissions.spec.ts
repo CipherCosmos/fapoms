@@ -53,7 +53,7 @@ describe('canAccessRoute', () => {
   describe('the HR section pages', () => {
     const HR_PAGES = [
       '/hr', '/hr/roster', '/hr/onboarding', '/hr/records',
-      '/hr/compliance', '/hr/pay', '/hr/deployment', '/hr/utilisation', '/hr/activity',
+      '/hr/compliance', '/hr/capability', '/hr/pay', '/hr/deployment', '/hr/utilisation', '/hr/activity',
     ];
 
     it('are all reachable by an HR manager', () => {

@@ -866,6 +866,13 @@ export class AssayerController {
   }
 
   // Workforce Attribute CRUD APIs
+  @Get('workforce-attribute/vocabulary')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Distinct skills, languages and certifications already in use across the roster' })
+  async getWorkforceAttributeVocabulary() {
+    return { success: true, data: await this.assayerService.getWorkforceAttributeVocabulary() };
+  }
+
   @Post(':assayerId/workforce-attribute')
   @HttpCode(201)
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)

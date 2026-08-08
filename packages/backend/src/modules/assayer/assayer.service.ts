@@ -341,15 +341,59 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
-  private async syncWorkforceAttributes(assayerId: string, dto: CreateAssayerDto | UpdateAssayerDto, userId: string): Promise<void> {
-    const syncedFields = ['skills', 'certifications', 'languages', 'specializations'] as const;
-    const hasAny = syncedFields.some(f => (dto as any)[f] !== undefined);
-    if (!hasAny) return;
+  /**
+   * Every distinct capability name already recorded across the roster, by kind.
+   *
+   * The picker on the capability screen is built from this rather than a hardcoded list, so it
+   * offers the vocabulary this workforce actually uses — and a name typed once is offered to
+   * everyone afterwards, which is what stops "Gold Assaying" and "Gold assaying" becoming two
+   * different skills that the eligibility filter treats as unrelated.
+   */
+  async getWorkforceAttributeVocabulary(): Promise<Record<string, Array<{ name: string; assayerCount: number }>>> {
+    const rows = await this.workforceAttributeRepository
+      .createQueryBuilder('a')
+      .select('a.type', 'type')
+      .addSelect('a.name', 'name')
+      .addSelect('COUNT(DISTINCT a.assayerId)', 'assayerCount')
+      .where('a.isActive = true')
+      .groupBy('a.type')
+      .addGroupBy('a.name')
+      .orderBy('a.type')
+      .addOrderBy('COUNT(DISTINCT a.assayerId)', 'DESC')
+      .getRawMany();
 
-    // Remove old workforce attrs for these types
+    return rows.reduce<Record<string, Array<{ name: string; assayerCount: number }>>>((acc, r) => {
+      (acc[r.type] ??= []).push({ name: r.name, assayerCount: Number(r.assayerCount) });
+      return acc;
+    }, {});
+  }
+
+  private async syncWorkforceAttributes(assayerId: string, dto: CreateAssayerDto | UpdateAssayerDto, userId: string): Promise<void> {
+    const FIELD_TO_TYPE = {
+      skills: 'SKILL',
+      certifications: 'CERTIFICATION',
+      languages: 'LANGUAGE',
+      specializations: 'SPECIALIZATION',
+    } as const;
+
+    /**
+     * Replace only the kinds of attribute the caller actually sent.
+     *
+     * This used to delete all four types whenever any one of them was present, then re-insert
+     * just the ones supplied. Saving an assayer's skills therefore erased their certifications,
+     * languages and specializations — including certification expiry dates, which the
+     * eligibility gate reads. A partial update is the normal shape for an edit form, so this
+     * was data loss waiting for the first screen that offered one field without the others.
+     */
+    const providedTypes = (Object.keys(FIELD_TO_TYPE) as Array<keyof typeof FIELD_TO_TYPE>)
+      .filter((f) => (dto as any)[f] !== undefined)
+      .map((f) => FIELD_TO_TYPE[f]);
+
+    if (providedTypes.length === 0) return;
+
     await this.workforceAttributeRepository.delete({
       assayerId,
-      type: In(['SKILL', 'CERTIFICATION', 'LANGUAGE', 'SPECIALIZATION']),
+      type: In(providedTypes),
     });
 
     const newAttrs: Partial<WorkforceAttributeEntity>[] = [];

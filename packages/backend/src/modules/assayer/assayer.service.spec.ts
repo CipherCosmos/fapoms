@@ -39,6 +39,7 @@ describe('AssayerService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
+    delete: jest.fn(),
   };
 
   const mockGovDocRepo = {
@@ -111,6 +112,45 @@ describe('AssayerService', () => {
   // ---------------------------------------------------------------------------
   // CRUD
   // ---------------------------------------------------------------------------
+
+  /**
+   * Skills, certifications, languages and specializations are replaced wholesale by whatever the
+   * caller sends. That is fine for the kind the caller sent, and destructive for the ones it did
+   * not — which is what an edit form offering one field at a time inevitably does.
+   */
+  describe('workforce attributes are replaced per kind, not wholesale', () => {
+    const existing = { id: 'asr-1', assayerCode: 'AS-01', displayName: 'John Doe' };
+
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue(existing);
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+      mockWorkforceRepo.delete.mockResolvedValue({ affected: 0 });
+      mockWorkforceRepo.save.mockResolvedValue([]);
+    });
+
+    it('touches only the kind supplied, leaving certifications and languages alone', async () => {
+      await service.update('asr-1', { skills: ['Gold Assaying'] } as any, 'user-1');
+
+      expect(mockWorkforceRepo.delete).toHaveBeenCalledWith(
+        expect.objectContaining({ assayerId: 'asr-1' }),
+      );
+      const { type } = mockWorkforceRepo.delete.mock.calls.at(-1)![0] as any;
+      // In(['SKILL']) — the operator carries its values under _value.
+      expect(type._value ?? type).toEqual(['SKILL']);
+    });
+
+    it('replaces several kinds when several are supplied', async () => {
+      await service.update('asr-1', { skills: ['Gold'], languages: ['Tamil'] } as any, 'user-1');
+
+      const { type } = mockWorkforceRepo.delete.mock.calls.at(-1)![0] as any;
+      expect((type._value ?? type).sort()).toEqual(['LANGUAGE', 'SKILL']);
+    });
+
+    it('deletes nothing at all when none is supplied', async () => {
+      await service.update('asr-1', { firstName: 'Jonathan' } as any, 'user-1');
+      expect(mockWorkforceRepo.delete).not.toHaveBeenCalled();
+    });
+  });
 
   describe('create', () => {
     it('should create an assayer with INVITED lifecycle status', async () => {

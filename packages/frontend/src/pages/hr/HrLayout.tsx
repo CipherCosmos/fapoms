@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
-  Users, UserPlus, ShieldCheck, MapPin, Activity, ClipboardList, TrendingDown, Wallet,
+  Users, UserPlus, ShieldCheck, MapPin, Activity, ClipboardList, TrendingDown, Wallet, Award,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
@@ -37,6 +37,7 @@ const PAGES = [
   { to: '/hr/roster', label: 'Roster', icon: Users, badge: (d: HrWorkforceOverview) => d.headcount.total },
   { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length },
   { to: '/hr/compliance', label: 'Compliance', icon: ShieldCheck, badge: (d: HrWorkforceOverview) => d.compliance.incompleteCount },
+  { to: '/hr/capability', label: 'Capability', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired },
   { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null },
   { to: '/hr/deployment', label: 'Deployment', icon: MapPin, badge: () => null },
   { to: '/hr/utilisation', label: 'Utilisation', icon: TrendingDown, badge: () => null },
@@ -46,8 +47,8 @@ const PAGES = [
 /** The tab keys the single-page version used, mapped to the pages that replaced them. */
 const LEGACY_TABS: Record<string, string> = {
   overview: '/hr', roster: '/hr/roster', onboarding: '/hr/onboarding', records: '/hr/records',
-  compliance: '/hr/compliance', deployment: '/hr/deployment', utilisation: '/hr/utilisation',
-  activity: '/hr/activity',
+  compliance: '/hr/compliance', capability: '/hr/capability', deployment: '/hr/deployment',
+  utilisation: '/hr/utilisation', activity: '/hr/activity',
 };
 
 export const HrLayout: React.FC = () => {

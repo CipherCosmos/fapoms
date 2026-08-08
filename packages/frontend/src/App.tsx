@@ -27,6 +27,7 @@ import { HrRosterPage } from './pages/hr/HrRosterPage';
 import { HrOnboardingPage } from './pages/hr/HrOnboardingPage';
 import { HrRecordsPage } from './pages/hr/HrRecordsPage';
 import { HrCompliancePage } from './pages/hr/HrCompliancePage';
+import { HrCapabilityPage } from './pages/hr/HrCapabilityPage';
 import { HrDeploymentPage } from './pages/hr/HrDeploymentPage';
 import { HrUtilisationPage } from './pages/hr/HrUtilisationPage';
 import { HrActivityPage } from './pages/hr/HrActivityPage';
@@ -152,6 +153,7 @@ export const App: React.FC = () => {
           <Route path="onboarding" element={<HrOnboardingPage />} />
           <Route path="records" element={<HrRecordsPage />} />
           <Route path="compliance" element={<HrCompliancePage />} />
+          <Route path="capability" element={<HrCapabilityPage />} />
           <Route path="deployment" element={<HrDeploymentPage />} />
           <Route path="utilisation" element={<HrUtilisationPage />} />
           <Route path="activity" element={<HrActivityPage />} />
