@@ -43,6 +43,9 @@ export interface CreateClientDto {
     maxResponseTimeHours?: number;
     penaltyRate?: number;
     serviceHours?: Record<string, any>;
+    defaultBaseFee?: number;
+    travelFeePerKm?: number;
+    freeTravelAllowanceKm?: number;
   };
 }
 
@@ -72,6 +75,9 @@ export interface UpdateClientDto {
     maxResponseTimeHours?: number;
     penaltyRate?: number;
     serviceHours?: Record<string, any>;
+    defaultBaseFee?: number;
+    travelFeePerKm?: number;
+    freeTravelAllowanceKm?: number;
     effectiveTo?: Date;
   };
 }
@@ -132,6 +138,8 @@ export interface UpdateBillingDto {
   bankName?: string;
   ifscCode?: string;
   notes?: string;
+  gstRate?: number;
+  tdsRate?: number;
 }
 
 const VALID_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
@@ -210,6 +218,9 @@ export class ClientService {
       maxResponseTimeHours: dto.configuration?.maxResponseTimeHours ?? null,
       penaltyRate: dto.configuration?.penaltyRate ?? null,
       serviceHours: dto.configuration?.serviceHours ?? null,
+      defaultBaseFee: dto.configuration?.defaultBaseFee ?? null,
+      travelFeePerKm: dto.configuration?.travelFeePerKm ?? null,
+      freeTravelAllowanceKm: dto.configuration?.freeTravelAllowanceKm ?? null,
       effectiveFrom: new Date(),
       createdBy: userId,
       updatedBy: userId,
@@ -353,6 +364,9 @@ export class ClientService {
       if (dto.configuration.maxResponseTimeHours !== undefined) conf.maxResponseTimeHours = dto.configuration.maxResponseTimeHours;
       if (dto.configuration.penaltyRate !== undefined) conf.penaltyRate = dto.configuration.penaltyRate;
       if (dto.configuration.serviceHours !== undefined) conf.serviceHours = dto.configuration.serviceHours;
+      if (dto.configuration.defaultBaseFee !== undefined) conf.defaultBaseFee = dto.configuration.defaultBaseFee;
+      if (dto.configuration.travelFeePerKm !== undefined) conf.travelFeePerKm = dto.configuration.travelFeePerKm;
+      if (dto.configuration.freeTravelAllowanceKm !== undefined) conf.freeTravelAllowanceKm = dto.configuration.freeTravelAllowanceKm;
       if (dto.configuration.effectiveTo !== undefined) conf.effectiveTo = dto.configuration.effectiveTo;
       conf.updatedBy = userId;
     }
@@ -707,6 +721,8 @@ export class ClientService {
     { key: 'bankName', label: 'Bank Name' },
     { key: 'ifscCode', label: 'IFSC Code' },
     { key: 'notes', label: 'Notes' },
+    { key: 'gstRate', label: 'GST Rate' },
+    { key: 'tdsRate', label: 'TDS Rate' },
   ];
 
   private stringify(value: unknown): string | null {
@@ -743,6 +759,8 @@ export class ClientService {
         bankName: dto.bankName ?? null,
         ifscCode: dto.ifscCode ?? null,
         notes: dto.notes ?? null,
+        gstRate: dto.gstRate ?? 18,
+        tdsRate: dto.tdsRate ?? 10,
         createdBy: userId,
         updatedBy: userId,
       });

@@ -519,7 +519,17 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   private async createEntryFromAssignment(a: AssignmentEntity, clientId: string, userId: string): Promise<BillingEntryEntity> {
-    const fee = Number(a.agreedFee ?? 0);
+    const assayerFee = Number(a.agreedFee ?? 0);
+    // What the CLIENT is billed comes from the client's own contracted rate card, not from
+    // what the assayer was paid. Billing the client the assayer's fee made revenue equal cost
+    // on every audit — margin was structurally zero. The spread between this rate and the
+    // assayer's fee is the margin the business earns.
+    //
+    // Falls back to the assayer fee only when the client has set no rate, so an unconfigured
+    // client keeps the old pass-through behaviour rather than being billed a platform default
+    // that might sit below cost. The Client Billing Settings page is where this rate is set.
+    const clientBase = await this.clientContractedBaseFor(clientId);
+    const fee = clientBase ?? assayerFee;
     // Travel paid to the assayer is recovered from the client when their contract
     // says it is rechargeable. Without this the assayer's travel was a pure cost
     // absorbed on every job — the reason completed audits showed a negative margin
@@ -541,9 +551,30 @@ export class BillingEngineService implements OnModuleInit {
       travelAmount: travel,
       // taxRate/tdsRate intentionally omitted so the client's contracted rates apply.
       billingPeriodEnd: a.completionDate ? this.toISO(a.completionDate) : undefined,
-      description: `Auto-synced from ${a.assignmentNumber} (${a.status})`,
+      description: clientBase != null
+        ? `Auto-synced from ${a.assignmentNumber} (${a.status}) — billed at client contracted rate`
+        : `Auto-synced from ${a.assignmentNumber} (${a.status}) — no client rate set, billed at assayer cost`,
       initialState: isComplete ? BillingState.READY_FOR_BILLING : BillingState.PENDING_BILLING,
     }, userId);
+  }
+
+  /**
+   * The client's contracted per-audit base fee, or null when they have not set one.
+   *
+   * This is the client rate card (client_configurations.default_base_fee), distinct from the
+   * assayer's commercial profile. Reading it here keeps the client-billed amount independent of
+   * the assayer's cost, which is what produces a real margin.
+   */
+  private async clientContractedBaseFor(clientId: string): Promise<number | null> {
+    const rows = await this.entryRepository.manager.query(
+      `SELECT cc.default_base_fee
+         FROM client_configurations cc
+        WHERE cc.client_id = $1
+        LIMIT 1`,
+      [clientId],
+    ).catch(() => []);
+    const value = rows?.[0]?.default_base_fee;
+    return value != null && Number(value) > 0 ? Number(value) : null;
   }
 
   /**

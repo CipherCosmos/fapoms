@@ -73,6 +73,11 @@ describe('BillingEngineService', () => {
     find: jest.fn(async () => []), findOne: jest.fn(async () => null),
   };
 
+  const projectRepo: any = {
+    create: jest.fn((d) => d), save: jest.fn(async (d) => ({ id: 'x', ...d })),
+    find: jest.fn(async () => []), findOne: jest.fn(async () => null),
+  };
+
   const simpleRepo = () => ({
     create: jest.fn((d) => d), save: jest.fn(async (d) => ({ id: 'x', ...d })),
     find: jest.fn(async () => []), findOne: jest.fn(async () => null),
@@ -91,7 +96,7 @@ describe('BillingEngineService', () => {
         { provide: getRepositoryToken(BillingConflictEntity), useValue: conflictRepo },
         { provide: getRepositoryToken(BillingHistoryEntity), useValue: simpleRepo() },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
-        { provide: getRepositoryToken(ProjectEntity), useValue: simpleRepo() },
+        { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
         { provide: DomainEventPublisher, useValue: { publish: jest.fn(), subscribe: jest.fn() } },
       ],
     }).compile();
@@ -187,6 +192,62 @@ describe('BillingEngineService', () => {
         { id: 'b', clientId: 'client-1', entryNumber: 'BE-B', paidAmount: 0, invoiceId: null },
       ]);
       await expect(service.mergeEntries(['a', 'b'], 'user-1')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('billing the client at their contracted rate (margin)', () => {
+    const completedAssignment = {
+      id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',
+      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000, completionDate: new Date('2026-08-20'),
+    };
+
+    beforeEach(() => {
+      assignmentRepo.find.mockResolvedValue([completedAssignment]);
+      assignmentRepo.findOne.mockResolvedValue(completedAssignment);
+      // No existing entries or payables, so both legs are created fresh.
+      entryRepo.find.mockResolvedValue([]);
+      payableRepo.findOne.mockResolvedValue(null);
+    });
+
+    it('bills the client the contracted base fee, not the assayer fee, creating margin', async () => {
+      const q = jest.fn(async (sql: string) => {
+        if (sql.includes('default_base_fee')) return [{ default_base_fee: '3000' }];
+        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
+        return [];
+      });
+      entryRepo.manager.query = q;
+      payableRepo.manager.query = q;
+      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
+
+      await service.syncFromAssignments('user-1');
+
+      // The entry (what the client pays) is booked at the client rate 3000; the payable (what
+      // the assayer is paid) stays at the agreed fee 2000. Margin = 1000, no longer zero.
+      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
+      expect(entry).toBeDefined();
+      expect(Number(entry.baseAmount)).toBe(3000);
+    });
+
+    it('falls back to the assayer fee when the client has set no rate', async () => {
+      const q = jest.fn(async (sql: string) => {
+        if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
+        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
+        return [];
+      });
+      entryRepo.manager.query = q;
+      payableRepo.manager.query = q;
+      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
+
+      await service.syncFromAssignments('user-1');
+
+      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
+      expect(Number(entry.baseAmount)).toBe(2000);
     });
   });
 

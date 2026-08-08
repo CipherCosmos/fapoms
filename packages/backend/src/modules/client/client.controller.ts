@@ -30,6 +30,14 @@ class CreateClientConfigDto {
   @IsOptional() @IsNumber() maxResponseTimeHours?: number;
   @IsOptional() @IsNumber() penaltyRate?: number;
   @IsOptional() @IsObject() serviceHours?: Record<string, any>;
+  // The client rate card that determines what the client is billed — distinct from the
+  // assayer's own commercial profile, which determines what the assayer is paid. The gap
+  // between them is the margin. These columns exist and FeePolicyService reads them, but
+  // nothing could write them, so they stayed NULL and billing fell through to platform
+  // defaults on every client.
+  @IsOptional() @IsNumber() defaultBaseFee?: number;
+  @IsOptional() @IsNumber() travelFeePerKm?: number;
+  @IsOptional() @IsNumber() freeTravelAllowanceKm?: number;
 }
 
 class CreateClientRequestDto implements CreateClientDto {
@@ -129,6 +137,8 @@ class UpdateBillingRequestDto implements UpdateBillingDto {
   @IsOptional() @IsString() bankName?: string;
   @IsOptional() @IsString() ifscCode?: string;
   @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsNumber() gstRate?: number;
+  @IsOptional() @IsNumber() tdsRate?: number;
 }
 
 class LifecycleTransitionDto {
