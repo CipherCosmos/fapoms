@@ -4,6 +4,7 @@ import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ValidationService } from './validation.service';
 import { ValidationCaseEntity } from './validation-case.entity';
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { ValidationStatus } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
@@ -15,6 +16,7 @@ import { AssessmentEntity } from '../project/assessment.entity';
 describe('ValidationService', () => {
   let service: ValidationService;
   let validationCaseRepo: Repository<ValidationCaseEntity>;
+  let validationQueryRepo: any;
 
   const mockValidationCaseRepo = {
     create: jest.fn(),
@@ -65,6 +67,11 @@ describe('ValidationService', () => {
           useValue: { findOne: jest.fn(), save: jest.fn() },
         },
         {
+          // No unresolved clarifications by default, so the submit guard does not block.
+          provide: getRepositoryToken(ValidationQueryEntity),
+          useValue: { count: jest.fn().mockResolvedValue(0) },
+        },
+        {
           provide: ProjectQueryService,
           useValue: mockProjectQueryService,
         },
@@ -89,6 +96,7 @@ describe('ValidationService', () => {
 
     service = module.get<ValidationService>(ValidationService);
     validationCaseRepo = module.get<Repository<ValidationCaseEntity>>(getRepositoryToken(ValidationCaseEntity));
+    validationQueryRepo = module.get(getRepositoryToken(ValidationQueryEntity));
 
     jest.clearAllMocks();
   });
@@ -150,6 +158,24 @@ describe('ValidationService', () => {
       const result = await service.transition('v-1', ValidationStatus.HUMAN_REVIEW, 'user-1');
 
       expect(result.status).toBe(ValidationStatus.HUMAN_REVIEW);
+    });
+  });
+
+  describe('submit guard: open clarifications block submission', () => {
+    it('refuses to submit a case to the client while a clarification is unresolved', async () => {
+      mockValidationCaseRepo.findOne.mockResolvedValue({ id: 'v-1', status: ValidationStatus.APPROVED, projectBranch: {}, assessment: null });
+      validationQueryRepo.count.mockResolvedValueOnce(2); // two unresolved clarifications
+
+      await expect(service.transition('v-1', ValidationStatus.SUBMITTED, 'user-1')).rejects.toThrow(/unresolved/i);
+    });
+
+    it('allows submission once no clarification is open', async () => {
+      mockValidationCaseRepo.findOne.mockResolvedValue({ id: 'v-1', status: ValidationStatus.APPROVED, projectBranch: {}, assessment: null });
+      mockValidationCaseRepo.save.mockImplementation(async (c: any) => c);
+      validationQueryRepo.count.mockResolvedValue(0);
+
+      const result = await service.transition('v-1', ValidationStatus.SUBMITTED, 'user-1');
+      expect(result.status).toBe(ValidationStatus.SUBMITTED);
     });
   });
 

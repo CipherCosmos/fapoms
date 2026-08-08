@@ -1,9 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Crop, X, Loader2 } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
+// The worker is bundled from the installed pdfjs-dist, not fetched from a CDN at runtime.
+// This tool renders bank-collateral audit PDFs, often inside locked-down or air-gapped bank
+// networks where unpkg.com is unreachable or blocked by CSP — a runtime CDN fetch meant the
+// viewer, and the whole case workspace, silently failed to render. `?url` makes Vite emit the
+// worker as a hashed asset served from our own origin, version-locked to the installed package.
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-// Dynamic worker URL matching pdfjs version for reliable Vite build & HMR resolution
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version || '4.10.38'}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 /**
  * The returned audit packet, with a marking tool.

@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull} from 'typeorm';
+import { Repository, IsNull, In } from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
@@ -9,7 +10,7 @@ import { ValidationStateMachine } from './validation.state-machine';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition, ValidationQueryStatus } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 
 export interface CreateValidationCaseDto {
@@ -24,6 +25,8 @@ export class ValidationService implements OnModuleInit {
     private readonly validationCaseRepository: Repository<ValidationCaseEntity>,
     @InjectRepository(AssessmentEntity)
     private readonly assessmentRepository: Repository<AssessmentEntity>,
+    @InjectRepository(ValidationQueryEntity)
+    private readonly validationQueryRepository: Repository<ValidationQueryEntity>,
     private readonly projectQueryService: ProjectQueryService,
     private readonly projectService: ProjectService,
     private readonly auditService: AuditService,
@@ -184,6 +187,24 @@ export class ValidationService implements OnModuleInit {
   ): Promise<{ saved: ValidationCaseEntity; event: any }> {
     const validationCase = await this.findOne(id);
     const prevStatus = validationCase.status;
+
+    /**
+     * A case must not be sent to the client while a question about its evidence is still open.
+     * Submitting an audit report to the bank with an unresolved clarification against it is
+     * exactly the integrity gap the trail exists to prevent — the answer might change a figure
+     * on the report. Blocked on any query that is not RESOLVED; the desk resolves or the assayer
+     * answers and the desk resolves, then submission proceeds.
+     */
+    if (targetStatus === ValidationStatus.SUBMITTED) {
+      const unresolved = await this.validationQueryRepository.count({
+        where: { validationCaseId: id, status: In([ValidationQueryStatus.OPEN, ValidationQueryStatus.RESPONDED]) },
+      });
+      if (unresolved > 0) {
+        throw new BadRequestException(
+          `Cannot submit to the client while ${unresolved} clarification(s) are unresolved. Resolve them first.`,
+        );
+      }
+    }
 
     let event: any;
     if (targetStatus === ValidationStatus.APPROVED) {
