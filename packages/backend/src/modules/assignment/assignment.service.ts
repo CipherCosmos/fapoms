@@ -235,6 +235,18 @@ export class AssignmentService {
       }
     }
 
+    // The client's own territorial rules, enforced on the write path rather than merely
+    // influencing a score. Without this an operator could assign an assayer living beside the
+    // branch they are auditing — exactly what the minimum-distance rule exists to prevent —
+    // simply by using the single-branch flow instead of the day planner.
+    const distancePolicy = this.constraintEvaluator.checkDistancePolicy(
+      projectBranch.project?.client?.planningPreferences,
+      distanceKm > 0 ? distanceKm : null,
+    );
+    if (!distancePolicy.passed) {
+      throw new BadRequestException(distancePolicy.reason);
+    }
+
     // One calculator, one rate card. The free-commute allowance and per-km rate come from
     // the client's contract, not from a constant in this file.
     const quote = await this.feePolicyService.quote({

@@ -173,6 +173,48 @@ export class ConstraintEvaluator {
   }
 
   /**
+   * The client's territorial rules for who may audit a branch.
+   *
+   * `minDistanceKm` is a conflict-of-interest floor — an assayer must be far enough from the
+   * branch they audit, not close to it — and `maxDistanceKm` is a serviceability ceiling. The
+   * day planner enforced both as hard exclusions, while the single-branch path only subtracted
+   * 40 points from the score and the write path did not check at all, so an operator could
+   * assign an assayer living beside the branch simply by using the per-branch flow. A control
+   * that one screen enforces and another merely discourages is not a control.
+   *
+   * `relaxDistance` exists for the ceiling only: when nothing is serviceable, ops may knowingly
+   * reach further. The floor is never relaxed — that is the whole point of it.
+   */
+  checkDistancePolicy(
+    planningPreferences: Record<string, any> | null | undefined,
+    distanceKm: number | null | undefined,
+    options?: { relaxDistance?: boolean },
+  ): ConstraintResult {
+    if (distanceKm === null || distanceKm === undefined || !Number.isFinite(Number(distanceKm))) {
+      return { passed: true };
+    }
+    const distance = Number(distanceKm);
+
+    const minDistance = Number(planningPreferences?.minDistanceKm);
+    if (Number.isFinite(minDistance) && minDistance > 0 && distance < minDistance) {
+      return {
+        passed: false,
+        reason: `Conflict of interest: ${distance.toFixed(1)}km is within the client's ${minDistance}km minimum-distance rule.`,
+      };
+    }
+
+    const maxDistance = Number(planningPreferences?.maxDistanceKm);
+    if (!options?.relaxDistance && Number.isFinite(maxDistance) && maxDistance > 0 && distance > maxDistance) {
+      return {
+        passed: false,
+        reason: `Out of range: ${distance.toFixed(1)}km exceeds the client's ${maxDistance}km limit.`,
+      };
+    }
+
+    return { passed: true };
+  }
+
+  /**
    * Evaluates if the assayer possesses all required skills and certifications.
    */
   checkSkillsAndCertifications(assayerEntity: AssayerEntity, project: ProjectEntity): ConstraintResult {

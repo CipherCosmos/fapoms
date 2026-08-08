@@ -112,6 +112,7 @@ const mockNotificationService = {
     checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
     checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
     checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
+    checkDistancePolicy: jest.fn().mockReturnValue({ passed: true }),
     checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
@@ -276,6 +277,27 @@ const mockNotificationService = {
 
       const result = await service.cancelAssignment('asn-1', 'user-1', 'Admin override');
       expect(result.status).toBe(AssignmentStatus.CANCELLED);
+    });
+  });
+
+  /**
+   * minDistanceKm is a conflict-of-interest floor: an assayer must be far ENOUGH from the
+   * branch they audit. The day planner always excluded on it, but the single-branch path only
+   * subtracted 40 points from the score and this write path did not check at all, so the
+   * control could be bypassed simply by using the per-branch flow.
+   */
+  describe('client distance policy', () => {
+    it('refuses an assayer too close to the branch they would audit', async () => {
+      mockConstraintEvaluator.checkDistancePolicy.mockReturnValueOnce({
+        passed: false,
+        reason: "Conflict of interest: 2.0km is within the client's 5km minimum-distance rule.",
+      });
+
+      await expect(
+        service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 1500, scheduledDate: '2026-08-20' }, 'user-1'),
+      ).rejects.toThrow(/Conflict of interest/);
+
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
     });
   });
 

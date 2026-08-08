@@ -26,6 +26,7 @@ const EXCLUSION_REASONS: Record<string, string> = {
   clientEligibility: 'Not approved to work for this client',
   ruleEngineEligibility: 'Blocked by a business rule',
   requiredSkills: 'Missing a skill or certification this project requires',
+  distancePolicy: "Outside the client's permitted distance band for this branch",
 };
 
 export interface PlanningContext {
@@ -169,6 +170,52 @@ export class ConsecutiveBranchAuditFilter implements CandidateFilter {
     }
 
     return true;
+  }
+}
+
+/**
+ * The client's territorial rules as an exclusion, not a discount.
+ *
+ * `minDistanceKm` is a conflict-of-interest floor: an assayer must be far enough from the
+ * branch they audit. The day planner has always enforced it by dropping the candidate, but this
+ * path only subtracted 40 points, so a disqualified assayer still appeared on the list — merely
+ * lower down — and could be assigned. Scoring cannot express "not allowed".
+ */
+@Injectable()
+export class DistancePolicyFilter implements CandidateFilter {
+  name = 'distancePolicy';
+
+  constructor(private readonly constraintEvaluator: ConstraintEvaluator) {}
+
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    const preferences = context.client?.planningPreferences;
+    if (!preferences) return true;
+    if (
+      context.branch?.latitude == null || context.branch?.longitude == null ||
+      assayer.effectiveLatitude == null || assayer.effectiveLongitude == null
+    ) {
+      return true;
+    }
+
+    const distance = calculateHaversineDistance(
+      Number(context.branch.latitude),
+      Number(context.branch.longitude),
+      Number(assayer.effectiveLatitude),
+      Number(assayer.effectiveLongitude),
+    );
+
+    /**
+     * The floor only. `minDistanceKm` is a compliance control — an assayer must not audit a
+     * branch on their own doorstep — so it is never negotiable and is enforced by exclusion.
+     *
+     * `maxDistanceKm` is a serviceability preference, not a control: the day planner treats it
+     * as relaxable and widens the search when nothing is reachable. This path has no such
+     * relaxation, so excluding on it would leave ops with an empty list and no way to reopen it
+     * — on live data it cut a 26-candidate list to 2. The ceiling therefore stays a scoring
+     * penalty here (ClientPreferenceScoreCalculator), which ranks distant assayers last while
+     * still letting ops see and choose them.
+     */
+    return this.constraintEvaluator.checkDistancePolicy(preferences, distance, { relaxDistance: true }).passed;
   }
 }
 
@@ -591,6 +638,8 @@ export class ClientPreferenceScoreCalculator implements ScoreCalculator {
       const minDistance = Number(preferences.minDistanceKm);
       const maxDistance = Number(preferences.maxDistanceKm);
 
+      // Eligibility is decided by DistancePolicyFilter; anything outside the band never
+      // reaches a scorer. These penalties remain only as a ranking nudge for the boundary.
       if (!isNaN(minDistance) && distance < minDistance) {
         score -= 40;
       }
@@ -868,6 +917,7 @@ export class RecommendationEngine {
     private readonly clientEligibilityFilter: ClientEligibilityFilter,
     private readonly ruleEngineEligibilityFilter: RuleEngineEligibilityFilter,
     private readonly requiredSkillsFilter: RequiredSkillsFilter,
+    private readonly distancePolicyFilter: DistancePolicyFilter,
     private readonly distanceCalculator: DistanceScoreCalculator,
     private readonly travelTimeCalculator: TravelTimeScoreCalculator,
     private readonly workloadCalculator: WorkloadScoreCalculator,
@@ -909,6 +959,7 @@ export class RecommendationEngine {
       this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
       this.requiredSkillsFilter,
+      this.distancePolicyFilter,
     );
 
     this.calculators.push(
