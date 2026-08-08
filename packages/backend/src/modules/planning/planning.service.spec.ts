@@ -8,6 +8,7 @@ import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 import { AuditService } from '../../core/audit/audit.service';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 describe('PlanningService', () => {
   let service: PlanningService;
@@ -48,6 +49,15 @@ describe('PlanningService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanningService,
+        {
+          provide: FeePolicyService,
+          useValue: {
+            // Mirrors the real service: a client rate card when configured, platform defaults
+            // otherwise, and a base fee resolved for the date the candidate is scored on.
+            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: false }),
+            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1500, usedFallback: false }),
+          },
+        },
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         {
           provide: BranchQueryService,

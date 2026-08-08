@@ -17,6 +17,7 @@ import { RoutingService } from '../geo/routing.provider';
 import { generateExplanation, ExplanationReason } from './explainability.mapper';
 import { AuditService } from '../../core/audit/audit.service';
 import { EventCategory } from '@fapoms/shared';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 export interface AssayerRecommendation {
   id: string;
@@ -75,6 +76,7 @@ export class PlanningService {
     private readonly recommendationEngine: RecommendationEngine,
     private readonly routingService: RoutingService,
     private readonly auditService: AuditService,
+    private readonly feePolicyService: FeePolicyService,
   ) {}
 
   async getRecommendedCandidates(branchId: string): Promise<AssayerRecommendation[]> {
@@ -84,7 +86,11 @@ export class PlanningService {
       throw new NotFoundException(`Branch ${branchId} not found.`);
     }
 
-    const results = await this.recommendationEngine.recommend(branch, new Date());
+    // One date for the whole call: the same instant the engine scores against is the instant
+    // the fee is quoted for, so the score and the price can never describe different days.
+    const scheduledDate = new Date();
+    const results = await this.recommendationEngine.recommend(branch, scheduledDate);
+    const rates = await this.feePolicyService.getRates(branch.clientId ?? null);
 
     const recommendations: AssayerRecommendation[] = [];
     for (const r of results) {
@@ -97,8 +103,11 @@ export class PlanningService {
         distanceKm = route.distanceKm;
       }
 
-      const profile = await this.assayerService.getActiveCommercialProfile(r.assayer.id);
-      const baseFee = profile ? Number(profile.baseFee) : 1500;
+      // Quoted through the one calculator that prices the assignment itself. This used to read
+      // the profile active *today* and fall back to a literal 1500, while assignment creation
+      // fell back to 1200 and FeePolicyService falls back to the client's contracted rate — so
+      // ops saw a figure on the candidate list that no part of the system would ever charge.
+      const { baseFee } = await this.feePolicyService.resolveBaseFee(r.assayer.id, rates, scheduledDate);
 
       const readableReasons = generateExplanation(r.breakdown, {
         displayName: r.assayer.displayName,

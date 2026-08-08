@@ -945,9 +945,16 @@ export class AssignmentService {
       projectVersions.set(projectId, version);
     }
 
-    const commercialProfileRepo = this.dataSource.getRepository(AssayerCommercialProfileEntity);
-    const commProfile = await commercialProfileRepo.findOne({ where: { assayerId, isActive: true } }).catch(() => null);
-    const baseFeeAmount = commProfile?.baseFee ? Number(commProfile.baseFee) : 1200;
+    // The assayer's current going rate, resolved by the same calculator that prices the work.
+    // This used to be a bare findOne with no date window and no ordering — an arbitrary profile
+    // row won — falling back to a hardcoded 1200 that ignored the client's contracted rate.
+    // The result is shown to the field worker on their phone as their own standard base fee,
+    // so it must be the figure the platform would actually pay.
+    const { baseFee: baseFeeAmount } = await this.feePolicyService.resolveBaseFee(
+      assayerId,
+      await this.feePolicyService.getRates(null),
+      new Date(),
+    );
 
     const queryRepo = this.dataSource.getRepository(ValidationQueryEntity);
     const caseRepo = this.dataSource.getRepository(ValidationCaseEntity);
