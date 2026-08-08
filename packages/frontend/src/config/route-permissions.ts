@@ -181,20 +181,63 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     path: '/settings',
     allowedRoles: Object.values(SystemRole),
   },
+  {
+    // Everyone has a notification inbox; it only ever shows their own.
+    path: '/notifications',
+    allowedRoles: Object.values(SystemRole),
+  },
+  {
+    // Redirect shims kept for old links. They forward to /data-entry and /hr respectively, and
+    // must carry the same roles as their destination or the redirect lands on a denied page.
+    path: '/validation',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.VALIDATION_MANAGER,
+      SystemRole.VALIDATOR,
+      SystemRole.DATA_ENTRY_HEAD,
+      SystemRole.DOCUMENT_EXECUTIVE,
+      SystemRole.READ_ONLY_AUDITOR,
+    ],
+  },
+  {
+    path: '/assayers',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.HR_MANAGER,
+    ],
+  },
 ];
 
+/**
+ * Whether a role may open a path.
+ *
+ * Two things this used to get wrong, both of which matter more now that roles have several
+ * pages each rather than one:
+ *
+ * 1. Matching was exact, so a sub-path like `/hr/roster` matched no entry at all — and an
+ *    unmatched path fell through to "allow". Every page added under an existing section would
+ *    therefore have been reachable by every role, including a read-only auditor. Matching is
+ *    now longest-prefix, so a sub-path inherits its section's roles unless it declares its own.
+ *
+ * 2. The fallback was allow-by-default, which means forgetting an entry silently publishes a
+ *    page. For a product whose whole purpose is controlled access to audit evidence, the safe
+ *    default is the other way round: an unlisted path is denied, and the omission shows up as a
+ *    missing page rather than as a leak.
+ */
 export function canAccessRoute(userRoles: SystemRole[], path: string): boolean {
-  const routeConfig = ROUTE_PERMISSIONS.find((rp) => {
+  const matches = ROUTE_PERMISSIONS.filter((rp) => {
     if (rp.path.includes(':id')) {
-      const pattern = new RegExp(
-        `^${rp.path.replace(/:id/g, '[^/]+')}$`,
-      );
-      return pattern.test(path);
+      return new RegExp(`^${rp.path.replace(/:id/g, '[^/]+')}$`).test(path);
     }
-    return rp.path === path;
+    return path === rp.path || path.startsWith(`${rp.path}/`);
   });
 
-  if (!routeConfig) return true;
+  if (matches.length === 0) return false;
+
+  // Most specific wins: `/hr/pay` beats `/hr` when both are declared.
+  const routeConfig = matches.reduce((best, rp) => (rp.path.length > best.path.length ? rp : best));
 
   return userRoles.some((role) => routeConfig.allowedRoles.includes(role));
 }
