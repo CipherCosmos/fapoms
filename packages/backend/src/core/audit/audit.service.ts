@@ -8,7 +8,7 @@
  * Business history is immutable (Part 6 §13, Constitution §History is Immutable).
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditEventEntity } from './audit-event.entity';
@@ -30,6 +30,8 @@ export interface CreateAuditEventDto {
 
 @Injectable()
 export class AuditService {
+  private readonly logger = new Logger(AuditService.name);
+
   constructor(
     @InjectRepository(AuditEventEntity)
     private readonly auditRepository: Repository<AuditEventEntity>,
@@ -55,6 +57,28 @@ export class AuditService {
     });
 
     return this.auditRepository.save(event);
+  }
+
+  /**
+   * Record an event without letting an audit failure roll back the business operation that
+   * caused it — but leave evidence when it happens.
+   *
+   * Callers throughout the codebase already append `.catch(() => {})` to `recordEvent`, on the
+   * reasoning that a completed state change shouldn't be undone because its audit row failed
+   * to insert. That reasoning holds, but a bare swallow means a missing trail entry leaves no
+   * trace anywhere, which for an audit business is the one failure that must never be silent.
+   * This logs at error level instead, so a gap is detectable rather than invisible.
+   */
+  async recordEventSafe(dto: CreateAuditEventDto): Promise<void> {
+    try {
+      await this.recordEvent(dto);
+    } catch (error) {
+      this.logger.error(
+        `AUDIT WRITE FAILED — ${dto.eventType} on ${dto.entityType}:${dto.entityId} was not recorded: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**

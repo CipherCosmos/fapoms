@@ -38,7 +38,22 @@ export interface CoveragePlanOutput {
   uncoveredBranches: UncoveredBranchInfo[];
   warnings: CoverageWarning[];
   workforceCapacity: AssayerCapacityMetrics[];
-  clusters: Array<{ id: string; name: string; branchCount: number; assignedAssayerName: string | null }>;
+  clusters: Array<{
+    id: string;
+    name: string;
+    branchCount: number;
+    assignedAssayerName: string | null;
+    /**
+     * Identifiers, not just labels. The approved plan is the authority for what gets deployed,
+     * so execution must be able to create exactly the assignments that were approved. Storing
+     * only `assignedAssayerName` made that impossible, and `executeApprovedPlan` compensated
+     * with a hardcoded assayer, the first project branch, and a flat fee.
+     */
+    assignedAssayerId: string | null;
+    branchIds: string[];
+    /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
+    estimatedTotalFee: number | null;
+  }>;
 }
 
 @Injectable()
@@ -99,7 +114,22 @@ export class CoveragePlanningEngine {
     let totalEstimatedCost = 0;
     const assignedAssayerIds = new Set<string>();
 
-    const clusterAssignments: Array<{ id: string; name: string; branchCount: number; assignedAssayerName: string | null }> = [];
+    const clusterAssignments: Array<{
+    id: string;
+    name: string;
+    branchCount: number;
+    assignedAssayerName: string | null;
+    /**
+     * Identifiers, not just labels. The approved plan is the authority for what gets deployed,
+     * so execution must be able to create exactly the assignments that were approved. Storing
+     * only `assignedAssayerName` made that impossible, and `executeApprovedPlan` compensated
+     * with a hardcoded assayer, the first project branch, and a flat fee.
+     */
+    assignedAssayerId: string | null;
+    branchIds: string[];
+    /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
+    estimatedTotalFee: number | null;
+  }> = [];
 
     // Client and assayer roster are identical for every cluster in one project, so they are
     // fetched and hydrated once here instead of inside each of the (currently 31) per-cluster
@@ -112,6 +142,7 @@ export class CoveragePlanningEngine {
       let assignedAssayerName: string | null = null;
       let highestScore = -1;
       let selectedAssayer: any | null = null;
+      let clusterFee: number | null = null;
 
       /**
        * Score candidates against a real branch standing in for the cluster, positioned at the
@@ -181,6 +212,7 @@ export class CoveragePlanningEngine {
           distanceKm: 0, // Cluster-level estimate: per-branch travel is resolved at assign time.
           branchCount: cluster.branches.length,
         });
+        clusterFee = clusterQuote.total;
         totalEstimatedCost += clusterQuote.total;
       } else {
         // Explanations for uncovered clusters
@@ -198,6 +230,9 @@ export class CoveragePlanningEngine {
         name: cluster.name,
         branchCount: cluster.branches.length,
         assignedAssayerName,
+        assignedAssayerId: selectedAssayer?.id ?? null,
+        branchIds: cluster.branches.map((b: any) => b.id),
+        estimatedTotalFee: clusterFee,
       });
     }
 

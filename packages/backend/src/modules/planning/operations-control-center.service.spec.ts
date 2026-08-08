@@ -7,6 +7,7 @@ import { ProjectEntity } from '../project/project.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
+import { AuditService } from '../../core/audit/audit.service';
 
 describe('OperationsControlCenterService', () => {
   let service: OperationsControlCenterService;
@@ -38,6 +39,7 @@ describe('OperationsControlCenterService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn().mockResolvedValue(undefined) } },
         OperationsControlCenterService,
         { provide: getRepositoryToken(OperationsTaskEntity), useValue: mockTaskRepository },
         { provide: getRepositoryToken(OperationsExceptionEntity), useValue: mockExceptionRepository },

@@ -175,6 +175,16 @@ class CreateFieldIncidentRequestDto {
   severity: IncidentSeverity;
 }
 
+/**
+ * Deployment date for an approved coverage plan. Without it, execution silently used "today",
+ * which on any holiday or weekend means every assignment is rejected by the date rules and
+ * nothing can be deployed at all.
+ */
+class ExecutePlanRequestDto {
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+}
+
 /** Resolving anything operational requires a stated reason — that is the point of the record. */
 class JustificationRequestDto {
   @IsString() @IsNotEmpty() @MaxLength(2000)
@@ -244,14 +254,16 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Initialize new field visit execution record' })
   async createVisit(
-    @Body() body: CreateFieldVisitRequestDto
+    @Body() body: CreateFieldVisitRequestDto,
+    @Req() req: any
   ) {
     const visit = await this.fieldService.createFieldVisit(
       body.coveragePlanId,
       body.executionGroupId,
       body.branchId,
       body.assayerId,
-      body.plannedDate
+      body.plannedDate,
+      req.user?.id
     );
     return {
       success: true,
@@ -265,9 +277,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' })
   async transitionVisit(
     @Param('visitId', ParseUUIDPipe) visitId: string,
-    @Body() body: UpdateFieldVisitStatusRequestDto
+    @Body() body: UpdateFieldVisitStatusRequestDto,
+    @Req() req: any
   ) {
-    const visit = await this.fieldService.transitionVisitStatus(visitId, body.status);
+    const visit = await this.fieldService.transitionVisitStatus(visitId, body.status, req.user?.id);
     return {
       success: true,
       data: visit,
@@ -280,9 +293,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Report operational field incident (e.g. branch closed, assayer illness)' })
   async reportIncident(
     @Param('visitId', ParseUUIDPipe) visitId: string,
-    @Body() body: CreateFieldIncidentRequestDto
+    @Body() body: CreateFieldIncidentRequestDto,
+    @Req() req: any
   ) {
-    const incident = await this.fieldService.reportIncident(visitId, body.title, body.description, body.severity);
+    const incident = await this.fieldService.reportIncident(visitId, body.title, body.description, body.severity, req.user?.id);
     return {
       success: true,
       data: incident,
@@ -295,9 +309,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Resolve active field incident' })
   async resolveIncident(
     @Param('incidentId', ParseUUIDPipe) incidentId: string,
-    @Body() body: JustificationRequestDto
+    @Body() body: JustificationRequestDto,
+    @Req() req: any
   ) {
-    const incident = await this.fieldService.resolveIncident(incidentId, body.justification);
+    const incident = await this.fieldService.resolveIncident(incidentId, body.justification, req.user?.id);
     return {
       success: true,
       data: incident,
@@ -386,9 +401,10 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate manual operational task in the queue' })
   async createTask(
-    @Body() body: CreateOperationsTaskRequestDto
+    @Body() body: CreateOperationsTaskRequestDto,
+    @Req() req: any
   ) {
-    const task = await this.controlCenterService.createOperationsTask(body.projectId, body.title, body.reason, body.priority);
+    const task = await this.controlCenterService.createOperationsTask(body.projectId, body.title, body.reason, body.priority, req.user?.id);
     return {
       success: true,
       data: task,
@@ -401,9 +417,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Resolve an operations task with justification log' })
   async resolveTask(
     @Param('taskId', ParseUUIDPipe) taskId: string,
-    @Body() body: JustificationRequestDto
+    @Body() body: JustificationRequestDto,
+    @Req() req: any
   ) {
-    const task = await this.controlCenterService.resolveOperationsTask(taskId, body.justification);
+    const task = await this.controlCenterService.resolveOperationsTask(taskId, body.justification, req.user?.id);
     return {
       success: true,
       data: task,
@@ -415,9 +432,10 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Flag managed exception rule violations' })
   async createException(
-    @Body() body: CreateOperationsExceptionRequestDto
+    @Body() body: CreateOperationsExceptionRequestDto,
+    @Req() req: any
   ) {
-    const exc = await this.controlCenterService.flagException(body.projectId, body.category, body.message, body.targetEntityId);
+    const exc = await this.controlCenterService.flagException(body.projectId, body.category, body.message, body.targetEntityId, req.user?.id);
     return {
       success: true,
       data: exc,
@@ -430,9 +448,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Resolve or bypass exception log with justification' })
   async resolveException(
     @Param('exceptionId', ParseUUIDPipe) exceptionId: string,
-    @Body() body: JustificationRequestDto
+    @Body() body: JustificationRequestDto,
+    @Req() req: any
   ) {
-    const exc = await this.controlCenterService.resolveException(exceptionId, body.justification);
+    const exc = await this.controlCenterService.resolveException(exceptionId, body.justification, req.user?.id);
     return {
       success: true,
       data: exc,
@@ -499,9 +518,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Deploy approved plan and automatically spawn operational assignments' })
   async executePlan(
     @Param('planId', ParseUUIDPipe) planId: string,
+    @Body() body: ExecutePlanRequestDto,
     @Req() req: any
   ) {
-    await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id);
+    await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
     return {
       success: true,
       data: { message: 'Approved coverage plan executed and deployed successfully.' },

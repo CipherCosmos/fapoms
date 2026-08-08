@@ -4,6 +4,7 @@ import { FieldVisitEntity, FieldVisitStatus } from './field-visit.entity';
 import { FieldIncidentEntity, IncidentStatus, IncidentSeverity } from './field-incident.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { AuditService } from '../../core/audit/audit.service';
 
 describe('FieldOperationsService', () => {
   let service: FieldOperationsService;
@@ -25,6 +26,7 @@ describe('FieldOperationsService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn().mockResolvedValue(undefined) } },
         FieldOperationsService,
         { provide: getRepositoryToken(FieldVisitEntity), useValue: mockVisitRepository },
         { provide: getRepositoryToken(FieldIncidentEntity), useValue: mockIncidentRepository },

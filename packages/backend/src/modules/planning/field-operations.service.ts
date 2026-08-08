@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FieldVisitEntity, FieldVisitStatus } from './field-visit.entity';
 import { FieldIncidentEntity, IncidentStatus, IncidentSeverity } from './field-incident.entity';
+import { AuditService } from '../../core/audit/audit.service';
+import { EventCategory } from '@fapoms/shared';
 
 export interface HandoverPackage {
   visitId: string;
@@ -33,6 +35,7 @@ export class FieldOperationsService {
     private readonly visitRepository: Repository<FieldVisitEntity>,
     @InjectRepository(FieldIncidentEntity)
     private readonly incidentRepository: Repository<FieldIncidentEntity>,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -43,7 +46,8 @@ export class FieldOperationsService {
     executionGroupId: string,
     branchId: string,
     assayerId: string,
-    plannedDate: string
+    plannedDate: string,
+    userId?: string,
   ): Promise<FieldVisitEntity> {
     const visit = this.visitRepository.create({
       coveragePlanId,
@@ -58,14 +62,29 @@ export class FieldOperationsService {
         formsCompleted: false,
         missingEvidenceList: ['Mandatory Form 1A', 'Store Front Photo'],
       },
+      createdBy: userId,
+      updatedBy: userId,
     });
-    return this.visitRepository.save(visit);
+    const saved = await this.visitRepository.save(visit);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_VISIT_CREATED',
+      entityType: 'FIELD_VISIT',
+      entityId: saved.id,
+      newState: FieldVisitStatus.READY,
+      userId,
+      remarks: `Field visit planned for ${plannedDate}.`,
+      metadata: { coveragePlanId, executionGroupId, branchId, assayerId, plannedDate },
+    });
+
+    return saved;
   }
 
   /**
    * Transitions field visit execution states.
    */
-  async transitionVisitStatus(visitId: string, targetStatus: FieldVisitStatus): Promise<FieldVisitEntity> {
+  async transitionVisitStatus(visitId: string, targetStatus: FieldVisitStatus, userId?: string): Promise<FieldVisitEntity> {
     const visit = await this.visitRepository.findOne({ where: { id: visitId } });
     if (!visit) {
       throw new NotFoundException(`Field visit ${visitId} not found.`);
@@ -77,14 +96,35 @@ export class FieldOperationsService {
       visit.actualEndTime = new Date();
     }
 
+    const previousStatus = visit.status;
     visit.status = targetStatus;
-    return this.visitRepository.save(visit);
+    visit.updatedBy = userId ?? visit.updatedBy;
+    const saved = await this.visitRepository.save(visit);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_VISIT_STATUS_CHANGED',
+      entityType: 'FIELD_VISIT',
+      entityId: saved.id,
+      previousState: previousStatus,
+      newState: targetStatus,
+      userId,
+      remarks: `Field visit moved ${previousStatus} → ${targetStatus}.`,
+      metadata: {
+        branchId: saved.branchId,
+        assayerId: saved.assayerId,
+        actualStartTime: saved.actualStartTime ?? null,
+        actualEndTime: saved.actualEndTime ?? null,
+      },
+    });
+
+    return saved;
   }
 
   /**
    * Logs a blocker or operational incident in the field.
    */
-  async reportIncident(visitId: string, title: string, description: string, severity: IncidentSeverity): Promise<FieldIncidentEntity> {
+  async reportIncident(visitId: string, title: string, description: string, severity: IncidentSeverity, userId?: string): Promise<FieldIncidentEntity> {
     const visit = await this.visitRepository.findOne({ where: { id: visitId } });
     if (!visit) {
       throw new NotFoundException(`Field visit ${visitId} not found.`);
@@ -96,22 +136,53 @@ export class FieldOperationsService {
       description,
       severity,
       status: IncidentStatus.REPORTED,
+      createdBy: userId,
+      updatedBy: userId,
     });
-    return this.incidentRepository.save(incident);
+    const saved = await this.incidentRepository.save(incident);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_INCIDENT_REPORTED',
+      entityType: 'FIELD_INCIDENT',
+      entityId: saved.id,
+      newState: IncidentStatus.REPORTED,
+      userId,
+      remarks: `${severity} incident on visit ${visitId}: ${title}`,
+      metadata: { visitId, branchId: visit.branchId, assayerId: visit.assayerId, severity, title, description },
+    });
+
+    return saved;
   }
 
   /**
    * Resolves a logged field incident.
    */
-  async resolveIncident(incidentId: string, details: string): Promise<FieldIncidentEntity> {
+  async resolveIncident(incidentId: string, details: string, userId?: string): Promise<FieldIncidentEntity> {
     const incident = await this.incidentRepository.findOne({ where: { id: incidentId } });
     if (!incident) {
       throw new NotFoundException(`Incident ${incidentId} not found.`);
     }
 
+    const previousStatus = incident.status;
     incident.status = IncidentStatus.RESOLVED;
     incident.resolutionDetails = details;
-    return this.incidentRepository.save(incident);
+    incident.updatedBy = userId ?? incident.updatedBy;
+    const saved = await this.incidentRepository.save(incident);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_INCIDENT_RESOLVED',
+      entityType: 'FIELD_INCIDENT',
+      entityId: saved.id,
+      previousState: previousStatus,
+      newState: IncidentStatus.RESOLVED,
+      userId,
+      remarks: `Resolved "${saved.title}": ${details}`,
+      metadata: { visitId: saved.visitId, severity: saved.severity, resolutionDetails: details },
+    });
+
+    return saved;
   }
 
   /**
