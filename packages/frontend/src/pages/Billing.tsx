@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, AlertTriangle, Banknote, FileText, RefreshCw } from 'lucide-react';
 import {
   useBillingDashboard,
@@ -132,11 +132,30 @@ const TabButton: React.FC<{ active: boolean; onClick: () => void; children: Reac
 );
 
 export const Billing: React.FC = () => {
-  const [tab, setTab] = useState<Tab>('finance');
+  // Each concern is a real URL (?tab=entries), so a finance page is linkable, bookmarkable, and
+  // survives back/forward — the receivables view and an invoice's entries can point at each
+  // other. Kept as query-param tabs rather than separate route components because the modals,
+  // drawers and client scope are shared across all of them; splitting the money screen's state
+  // apart carries more risk than the addressability is worth.
+  const [params, setParams] = useSearchParams();
+  const VALID_TABS: Tab[] = ['finance', 'overview', 'hierarchy', 'entries', 'invoices', 'payables', 'conflicts', 'history'];
+  const tab = (VALID_TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'finance') as Tab;
+  const setTab = (t: Tab) => {
+    const next = new URLSearchParams(params);
+    if (t === 'finance') next.delete('tab'); else next.set('tab', t);
+    setParams(next, { replace: false });
+  };
+  // Client scope also lives in the URL, so it holds when following a Ledger/Statement link out
+  // and coming back, and matches how those pages read ?client=.
+  const clientId = params.get('client') ?? '';
+  const setClientId = (id: string) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set('client', id); else next.delete('client');
+    setParams(next, { replace: true });
+  };
   const [level, setLevel] = useState<BillingLevel | ''>('');
   // Every backend billing filter has always accepted a clientId; the page just
   // never offered a way to set one, so all figures were whole-book totals.
-  const [clientId, setClientId] = useState<string>('');
 
   const [showEntryModal, setShowEntryModal] = useState(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
