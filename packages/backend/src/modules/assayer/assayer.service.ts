@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, In } from 'typeorm';
 import * as xlsx from 'xlsx';
 import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
@@ -1814,14 +1815,25 @@ export class AssayerService implements OnModuleInit {
   }
 
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
-  async resetPasswordByStaff(assayerId: string, newPassword: string, actorId: string): Promise<void> {
+  async resetPasswordByStaff(
+    assayerId: string,
+    newPassword: string | undefined,
+    actorId: string,
+  ): Promise<{ generatedPassword?: string }> {
     const assayer = await this.assayerRepository.findOne({ where: { id: assayerId }, select: { id: true } });
     if (!assayer) throw new NotFoundException('Assayer not found.');
 
-    this.assertPasswordAcceptable(newPassword);
+    // When HR does not supply one, generate a readable temporary password and return it once.
+    // The point of the reset is a locked-out field worker on the phone, so the credential has to
+    // be sayable — hence a short memorable form rather than a random hex blob — and it is never
+    // stored in readable form, only its hash.
+    const wasGenerated = !newPassword;
+    const password = newPassword ?? this.generateTemporaryPassword();
+
+    this.assertPasswordAcceptable(password);
 
     await this.assayerRepository.update(assayerId, {
-      passwordHash: await bcrypt.hash(newPassword, 12),
+      passwordHash: await bcrypt.hash(password, 12),
       failedLoginAttempts: 0,
       lockedUntil: null,
       // A password chosen by HR is a temporary credential, not the assayer's own. Forcing a
@@ -1841,6 +1853,24 @@ export class AssayerService implements OnModuleInit {
     });
 
     await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
+
+    return wasGenerated ? { generatedPassword: password } : {};
+  }
+
+  /**
+   * A short, sayable temporary password: two lowercase words joined by a digit and a symbol,
+   * e.g. "tiger4mango!". Long enough to clear the length rule, memorable enough to read aloud
+   * once, and never a shared default. Not meant to be kept — mustChangePassword forces a change
+   * at first sign-in.
+   */
+  private generateTemporaryPassword(): string {
+    const words = ['tiger', 'mango', 'river', 'stone', 'cloud', 'ember', 'ivory', 'coral', 'delta', 'flint', 'grove', 'larch'];
+    // randomInt is a CSPRNG; Math.random must never mint a credential.
+    const pick = () => words[randomInt(words.length)];
+    const a = pick();
+    let b = pick();
+    while (b === a) b = pick();
+    return `${a}${randomInt(10)}${b}!`;
   }
 
   /**

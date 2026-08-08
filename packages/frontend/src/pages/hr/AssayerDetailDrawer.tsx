@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   X, ExternalLink, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
-  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin,
+  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
 import { formatRupees, nextAssayerLifecycleStates } from '@fapoms/shared';
 
@@ -137,6 +137,27 @@ export const AssayerDetailDrawer: React.FC<{
     setBusy(false);
   };
 
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+
+  /**
+   * Recovery for a field worker who is locked out — they enter client bank vaults on a
+   * schedule, so "come back tomorrow" is a missed audit. HR generates a temporary password the
+   * server returns exactly once; it is read to the assayer and forces a change at next sign-in.
+   */
+  const resetPassword = async () => {
+    if (resetting) return;
+    setResetting(true); setErr(null); setTempPassword(null);
+    try {
+      const res = await api.request<{ temporaryPassword?: string }>(`/assayers/${assayerId}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setTempPassword(res.temporaryPassword ?? '(set, but not returned)');
+    } catch (e) { setErr(userMessage(e)); }
+    setResetting(false);
+  };
+
   const tone = a ? STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)' : 'var(--text-muted)';
 
   return (
@@ -257,6 +278,29 @@ export const AssayerDetailDrawer: React.FC<{
                           {busy ? 'Moving…' : 'Move'}
                         </button>
                       </div>
+                    </section>
+                  )}
+
+                  {canManage && (
+                    <section>
+                      <div style={{ ...label, marginBottom: '7px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <KeyRound size={11} /> Account access
+                      </div>
+                      {tempPassword ? (
+                        <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'var(--status-active-bg)', border: '1px solid var(--success)' }}>
+                          <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                            Temporary password — read it to the assayer now, it will not be shown again:
+                          </div>
+                          <code style={{ fontSize: '16px', fontWeight: 700, letterSpacing: '0.02em', color: 'var(--success)', userSelect: 'all' }}>{tempPassword}</code>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                            They will be asked to choose their own at next sign-in.
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={resetPassword} disabled={resetting} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <KeyRound size={13} /> {resetting ? 'Resetting…' : 'Reset password'}
+                        </button>
+                      )}
                     </section>
                   )}
 

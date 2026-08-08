@@ -118,6 +118,41 @@ describe('AssayerService', () => {
    * caller sends. That is fine for the kind the caller sent, and destructive for the ones it did
    * not — which is what an edit form offering one field at a time inevitably does.
    */
+  describe('resetPasswordByStaff', () => {
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1' });
+      mockAssayerRepo.update.mockResolvedValue({ affected: 1 });
+    });
+
+    it('generates a temporary password and returns it once when HR supplies none', async () => {
+      const result = await service.resetPasswordByStaff('asr-1', undefined, 'hr-1');
+
+      expect(result.generatedPassword).toBeDefined();
+      expect(result.generatedPassword!.length).toBeGreaterThanOrEqual(8);
+      // The stored hash is of the generated password, not the password itself.
+      const { passwordHash, mustChangePassword } = mockAssayerRepo.update.mock.calls.at(-1)![1] as any;
+      expect(passwordHash).not.toEqual(result.generatedPassword);
+      // A staff-set credential is temporary — the holder must choose their own next sign-in.
+      expect(mustChangePassword).toBe(true);
+    });
+
+    it('uses the password HR supplied, and returns nothing to echo', async () => {
+      const result = await service.resetPasswordByStaff('asr-1', 'chosen-strong-pw', 'hr-1');
+      expect(result.generatedPassword).toBeUndefined();
+    });
+
+    it('refuses a known shared default even from staff', async () => {
+      await expect(service.resetPasswordByStaff('asr-1', 'assayer123', 'hr-1')).rejects.toThrow();
+    });
+
+    it('records who reset whose credential', async () => {
+      await service.resetPasswordByStaff('asr-1', undefined, 'hr-1');
+      expect(mockAuditService.recordEventSafe).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'ASSAYER_PASSWORD_RESET', entityId: 'asr-1', userId: 'hr-1' }),
+      );
+    });
+  });
+
   describe('workforce attributes are replaced per kind, not wholesale', () => {
     const existing = { id: 'asr-1', assayerCode: 'AS-01', displayName: 'John Doe' };
 

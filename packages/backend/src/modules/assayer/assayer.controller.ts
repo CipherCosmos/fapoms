@@ -581,9 +581,11 @@ class ChangeOwnPasswordRequestDto {
 }
 
 class ResetAssayerPasswordRequestDto {
-  @IsString() @MinLength(8, { message: 'The new password must be at least 8 characters.' })
+  // Optional: when omitted, the server generates a temporary password and returns it once, so
+  // HR can read it to a locked-out field worker over the phone without inventing one.
+  @IsOptional() @IsString() @MinLength(8, { message: 'The new password must be at least 8 characters.' })
   @MaxLength(128)
-  newPassword: string;
+  newPassword?: string;
 }
 
 @ApiTags('Assayers')
@@ -1206,11 +1208,16 @@ export class AssayerController {
     @Body() dto: ResetAssayerPasswordRequestDto,
     @Req() req: any,
   ) {
-    if (!dto?.newPassword) {
-      throw new BadRequestException('A new password is required.');
-    }
-    await this.assayerService.resetPasswordByStaff(assayerId, dto.newPassword, req.user.id);
-    return { success: true, message: 'Password reset. Ask the assayer to sign in with it and change it.' };
+    const result = await this.assayerService.resetPasswordByStaff(assayerId, dto?.newPassword, req.user.id);
+    return {
+      success: true,
+      // Present only when the server generated the password; shown to HR once and never stored
+      // in readable form. When HR set the password themselves it is echoed back to no one.
+      temporaryPassword: result.generatedPassword,
+      message: result.generatedPassword
+        ? 'Temporary password generated. Read it to the assayer now — it will not be shown again.'
+        : 'Password reset. Ask the assayer to sign in with it and change it.',
+    };
   }
 
 }
