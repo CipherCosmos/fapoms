@@ -303,7 +303,10 @@ const mockNotificationService = {
         project: {},
       });
       mockAssayerRepo.findOne.mockResolvedValue({
-        id: 'as-1', skills: [], certifications: [], latitude: 19.0, longitude: 72.0,
+        // homeLatitude/homeLongitude are getters on AssayerEntity; a plain fixture object does
+        // not inherit them, so they must be set explicitly or the distance reads as absent.
+        id: 'as-1', skills: [], certifications: [],
+        latitude: 19.0, longitude: 72.0, homeLatitude: 19.0, homeLongitude: 72.0,
       });
       mockAssignmentRepo.create.mockReturnValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
       mockAssignmentRepo.save.mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.PENDING });

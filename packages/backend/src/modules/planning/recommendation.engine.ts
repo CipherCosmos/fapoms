@@ -190,9 +190,16 @@ export class DistancePolicyFilter implements CandidateFilter {
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     const preferences = context.client?.planningPreferences;
     if (!preferences) return true;
+    /**
+     * Measured from the assayer's registered home, not their live position. The floor asks how
+     * close this person lives to the branch they would audit — a structural fact about conflict
+     * of interest. Measuring it from wherever their phone happened to be would let someone
+     * disqualified by where they live pass simply by travelling, and would make the same
+     * candidate eligible or not depending on the hour.
+     */
     if (
       context.branch?.latitude == null || context.branch?.longitude == null ||
-      assayer.effectiveLatitude == null || assayer.effectiveLongitude == null
+      assayer.homeLatitude == null || assayer.homeLongitude == null
     ) {
       return true;
     }
@@ -200,8 +207,8 @@ export class DistancePolicyFilter implements CandidateFilter {
     const distance = calculateHaversineDistance(
       Number(context.branch.latitude),
       Number(context.branch.longitude),
-      Number(assayer.effectiveLatitude),
-      Number(assayer.effectiveLongitude),
+      Number(assayer.homeLatitude),
+      Number(assayer.homeLongitude),
     );
 
     /**

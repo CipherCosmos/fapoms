@@ -784,7 +784,7 @@ export class DayPlannerService {
 
     for (const assayerEntity of assayers) {
       const assayer = assayerEntity as AssayerWithWorkforceAttributes;
-      if (!assayer.latitude || !assayer.longitude) continue;
+      if (!assayer.homeLatitude || !assayer.homeLongitude) continue;
 
       // ─── Eligibility: must be eligible for EVERY branch in the cluster ──
       let exclusion: ExcludedDayPlanCandidate | null = null;
@@ -806,9 +806,17 @@ export class DayPlannerService {
         continue;
       }
 
-      // ─── Distance ────────────────────────────────────────────────────
-      const aLat = assayer.latitude!;
-      const aLng = assayer.longitude!;
+      /**
+       * ─── Distance ────────────────────────────────────────────────────
+       *
+       * Home, deliberately — see AssayerEntity.homeLatitude. These distances decide two things
+       * that must not move with a GPS reading: whether the assayer clears the client's
+       * conflict-of-interest floor, and what travel allowance the day is quoted at. The
+       * candidate list elsewhere ranks by live position instead, because "who is nearest right
+       * now" is a different question from "what may we bill and who is eligible".
+       */
+      const aLat = assayer.homeLatitude!;
+      const aLng = assayer.homeLongitude!;
       const branchDistances = cluster.branches.map((b) =>
         calculateHaversineDistance(aLat, aLng, b.latitude, b.longitude),
       );
@@ -844,7 +852,8 @@ export class DayPlannerService {
       }));
 
       const routeResult = await this.routingService.optimizeRoute(
-        { latitude: assayer.latitude, longitude: assayer.longitude },
+        // Same origin as the distances above, so the quoted travel matches the route quoted for.
+        { latitude: assayer.homeLatitude!, longitude: assayer.homeLongitude! },
         destinations,
         true, // round trip back to assayer location
       );

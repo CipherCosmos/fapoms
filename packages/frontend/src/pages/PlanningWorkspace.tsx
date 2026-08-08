@@ -352,6 +352,11 @@ export const PlanningWorkspace: React.FC = () => {
       : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700));
   }, [candidates, slaEnabled, slaRadius, showAllCandidates]);
   const drawerRef = useRef<HTMLDivElement>(null);
+  /**
+   * The client's contracted travel rates for the selected project, so the map quotes travel the
+   * way the platform bills it rather than with its own hardcoded per-km figure.
+   */
+  const [travelRates, setTravelRates] = useState<{ travelFeePerKm: number; freeTravelAllowanceKm: number } | null>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
   /**
    * Projects to plan together. Empty means "just the one currently selected", which keeps the
@@ -510,6 +515,15 @@ export const PlanningWorkspace: React.FC = () => {
    * `projectIdsOverride` lets the project chips reload immediately on click rather than
    * waiting for the next render to observe the new state.
    */
+  useEffect(() => {
+    if (!selectedProjectId) { setTravelRates(null); return; }
+    let cancelled = false;
+    api.request<{ travelFeePerKm: number; freeTravelAllowanceKm: number }>(`/pricing/rates?projectId=${selectedProjectId}`)
+      .then((r) => { if (!cancelled) setTravelRates(r); })
+      .catch(() => { if (!cancelled) setTravelRates(null); });
+    return () => { cancelled = true; };
+  }, [selectedProjectId]);
+
   const loadDayPlans = async (projectIdsOverride?: string[]) => {
     if (!selectedProjectId) return;
     setIsLoadingDayPlans(true);
@@ -1522,6 +1536,7 @@ export const PlanningWorkspace: React.FC = () => {
               slaRadius={slaRadius}
               rankedCandidates={displayCandidates}
               excludedCandidates={excludedCandidates}
+            travelRates={travelRates}
             />
           </div>
         </div>
@@ -1554,6 +1569,7 @@ export const PlanningWorkspace: React.FC = () => {
               slaRadius={slaRadius}
               rankedCandidates={displayCandidates}
               excludedCandidates={excludedCandidates}
+            travelRates={travelRates}
             />
             <div ref={drawerRef} style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -1617,6 +1633,7 @@ export const PlanningWorkspace: React.FC = () => {
               slaRadius={slaRadius}
               rankedCandidates={displayCandidates}
               excludedCandidates={excludedCandidates}
+            travelRates={travelRates}
             />
           </div>
 
@@ -1651,6 +1668,7 @@ export const PlanningWorkspace: React.FC = () => {
             selectedAssayerFromParent={selectedCandidateForMap}
             slaEnabled={slaEnabled}
             slaRadius={slaRadius}
+            travelRates={travelRates}
           />
         </div>
       )}

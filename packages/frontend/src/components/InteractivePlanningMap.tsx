@@ -31,6 +31,12 @@ interface InteractivePlanningMapProps {
    */
   rankedCandidates?: { id: string; score?: number; scoreBreakdown?: Record<string, number> }[];
   excludedCandidates?: { assayerId: string; reason: string; detail?: string }[];
+  /**
+   * The client's contracted travel rates, from /pricing/rates. The map used to price travel as
+   * `distance x 8` with no free-commute allowance, so the figure an operator read here was not
+   * the figure the assignment would be billed at.
+   */
+  travelRates?: { travelFeePerKm: number; freeTravelAllowanceKm: number } | null;
 }
 
 export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
@@ -44,6 +50,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   slaRadius: slaRadiusProp = 50,
   rankedCandidates,
   excludedCandidates,
+  travelRates,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -634,8 +641,22 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     ? Math.round(roadDurationMinutes) 
     : Math.round((straightDist / speed) * 60);
 
-  const costModes = { driving: 8, 'two-wheeler': 3, walking: 0 };
-  const estCost = Math.round(actualDistance * costModes[travelMode]);
+  /**
+   * Travel allowance, calculated the way FeePolicyService calculates it: the free commute
+   * allowance is deducted first, then the contracted per-km rate applies. This used to be
+   * `distance x 8` flat, which both ignored the allowance and hardcoded a rate that no longer
+   * matched the client's contract, so the operator was shown a number nothing would ever pay.
+   *
+   * Only driving is a billable allowance. The two-wheeler and walking figures are fuel
+   * estimates for comparing how the assayer might travel, and are labelled as such.
+   */
+  const perKmRate = travelRates?.travelFeePerKm ?? 8;
+  const freeAllowanceKm = travelRates?.freeTravelAllowanceKm ?? 0;
+  const chargeableKm = Math.max(0, actualDistance - freeAllowanceKm);
+  const fuelModes = { driving: perKmRate, 'two-wheeler': 3, walking: 0 };
+  const estCost = travelMode === 'driving'
+    ? Math.round(chargeableKm * perKmRate)
+    : Math.round(actualDistance * fuelModes[travelMode]);
 
   return (
     <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative', flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px', boxSizing: 'border-box' }}>
@@ -807,7 +828,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span>| Speed: ~{speed} km/h</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-hair)', paddingTop: '6px', marginTop: '4px' }}>
-              <span>{roadDistanceKm !== null ? 'Est. Travel Cost:' : 'Est. Travel Cost (approx):'}</span>
+              <span>{travelMode === 'driving'
+                ? (roadDistanceKm !== null ? 'Travel allowance:' : 'Travel allowance (approx):')
+                : 'Est. fuel cost:'}</span>
               <b style={{ color: 'var(--text-primary)', fontSize: '12px' }}>₹{estCost}</b>
             </div>
             <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>

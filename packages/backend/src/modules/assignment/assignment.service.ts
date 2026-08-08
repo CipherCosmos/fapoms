@@ -223,11 +223,13 @@ export class AssignmentService {
     let calculatedTravelFee = 0;
     let distanceKm = 0;
 
-    if (projectBranch.branch?.latitude && projectBranch.branch?.longitude && assayer.latitude && assayer.longitude) {
+    // Home, not the live fix: this distance sets the travel allowance actually billed, and a
+    // fee that changes with where somebody's phone was that morning is not auditable.
+    if (projectBranch.branch?.latitude && projectBranch.branch?.longitude && assayer.homeLatitude && assayer.homeLongitude) {
       try {
         const route = await this.routingService.calculateRoute(
           { latitude: Number(projectBranch.branch.latitude), longitude: Number(projectBranch.branch.longitude) },
-          { latitude: Number(assayer.latitude), longitude: Number(assayer.longitude) }
+          { latitude: Number(assayer.homeLatitude), longitude: Number(assayer.homeLongitude) }
         );
         distanceKm = route.distanceKm || 0;
       } catch (e) {

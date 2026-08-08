@@ -130,6 +130,28 @@ export class AssayerEntity extends BaseEntity {
     return this.isLiveEnabled && this.liveLongitude != null ? this.liveLongitude : this.longitude;
   }
 
+  /**
+   * The assayer's registered home location, never their live position.
+   *
+   * Two questions get asked about where an assayer is, and they need different answers.
+   * "Who is nearest to this branch today?" is a routing question and should follow the live
+   * fix — that is `effectiveLatitude`/`effectiveLongitude` above. "How far does this person
+   * live from the branch they are auditing?" is a compliance and money question, and must not
+   * move because somebody's phone was in another city that morning: a travel allowance that
+   * changes with a GPS reading is not auditable, and a conflict-of-interest floor measured
+   * from a temporary position does not measure conflict of interest at all.
+   *
+   * These read the same columns as `latitude`/`longitude`; the name states the intent, so a
+   * reader can tell which question a call site is asking.
+   */
+  get homeLatitude(): number | null {
+    return this.latitude;
+  }
+
+  get homeLongitude(): number | null {
+    return this.longitude;
+  }
+
   @Column({
     type: 'enum',
     enum: AssayerStatus,
