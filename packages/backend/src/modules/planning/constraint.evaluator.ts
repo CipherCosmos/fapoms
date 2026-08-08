@@ -217,7 +217,11 @@ export class ConstraintEvaluator {
   /**
    * Evaluates if the assayer possesses all required skills and certifications.
    */
-  checkSkillsAndCertifications(assayerEntity: AssayerEntity, project: ProjectEntity): ConstraintResult {
+  checkSkillsAndCertifications(
+    assayerEntity: AssayerEntity,
+    project: ProjectEntity,
+    scheduledDate?: Date,
+  ): ConstraintResult {
     const assayer = assayerEntity as AssayerWithWorkforceAttributes;
     if (project.requiredSkills && project.requiredSkills.length > 0) {
       const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
@@ -233,14 +237,27 @@ export class ConstraintEvaluator {
     }
 
     if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-      const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
+      /**
+       * A certification the assayer no longer holds does not qualify them.
+       *
+       * This gate matched on name alone while the CERTIFICATION business rule
+       * (platform/rules/rule.engine.ts) also required the certification to be unexpired on the
+       * audit date. Since this is the hard gate — it blocks assignment creation and filters the
+       * candidate list — an assayer with a lapsed certification passed the check that actually
+       * stops work while failing the rule that only advises. Expiry dates are real, maintained
+       * data: all 24 certifications on record carry one.
+       */
+      const asOf = scheduledDate ?? new Date();
+      const assayerCerts = (assayer.certifications || [])
+        .filter((c) => !c.expiryDate || new Date(c.expiryDate) > asOf)
+        .map((c) => c.name.trim().toLowerCase());
       const missingCerts = project.requiredCertifications.filter(
         (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
       );
       if (missingCerts.length > 0) {
         return {
           passed: false,
-          reason: `Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`,
+          reason: `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
         };
       }
     }

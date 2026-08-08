@@ -351,7 +351,7 @@ export class RequiredSkillsFilter implements CandidateFilter {
       return true;
     }
 
-    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project);
+    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project, context.scheduledDate);
     return checkResult.passed;
   }
 }

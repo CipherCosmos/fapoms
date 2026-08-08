@@ -187,7 +187,7 @@ export class AssignmentService {
 
     // Validate skills and certifications via ConstraintEvaluator
     if (projectBranch.project) {
-      const skillsCheck = this.constraintEvaluator.checkSkillsAndCertifications(assayer, projectBranch.project);
+      const skillsCheck = this.constraintEvaluator.checkSkillsAndCertifications(assayer, projectBranch.project, dto.scheduledDate ? new Date(dto.scheduledDate) : undefined);
       if (!skillsCheck.passed) {
         throw new BadRequestException(skillsCheck.reason);
       }
