@@ -26,6 +26,7 @@ import { ProjectBranchStateMachine } from '../project/project.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { ProjectEntity } from '../project/project.entity';
+import { COMMITTED_ASSIGNMENT_STATUSES } from './assignment-workload';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
@@ -247,13 +248,40 @@ export class AssignmentService {
       throw new BadRequestException(distancePolicy.reason);
     }
 
+    /**
+     * An assayer travels to a town once, so the day is charged travel once.
+     *
+     * Every assignment used to be quoted full travel from the assayer's home, so two branches
+     * on the same street on the same day each paid the whole journey — the client was billed
+     * twice for one trip, and the day planner's own estimate (which charges a shared route
+     * once, and says so) never matched the assignments the plan went on to create.
+     *
+     * The first assignment of a day carries the travel; later ones on that same date are quoted
+     * base fee only. Ordering is by creation, so this is stable regardless of which branch is
+     * assigned first.
+     */
+    let chargeableDistanceKm = distanceKm;
+    if (scheduledDateObj) {
+      const alreadyTravellingThatDay = await this.assignmentRepository.findOne({
+        where: {
+          assayerId: assayer.id,
+          scheduledDate: scheduledDateObj,
+          status: In(COMMITTED_ASSIGNMENT_STATUSES.concat(AssignmentStatus.PENDING)),
+          isActive: true,
+        },
+      });
+      if (alreadyTravellingThatDay) {
+        chargeableDistanceKm = 0;
+      }
+    }
+
     // One calculator, one rate card. The free-commute allowance and per-km rate come from
     // the client's contract, not from a constant in this file.
     const quote = await this.feePolicyService.quote({
       assayerId: assayer.id,
       clientId: projectBranch.project?.clientId ?? null,
       configuration: projectBranch.project?.client?.configuration ?? undefined,
-      distanceKm,
+      distanceKm: chargeableDistanceKm,
       onDate: scheduledDateObj || new Date(),
     });
     const baseFee = quote.baseFee;

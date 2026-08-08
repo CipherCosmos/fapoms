@@ -64,6 +64,20 @@ describe('AssignmentService', () => {
     getActiveCommercialProfile: jest.fn().mockResolvedValue({ baseFee: 1500 }),
   };
 
+  const mockFeePolicyService = {
+            quote: jest.fn().mockResolvedValue({
+              baseFee: 1200, branchCount: 1, baseComponent: 1200,
+              distanceKm: 0, chargeableKm: 0, travelFee: 0, total: 1200,
+              usedFallbackBaseFee: false,
+              rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
+            }),
+            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            ratesFromConfiguration: jest.fn().mockReturnValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1200, usedFallback: false }),
+            calculateTravelFee: jest.fn().mockReturnValue({ chargeableKm: 0, travelFee: 0 }),
+            resolveClientIdForProject: jest.fn().mockResolvedValue(null),
+  };
+
   const mockHolidayService = {
     isHoliday: jest.fn(),
   };
@@ -128,22 +142,7 @@ const mockNotificationService = {
             dispatchDocument: jest.fn(),
           },
         },
-        {
-          provide: FeePolicyService,
-          useValue: {
-            quote: jest.fn().mockResolvedValue({
-              baseFee: 1200, branchCount: 1, baseComponent: 1200,
-              distanceKm: 0, chargeableKm: 0, travelFee: 0, total: 1200,
-              usedFallbackBaseFee: false,
-              rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
-            }),
-            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
-            ratesFromConfiguration: jest.fn().mockReturnValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
-            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1200, usedFallback: false }),
-            calculateTravelFee: jest.fn().mockReturnValue({ chargeableKm: 0, travelFee: 0 }),
-            resolveClientIdForProject: jest.fn().mockResolvedValue(null),
-          },
-        },
+        { provide: FeePolicyService, useValue: mockFeePolicyService },
         { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
         { provide: getRepositoryToken(AssessmentEntity), useValue: { findOne: jest.fn(), save: jest.fn() } },
         { provide: ProjectQueryService, useValue: mockProjectQueryService },
@@ -286,6 +285,53 @@ const mockNotificationService = {
    * subtracted 40 points from the score and this write path did not check at all, so the
    * control could be bypassed simply by using the per-branch flow.
    */
+  /**
+   * The day planner charges a shared route once and says so; assignment creation charged full
+   * travel per branch, so a two-branch day billed the same journey twice and the plan's
+   * estimate never matched the assignments it produced.
+   */
+  /**
+   * The day planner charges a shared route once and says so; assignment creation charged full
+   * travel per branch, so a two-branch day billed the same journey twice and the plan's
+   * estimate never matched the assignments it produced.
+   */
+  describe('travel is charged once per assayer-day', () => {
+    const setup = () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1',
+        branch: { name: 'Test', state: 'MH', latitude: 18.5, longitude: 73.8 },
+        project: {},
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'as-1', skills: [], certifications: [], latitude: 19.0, longitude: 72.0,
+      });
+      mockAssignmentRepo.create.mockReturnValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
+      mockAssignmentRepo.save.mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
+      mockFeePolicyService.quote.mockClear();
+    };
+
+    it('quotes travel on the first assignment of a day', async () => {
+      setup();
+      // No existing assignment for this assayer on this date — the journey is not yet paid for.
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 500, scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.distanceKm).toBeGreaterThan(0);
+    });
+
+    it('quotes base fee only for a second branch on the same day', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-existing', assayerId: 'as-1' });
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 500, scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.distanceKm).toBe(0);
+    });
+  });
+
   describe('client distance policy', () => {
     it('refuses an assayer too close to the branch they would audit', async () => {
       mockConstraintEvaluator.checkDistancePolicy.mockReturnValueOnce({
