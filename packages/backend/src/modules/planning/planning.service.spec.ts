@@ -48,7 +48,7 @@ describe('PlanningService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlanningService,
-        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) } },
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         {
           provide: BranchQueryService,
           useValue: mockBranchQueryService,

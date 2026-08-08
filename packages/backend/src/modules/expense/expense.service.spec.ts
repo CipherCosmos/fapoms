@@ -41,7 +41,7 @@ describe('ExpenseService', () => {
         ExpenseService,
         { provide: getRepositoryToken(ExpenseEntity), useValue: expenseRepo },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
-        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) } },
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         { provide: NotificationDispatchService, useValue: dispatch },
       ],
     }).compile();

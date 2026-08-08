@@ -118,7 +118,7 @@ export class DocumentService {
      * latest. For a firm whose product is audit evidence, who held a packet and when is
      * exactly the question that has to be answerable years later.
      */
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'DOCUMENT_DELEGATED_TO_DATA_ENTRY',
       entityType: 'DOCUMENT',
@@ -128,7 +128,7 @@ export class DocumentService {
       userId: actorId,
       remarks: `Packet ${saved.fileName} delegated to user ${assigneeId}.`,
       metadata: { assigneeId, projectBranchId: doc.projectBranchId ?? null },
-    }).catch(() => { /* custody record must not fail the delegation itself */ });
+    });
 
     // Opens the case (at PENDING) as soon as work starts, not only at hand-back,
     // so the member has somewhere to raise a clarification while still processing.
@@ -157,7 +157,7 @@ export class DocumentService {
     doc.updatedBy = actorId;
     const saved = await this.documentRepository.save(doc);
 
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'DOCUMENT_DATA_ENTRY_COMPLETED',
       entityType: 'DOCUMENT',
@@ -165,7 +165,7 @@ export class DocumentService {
       userId: actorId,
       remarks: `Packet ${saved.fileName} handed back by user ${doc.assignedToUserId}.`,
       metadata: { assignedToUserId: doc.assignedToUserId, projectBranchId: doc.projectBranchId ?? null },
-    }).catch(() => { /* see the note in assignForDataEntry */ });
+    });
 
     if (doc.projectBranchId) {
       try {

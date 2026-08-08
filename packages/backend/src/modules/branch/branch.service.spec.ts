@@ -47,7 +47,7 @@ describe('BranchService', () => {
   const mockCityRepo = { findOne: jest.fn() };
 
   const mockClientService = { findOne: jest.fn() };
-  const mockAuditService = { recordEvent: jest.fn() };
+  const mockAuditService = { recordEvent: jest.fn() , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })};
 
   const mockBranchQueryService = {
     findOne: jest.fn().mockImplementation((id) => Promise.resolve({ id, name: 'Branch 1' })),

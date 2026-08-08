@@ -344,7 +344,7 @@ export class AssignmentService {
       // Update ProjectBranch status to PLANNING (or appropriate transitional state)
       await this.projectService.initiateBranchPlanning(projectBranch.id, userId, manager);
 
-      await this.auditService.recordEvent({
+      await this.auditService.recordEventSafe({
         category: EventCategory.OPERATIONAL,
         eventType: isReassignment ? 'ASSIGNMENT_REASSIGNED' : 'ASSIGNMENT_CREATED',
         entityType: 'ASSIGNMENT',
@@ -513,7 +513,7 @@ export class AssignmentService {
             remarks: 'Auto-created upon offer acceptance (Direct Calendar Lock)',
             createdBy: userId,
             updatedBy: userId,
-          }).catch(() => {});
+          });
         }
       }
     } else if (targetStatus === AssignmentStatus.REJECTED) {
@@ -563,7 +563,7 @@ export class AssignmentService {
         await this.syncScheduleCompletion(savedAssign, userId, manager);
       }
 
-      await this.auditService.recordEvent({
+      await this.auditService.recordEventSafe({
         category: EventCategory.OPERATIONAL,
         eventType: `ASSIGNMENT_${targetStatus}`,
         entityType: 'ASSIGNMENT',
@@ -696,7 +696,7 @@ export class AssignmentService {
         negotiationRound: saved.negotiationCount,
         assayerId: saved.assayerId,
       },
-    }).catch(() => { /* the counter-offer stands even if its audit row fails */ });
+    });
 
     try {
       this.eventPublisher.publish('assignment:counter-offered', {
@@ -762,7 +762,7 @@ export class AssignmentService {
     assignment.updatedBy = userId;
     const saved = await this.assignmentRepository.save(assignment);
 
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSIGNMENT_ESCALATED',
       entityType: 'ASSIGNMENT',
@@ -1033,7 +1033,7 @@ export class AssignmentService {
       userId,
       remarks: comment.length > 200 ? `${comment.slice(0, 200)}…` : comment,
       metadata: { commentId: saved.id, authorName: userName },
-    }).catch(() => { /* the comment stands even if its audit row fails */ });
+    });
 
     try {
       this.eventPublisher.publish('comment:added', {

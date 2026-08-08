@@ -71,7 +71,7 @@ describe('AssayerService', () => {
   };
 
   const mockAuditService = {
-    recordEvent: jest.fn(),
+    recordEvent: jest.fn(), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
   const mockDomainEventPublisher = {

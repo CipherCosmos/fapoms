@@ -450,7 +450,7 @@ export class AssayerService implements OnModuleInit {
     const saved = await this.assayerRepository.save(assayer);
     await this.syncWorkforceAttributes(saved.id, dto, userId);
     await this.recordActivity(saved.id, 'ASSAYER_CREATED', null, AssayerLifecycleStatus.INVITED, userId, 'Assayer profile created');
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_CREATED',
       entityType: 'ASSAYER',
@@ -1764,7 +1764,7 @@ export class AssayerService implements OnModuleInit {
       entityId: assayerId,
       userId: assayerId,
       remarks: 'Assayer changed their own password.',
-    }).catch(() => { /* never fail the password change over its audit row */ });
+    });
 
     await this.recordActivity(assayerId, 'PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
   }
@@ -1787,14 +1787,14 @@ export class AssayerService implements OnModuleInit {
     });
 
     // Who reset whose credential, and when — see the note in changeOwnPassword.
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.USER,
       eventType: 'ASSAYER_PASSWORD_RESET',
       entityType: 'ASSAYER',
       entityId: assayerId,
       userId: actorId,
       remarks: 'Password reset by staff. The assayer must choose a new one at next sign-in.',
-    }).catch(() => { /* never fail the reset over its audit row */ });
+    });
 
     await this.recordActivity(assayerId, 'PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
   }

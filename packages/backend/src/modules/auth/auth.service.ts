@@ -167,7 +167,7 @@ export class AuthService {
 
       const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
 
-      await this.auditService.recordEvent({
+      await this.auditService.recordEventSafe({
         category: EventCategory.USER,
         eventType: 'USER_LOGIN',
         entityType: 'ASSAYER',
@@ -175,7 +175,7 @@ export class AuthService {
         userId: assayer.id,
         userDisplayName: assayer.displayName,
         ipAddress: ipAddress ?? undefined,
-      }).catch(() => {});
+      });
 
       return {
         ...tokens,
@@ -227,7 +227,7 @@ export class AuthService {
     const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
 
     // Record audit event
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.USER,
       eventType: 'USER_LOGIN',
       entityType: 'USER',
@@ -272,7 +272,7 @@ export class AuthService {
       entityId: user.id,
       userId: user.id,
       ipAddress: ipAddress ?? undefined,
-    }).catch(() => {});
+    });
 
     return { ...tokens, user };
   }

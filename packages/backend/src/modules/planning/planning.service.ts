@@ -156,7 +156,7 @@ export class PlanningService {
     });
     const saved = await this.ruleRepository.save(rule);
 
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'BUSINESS_RULE_CREATED',
       entityType: 'BUSINESS_RULE',
@@ -164,7 +164,7 @@ export class PlanningService {
       userId,
       remarks: `Created rule "${saved.name ?? saved.id}".`,
       metadata: { rule: saved },
-    }).catch(() => { /* the rule change stands even if its audit row fails */ });
+    });
 
     return saved;
   }
@@ -181,7 +181,7 @@ export class PlanningService {
     rule.updatedBy = userId;
     const saved = await this.ruleRepository.save(rule);
 
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'BUSINESS_RULE_UPDATED',
       entityType: 'BUSINESS_RULE',
@@ -189,7 +189,7 @@ export class PlanningService {
       userId,
       remarks: `Updated rule "${saved.name ?? saved.id}".`,
       metadata: { before, after: saved, changedFields: Object.keys(dto ?? {}) },
-    }).catch(() => { /* see createRule */ });
+    });
 
     return saved;
   }
@@ -203,7 +203,7 @@ export class PlanningService {
     rule.updatedBy = userId;
     await this.ruleRepository.save(rule);
 
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'BUSINESS_RULE_DELETED',
       entityType: 'BUSINESS_RULE',
@@ -211,7 +211,7 @@ export class PlanningService {
       userId,
       remarks: `Deactivated rule "${rule.name ?? rule.id}". It no longer constrains assignment.`,
       metadata: { rule },
-    }).catch(() => { /* see createRule */ });
+    });
   }
 
   async getRules(scope?: string): Promise<BusinessRuleEntity[]> {

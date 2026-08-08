@@ -42,7 +42,7 @@ describe('OperationsPlanningService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn().mockResolvedValue(undefined) } },
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }) } },
         OperationsPlanningService,
         { provide: getRepositoryToken(CoveragePlanEntity), useValue: mockPlanRepository },
         { provide: getRepositoryToken(CoveragePlanVersionEntity), useValue: mockVersionRepository },
