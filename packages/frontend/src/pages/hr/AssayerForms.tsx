@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
-import { INDIAN_STATES } from '@fapoms/shared';
+import { INDIAN_STATES, todayDateKey } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { Modal, useToast } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
@@ -236,7 +236,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
       state: 'Delhi',
       district: 'Central Delhi',
       city: 'New Delhi',
-      joiningDate: new Date().toISOString().split('T')[0],
+      joiningDate: todayDateKey(),
     };
   });
   const [activeTab, setActiveTab] = useState(0);
@@ -431,7 +431,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
             <div>
               <label style={labelStyle}>First Name <span style={{ color: 'var(--danger)' }}>*</span></label>
               <input
@@ -579,7 +579,7 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
           </div>
           <div key={activeTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
               {currentGroup.fields.map(key => {
                 const field = fieldsMap.get(key);
                 return field ? renderFormField(field, form, setForm) : null;
@@ -716,7 +716,7 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
       {/* Tab content */}
       <div key={activeEditTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
           {currentGroup.fields.map(key => {
             const field = fieldsMap.get(key);
             return field ? renderFormField(field, form, setForm) : null;

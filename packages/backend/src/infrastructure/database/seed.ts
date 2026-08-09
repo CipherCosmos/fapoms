@@ -121,7 +121,7 @@ async function seed() {
     ];
 
     for (const dp of defaultPermissions) {
-      let existing = existingPermissions.find(p => p.resource === dp.resource && p.action === dp.action && p.scope === dp.scope);
+      const existing = existingPermissions.find(p => p.resource === dp.resource && p.action === dp.action && p.scope === dp.scope);
       if (!existing) {
         const perm = permissionRepository.create({
           resource: dp.resource,
@@ -1388,4 +1388,7 @@ async function seed() {
   }
 }
 
-seed();
+seed().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

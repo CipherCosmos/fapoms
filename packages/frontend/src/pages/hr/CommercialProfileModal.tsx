@@ -104,7 +104,7 @@ export const CommercialProfileModal: React.FC<{
 
   return (
     <Modal open={open} onClose={onClose} title={profile ? 'Edit pay structure' : 'Add pay structure'} asForm onSubmit={submit} width={520}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
         {NUMERIC_FIELDS.map((f) => (
           <div key={f.key} style={f.key === 'baseFee' ? { gridColumn: '1 / -1' } : undefined}>
             <label style={label}>{f.label}</label>
@@ -113,7 +113,7 @@ export const CommercialProfileModal: React.FC<{
           </div>
         ))}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginTop: '12px' }}>
         <div>
           <label style={label}>Currency</label>
           <select value={form.currency || 'INR'} onChange={(e) => setForm({ ...form, currency: e.target.value })} style={input}>

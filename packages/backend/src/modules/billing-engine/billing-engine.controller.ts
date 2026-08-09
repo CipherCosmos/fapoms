@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { BillingEngineService, CreateEntryDto, SplitEntryDto } from './billing-engine.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
@@ -311,7 +311,16 @@ export class BillingEngineController {
   @Get('assayers/:assayerId/statement')
   @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Assayer financial statement: earned, paid, outstanding and history' })
-  async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+  async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any) {
+    // An assayer may read only their own statement. The route allows both billing staff and
+    // ASSAYER, and the path id is attacker-controlled — without this an assayer could read any
+    // colleague's full earnings and payment history by changing the id. Billing roles are
+    // unrestricted; an assayer is forced to their own id.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
+    if (!isBillingStaff && req.user?.id !== assayerId) {
+      throw new ForbiddenException('You may only view your own statement.');
+    }
     return { success: true, data: await this.service.assayerStatement(assayerId) };
   }
 

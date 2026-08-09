@@ -525,10 +525,16 @@ export class PlanningController {
     @Body() body: ExecutePlanRequestDto,
     @Req() req: any
   ) {
-    await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
+    const result = await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
     return {
       success: true,
-      data: { message: 'Approved coverage plan executed and deployed successfully.' },
+      data: {
+        message: `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}.`,
+        deployedCount: result.deployed.length,
+        skippedCount: result.skipped.length,
+        deployed: result.deployed,
+        skipped: result.skipped,
+      },
     };
   }
 

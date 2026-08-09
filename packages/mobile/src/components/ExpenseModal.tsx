@@ -1,9 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, TextInput, TextStyle } from 'react-native';
+import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
 
 type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
+
+/** Human-readable labels — the raw enum values were being shown to field users. */
+export const CAT_LABELS: Record<ExpenseCategory, string> = {
+  TRAVEL_KM: 'Travel (km)',
+  TOLL: 'Toll',
+  FOOD: 'Food',
+  OTHER: 'Other',
+};
 
 export interface ExpenseModalProps {
   visible: boolean;
@@ -37,6 +45,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   const [internalCat, setInternalCat] = useState<ExpenseCategory>('TRAVEL_KM');
   const [internalAmt, setInternalAmt] = useState('');
   const [internalDesc, setInternalDesc] = useState('');
+  const [busy, setBusy] = useState(false);
 
   // Clear the form each time the sheet opens, so a claim is never pre-filled with the
   // previous one's amount and silently filed against a different assignment.
@@ -45,6 +54,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
     setInternalCat('TRAVEL_KM');
     setInternalAmt('');
     setInternalDesc('');
+    setBusy(false);
   }, [visible]);
 
   /**
@@ -74,7 +84,13 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
     onChangeDescription?.(val);
   };
 
+  const amountValue = parseFloat(amt);
+  const amountValid = !Number.isNaN(amountValue) && amountValue > 0;
+
   const handleSubmit = () => {
+    // Block empty/zero claims and double-taps; the parent only validated the assignment.
+    if (!amountValid || busy) return;
+    setBusy(true);
     if (onAddExpense) {
       onAddExpense(cat, amt, desc);
     } else {
@@ -105,14 +121,18 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
-      <View style={{
-        flex: 1,
-        backgroundColor: t.colors.scrim,
-        justifyContent: 'center',
-        padding: t.space.xl,
-      }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: t.colors.scrim,
+          justifyContent: 'center',
+          padding: t.space.xl,
+        }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">Add Travel Expense</AppText>
+          <AppText variant="h2">Log an expense</AppText>
 
           <View style={{ gap: t.space.xs }}>
             <AppText variant="overline" tone="faint">EXPENSE CATEGORY</AppText>
@@ -131,7 +151,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                       borderWidth: 1.5,
                       borderColor: active ? t.colors.primary : t.colors.border,
                     }}>
-                      <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{c}</AppText>
+                      <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{CAT_LABELS[c]}</AppText>
                     </View>
                   </Tappable>
                 );
@@ -163,11 +183,12 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
           </View>
 
           <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label="Submit Expense" icon="checkmark" onPress={handleSubmit} style={{ flex: 1 }} />
-            <Button label="Cancel" variant="danger" onPress={handleClose} style={{ flex: 1 }} />
+            <Button label="Submit Expense" icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} style={{ flex: 1 }} />
+            <Button label="Cancel" variant="neutral" onPress={handleClose} style={{ flex: 1 }} />
           </View>
         </Card>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

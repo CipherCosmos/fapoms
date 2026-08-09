@@ -283,3 +283,78 @@ export function localDateKey(value?: string | number | Date | null): string {
 export function todayDateKey(): string {
   return localDateKey(new Date());
 }
+
+/**
+ * Render a **date-only** value (a `YYYY-MM-DD` column, or anything with no meaningful time-of-day)
+ * in the local calendar without the UTC-parse shift.
+ *
+ * `new Date('2026-08-09').toLocaleDateString()` parses the string as UTC midnight, which renders a
+ * day early for every timezone behind UTC — the exact split that let a schedule be bucketed under one
+ * day (via `localDateKey`) yet print a different date on its card. Anchoring a bare `YYYY-MM-DD` to
+ * *local* midnight removes the shift. Real timestamps (`timestamptz`) are passed through unchanged.
+ */
+export function formatDateOnly(
+  value?: string | number | Date | null,
+  options: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', year: 'numeric' },
+  locale = 'en-IN',
+): string {
+  if (value == null || value === '') return '';
+  let d: Date;
+  if (typeof value === 'string') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+    d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(value);
+  } else {
+    d = new Date(value);
+  }
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(locale, options);
+}
+
+/**
+ * The `YYYY-MM-DD` calendar date in the operation's business timezone (India), independent of where the
+ * process runs. `new Date().toISOString().split('T')[0]` yields the *UTC* date, which is still yesterday
+ * for IST between 00:00 and 05:30 — so a server-side "today" default scheduled work a day early. `en-CA`
+ * formats as `YYYY-MM-DD`, and the explicit `timeZone` makes the result the same on a UTC server or a
+ * local dev box.
+ */
+export const BUSINESS_TIME_ZONE = 'Asia/Kolkata';
+export function businessDateKey(value: Date | string | number, timeZone: string = BUSINESS_TIME_ZONE): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-CA', { timeZone });
+}
+export function businessTodayDateKey(timeZone: string = BUSINESS_TIME_ZONE): string {
+  return businessDateKey(new Date(), timeZone);
+}
+
+/**
+ * Reasons an assayer can flag an assignment to the operations desk from the field app.
+ *
+ * The field app cannot cancel or reassign work — those stay with the desk. This is the
+ * assayer's one channel to raise a problem on their own initiative, so the categories are the
+ * real situations a field worker hits: a branch they cannot get into, a job they cannot make,
+ * a safety concern, or something needing the desk's clarification. Shared so the mobile picker,
+ * the backend audit/notification text, and the web desk view all read the same words.
+ */
+export const ASSIGNMENT_ISSUE_CATEGORIES = [
+  'CANNOT_ATTEND',
+  'BRANCH_INACCESSIBLE',
+  'NEEDS_CLARIFICATION',
+  'SAFETY_CONCERN',
+  'OTHER',
+] as const;
+
+export type AssignmentIssueCategory = (typeof ASSIGNMENT_ISSUE_CATEGORIES)[number];
+
+export const ASSIGNMENT_ISSUE_CATEGORY_LABELS: Record<AssignmentIssueCategory, string> = {
+  CANNOT_ATTEND: 'Cannot attend',
+  BRANCH_INACCESSIBLE: 'Branch inaccessible',
+  NEEDS_CLARIFICATION: 'Needs clarification',
+  SAFETY_CONCERN: 'Safety concern',
+  OTHER: 'Other',
+};
+
+export function assignmentIssueCategoryLabel(category?: string | null): string {
+  if (!category) return 'Issue';
+  return ASSIGNMENT_ISSUE_CATEGORY_LABELS[category as AssignmentIssueCategory] ?? category;
+}

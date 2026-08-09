@@ -61,7 +61,7 @@ const RecordsTabBody = ({ d, navigate, search, setSearch, canManage }: { d: HrWo
           <div style={label}>
             Incomplete records ({rows.length}{onlyField ? ` missing ${FIELD_LABELS[onlyField] ?? onlyField}` : ''})
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             {onlyField && (
               <button onClick={() => setOnlyField('')} className="btn btn-secondary" style={{ fontSize: '11px', padding: '5px 10px' }}>
                 Clear filter

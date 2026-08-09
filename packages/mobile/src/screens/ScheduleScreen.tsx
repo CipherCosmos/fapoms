@@ -5,11 +5,13 @@ import { MobileApiService } from '../services/api.service';
 import { getAssignmentTotalFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
-import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal } from '@fapoms/shared';
+import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
+  /** Assignment id whose accept/check-in is in flight — drives the button spinner + disable. */
+  busyActionId?: string | null;
   onAcceptAssignment: (id: string) => void;
   onOpenRejectModal: (id: string) => void;
   onCheckIn: (assignment: AssayerAssignment) => void;
@@ -24,7 +26,7 @@ type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' 
 
 
 const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' }) : 'Today';
+  d ? formatDateOnly(d, { weekday: 'short', day: '2-digit', month: 'short' }) : 'Today';
 
 /**
  * The route: every branch this assayer owes work on.
@@ -36,6 +38,7 @@ const fmtDate = (d?: string | null) =>
  */
 export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   assignments,
+  busyActionId,
   onAcceptAssignment,
   onOpenRejectModal,
   onCheckIn,
@@ -147,11 +150,11 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
                 <View style={{ flexDirection: 'row', gap: t.space.lg }}>
                   <Fact icon="calendar-outline" label="Date" value={fmtDate(a.scheduledDate)} />
-                  <Fact icon="cube-outline" label="Packets" value={String(a.estimatedCustomerCount || 15)} />
+                  <Fact icon="cube-outline" label="Packets" value={a.estimatedCustomerCount > 0 ? String(a.estimatedCustomerCount) : '—'} />
                   <Fact
                     icon="cash-outline"
                     label="Fee"
-                    value={fee > 0 ? money(fee) : 'To agree'}
+                    value={fee > 0 ? money(fee) : 'Fee not set'}
                     tone={fee > 0 ? 'success' : 'warning'}
                   />
                 </View>
@@ -170,8 +173,8 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                       </View>
                     )}
                     <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                      <Button label="Accept" icon="checkmark" onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
-                      <Button label="Decline" icon="close" variant="danger" onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
+                      <Button label="Accept" icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
+                      <Button label="Decline" icon="close" variant="neutral" disabled={busyActionId != null} onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
                     </View>
                     {onCounterOffer && (
                       <Button
@@ -191,7 +194,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     {onOpenMap && (
                       <Button label="Navigate" icon="navigate" variant="neutral" onPress={() => onOpenMap(a)} style={{ flex: 1 }} />
                     )}
-                    <Button label="Check in" icon="log-in-outline" onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
+                    <Button label="Check in" icon="log-in-outline" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
                   </View>
                 )}
 

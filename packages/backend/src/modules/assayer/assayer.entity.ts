@@ -1,6 +1,7 @@
 import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { AssayerStatus, AssayerLifecycleStatus } from '@fapoms/shared';
+import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
 @Entity('assayers')
 @Index(['assayerCode'])
@@ -170,10 +171,12 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'organization_id', type: 'uuid', nullable: true })
   organizationId: string | null;
 
-  @Column({ name: 'pan_number', type: 'varchar', length: 20, nullable: true })
+  // Encrypted at rest (AES-256-GCM) — stored as ciphertext, so the column is `text`. IFSC is a public
+  // bank-branch routing code, not secret, so it stays plaintext and searchable.
+  @Column({ name: 'pan_number', type: 'text', nullable: true, transformer: encryptedColumn })
   panNumber: string | null;
 
-  @Column({ name: 'bank_account_number', type: 'varchar', length: 50, nullable: true })
+  @Column({ name: 'bank_account_number', type: 'text', nullable: true, transformer: encryptedColumn })
   bankAccountNumber: string | null;
 
   @Column({ name: 'ifsc_code', type: 'varchar', length: 20, nullable: true })

@@ -57,10 +57,11 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
   const initials = (user?.displayName || 'SA').split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
 
   return (
-    <header style={{
+    <header className="app-header" style={{
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
+      gap: 12,
       padding: '0 24px',
       height: '56px',
       borderBottom: '1px solid var(--border-color)',
@@ -84,10 +85,10 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
         )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+      <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
         {/* Enhanced Global Project Filter */}
         {projects.length > 0 && (
-          <div style={{ position: 'relative' }}>
+          <div className="header-project-filter" style={{ position: 'relative' }}>
             <button
               onClick={() => setFilterDropdownOpen((open) => !open)}
               title="Global Project Scope Filter"
@@ -265,10 +266,11 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
             )}
           </div>
         )}
-        <div style={{ position: 'relative', width: '240px', flexShrink: 0 }}>
+        <div className="header-search" style={{ position: 'relative', width: '240px', flexShrink: 0 }}>
           <GlobalSearch />
         </div>
         <div
+          className="header-live-badge"
           title={live ? 'Live updates connected' : 'Live updates disconnected'}
           style={{
             display: 'flex', alignItems: 'center', gap: 5,

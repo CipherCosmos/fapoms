@@ -111,7 +111,7 @@ export class AuthService implements OnModuleInit {
     userAgent?: string,
   ): Promise<TokenPair & { user: any }> {
     // 1. Find user by username or email in UserEntity
-    let user = await this.userRepository.findOne({
+    const user = await this.userRepository.findOne({
       where: [
         { username: usernameOrEmail },
         { email: usernameOrEmail },

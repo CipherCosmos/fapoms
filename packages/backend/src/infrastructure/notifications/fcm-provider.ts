@@ -6,7 +6,11 @@ import { PushProvider, PushPayload, PushResult } from './push-provider.interface
 
 let initializeApp: any, cert: any, getApps: any, getMessaging: any;
 try {
+  // Optional dependency: firebase-admin may not be installed. A static import would crash the module
+  // at load; require inside try/catch lets push notifications degrade gracefully when it is absent.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const adminApp = require('firebase-admin/app');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const adminMsg = require('firebase-admin/messaging');
   initializeApp = adminApp.initializeApp;
   cert = adminApp.cert;

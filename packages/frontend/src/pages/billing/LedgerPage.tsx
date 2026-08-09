@@ -46,10 +46,10 @@ export const LedgerPage: React.FC = () => {
             {clients.data?.map((c) => <option key={c.clientId} value={c.clientId}>{c.clientName}</option>)}
           </select>
         ) : (
-          <div style={{ position: 'relative' }}>
+          <div style={{ position: 'relative', flex: '1 1 260px', minWidth: 0 }}>
             <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input value={entityId} onChange={(e) => setEntityId(e.target.value)} placeholder={`${entityType} id`}
-              style={{ ...selectStyle, paddingLeft: 28, minWidth: 300, fontFamily: 'monospace' }} />
+              style={{ ...selectStyle, paddingLeft: 28, width: '100%', minWidth: 0, fontFamily: 'monospace', boxSizing: 'border-box' }} />
           </div>
         )}
       </div>

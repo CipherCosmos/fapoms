@@ -5,8 +5,9 @@ import {
   Plus, Download, ChevronLeft, ChevronRight,
   X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight
 } from 'lucide-react';
-import { ScheduleStatus } from '@fapoms/shared';
-import { scheduleStatusLabel, localDateKey, todayDateKey } from '../utils/statusLabels';
+import { ScheduleStatus, SystemRole } from '@fapoms/shared';
+import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
+import { scheduleStatusLabel, localDateKey, todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
@@ -72,6 +73,12 @@ const STATUS_COLORS: Record<string, string> = {
 
 export const Scheduling: React.FC = () => {
   const today = new Date();
+  // Create/complete/reschedule are ops-only on the backend (POST /schedules, /:id/transition). Other
+  // roles reach the calendar as viewers, so the write controls are hidden rather than offered as 403s.
+  const canManageSchedules = hasAnyRole(useCurrentRoles(), [
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
+  ]);
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
   const [selectedDate, setSelectedDate] = useState<string>(todayDateKey());
@@ -324,10 +331,12 @@ export const Scheduling: React.FC = () => {
             </button>
           </div>
 
+          {canManageSchedules && (
           <button onClick={() => { setShowCreateModal(true); setScheduleDate(todayDateKey()); setAssayerWorkload(null); }}
             className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
             <Plus size={13} /> + Schedule Audit
           </button>
+          )}
 
           <button onClick={() => window.location.href = '/assignments'} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             Stage 3: Field Execution <ArrowRight size={12} />
@@ -485,7 +494,7 @@ export const Scheduling: React.FC = () => {
                       <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{sch.assignment?.projectBranch?.branch?.name || 'Branch Audit'}</div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', gap: '10px' }}>
                         <span>👤 {sch.assayer?.displayName}</span>
-                        <span>📅 {new Date(sch.scheduledDate).toLocaleDateString('en-IN')}</span>
+                        <span>📅 {formatDateOnly(sch.scheduledDate)}</span>
                       </div>
                     </div>
                     <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700, background: (STATUS_COLORS[sch.status] || 'var(--accent)') + '20', color: STATUS_COLORS[sch.status] || 'var(--accent)' }}>
@@ -506,7 +515,7 @@ export const Scheduling: React.FC = () => {
             <div>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>DATE AGENDA</span>
               <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
-                {new Date(selectedDate).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                {formatDateOnly(selectedDate, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
               </div>
             </div>
             <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(216,174,71,0.15)', color: 'var(--accent)', fontWeight: 700 }}>
@@ -572,14 +581,16 @@ export const Scheduling: React.FC = () => {
                 
                 {/* Actions */}
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-                  {(selectedSch.status === ScheduleStatus.CONFIRMED || selectedSch.status === ScheduleStatus.RESCHEDULED) &&
+                  {canManageSchedules &&
+                    (selectedSch.status === ScheduleStatus.CONFIRMED || selectedSch.status === ScheduleStatus.RESCHEDULED) &&
                     !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes((selectedSch.assignment?.projectBranch as any)?.status) &&
                     (selectedSch.assignment as any)?.status !== 'COMPLETED' && (
                       <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.RESCHEDULED)} className="btn btn-secondary" style={{ flex: 1, padding: '4px', fontSize: '10px' }}>
                         Reschedule
                       </button>
                   )}
-                  {selectedSch.status !== ScheduleStatus.COMPLETED &&
+                  {canManageSchedules &&
+                    selectedSch.status !== ScheduleStatus.COMPLETED &&
                     !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes((selectedSch.assignment?.projectBranch as any)?.status) && (
                       <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.COMPLETED)} className="btn btn-primary" style={{ flex: 1, padding: '4px', fontSize: '10px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                         ✓ Complete
@@ -594,7 +605,7 @@ export const Scheduling: React.FC = () => {
                     <div>
                       <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>SCHEDULED</div>
                       <div style={{ fontSize: '11px', color: 'var(--accent)', fontWeight: 600 }}>
-                        {new Date(selectedSch.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        {formatDateOnly(selectedSch.scheduledDate)}
                       </div>
                     </div>
                     <div>

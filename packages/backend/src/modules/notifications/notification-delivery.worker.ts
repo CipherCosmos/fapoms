@@ -86,9 +86,13 @@ export class NotificationDeliveryWorker {
       return;
     }
 
-    // Already handled — a duplicate job, or a manual resend that beat us here.
+    // Terminal delivery states never re-deliver. The previous "...unless it carries a
+    // PUSH channel" exception let a duplicate or re-enqueued job for an already
+    // DELIVERED/READ push fall through and send a SECOND push (the sweep/requeue path
+    // or any resend could trigger it). A legitimate manual resend resets status to
+    // PENDING before re-enqueuing, so it is not caught here.
     if ([NotificationStatus.DELIVERED, NotificationStatus.READ, NotificationStatus.SUPPRESSED]
-      .includes(notification.status) && !notification.channels?.includes(NotificationChannel.PUSH)) {
+      .includes(notification.status)) {
       return;
     }
 

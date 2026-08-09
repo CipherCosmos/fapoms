@@ -2,10 +2,11 @@ import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } from '../components/ui/primitives';
-import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, isAssignmentTerminal } from '@fapoms/shared';
+import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
+import { getAssignmentTotalFee } from '../utils/fees';
 import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
 
 export interface HomeScreenProps {
@@ -19,8 +20,12 @@ export interface HomeScreenProps {
   onCheckIn: (a: AssayerAssignment) => void;
   onScan: (a: AssayerAssignment) => void;
   onNavigate: (a: AssayerAssignment) => void;
+  onAcceptOffer: (a: AssayerAssignment) => void;
+  onDeclineOffer: (a: AssayerAssignment) => void;
   onSeeSchedule: () => void;
   onSeeQueries: () => void;
+  /** Assignment id whose accept/check-in is in flight — drives the button spinner + disable. */
+  busyActionId?: string | null;
   /** Set when the list came from cache because the last refresh failed. */
   stale?: boolean;
   lastSyncedAt?: string | null;
@@ -61,27 +66,42 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onCheckIn,
   onScan,
   onNavigate,
+  onAcceptOffer,
+  onDeclineOffer,
   onSeeSchedule,
   onSeeQueries,
+  busyActionId,
   stale,
   lastSyncedAt,
 }) => {
   const t = useTheme();
 
-  const { current, todays, openQueries, resolvedQueries } = useMemo(() => {
+  const { current, offers, todays, openQueries, resolvedQueries } = useMemo(() => {
     const today = new Date();
     const todaysJobs = assignments.filter((a) => isSameDay(a.scheduledDate, today));
 
-    // "Current" is whatever the assayer is part-way through, else the next thing due today,
-    // else the next thing due at all — so the card is never empty while work remains.
+    /**
+     * PENDING is excluded from "current job" on purpose.
+     *
+     * An assignment the assayer has not accepted is an offer, not their work — but it used to
+     * be promoted straight into the hero card, which handed them "Check in at branch",
+     * Navigate and the full packet detail for a job that is not theirs yet. Someone could
+     * drive to a branch and check in against an offer they never accepted, and the one
+     * decision the offer actually needs — accept or decline — was nowhere on the screen.
+     */
+    const pendingOffers = assignments
+      .filter((a) => a.status === 'PENDING')
+      .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate));
+
     const inFlight = assignments.find((a) => a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS');
-    const nextToday = todaysJobs.find((a) => a.status === 'ACCEPTED' || a.status === 'PENDING');
-    const nextEver = [...assignments]
-      .filter((a) => !isAssignmentTerminal(a.status))
-      .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate))[0];
+    const accepted = [...assignments]
+      .filter((a) => a.status === 'ACCEPTED')
+      .sort((a, b) => +new Date(a.scheduledDate) - +new Date(b.scheduledDate));
+    const nextToday = accepted.find((a) => isSameDay(a.scheduledDate, today));
 
     return {
-      current: inFlight || nextToday || nextEver || null,
+      current: inFlight || nextToday || accepted[0] || null,
+      offers: pendingOffers,
       todays: todaysJobs,
       // Both from the shared helper — the tab badge reads the same one.
       openQueries: countOpenQueries(assignments),
@@ -97,7 +117,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         the screen restating what the user just read.
       */}
       <View style={{ gap: 2 }}>
-        <AppText variant="h2">{greeting()}</AppText>
+        <AppText variant="largeTitle">{greeting()}</AppText>
         <AppText variant="small" tone="muted">
           {new Date().toLocaleDateString('en-IN', {
             weekday: 'long',
@@ -137,12 +157,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {current ? (
         <CurrentJobCard
           assignment={current}
+          busy={busyActionId === current.id}
           onOpen={() => onOpenAssignment(current)}
           onCheckIn={() => onCheckIn(current)}
           onScan={() => onScan(current)}
           onNavigate={() => onNavigate(current)}
         />
-      ) : (
+      ) : offers.length === 0 ? (
         <Card level={1}>
           <EmptyState
             icon="checkmark-done-circle-outline"
@@ -150,6 +171,31 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             body="You have no open assignments. New work will appear here as soon as it is assigned."
           />
         </Card>
+      ) : null}
+
+      {offers.length > 0 && (
+        <Section title={offers.length === 1 ? 'New offer' : `New offers (${offers.length})`}>
+          <View style={{ gap: t.space.md }}>
+            {offers.slice(0, 2).map((offer) => (
+              <OfferCard
+                key={offer.id}
+                assignment={offer}
+                busy={busyActionId === offer.id}
+                onAccept={() => onAcceptOffer(offer)}
+                onDecline={() => onDeclineOffer(offer)}
+              />
+            ))}
+            {offers.length > 2 && (
+              <Tappable onPress={onSeeSchedule}>
+                <View style={{ alignItems: 'center', paddingVertical: t.space.sm }}>
+                  <AppText variant="caption" tone="primary">
+                    See all {offers.length} offers
+                  </AppText>
+                </View>
+              </Tappable>
+            )}
+          </View>
+        </Section>
       )}
 
       <Section
@@ -202,13 +248,64 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 };
 
 
+/**
+ * A job offer awaiting the assayer's decision.
+ *
+ * Deliberately carries only what that decision needs — where, when, how far, how many
+ * customers, and the fee — plus the two answers. No check-in, no scanning, no packet
+ * documents: those belong to work the assayer has agreed to do. The offer's operational
+ * detail stays minimal until acceptance.
+ */
+const OfferCard: React.FC<{
+  assignment: AssayerAssignment;
+  busy?: boolean;
+  onAccept: () => void;
+  onDecline: () => void;
+}> = ({ assignment, busy, onAccept, onDecline }) => {
+  const t = useTheme();
+  const when = new Date(assignment.scheduledDate);
+  const fee = getAssignmentTotalFee(assignment);
+  const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
+
+  return (
+    <Card level={2} style={{ gap: t.space.lg }}>
+      <View style={{ gap: t.space.xs }}>
+        <Badge label={assignmentStatusLabel(assignment.status)} tone="warning" dot />
+        <AppText variant="h2">{assignment.branchName}</AppText>
+        {subtitle ? (
+          <AppText variant="small" tone="muted">
+            {subtitle}
+          </AppText>
+        ) : null}
+      </View>
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.lg }}>
+        <Meta icon="time-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+        {assignment.distanceKm != null && (
+          <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
+        )}
+        {assignment.estimatedCustomerCount > 0 && (
+          <Meta icon="people-outline" label={`${assignment.estimatedCustomerCount} customers`} />
+        )}
+        {fee > 0 && <Meta icon="wallet-outline" label={money(fee)} />}
+      </View>
+
+      <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+        <Button label="Accept" icon="checkmark" loading={busy} disabled={busy} onPress={onAccept} style={{ flex: 1 }} />
+        <Button label="Decline" icon="close" variant="neutral" disabled={busy} onPress={onDecline} style={{ flex: 1 }} />
+      </View>
+    </Card>
+  );
+};
+
 const CurrentJobCard: React.FC<{
   assignment: AssayerAssignment;
+  busy?: boolean;
   onOpen: () => void;
   onCheckIn: () => void;
   onScan: () => void;
   onNavigate: () => void;
-}> = ({ assignment, onOpen, onCheckIn, onScan, onNavigate }) => {
+}> = ({ assignment, busy, onOpen, onCheckIn, onScan, onNavigate }) => {
   const t = useTheme();
   const when = new Date(assignment.scheduledDate);
   const checkedIn = assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS';
@@ -238,7 +335,7 @@ const CurrentJobCard: React.FC<{
       </View>
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.lg }}>
-        <Meta icon="time-outline" label={when.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} />
+        <Meta icon="time-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
         {assignment.distanceKm != null && (
           <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
         )}

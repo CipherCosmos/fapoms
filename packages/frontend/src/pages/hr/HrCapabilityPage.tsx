@@ -51,8 +51,20 @@ const daysUntil = (iso: string | null): number | null => {
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
 };
 
+/** Stacks the two-pane layout below this width so the picker/detail don't overlap on phones. */
+function useNarrow(breakpoint = 760): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < breakpoint);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < breakpoint);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [breakpoint]);
+  return narrow;
+}
+
 export const HrCapabilityPage: React.FC = () => {
   const { canManage } = useHr();
+  const narrow = useNarrow();
   const [roster, setRoster] = useState<AssayerLite[]>([]);
   const [vocab, setVocab] = useState<Vocabulary>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -144,9 +156,9 @@ export const HrCapabilityPage: React.FC = () => {
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'minmax(240px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
       {/* Roster picker */}
-      <div style={{ ...card, padding: '12px', position: 'sticky', top: '12px' }}>
+      <div style={{ ...card, padding: '12px', position: narrow ? 'static' : 'sticky', top: '12px' }}>
         <div style={{ position: 'relative', marginBottom: '10px' }}>
           <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input

@@ -62,7 +62,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
         </button>
       </>
     }>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
         <StyledInput {...inputProps} placeholder="Client Code *" value={form.clientCode} onChange={(e) => set('clientCode', e.target.value)} required />
         <StyledInput {...inputProps} placeholder="Name *" value={form.name} onChange={(e) => set('name', e.target.value)} required />
         <StyledInput {...inputProps} placeholder="Display Name *" value={form.displayName} onChange={(e) => set('displayName', e.target.value)} required style={{ gridColumn: '1 / -1', width: '100%' }} />

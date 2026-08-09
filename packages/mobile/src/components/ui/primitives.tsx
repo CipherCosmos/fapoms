@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import * as Font from 'expo-font';
+import * as haptics from '../../lib/haptics';
 
 /**
  * Ionicons rendered as plain <Text> with the ionicons font.
@@ -102,7 +103,7 @@ export const Icon: React.FC<{ name: IconName; size?: number; color?: string; sty
 
 // ─────────────────────────────────────────────────────────── Text
 
-type TypeKey = 'display' | 'h1' | 'h2' | 'h3' | 'body' | 'bodyStrong' | 'small' | 'caption' | 'overline' | 'mono';
+type TypeKey = 'largeTitle' | 'display' | 'h1' | 'h2' | 'h3' | 'body' | 'bodyStrong' | 'small' | 'caption' | 'overline' | 'mono';
 type ToneKey = 'default' | 'muted' | 'faint' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info' | 'onPrimary' | 'onAccent';
 
 export const AppText: React.FC<{
@@ -149,8 +150,10 @@ export const Tappable: React.FC<{
   /** Passed through to Pressable so icon-only controls announce themselves to screen readers. */
   accessibilityLabel?: string;
   accessibilityRole?: 'button' | 'link' | 'switch';
+  /** Override the default 8px touch expansion for small controls that need a larger tap area. */
+  hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
   children: React.ReactNode;
-}> = ({ onPress, disabled, style, scaleTo, accessibilityLabel, accessibilityRole, children }) => {
+}> = ({ onPress, disabled, style, scaleTo, accessibilityLabel, accessibilityRole, hitSlop, children }) => {
   const t = useTheme();
   const scale = useRef(new Animated.Value(1)).current;
   const to = scaleTo ?? t.motion.pressScale;
@@ -167,7 +170,7 @@ export const Tappable: React.FC<{
       onPressIn={() => !disabled && animate(to)}
       onPressOut={() => animate(1)}
       // Android needs an explicit larger touch target for small controls.
-      hitSlop={8}
+      hitSlop={hitSlop ?? 8}
     >
       <Animated.View style={[{ transform: [{ scale }], opacity: disabled ? 0.5 : 1 }, style]}>
         {children}
@@ -256,8 +259,17 @@ export const Button: React.FC<{
   const pad = { sm: { v: 8, h: 14 }, md: { v: 12, h: 18 }, lg: { v: 15, h: 22 } }[size];
   const textVariant: TypeKey = size === 'sm' ? 'caption' : 'bodyStrong';
 
+  // A committing action (primary/accent) gets a firmer tick than a neutral/ghost one — the same
+  // gradation of feedback iOS gives its own buttons.
+  const handlePress = onPress
+    ? () => {
+        (variant === 'primary' || variant === 'accent') ? haptics.commit() : haptics.tap();
+        onPress();
+      }
+    : undefined;
+
   return (
-    <Tappable onPress={onPress} disabled={disabled || loading} style={[full ? { alignSelf: 'stretch' } : undefined, style]}>
+    <Tappable onPress={handlePress} disabled={disabled || loading} style={[full ? { alignSelf: 'stretch' } : undefined, style]}>
       <View
         style={{
           flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm,
@@ -385,7 +397,14 @@ export const Segmented: React.FC<{
       {options.map((o) => {
         const active = o.key === value;
         return (
-          <Pressable key={o.key} onPress={() => onChange(o.key)} style={{ flex: 1, paddingVertical: 9, alignItems: 'center' }}>
+          <Pressable
+            key={o.key}
+            onPress={() => { if (!active) haptics.select(); onChange(o.key); }}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={o.label}
+            style={{ flex: 1, paddingVertical: 9, alignItems: 'center' }}
+          >
             <Text
               numberOfLines={1}
               style={[t.type.caption as TextStyle, { color: active ? t.colors.text : t.colors.textMuted }]}

@@ -6,6 +6,7 @@ import { ClusterManager, BranchCluster } from './cluster.manager';
 import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider } from './planning-providers.interface';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+import { calculateHaversineDistance } from '@fapoms/shared';
 
 export interface CoverageWarning {
   type: string;
@@ -54,6 +55,13 @@ export interface CoveragePlanOutput {
     branchIds: string[];
     /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
     estimatedTotalFee: number | null;
+    /**
+     * Per-branch assignment: each branch's OWN top-recommended assayer and quoted fee. The cluster
+     * groups branches for routing, but the assignment decision is made per branch (a branch on the
+     * cluster edge can have a different best assayer than the cluster centre), and deployment
+     * honours these rather than stamping one cluster-wide assayer onto every branch.
+     */
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null }>;
   }>;
 }
 
@@ -130,6 +138,7 @@ export class CoveragePlanningEngine {
     branchIds: string[];
     /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
     estimatedTotalFee: number | null;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null }>;
   }> = [];
 
     // Client and assayer roster are identical for every cluster in one project, so they are
@@ -138,102 +147,94 @@ export class CoveragePlanningEngine {
     // response, and it grows with branch count.
     const preloaded = await this.recommendationEngine.preloadContext(project.clientId ?? null);
 
-    // Solve matching on clusters
+    // The client's hard serviceability ceiling. The recommendation engine only *penalises* distance
+    // beyond this in scoring (it's a soft preference there), but assignment creation enforces it as
+    // a hard rule — so without this the plan would propose an assayer 600km away and deployment
+    // would reject it as "out of range". Applied as a hard filter here so the plan only proposes
+    // assayers that can actually be assigned, and honestly marks the rest uncovered.
+    const clientMaxDistanceKm = Number((preloaded.client as any)?.planningPreferences?.maxDistanceKm) || Infinity;
+
+    // Solve matching PER BRANCH. The cluster still groups branches for routing/display, but the
+    // assignment decision is made for each branch against its OWN coordinates and recommendation —
+    // a branch on the cluster edge, or with different familiarity/risk, can have a genuinely
+    // different top assayer than the cluster centre, and the plan must honour that. The old code
+    // scored once against the centroid and stamped that single assayer onto every branch.
     for (const cluster of clusters) {
-      let assignedAssayerName: string | null = null;
-      let highestScore = -1;
-      let selectedAssayer: any | null = null;
-      let clusterFee: number | null = null;
+      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null }> = [];
+      const assayerCountInCluster = new Map<string, number>();
+      let clusterFeeSum = 0;
 
-      /**
-       * Score candidates against a real branch standing in for the cluster, positioned at the
-       * cluster centre.
-       *
-       * This used to pass `id: cluster.id`, which is a synthetic string of the form
-       * `cluster-<uuid>` minted by ClusterManager — not a branch id and not a UUID at all. The
-       * recommendation engine runs genuine id-keyed queries with it (no-repeat-auditor history,
-       * client eligibility), so Postgres rejected it outright:
-       * `invalid input syntax for type uuid: "cluster-..."`. The whole endpoint 500'd every
-       * time it was called, which nothing in the product currently does.
-       *
-       * Using the cluster's own nearest-to-centre branch keeps the geography (its coordinates
-       * are overridden with the centre below) while making every id-keyed lookup resolve
-       * against a branch that actually exists.
-       */
-      const representative = cluster.branches.reduce((closest, b) => {
-        if (b.latitude == null || b.longitude == null) return closest;
-        if (!closest) return b;
-        const d = (x: any) =>
-          Math.hypot(Number(x.latitude) - cluster.centerLatitude, Number(x.longitude) - cluster.centerLongitude);
-        return d(b) < d(closest) ? b : closest;
-      }, null as any) ?? cluster.branches[0];
+      for (const branch of cluster.branches) {
+        let assayerId: string | null = null;
+        let assayerName: string | null = null;
+        let fee: number | null = null;
 
-      if (!representative) {
-        for (const b of cluster.branches) {
-          uncoveredBranches.push({
-            branchId: b.id,
-            branchName: b.name,
-            reason: 'Cluster contains no branch with usable coordinates, so no assayer could be scored against it.',
+        if (branch.latitude == null || branch.longitude == null) {
+          uncoveredBranches.push({ branchId: branch.id, branchName: branch.name, reason: 'Branch has no usable coordinates, so no assayer could be scored against it.' });
+        } else {
+          // Score this specific branch. `clientId` is threaded so id-keyed eligibility queries
+          // resolve; `preloaded` keeps the client + assayer roster loaded once across all branches.
+          const branchForScoring = { ...branch, clientId: project.clientId } as any;
+          const candidates = await this.recommendationEngine.recommend(branchForScoring, new Date(), {}, preloaded);
+          const valid = candidates.filter((c) => {
+            const hasCapacity = (allocationMap[c.assayer.id] || 0) < (c.assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY);
+            if (!hasCapacity) return false;
+            // Enforce the client's hard distance ceiling, matching what assignment creation checks —
+            // so we never propose an assayer the deploy step will then reject as out of range.
+            if (Number.isFinite(clientMaxDistanceKm)) {
+              const aLat = (c.assayer as any).effectiveLatitude;
+              const aLng = (c.assayer as any).effectiveLongitude;
+              if (aLat != null && aLng != null && branch.latitude != null && branch.longitude != null) {
+                const d = calculateHaversineDistance(Number(branch.latitude), Number(branch.longitude), Number(aLat), Number(aLng));
+                if (d > clientMaxDistanceKm) return false;
+              }
+            }
+            return true;
           });
+          if (valid.length > 0) {
+            const top = valid[0].assayer;
+            assayerId = top.id;
+            assayerName = top.displayName;
+            allocationMap[top.id] = (allocationMap[top.id] || 0) + 1;
+            assignedAssayerIds.add(top.id);
+            matchedCount += 1;
+            assayerCountInCluster.set(top.id, (assayerCountInCluster.get(top.id) || 0) + 1);
+
+            const quote = await this.feePolicyService.quote({
+              assayerId: top.id,
+              clientId: project.clientId ?? null,
+              distanceKm: 0, // per-branch travel resolved at assign time
+              branchCount: 1,
+            });
+            fee = quote.total;
+            clusterFeeSum += quote.total;
+            totalEstimatedCost += quote.total;
+          } else {
+            uncoveredBranches.push({ branchId: branch.id, branchName: branch.name, reason: 'No eligible assayer with available capacity for this branch.' });
+          }
         }
-        continue;
+
+        branchAssignments.push({ branchId: branch.id, branchName: branch.name, assayerId, assayerName, fee });
       }
 
-      const clusterCenterBranch = {
-        ...representative,
-        latitude: cluster.centerLatitude,
-        longitude: cluster.centerLongitude,
-        clientId: project.clientId,
-      } as any;
-
-      const candidates = await this.recommendationEngine.recommend(clusterCenterBranch, new Date(), {}, preloaded);
-      
-      // Filter out double-booked or capacity-short candidates
-      const validCandidates = candidates.filter((c) => {
-        const remaining = (allocationMap[c.assayer.id] || 0) < (c.assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY);
-        return remaining;
-      });
-
-      if (validCandidates.length > 0) {
-        selectedAssayer = validCandidates[0].assayer;
-        highestScore = validCandidates[0].score;
-        assignedAssayerName = selectedAssayer.displayName;
-        assignedAssayerIds.add(selectedAssayer.id);
-
-        allocationMap[selectedAssayer.id] = (allocationMap[selectedAssayer.id] || 0) + cluster.branches.length;
-        matchedCount += cluster.branches.length;
-
-        // Priced through the one calculator the rest of the platform quotes from. This was
-        // `cluster.branches.length * 1500`, commented "Mock base fee cost calculation" — a
-        // sixth independent copy of a fee rate, disagreeing with the contracted rate card and
-        // ignoring both the assayer's own commercial profile and travel entirely.
-        const clusterQuote = await this.feePolicyService.quote({
-          assayerId: selectedAssayer.id,
-          clientId: project.clientId ?? null,
-          distanceKm: 0, // Cluster-level estimate: per-branch travel is resolved at assign time.
-          branchCount: cluster.branches.length,
-        });
-        clusterFee = clusterQuote.total;
-        totalEstimatedCost += clusterQuote.total;
-      } else {
-        // Explanations for uncovered clusters
-        for (const b of cluster.branches) {
-          uncoveredBranches.push({
-            branchId: b.id,
-            branchName: b.name,
-            reason: 'No eligible workforce candidate with available capacity within territorial range.',
-          });
-        }
+      // Cluster-level display fields summarise the per-branch decisions: the assayer covering the
+      // most branches in the cluster represents it, and the fee is the sum of the branch quotes.
+      let dominantId: string | null = null;
+      let dominantCount = 0;
+      for (const [id, count] of assayerCountInCluster) {
+        if (count > dominantCount) { dominantCount = count; dominantId = id; }
       }
+      const dominantName = branchAssignments.find((b) => b.assayerId === dominantId)?.assayerName ?? null;
 
       clusterAssignments.push({
         id: cluster.id,
         name: cluster.name,
         branchCount: cluster.branches.length,
-        assignedAssayerName,
-        assignedAssayerId: selectedAssayer?.id ?? null,
+        assignedAssayerName: dominantName,
+        assignedAssayerId: dominantId,
         branchIds: cluster.branches.map((b: any) => b.id),
-        estimatedTotalFee: clusterFee,
+        estimatedTotalFee: clusterFeeSum > 0 ? clusterFeeSum : null,
+        branchAssignments,
       });
     }
 

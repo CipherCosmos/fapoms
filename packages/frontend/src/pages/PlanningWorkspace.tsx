@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
-import { ProjectBranchStatus } from '@fapoms/shared';
+import { ProjectBranchStatus, formatDateOnly } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
@@ -13,7 +13,17 @@ import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
+import { CoveragePlanModal } from './planning/CoveragePlanModal';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
+import {
+  getProjects,
+  getZones,
+  getProjectBranches,
+  getPricingRates,
+  getDayPlans,
+  getRecommendations,
+  optimizeRoute,
+} from '../services/planning';
 
 /** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
 interface FeeQuote {
@@ -320,6 +330,11 @@ export const PlanningWorkspace: React.FC = () => {
   const [lastContact, setLastContact] = useState<Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }>>({});
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
   const [negotiatingFee, setNegotiatingFee] = useState('');
+  // When set, the negotiation modal is in "counter back" mode: submitting posts a counter-offer on
+  // THIS existing assignment (proposeCounterFee) instead of creating a brand-new one. null = the
+  // normal Call & Assign flow.
+  const [counterOfferAssignmentId, setCounterOfferAssignmentId] = useState<string | null>(null);
+  const [counterRemarks, setCounterRemarks] = useState('');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
@@ -337,6 +352,19 @@ export const PlanningWorkspace: React.FC = () => {
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [slaEnabled, setSlaEnabled] = useState(true);
   const [slaRadius, setSlaRadius] = useState(50);
+  // Max-radius ("show assayers WITHIN X km") — the intuitive service-radius filter, independent of
+  // the min-radius independence floor. Replaces the old fixed 700km cap + "Show Distant" toggle.
+  const [maxRadiusEnabled, setMaxRadiusEnabled] = useState(false);
+  const [maxRadius, setMaxRadius] = useState(200);
+  // The excluded candidate whose "assign anyway" override is currently being persisted.
+  const [assigningExcludedId, setAssigningExcludedId] = useState<string | null>(null);
+  // Whole-project coverage-plan (generate → approve → deploy) modal.
+  const [showCoveragePlan, setShowCoveragePlan] = useState(false);
+  // Structured "unable to cover" reason capture (replaces window.prompt). Holds the target branch
+  // ids and a label; one flow serves both the single-branch and bulk cases.
+  const [unableModal, setUnableModal] = useState<{ ids: string[]; label: string } | null>(null);
+  const [unableReason, setUnableReason] = useState('');
+  const [unableSubmitting, setUnableSubmitting] = useState(false);
 
   // Single source of truth for "which candidates are actually eligible right now". The map
   // previously ranked off the raw `candidates` array, so an assayer who fails the min-radius
@@ -344,13 +372,17 @@ export const PlanningWorkspace: React.FC = () => {
   // gold #1 badge on the map, contradicting the sidebar which excludes/flags them. Both now
   // read from this one filtered list.
   const displayCandidates = useMemo(() => {
-    const slaFiltered = slaEnabled
-      ? candidates.filter(c => c.distanceKm !== null && c.distanceKm >= slaRadius)
-      : null;
-    return slaFiltered ?? (showAllCandidates
-      ? candidates
-      : candidates.filter(c => c.distanceKm === null || c.distanceKm <= 700));
-  }, [candidates, slaEnabled, slaRadius, showAllCandidates]);
+    // Compose the two radius bounds instead of short-circuiting. Min-radius is the audit-independence
+    // floor (hide too-close assayers); max-radius is the service radius (show only within X km).
+    // Both can apply at once: min <= distanceKm <= max. Unknown distance is always shown.
+    // `showAllCandidates` lifts the max bound entirely for a full sweep.
+    return candidates.filter(c => {
+      if (c.distanceKm == null) return true;
+      if (slaEnabled && c.distanceKm < slaRadius) return false;
+      if (!showAllCandidates && maxRadiusEnabled && c.distanceKm > maxRadius) return false;
+      return true;
+    });
+  }, [candidates, slaEnabled, slaRadius, maxRadiusEnabled, maxRadius, showAllCandidates]);
   const drawerRef = useRef<HTMLDivElement>(null);
   /**
    * The client's contracted travel rates for the selected project, so the map quotes travel the
@@ -468,10 +500,7 @@ export const PlanningWorkspace: React.FC = () => {
     setOptimizedSummary(null);
     setRoutePoints(undefined);
     try {
-      const data = await api.request<any>('/geo/route/optimize', {
-        method: 'POST',
-        body: JSON.stringify({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true, mode: 'driving' })
-      });
+      const data = await optimizeRoute({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true, mode: 'driving' });
       const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = data;
       const points = [{ latitude: originLat, longitude: originLng }];
       for (const destId of optimizedSequence) {
@@ -487,7 +516,7 @@ export const PlanningWorkspace: React.FC = () => {
 
   const loadProjects = async () => {
     try {
-      const response = await api.request<ProjectOption[]>('/projects', { method: 'GET' });
+      const response = await getProjects();
       setProjects(response);
       if (response.length > 0) setSelectedProjectId(response[0].id);
     } catch { console.error('Failed to load projects'); }
@@ -495,7 +524,7 @@ export const PlanningWorkspace: React.FC = () => {
 
   const loadZones = async () => {
     try {
-      const data = await api.request<{ id: string; name: string }[]>('/zones?limit=100');
+      const data = await getZones();
       setZones(data || []);
     } catch { console.error('Failed to load zones'); }
   };
@@ -504,7 +533,7 @@ export const PlanningWorkspace: React.FC = () => {
     setIsLoadingQueue(true);
     setMessage(null);
     try {
-      const data = await api.request<ProjectBranch[]>(`/projects/${projectId}/branches`);
+      const data = await getProjectBranches<ProjectBranch>(projectId);
       setBranches(data);
       setSelectedBranchId(data.length > 0 ? data[0].id : null);
     } catch { console.error('Failed to fetch project branches queue'); }
@@ -518,7 +547,7 @@ export const PlanningWorkspace: React.FC = () => {
   useEffect(() => {
     if (!selectedProjectId) { setTravelRates(null); return; }
     let cancelled = false;
-    api.request<{ travelFeePerKm: number; freeTravelAllowanceKm: number }>(`/pricing/rates?projectId=${selectedProjectId}`)
+    getPricingRates(selectedProjectId)
       .then((r) => { if (!cancelled) setTravelRates(r); })
       .catch(() => { if (!cancelled) setTravelRates(null); });
     return () => { cancelled = true; };
@@ -539,12 +568,11 @@ export const PlanningWorkspace: React.FC = () => {
       const projectIdsForPlan = Array.from(
         new Set([...(selectedProjectId ? [selectedProjectId] : []), ...(projectIdsOverride ?? dayPlanProjectIds)]),
       );
-      const params = new URLSearchParams({
+      const data = await getDayPlans<ProjectDayPlan>({
         targetDate: dayPlanTargetDate,
-        projectIds: projectIdsForPlan.join(','),
+        projectIds: projectIdsForPlan,
+        minDistanceKm: slaEnabled ? slaRadius : undefined,
       });
-      if (slaEnabled) params.set('minDistanceKm', String(slaRadius));
-      const data = await api.request<ProjectDayPlan>(`/planning/day-plans?${params}`);
       setDayPlanData(data);
       if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
     } catch (err) { console.error('Failed to load day plans', err); }
@@ -589,32 +617,35 @@ export const PlanningWorkspace: React.FC = () => {
       ? plan.stops.filter((s) => onlyBranchIds.includes(s.branchId))
       : plan.stops;
 
-    const results: { branchId: string; branchName: string; ok: boolean; error?: string }[] = [];
-    for (const stop of stops) {
-      const branchMeta = cluster.branches.find((b) => b.branchId === stop.branchId);
-      if (!branchMeta) {
-        results.push({ branchId: stop.branchId, branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' });
-        continue;
-      }
-      try {
-        await api.request('/assignments', {
-          method: 'POST',
-          body: JSON.stringify({
-            projectBranchId: branchMeta.id,
-            assayerId: plan.assayerId,
-            // The date the plan was actually built for, not the operator's raw request. The
-            // planner moves off weekends and holidays and reports the shift in the banner
-            // above; sending dayPlanTargetDate committed the rejected date instead, so an
-            // audit could be booked onto the very Saturday the planner had just refused.
-            scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
-            remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
-          }),
-        });
-        results.push({ branchId: stop.branchId, branchName: stop.branchName, ok: true });
-      } catch (err: any) {
-        results.push({ branchId: stop.branchId, branchName: stop.branchName, ok: false, error: err?.message || 'Failed' });
-      }
-    }
+    // Each stop is a distinct branch → distinct assignment record, so these are independent and run
+    // concurrently rather than one serial round-trip per stop (a 10-branch route was 10x slower than
+    // it needed to be). Per-item results are still collected for the retry-failed-only flow below.
+    const results = await Promise.all(
+      stops.map(async (stop) => {
+        const branchMeta = cluster.branches.find((b) => b.branchId === stop.branchId);
+        if (!branchMeta) {
+          return { branchId: stop.branchId, branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' };
+        }
+        try {
+          await api.request('/assignments', {
+            method: 'POST',
+            body: JSON.stringify({
+              projectBranchId: branchMeta.id,
+              assayerId: plan.assayerId,
+              // The date the plan was actually built for, not the operator's raw request. The
+              // planner moves off weekends and holidays and reports the shift in the banner
+              // above; sending dayPlanTargetDate committed the rejected date instead, so an
+              // audit could be booked onto the very Saturday the planner had just refused.
+              scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
+              remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
+            }),
+          });
+          return { branchId: stop.branchId, branchName: stop.branchName, ok: true };
+        } catch (err: any) {
+          return { branchId: stop.branchId, branchName: stop.branchName, ok: false, error: err?.message || 'Failed' };
+        }
+      }),
+    );
 
     setDayPlanAssigning(null);
     const failed = results.filter((r) => !r.ok);
@@ -681,20 +712,33 @@ export const PlanningWorkspace: React.FC = () => {
     const failures: Array<{ branchId: string; branchName: string; error: string }> = [];
     let succeeded = 0;
 
-    for (const pb of targets) {
-      try {
-        await api.request('/assignments', {
-          method: 'POST',
-          body: JSON.stringify({
-            projectBranchId: pb.id,
-            assayerId,
-            scheduledDate: bulkScheduledDate || undefined,
-            remarks: `Bulk-assigned to ${assayerName} from the planning queue`,
-          }),
-        });
-        succeeded += 1;
-      } catch (err: any) {
-        failures.push({ branchId: pb.id, branchName: pb.branch?.name || pb.id, error: err?.message || 'Failed' });
+    // Bounded-concurrency instead of one serial POST per branch: a 40-branch bulk offer was 40
+    // sequential round-trips. Five at a time keeps it fast without flooding the API, and each
+    // branch is an independent record so there is no cross-item ordering dependency.
+    const CONCURRENCY = 5;
+    for (let i = 0; i < targets.length; i += CONCURRENCY) {
+      const chunk = targets.slice(i, i + CONCURRENCY);
+      const chunkResults = await Promise.all(
+        chunk.map(async (pb) => {
+          try {
+            await api.request('/assignments', {
+              method: 'POST',
+              body: JSON.stringify({
+                projectBranchId: pb.id,
+                assayerId,
+                scheduledDate: bulkScheduledDate || undefined,
+                remarks: `Bulk-assigned to ${assayerName} from the planning queue`,
+              }),
+            });
+            return { ok: true as const, branchId: pb.id, branchName: pb.branch?.name || pb.id };
+          } catch (err: any) {
+            return { ok: false as const, branchId: pb.id, branchName: pb.branch?.name || pb.id, error: err?.message || 'Failed' };
+          }
+        }),
+      );
+      for (const r of chunkResults) {
+        if (r.ok) succeeded += 1;
+        else failures.push({ branchId: r.branchId, branchName: r.branchName, error: r.error || 'Failed' });
       }
     }
 
@@ -716,25 +760,43 @@ export const PlanningWorkspace: React.FC = () => {
    * Record that a branch cannot be staffed. Until now there was no way to say this: an
    * unstaffable branch stayed in IMPORTED, indistinguishable from one nobody had looked at.
    */
-  const handleMarkUnableToCover = async (projectBranchId: string, branchName: string) => {
-    const reason = window.prompt(
-      `Why can ${branchName} not be covered?\n\nThis is recorded against the branch and reported to the client, so be specific (e.g. "No certified assayer within 150km for the SLA window").`,
+  const handleMarkUnableToCover = (projectBranchId: string, branchName: string) => {
+    setUnableReason('');
+    setUnableModal({ ids: [projectBranchId], label: branchName });
+  };
+
+  /** Persist the "unable to cover" reason for one or many branches (from the modal). */
+  const submitUnableToCover = async () => {
+    if (!unableModal) return;
+    const reason = unableReason.trim();
+    if (!reason) return;
+    setUnableSubmitting(true);
+    const nameById = new Map(branches.map((b) => [b.id, b.branch?.name || b.id]));
+    const outcomes = await Promise.all(
+      unableModal.ids.map(async (id) => {
+        try {
+          await api.request(`/projects/branches/${id}/unable-to-cover`, {
+            method: 'POST',
+            body: JSON.stringify({ reason }),
+          });
+          return { ok: true as const };
+        } catch {
+          return { ok: false as const, name: nameById.get(id) || id };
+        }
+      }),
     );
-    if (reason === null) return;
-    if (!reason.trim()) {
-      setMessage({ type: 'error', text: 'A reason is required to mark a branch unable to cover.' });
-      return;
-    }
-    try {
-      await api.request(`/projects/branches/${projectBranchId}/unable-to-cover`, {
-        method: 'POST',
-        body: JSON.stringify({ reason: reason.trim() }),
-      });
-      setMessage({ type: 'success', text: `${branchName} recorded as unable to cover.` });
-      if (selectedProjectId) loadProjectBranches(selectedProjectId);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Could not record the coverage failure.' });
-    }
+    const failed = outcomes.filter((o) => !o.ok).map((o) => (o as { name: string }).name);
+    const ok = outcomes.length - failed.length;
+    setUnableSubmitting(false);
+    if (unableModal.ids.length > 1) setBulkSelectedIds(new Set());
+    setUnableModal(null);
+    setUnableReason('');
+    setMessage(
+      failed.length === 0
+        ? { type: 'success', text: `${ok} branch(es) recorded as unable to cover.` }
+        : { type: 'error', text: `${ok}/${outcomes.length} recorded. Failed: ${failed.join(', ')}` },
+    );
+    if (selectedProjectId) loadProjectBranches(selectedProjectId);
   };
 
   /** Put an uncoverable branch back into the planning pool. */
@@ -755,10 +817,7 @@ export const PlanningWorkspace: React.FC = () => {
       // withMeta so we also receive `excluded` — candidates the engine filtered out, with the
       // reason. Previously they vanished silently and ops had no way to tell "nobody suitable"
       // apart from "everyone blocked by one misconfigured rule".
-      const response = await api.request<{ data: Candidate[]; meta?: { excluded?: ExcludedCandidate[] } }>(
-        `/planning/recommendations?branchId=${branchId}`,
-        { method: 'GET', withMeta: true },
-      );
+      const response = await getRecommendations<Candidate, ExcludedCandidate>(branchId);
       setCandidates(response.data || []);
       setExcludedCandidates(response.meta?.excluded || []);
     } catch (err: any) {
@@ -874,9 +933,9 @@ export const PlanningWorkspace: React.FC = () => {
       'Proposed Fee (₹)': b.assignment?.proposedFee ?? '—',
       'Agreed Fee (₹)': b.assignment?.agreedFee ?? '—',
       'Scheduled Date': b.assignment?.scheduledDate
-        ? new Date(b.assignment.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        ? formatDateOnly(b.assignment.scheduledDate)
         : b.scheduledDate
-        ? new Date(b.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        ? formatDateOnly(b.scheduledDate)
         : 'N/A',
       'Remarks': b.remarks || '',
     }));
@@ -932,7 +991,40 @@ export const PlanningWorkspace: React.FC = () => {
       // The fee already proposed on this assignment — no invented fallback. A blank field
       // reads as "nothing proposed yet", where a hardcoded ₹1500 read as a real offer.
       setNegotiatingFee(assignment.proposedFee != null ? String(assignment.proposedFee) : '');
+      setCounterRemarks('');
+      // Counter-back mode: submit will counter THIS assignment, not create a new one.
+      setCounterOfferAssignmentId(assignment.id);
       setShowNegotiationModal(true);
+    }
+  };
+
+  /**
+   * Ops counters the assayer's fee back. This posts a real counter-offer on the existing
+   * assignment (proposeCounterFee via the NEGOTIATION transition) — it used to reuse the
+   * Confirm-Assignment path, which POSTed a brand-new duplicate assignment and left the original
+   * negotiation dangling, so the counter never reached the assayer.
+   */
+  const handleSubmitCounterOffer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!counterOfferAssignmentId) return;
+    const fee = Number(negotiatingFee);
+    if (!fee || Number.isNaN(fee)) {
+      setMessage({ type: 'error', text: 'Enter a valid counter fee.' });
+      return;
+    }
+    setMessage(null);
+    setShowNegotiationModal(false);
+    try {
+      await api.request(`/assignments/${counterOfferAssignmentId}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus: 'NEGOTIATION', counterFee: fee, remarks: counterRemarks || undefined }),
+      });
+      setMessage({ type: 'success', text: `Countered at ₹${fee.toLocaleString()}. The assayer will see your counter on their app.` });
+      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to send the counter offer.' });
+    } finally {
+      setCounterOfferAssignmentId(null);
     }
   };
 
@@ -955,6 +1047,37 @@ export const PlanningWorkspace: React.FC = () => {
       {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   );
+
+  /**
+   * Assign an assayer the engine had filtered out, to the currently selected branch, recording the
+   * operator's reason on the assignment. The engine's filters (min-radius, workload, soft rules) are
+   * advisory; this is the deliberate, auditable override for when a human knows better.
+   */
+  const handleAssignExcluded = async (candidate: ExcludedCandidate, reason: string) => {
+    const selectedPb = branches.find(b => b.id === selectedBranchId);
+    if (!selectedPb) {
+      setMessage({ type: 'error', text: 'Select a branch before assigning an excluded candidate.' });
+      return;
+    }
+    setAssigningExcludedId(candidate.assayerId);
+    try {
+      await api.request('/assignments', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectBranchId: selectedPb.id,
+          assayerId: candidate.assayerId,
+          remarks: `Filter override — bypassed "${candidate.reason}". Reason: ${reason}`,
+        }),
+      });
+      setMessage({ type: 'success', text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'} (override recorded).` });
+      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+      if (selectedBranchId) loadCandidates(selectedBranchId);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Override assignment failed.' });
+    } finally {
+      setAssigningExcludedId(null);
+    }
+  };
 
   const renderCandidatesList = (horizontal: boolean) => {
     if (isLoadingCandidates) {
@@ -982,6 +1105,18 @@ export const PlanningWorkspace: React.FC = () => {
         <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} style={{ color: 'var(--accent-secondary)' }} />
           <span>{msg}</span>
+          {/* When the min-radius filter hides everyone, the assayers are still there (and still on
+              the map) — they're just closer than the floor. Give a one-click way to reveal them,
+              rather than making ops hunt for the filter toggle to understand why the list is empty. */}
+          {slaEnabled && candidates.length > 0 && (
+            <button
+              onClick={() => { setSlaEnabled(false); setShowAllCandidates(true); }}
+              className="btn btn-secondary"
+              style={{ padding: '4px 8px', fontSize: '10px' }}
+            >
+              Show {candidates.length} assayer{candidates.length > 1 ? 's' : ''} within {slaRadius}km
+            </button>
+          )}
           {!slaEnabled && !showAllCandidates && candidates.length > 0 && (
             <button onClick={() => setShowAllCandidates(true)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '10px' }}>
               Show all ({candidates.length}) candidates
@@ -1010,10 +1145,28 @@ export const PlanningWorkspace: React.FC = () => {
         </div>
       );
     }
+    const hiddenCount = candidates.length - displayCandidates.length;
     return (
-      <div style={{ display: 'flex', gap: '12px', overflowX: horizontal ? 'auto' : 'hidden', flexDirection: horizontal ? 'row' : 'column', paddingBottom: '4px' }}>
+      <>
+        {hiddenCount > 0 && (
+          // Always tell the operator when candidates are being suppressed by the filters, so a
+          // short list is never mistaken for "few assayers exist". One click reveals them.
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', padding: '5px 9px', fontSize: '10.5px', fontWeight: 600, color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', borderRadius: '6px' }}>
+            <span>{displayCandidates.length} shown · {hiddenCount} hidden by filters</span>
+            <button
+              onClick={() => { setSlaEnabled(false); setShowAllCandidates(true); }}
+              className="btn btn-secondary"
+              style={{ padding: '2px 8px', fontSize: '10px' }}
+            >
+              Show all
+            </button>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '12px', overflowX: horizontal ? 'auto' : 'hidden', flexDirection: horizontal ? 'row' : 'column', paddingBottom: '4px' }}>
         {displayCandidates.map(c => {
-          const conf = c.score != null ? Math.round(c.score) : c.distanceKm != null && c.distanceKm < 30 ? 98 : c.distanceKm != null && c.distanceKm < 60 ? 88 : 74;
+          // The real weighted score, or nothing. This used to invent 98/88/74 from distance when the
+          // server returned no score, showing ops a confident match % the engine never produced.
+          const conf = c.score != null ? Math.round(c.score) : null;
           const slaStatus = slaEnabled && c.distanceKm !== null
             ? (c.distanceKm >= slaRadius ? 'compliant' : 'breach')
             : null;
@@ -1063,15 +1216,15 @@ export const PlanningWorkspace: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <span title="Weighted across 15 dimensions including SLA compliance, acceptance history, proximity, workload, paperwork quality and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
-                  {conf}% Match
+                <span title="Weighted across 15 dimensions including SLA compliance, acceptance history, proximity, workload, paperwork quality and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf != null && conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf != null && conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
+                  {conf != null ? `${conf}% Match` : 'Match n/a'}
                 </span>
               </div>
 
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'var(--bg-surface-2)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span>📞 {c.phone}</span>
                 <span>📍 {c.city}, {c.state}</span>
-                <span>Base: ₹{c.baseFee ?? 1200}</span>
+                <span>Base: {c.baseFee != null ? `₹${c.baseFee}` : '—'}</span>
               </div>
 
               <ScoreBreakdown breakdown={c.scoreBreakdown} />
@@ -1134,6 +1287,8 @@ export const PlanningWorkspace: React.FC = () => {
                     setMessage({ type: 'error', text: 'Could not retrieve the contracted fee for this assayer. Enter the agreed fee manually.' });
                   } finally {
                     setLoadingCommercial(false);
+                    // Normal assign flow — not a counter-back.
+                    setCounterOfferAssignmentId(null);
                     setShowNegotiationModal(true);
                   }
                 }}
@@ -1203,8 +1358,9 @@ export const PlanningWorkspace: React.FC = () => {
             </div>
           );
         })}
-        <ExcludedCandidatesPanel excluded={excludedCandidates} />
-      </div>
+        <ExcludedCandidatesPanel excluded={excludedCandidates} onAssignAnyway={handleAssignExcluded} assigningId={assigningExcludedId} />
+        </div>
+      </>
     );
   };
 
@@ -1247,6 +1403,16 @@ export const PlanningWorkspace: React.FC = () => {
           >
             {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>)}
           </select>
+          {selectedProjectId && (
+            <button
+              onClick={() => setShowCoveragePlan(true)}
+              className="btn btn-primary"
+              style={{ marginLeft: '8px', fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
+              title="Generate, approve and deploy assignments for the whole project in one flow"
+            >
+              <Layers size={13} /> Coverage Plan
+            </button>
+          )}
         </div>
 
         {/* Center: Stage Pipeline Switcher */}
@@ -1418,30 +1584,9 @@ export const PlanningWorkspace: React.FC = () => {
           </button>
 
           <button
-            onClick={async () => {
-              const reason = window.prompt(`Why can these ${bulkSelectedIds.size} branches not be covered?`);
-              if (reason === null) return;
-              if (!reason.trim()) {
-                setMessage({ type: 'error', text: 'A reason is required to mark branches unable to cover.' });
-                return;
-              }
-              const targets = filteredBranches.filter((b) => bulkSelectedIds.has(b.id));
-              let ok = 0;
-              const failed: string[] = [];
-              for (const pb of targets) {
-                try {
-                  await api.request(`/projects/branches/${pb.id}/unable-to-cover`, {
-                    method: 'POST',
-                    body: JSON.stringify({ reason: reason.trim() }),
-                  });
-                  ok += 1;
-                } catch { failed.push(pb.branch?.name || pb.id); }
-              }
-              setBulkSelectedIds(new Set());
-              setMessage(failed.length === 0
-                ? { type: 'success', text: `${ok} branch(es) recorded as unable to cover.` }
-                : { type: 'error', text: `${ok}/${targets.length} recorded. Failed: ${failed.join(', ')}` });
-              if (selectedProjectId) loadProjectBranches(selectedProjectId);
+            onClick={() => {
+              setUnableReason('');
+              setUnableModal({ ids: [...bulkSelectedIds], label: `${bulkSelectedIds.size} branches` });
             }}
             disabled={bulkAssigning}
             className="btn btn-secondary"
@@ -1499,6 +1644,10 @@ export const PlanningWorkspace: React.FC = () => {
               onToggleSla={setSlaEnabled}
               slaRadius={slaRadius}
               onSlaRadiusChange={setSlaRadius}
+              maxRadiusEnabled={maxRadiusEnabled}
+              onToggleMaxRadius={setMaxRadiusEnabled}
+              maxRadius={maxRadius}
+              onMaxRadiusChange={setMaxRadius}
               onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -1592,6 +1741,10 @@ export const PlanningWorkspace: React.FC = () => {
                     onToggleSla={setSlaEnabled}
                     slaRadius={slaRadius}
                     onSlaRadiusChange={setSlaRadius}
+              maxRadiusEnabled={maxRadiusEnabled}
+              onToggleMaxRadius={setMaxRadiusEnabled}
+              maxRadius={maxRadius}
+              onMaxRadiusChange={setMaxRadius}
                     onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
                     onAccept={handleAcceptCounterOffer}
                     onCounter={handleOpenCounterProposal}
@@ -1649,6 +1802,10 @@ export const PlanningWorkspace: React.FC = () => {
             onToggleSla={setSlaEnabled}
             slaRadius={slaRadius}
             onSlaRadiusChange={setSlaRadius}
+              maxRadiusEnabled={maxRadiusEnabled}
+              onToggleMaxRadius={setMaxRadiusEnabled}
+              maxRadius={maxRadius}
+              onMaxRadiusChange={setMaxRadius}
             onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -1675,11 +1832,15 @@ export const PlanningWorkspace: React.FC = () => {
 
       {/* ── Negotiation Modal ── */}
       {showNegotiationModal && selectedCandidate && selectedPb && (
-        <Modal open onClose={() => setShowNegotiationModal(false)} title="Confirm Assignment" width="580px" asForm onSubmit={handleConfirmAssignment} bodyStyle={{ padding: '24px' }} footer={
+        <Modal open onClose={() => setShowNegotiationModal(false)}
+          title={counterOfferAssignmentId ? "Counter the assayer's fee" : 'Confirm Assignment'}
+          width="580px" asForm
+          onSubmit={counterOfferAssignmentId ? handleSubmitCounterOffer : handleConfirmAssignment}
+          bodyStyle={{ padding: '24px' }} footer={
           <>
             <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Check size={14} /> Confirm Commitment
+              <Check size={14} /> {counterOfferAssignmentId ? 'Send counter' : 'Confirm Commitment'}
             </button>
           </>
         }>            {/* Assayer Summary */}
@@ -1697,8 +1858,8 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
-                <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, background: (selectedCandidate.score ?? 74) >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: (selectedCandidate.score ?? 74) >= 90 ? 'var(--status-active)' : 'var(--warning)' }}>
-                  {selectedCandidate.score != null ? Math.round(selectedCandidate.score) : selectedCandidate.distanceKm != null && selectedCandidate.distanceKm < 30 ? 98 : selectedCandidate.distanceKm != null && selectedCandidate.distanceKm < 60 ? 88 : 74}% Match
+                <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, background: (selectedCandidate.score ?? 0) >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: (selectedCandidate.score ?? 0) >= 90 ? 'var(--status-active)' : 'var(--warning)' }}>
+                  {selectedCandidate.score != null ? `${Math.round(selectedCandidate.score)}% Match` : 'Match n/a'}
                 </span>
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}><Compass size={10} /> {selectedCandidate.distanceKm ?? 'N/A'} km</span>
               </div>
@@ -1759,12 +1920,22 @@ export const PlanningWorkspace: React.FC = () => {
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={11} /> Audit Scheduled Date
                 </label>
-                <input type="date" value={scheduledAuditDate} onChange={e => setScheduledAuditDate(e.target.value)} required
+                <input type="date" value={scheduledAuditDate} onChange={e => setScheduledAuditDate(e.target.value)} required={!counterOfferAssignmentId}
                   style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>
 
-            {/* Auto-Dispatch Toggle Option */}
+            {counterOfferAssignmentId && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '12px' }}>
+                <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Note to the assayer (optional)</label>
+                <textarea value={counterRemarks} onChange={e => setCounterRemarks(e.target.value)} rows={2}
+                  placeholder="e.g. This is our best rate for this route."
+                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box', resize: 'vertical' }} />
+              </div>
+            )}
+
+            {/* Auto-Dispatch Toggle Option — only for a fresh assignment, not a fee counter. */}
+            {!counterOfferAssignmentId && (
             <div style={{ padding: '10px 12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <input type="checkbox" id="autoDispatchToggle" checked={autoDispatch} onChange={e => setAutoDispatch(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
               <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
@@ -1776,6 +1947,7 @@ export const PlanningWorkspace: React.FC = () => {
                 </span>
               </label>
             </div>
+            )}
           </Modal>
         )}
 
@@ -2451,6 +2623,44 @@ export const PlanningWorkspace: React.FC = () => {
 
       {historyBranchId && (
         <BranchHistoryDrawer projectBranchId={historyBranchId} onClose={() => setHistoryBranchId(null)} />
+      )}
+
+      {showCoveragePlan && selectedProjectId && (
+        <CoveragePlanModal
+          projectId={selectedProjectId}
+          projectName={projects.find(p => p.id === selectedProjectId)?.name || 'Project'}
+          onClose={() => setShowCoveragePlan(false)}
+          onDeployed={() => { if (selectedProjectId) loadProjectBranches(selectedProjectId); }}
+        />
+      )}
+
+      {unableModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+          onClick={() => !unableSubmitting && setUnableModal(null)}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(460px, 100%)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Mark unable to cover</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              Recorded against <b>{unableModal.label}</b> and reported to the client. Be specific
+              (e.g. "No certified assayer within 150km for the SLA window").
+            </div>
+            <textarea
+              autoFocus
+              value={unableReason}
+              onChange={(e) => setUnableReason(e.target.value)}
+              placeholder="Reason this cannot be staffed…"
+              rows={4}
+              style={{ resize: 'vertical', fontSize: '13px', padding: '9px 11px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button onClick={() => setUnableModal(null)} disabled={unableSubmitting} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 14px' }}>Cancel</button>
+              <button onClick={submitUnableToCover} disabled={!unableReason.trim() || unableSubmitting}
+                className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 14px', color: 'var(--danger)', opacity: !unableReason.trim() || unableSubmitting ? 0.6 : 1 }}>
+                {unableSubmitting ? 'Recording…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

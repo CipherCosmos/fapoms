@@ -60,7 +60,7 @@ export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose 
         <button type="submit" disabled={raise.isPending} className="btn btn-primary">{raise.isPending ? 'Raising...' : 'Raise Conflict'}</button>
       </>
     }>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         <select value={severity} onChange={(e) => setSeverity(e.target.value as BillingConflictSeverity)} style={selStyle}>
           {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -147,7 +147,7 @@ export const ConflictDetailDrawer: React.FC<{ conflictId: string; onClose: () =>
 
       {c.status === BillingConflictStatus.OPEN && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             <select value={action} onChange={(e) => setAction(e.target.value as BillingConflictAction)} style={selStyle}>
               {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
             </select>

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { collectDefaultMetrics, Counter, Histogram, Registry } from 'prom-client';
+import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from 'prom-client';
+import { CircuitBreaker } from '../resilience/circuit-breaker';
 
 /**
  * Prometheus metrics registry for the API.
@@ -43,7 +44,30 @@ export class MetricsService {
       labelNames: ['method', 'route', 'status'],
       registers: [this.registry],
     });
+
+    this.jobsFailed = new Counter({
+      name: 'jobs_failed_total',
+      help: 'Background jobs that exhausted their retries (dead-lettered), by queue and job name',
+      labelNames: ['queue', 'job'],
+      registers: [this.registry],
+    });
+
+    // Circuit-breaker state per external dependency, sampled on each scrape so an outage (a breaker
+    // sitting at OPEN=2) is visible on the dashboard and alertable. 0=CLOSED, 1=HALF_OPEN, 2=OPEN.
+    new Gauge({
+      name: 'circuit_breaker_state',
+      help: 'Circuit breaker state per dependency (0=closed, 1=half-open, 2=open)',
+      labelNames: ['name'],
+      registers: [this.registry],
+      collect() {
+        for (const breaker of CircuitBreaker.all()) {
+          this.set({ name: breaker.name }, breaker.stateCode());
+        }
+      },
+    });
   }
+
+  readonly jobsFailed: Counter<'queue' | 'job'>;
 
   scrape(): Promise<string> {
     return this.registry.metrics();

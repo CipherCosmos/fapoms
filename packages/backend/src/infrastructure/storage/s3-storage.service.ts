@@ -9,9 +9,12 @@ import {
   HeadObjectCommand,
   CreateBucketCommand,
   HeadBucketCommand,
+  PutBucketCorsCommand,
+  PutBucketEncryptionCommand,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { StorageEngine } from './storage-engine.interface';
 
 /**
@@ -41,6 +44,13 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
         accessKeyId: this.config.get<string>('AWS_ACCESS_KEY_ID', ''),
         secretAccessKey: this.config.get<string>('AWS_SECRET_ACCESS_KEY', ''),
       },
+      // Retry transient failures, and fail fast when storage is unreachable rather than hanging a
+      // request/worker. Only the *connection* is capped — the socket (data-transfer) timeout is left
+      // to the default so large file streams are never aborted mid-transfer.
+      maxAttempts: Number(this.config.get<string>('S3_MAX_ATTEMPTS')) || 3,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: Number(this.config.get<string>('S3_CONNECTION_TIMEOUT_MS')) || 5000,
+      }),
       // MinIO-specific: custom endpoint and path-style addressing.
       // AWS S3 uses virtual-hosted-style (bucket.s3.amazonaws.com) by default;
       // MinIO requires path-style (endpoint/bucket).
@@ -94,6 +104,97 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
         );
       }
     }
+
+    await this.ensureBucketCors();
+    await this.ensureBucketEncryption();
+  }
+
+  /**
+   * Turn on default server-side encryption at rest for the bucket, so every object — including the
+   * presigned browser uploads that never touch this process — is encrypted without the client having
+   * to send SSE headers. Audit evidence and KYC documents (PAN cards, photos, government IDs) live
+   * here, so this is the at-rest protection for the files, complementing the column encryption for the
+   * numbers.
+   *
+   * `STORAGE_SSE` selects the algorithm (`AES256` default, or `aws:kms` with `STORAGE_SSE_KMS_KEY_ID`).
+   * Non-fatal: some MinIO deployments manage encryption at the volume level, so a failure only warns.
+   */
+  private async ensureBucketEncryption(): Promise<void> {
+    const algo = this.config.get<string>('STORAGE_SSE', 'AES256');
+    const kmsKeyId = this.config.get<string>('STORAGE_SSE_KMS_KEY_ID');
+    try {
+      await this.client.send(
+        new PutBucketEncryptionCommand({
+          Bucket: this.bucket,
+          ServerSideEncryptionConfiguration: {
+            Rules: [
+              {
+                ApplyServerSideEncryptionByDefault: {
+                  SSEAlgorithm: algo as any,
+                  ...(algo === 'aws:kms' && kmsKeyId ? { KMSMasterKeyID: kmsKeyId } : {}),
+                },
+                BucketKeyEnabled: algo === 'aws:kms',
+              },
+            ],
+          },
+        }),
+      );
+      this.logger.log(`Applied default encryption (${algo}) to bucket "${this.bucket}".`);
+    } catch (err: any) {
+      this.logger.warn(
+        `Could not set default encryption on bucket "${this.bucket}" — confirm encryption is handled at ` +
+          `the storage layer: ${err?.message}`,
+      );
+    }
+  }
+
+  /** SSE params for individual PUTs, mirroring the bucket default so server-side uploads match. */
+  private sseParams(): { ServerSideEncryption?: any; SSEKMSKeyId?: string } {
+    const algo = this.config.get<string>('STORAGE_SSE');
+    if (!algo) return {};
+    const kmsKeyId = this.config.get<string>('STORAGE_SSE_KMS_KEY_ID');
+    return { ServerSideEncryption: algo, ...(algo === 'aws:kms' && kmsKeyId ? { SSEKMSKeyId: kmsKeyId } : {}) };
+  }
+
+  /**
+   * Allow the web app to upload straight to the bucket via presigned PUT URLs
+   * (`POST /documents/upload/presign` → client PUT → `/finalize`). Without a CORS rule the
+   * browser blocks that cross-origin PUT, so the presigned-upload path cannot work from a
+   * browser at all. Origins come from CORS_ORIGINS (falling back to '*' only when unset).
+   *
+   * Non-fatal: server-side uploads (multipart, chunked) do not need this, so a failure here
+   * only warns — it must never stop the service from booting.
+   */
+  private async ensureBucketCors(): Promise<void> {
+    const origins = (this.config.get<string>('CORS_ORIGINS') || '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const allowedOrigins = origins.length > 0 ? origins : ['*'];
+
+    try {
+      await this.client.send(
+        new PutBucketCorsCommand({
+          Bucket: this.bucket,
+          CORSConfiguration: {
+            CORSRules: [
+              {
+                AllowedMethods: ['PUT', 'GET', 'HEAD'],
+                AllowedOrigins: allowedOrigins,
+                AllowedHeaders: ['*'],
+                ExposeHeaders: ['ETag'],
+                MaxAgeSeconds: 3000,
+              },
+            ],
+          },
+        }),
+      );
+      this.logger.log(`Applied CORS policy to bucket "${this.bucket}" for: ${allowedOrigins.join(', ')}.`);
+    } catch (err: any) {
+      this.logger.warn(
+        `Could not set CORS on bucket "${this.bucket}" — presigned browser uploads may be blocked (server-side uploads are unaffected): ${err?.message}`,
+      );
+    }
   }
 
   /**
@@ -119,6 +220,7 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
           Body: content,
           ContentLength: content.length,
           ...(mimeType ? { ContentType: mimeType } : {}),
+          ...this.sseParams(),
         }),
       );
     } else {
@@ -129,6 +231,7 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
           Key: key,
           Body: content,
           ...(mimeType ? { ContentType: mimeType } : {}),
+          ...this.sseParams(),
         },
         queueSize: 4,
         partSize: 5 * 1024 * 1024,

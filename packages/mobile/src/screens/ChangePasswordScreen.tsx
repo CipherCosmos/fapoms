@@ -160,8 +160,8 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout }) =
           </View>
 
           {error ? (
-            <View style={{ backgroundColor: t.colors.dangerSoft || '#fee2e2', padding: t.space.md, borderRadius: t.radius.md }}>
-              <AppText variant="caption" style={{ color: t.colors.danger || '#ef4444', textAlign: 'center' }}>{error}</AppText>
+            <View style={{ backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md }}>
+              <AppText variant="caption" style={{ color: t.colors.danger, textAlign: 'center' }}>{error}</AppText>
             </View>
           ) : null}
 

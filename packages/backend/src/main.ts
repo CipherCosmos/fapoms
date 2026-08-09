@@ -3,11 +3,31 @@
  */
 
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bull';
+import type { Queue } from 'bull';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { setupBullBoard } from './infrastructure/queue/bull-board.setup';
 import { RedisIoAdapter } from './infrastructure/realtime/redis-io.adapter';
+import { realtimeHealth } from './infrastructure/realtime/realtime-health';
+import { correlationIdMiddleware } from './infrastructure/http/correlation-id.middleware';
+import { GlobalExceptionFilter } from './infrastructure/http/global-exception.filter';
+import { ResponseInterceptor } from './infrastructure/http/response.interceptor';
+import { Reflector } from '@nestjs/core';
+
+/**
+ * Every Bull queue in the system. Used only to pause local processing on API-role
+ * replicas; unknown names are skipped rather than fatal (see pauseLocalQueues).
+ */
+const ALL_QUEUE_NAMES = [
+  'background-jobs',
+  'ocr',
+  'sla-scanner',
+  'document-dispatch',
+  'notification-delivery',
+  'outbox',
+];
 
 import * as express from 'express';
 import * as compression from 'compression';
@@ -25,8 +45,11 @@ export function assertProductionSafeConfig(): void {
   const fatal: string[] = [];
 
   const jwtSecret = process.env.JWT_SECRET;
-  if (!jwtSecret || jwtSecret === 'dev-secret') {
-    fatal.push('JWT_SECRET is unset or still the development default. Every access token would be forgeable by anyone who has read this repository.');
+  // These literals were committed to git history in .env.docker, so they must be treated as
+  // public and permanently burned — not merely "a default someone might still be using".
+  const BURNED_SECRETS = ['dev-secret', 'fapoms-docker-dev-secret-key-change-in-production'];
+  if (!jwtSecret || BURNED_SECRETS.includes(jwtSecret)) {
+    fatal.push('JWT_SECRET is unset or a value that was committed to this repository. Every access token would be forgeable by anyone who has read the git history. Rotate it.');
   } else if (jwtSecret.length < 32) {
     fatal.push('JWT_SECRET is shorter than 32 characters. Use a high-entropy random value.');
   }
@@ -50,9 +73,23 @@ export function assertProductionSafeConfig(): void {
   }
 
   // A production database reachable with the development password is not a production database.
+  // 'fapoms_dev' is included because it was committed to git history in .env.docker.
   const dbPassword = process.env.DB_PASSWORD;
-  if (!dbPassword || ['postgres', 'password', 'fapoms', 'changeme'].includes(dbPassword)) {
-    fatal.push('DB_PASSWORD is unset or a well-known default.');
+  if (!dbPassword || ['postgres', 'password', 'fapoms', 'fapoms_dev', 'changeme'].includes(dbPassword)) {
+    fatal.push('DB_PASSWORD is unset, a well-known default, or a value committed to this repository.');
+  }
+
+  /**
+   * Audit evidence must not live on a container's local disk in production.
+   *
+   * STORAGE_DRIVER defaults to 'local', which writes scanned audit PDFs into the container
+   * filesystem. On more than one replica the same document 404s from whichever replica did
+   * not receive the upload, and every file is destroyed when the container is replaced — the
+   * ordinary outcome of any deploy. Only 's3' (MinIO/S3) is safe for a multi-replica bank
+   * audit system, so refuse to start in production without it.
+   */
+  if ((process.env.STORAGE_DRIVER || 'local') !== 's3') {
+    fatal.push('STORAGE_DRIVER must be "s3" in production. Local-disk storage loses audit evidence on every container replacement and 404s across replicas.');
   }
 
   if (fatal.length > 0) {
@@ -75,13 +112,18 @@ async function bootstrap() {
   // boot we log and fall back to the in-memory adapter, which is correct for one node
   // and lets local/test runs work without Redis.
   if (process.env.NODE_ENV !== 'test') {
+    // REDIS_HOST being set means multi-node realtime is intended, so a failed adapter becomes a
+    // readiness failure rather than a silent single-node fallback that keeps taking traffic.
+    realtimeHealth.redisConfigured = !!process.env.REDIS_HOST;
     try {
       const redisIoAdapter = new RedisIoAdapter(app);
       await redisIoAdapter.connectToRedis();
       app.useWebSocketAdapter(redisIoAdapter);
+      realtimeHealth.redisAdapterConnected = true;
     } catch (err: any) {
+      realtimeHealth.redisAdapterConnected = false;
       logger.warn(
-        `Redis Socket.IO adapter unavailable (${err?.message}); falling back to single-node in-memory adapter. Do not run more than one replica in this state.`,
+        `Redis Socket.IO adapter unavailable (${err?.message}); falling back to single-node in-memory adapter. Readiness reports degraded while REDIS_HOST is set.`,
       );
     }
   }
@@ -90,6 +132,28 @@ async function bootstrap() {
   // SIGINT so rolling deploys and autoscaling drain in-flight work instead of
   // dropping connections mid-request.
   app.enableShutdownHooks();
+
+  // ── Process role (api | worker | all) ─────────────────────────────────────────
+  // Lets API replicas and background workers scale independently. Default 'all'
+  // preserves the single-process behaviour exactly, so existing deployments are
+  // unaffected; opt into the split by setting PROCESS_ROLE per replica set. (An
+  // all-'api' deployment with no worker would never process jobs — run at least one
+  // 'worker' or 'all' replica.)
+  const processRole = (process.env.PROCESS_ROLE || 'all').toLowerCase();
+
+  if (processRole === 'worker') {
+    // Dedicated worker: runs Bull processors + scheduled crons, serves no HTTP, so
+    // heavy jobs (OCR, dispatch, SLA sweeps, notification delivery) never contend
+    // with request handling. init() runs the module lifecycle hooks that register
+    // the processors and repeatable jobs.
+    await app.init();
+    logger.log('PROCESS_ROLE=worker — processing background jobs and schedules; not serving HTTP.');
+    return;
+  }
+
+  // Correlation id first — before anything can fail — so every request (including one that
+  // errors before it reaches a handler) carries an id the exception filter and logs share.
+  app.use(correlationIdMiddleware);
 
   // ── Response compression ──────────────────────────────────────────────────────
   // Field assayers work on rural 2G/weak-3G links, and the app polls JSON constantly
@@ -112,10 +176,14 @@ async function bootstrap() {
     }),
   );
 
-  // Payload limit. Large scans should go through the resumable chunked upload endpoints
-  // rather than a single body, but this ceiling still covers legacy single-shot uploads.
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  // Payload limit. Large scans should go through the resumable chunked or binary upload endpoints
+  // rather than a single body; the high ceiling only remains for the legacy base64-JSON upload
+  // (document.controller — a PDF inflates ~33% as base64). It's env-tunable so a deployment that has
+  // moved off that path can shrink the JSON DoS surface (e.g. MAX_JSON_BODY=2mb). Rate limiting
+  // (the throttler) already caps how fast large bodies can be sent.
+  const bodyLimit = process.env.MAX_JSON_BODY || '50mb';
+  app.use(express.json({ limit: bodyLimit }));
+  app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
 
   // Global prefix for all API routes
   app.setGlobalPrefix('api/v1');
@@ -131,6 +199,16 @@ async function bootstrap() {
       },
     }),
   );
+
+  // Single HTTP error boundary: preserves the existing shape for deliberate HttpExceptions
+  // (validation messages included) and redacts everything else so TypeORM/Redis/S3 internals
+  // never reach a client. Registered after the pipe so validation failures flow through it too.
+  app.useGlobalFilters(new GlobalExceptionFilter());
+
+  // Single success-response boundary, mirroring the error boundary above. Idempotent by
+  // design: the 285 controller sites that already hand-build `{ success, data }` pass straight
+  // through, so this ships without touching them and they can be de-enveloped one at a time.
+  app.useGlobalInterceptors(new ResponseInterceptor(app.get(Reflector)));
 
   /**
    * Security response headers.
@@ -175,15 +253,55 @@ async function bootstrap() {
     setupBullBoard(app);
   }
 
+  if (processRole === 'api') {
+    // API replica: stop this process from executing background jobs so they run on
+    // worker replicas instead. pause(true) is a LOCAL pause — enqueuing from request
+    // handlers still works.
+    await pauseLocalQueues(app, logger);
+    logger.log('PROCESS_ROLE=api — serving HTTP; background jobs deferred to worker replicas.');
+  }
+
   const port = process.env.PORT || 3000;
   await app.listen(port);
+
+  // Server-level timeouts. `headersTimeout` defends against slow-header (slow-loris) clients holding
+  // connections open; `keepAliveTimeout` is set to exceed a typical upstream load-balancer idle timeout
+  // to avoid the well-known connection-reuse race. `requestTimeout` stays generous so a slow field-network
+  // upload (chunked/base64 on 2G) still completes — shrink it where uploads go direct-to-storage.
+  const httpServer = app.getHttpServer();
+  httpServer.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS) || 61_000;
+  httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 65_000;
+  httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 300_000;
   console.log(`FAPOMS API running on http://localhost:${port}`);
   console.log(`API Documentation: http://localhost:${port}/api/docs`);
   console.log(`Bull Board: http://localhost:${port}/bull-board`);
 }
 
+/**
+ * Pause local processing of every Bull queue so an API-role replica serves requests
+ * without executing background jobs. Local-only: producers (request handlers adding
+ * jobs) are unaffected and worker replicas keep processing. Unknown queue names are
+ * skipped rather than fatal, so adding or renaming a queue never breaks boot.
+ */
+async function pauseLocalQueues(app: INestApplication, logger: Logger): Promise<void> {
+  for (const name of ALL_QUEUE_NAMES) {
+    try {
+      const queue = app.get<Queue>(getQueueToken(name), { strict: false });
+      if (queue && typeof queue.pause === 'function') {
+        await queue.pause(true); // isLocal = true → pause only this worker's processing
+      }
+    } catch (err: any) {
+      logger.warn(`Skipped pausing queue "${name}": ${err?.message ?? err}`);
+    }
+  }
+}
+
 // Only start the server when this file is the entry point. Importing it (for example to unit
 // test the production-config guard above) must not boot the whole application.
 if (require.main === module) {
-  bootstrap();
+  bootstrap().catch((err) => {
+    // A boot failure must crash loudly, not become a swallowed unhandled rejection.
+    console.error('Fatal: application failed to start', err);
+    process.exit(1);
+  });
 }

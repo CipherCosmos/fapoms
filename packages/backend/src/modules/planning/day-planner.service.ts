@@ -774,8 +774,13 @@ export class DayPlannerService {
       string,
       { ranked: Awaited<ReturnType<RecommendationEngine['recommend']>>; excluded: ExcludedDayPlanCandidate[] }
     >();
+    // Load every branch in the cluster once, up front, instead of a findOne per iteration.
+    const clusterBranchMap = new Map(
+      (await this.branchRepository.find({ where: { id: In(cluster.branches.map((b) => b.branchId)) } }))
+        .map((b) => [b.id, b]),
+    );
     for (const branch of cluster.branches) {
-      const branchEntity = await this.branchRepository.findOne({ where: { id: branch.branchId } });
+      const branchEntity = clusterBranchMap.get(branch.branchId);
       if (!branchEntity) continue;
       const ranked = await this.recommendationEngine.recommend(branchEntity, scheduledDate);
       branchRecommendations.set(branch.branchId, {

@@ -251,8 +251,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </View>
 
             {errorMsg ? (
-              <View style={{ backgroundColor: t.colors.dangerSoft || '#fee2e2', padding: t.space.md, borderRadius: t.radius.md, borderWidth: 1, borderColor: '#fca5a5' }}>
-                <AppText variant="caption" style={{ color: t.colors.danger || '#ef4444', textAlign: 'center' }}>
+              <View style={{ backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md, borderWidth: 1, borderColor: t.colors.danger }}>
+                <AppText variant="caption" style={{ color: t.colors.danger, textAlign: 'center' }}>
                   {errorMsg}
                 </AppText>
               </View>

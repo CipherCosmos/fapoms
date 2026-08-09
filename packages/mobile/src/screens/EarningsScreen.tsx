@@ -1,8 +1,9 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AssayerPayableStatus, formatRupees as money } from '@fapoms/shared';
+import { AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 import { getAssignmentTotalFee, hasResolvedFee } from '../utils/fees';
+import { CAT_LABELS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
 import {
   AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Section, StatStrip, StatTile,
@@ -210,7 +211,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
                   <AppText variant="bodyStrong" numberOfLines={1}>{exp.description}</AppText>
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
-                    {exp.category}{exp.branchName ? ` · ${exp.branchName}` : ''}
+                    {CAT_LABELS[exp.category as keyof typeof CAT_LABELS] ?? exp.category}{exp.branchName ? ` · ${exp.branchName}` : ''}
                   </AppText>
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
@@ -241,7 +242,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                   <AppText variant="bodyStrong" numberOfLines={1}>{a.branchName}</AppText>
                   <AppText variant="caption" tone="faint">
                     {a.scheduledDate
-                      ? new Date(a.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                      ? formatDateOnly(a.scheduledDate, { day: '2-digit', month: 'short', year: 'numeric' })
                       : '—'}
                   </AppText>
                 </View>

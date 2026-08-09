@@ -1,8 +1,10 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, Animated, Pressable, Platform, StatusBar, TextStyle } from 'react-native';
+import { View, Text, Animated, Pressable, Platform, StatusBar, TextStyle, StyleSheet } from 'react-native';
+import { BlurView } from 'expo-blur';
 
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Avatar, Icon, IconButton, Tappable } from './primitives';
+import * as haptics from '../../lib/haptics';
 
 /**
  * App chrome: the top bar and the bottom navigation.
@@ -62,7 +64,12 @@ export const TopBar: React.FC<{
         The theme toggle that also lived here has moved to Profile > App > Appearance, where
         the rest of the app's settings are.
       */}
-      <IconButton icon="notifications-outline" onPress={onNotifications} badge={unreadCount} />
+      <IconButton
+        icon="notifications-outline"
+        onPress={onNotifications}
+        badge={unreadCount}
+        accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+      />
     </View>
   );
 };
@@ -98,18 +105,30 @@ export const TabDock: React.FC<{
     Animated.spring(x, { toValue: index * seg, ...t.motion.spring }).start();
   }, [index, seg, x, t.motion.spring]);
 
+  // Frosted material: content scrolls under the floating dock, so a real blur reads as the
+  // translucent glass iOS uses for its own tab bar. The translucent tint keeps text legible over
+  // the blur and doubles as the fallback fill if blur is unsupported.
+  const dark = t.mode === 'dark';
+  const material = dark ? 'rgba(29,25,34,0.62)' : 'rgba(255,255,255,0.62)';
+
   return (
     <View style={{
       position: 'absolute', left: t.space.lg, right: t.space.lg, bottom: BOTTOM_INSET,
     }}>
+      <View style={[{ borderRadius: t.radius['2xl'] }, t.elevation(3)]}>
       <View
         onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
-        style={[{
-          flexDirection: 'row', backgroundColor: t.colors.surface,
-          borderRadius: t.radius['2xl'], padding: 5,
-          borderWidth: 1, borderColor: t.colors.border,
-        }, t.elevation(3)]}
+        style={{
+          flexDirection: 'row', borderRadius: t.radius['2xl'], padding: 5,
+          borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden',
+          backgroundColor: material,
+        }}
       >
+        <BlurView
+          intensity={dark ? 40 : 55}
+          tint={dark ? 'dark' : 'light'}
+          style={StyleSheet.absoluteFill}
+        />
         {seg > 0 && (
           <Animated.View
             pointerEvents="none"
@@ -125,7 +144,10 @@ export const TabDock: React.FC<{
           return (
             <Pressable
               key={tab.key}
-              onPress={() => onSelect(tab.key)}
+              onPress={() => { if (!active) haptics.select(); onSelect(tab.key); }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={tab.label}
               style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, gap: 3 }}
             >
               <View>
@@ -156,6 +178,7 @@ export const TabDock: React.FC<{
             </Pressable>
           );
         })}
+      </View>
       </View>
     </View>
   );

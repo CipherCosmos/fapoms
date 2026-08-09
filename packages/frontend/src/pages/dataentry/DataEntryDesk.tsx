@@ -192,14 +192,16 @@ export const DataEntryDesk: React.FC = () => {
     setBulkMsg(null);
     setBusy('__bulk__');
     try {
-      const res = await api.request<{ succeeded: number; failed: string[] }>('/validation/bulk/transition', {
+      // bulkTransition returns { succeeded: {id,from,to}[]; failed: {id,reason}[] } — both arrays of
+      // objects, not a number and a string[]. Read the lengths and the per-failure reasons.
+      const res = await api.request<{ succeeded: { id: string }[]; failed: { id: string; reason: string }[] }>('/validation/bulk/transition', {
         method: 'POST',
         body: JSON.stringify({ ids: Array.from(selCases), targetStatus: target }),
       });
-      const s = res.succeeded ?? 0;
+      const s = res.succeeded?.length ?? 0;
       const f = res.failed ?? [];
       setBulkMsg(f.length
-        ? { type: 'error', text: `${s} updated · ${f.length} failed: ${f.join('; ')}` }
+        ? { type: 'error', text: `${s} updated · ${f.length} failed: ${f.map((x) => x.reason).join('; ')}` }
         : { type: 'success', text: `${s} ${target === 'APPROVED' ? 'approved' : 'sent back for rework'}` });
       setSelCases(new Set());
       load();

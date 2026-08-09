@@ -5,13 +5,16 @@ import {
   AlertTriangle, CheckCircle2, Edit2, ArrowRightLeft, FileText, ClipboardList,
   CreditCard, MessageSquare, ExternalLink, ShieldCheck,
 } from 'lucide-react';
-import { formatRupees as money, nextAssayerLifecycleStates } from '@fapoms/shared';
+import { nextAssayerLifecycleStates } from '@fapoms/shared';
 
 import { api } from '../services/api';
 import { connectSocket, getSocket } from '../services/socket';
 import { useCurrentRoles, canManageAssayers } from '../hooks/useCurrentRoles';
 import { EditAssayerModal } from './hr/AssayerForms';
-import { STATUS_COLORS } from './hr/assayer-shared';
+import {
+  STATUS_COLORS, fmtDate, fmtWhen, money, missingCriticalFields,
+  fieldLabelStyle as label,
+} from './hr/assayer-shared';
 import type { Assayer } from './hr/assayer-shared';
 import { userMessage } from '../services/errors';
 
@@ -48,14 +51,6 @@ interface ProfileData extends Assayer {
 }
 
 
-const CRITICAL: { key: keyof Assayer; label: string; why: string }[] = [
-  { key: 'panNumber', label: 'PAN', why: 'TDS and statutory filing' },
-  { key: 'bankAccountNumber', label: 'Bank account', why: 'payouts' },
-  { key: 'ifscCode', label: 'IFSC', why: 'payouts' },
-  { key: 'joiningDate', label: 'Joining date', why: 'tenure and settlement' },
-  { key: 'emergencyContactPhone', label: 'Emergency contact', why: 'duty of care' },
-];
-
 const TABS = [
   { key: 'work', label: 'Work', icon: ClipboardList },
   { key: 'pay', label: 'Pay', icon: CreditCard },
@@ -66,15 +61,6 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
-const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-const fmtWhen = (d?: string | null) =>
-  d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-
-const label: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted)',
-};
 const card: React.CSSProperties = {
   background: 'var(--bg-card)', border: '1px solid var(--border-color)',
   borderRadius: '10px', padding: '16px',
@@ -144,10 +130,7 @@ export const AssayerProfile: React.FC = () => {
       .catch(() => setSide((s) => ({ ...s, [tab]: tab === 'documents' ? { files: [], gov: [] } : [] })));
   }, [tab, id, side]);
 
-  const missing = useMemo(
-    () => (p ? CRITICAL.filter((f) => { const v = (p as any)[f.key]; return v == null || String(v).trim() === ''; }) : []),
-    [p],
-  );
+  const missing = useMemo(() => missingCriticalFields(p), [p]);
 
   const transitions = p ? nextAssayerLifecycleStates(p.lifecycleStatus) : [];
 

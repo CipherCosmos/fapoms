@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, TextInput, Switch, TextStyle } from 'react-native';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
@@ -7,7 +7,8 @@ import {
 import { useLocation } from '../context/LocationContext';
 import { formatRupees as money } from '@fapoms/shared';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
-import { MobileApiService, NotificationPreference } from '../services/api.service';
+import { MobileApiService, NotificationPreference, getApiBaseUrl } from '../services/api.service';
+import { probeServerUrl } from '../services/server-config';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
 import Constants from 'expo-constants';
@@ -70,6 +71,8 @@ interface ProfileScreenProps {
   onUpdateProfileField: (field: keyof ProfileDataState, value: any) => void;
   onSaveProfile: () => void;
   onLogout?: () => void;
+  /** Opens the self-service time-off calendar. */
+  onOpenAvailability?: () => void;
 }
 
 /**
@@ -108,6 +111,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onUpdateProfileField,
   onSaveProfile,
   onLogout,
+  onOpenAvailability,
 }) => {
   const t = useTheme();
   const [tab, setTab] = useState<SectionKey>('PROFILE');
@@ -123,6 +127,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [soundAlerts, setSoundAlerts] = useState(() => getPreference('soundAlerts'));
   const [biometrics, setBiometrics] = useState(() => getPreference('biometrics'));
   const [sensor, setSensor] = useState<'checking' | 'ready' | 'not-enrolled' | 'none'>('checking');
+
+  // Real connectivity, not a hardcoded "ONLINE". Probes the actual server the app is pointed at
+  // (the /health endpoint) so the badge tells the truth when the assayer is out of signal.
+  const [conn, setConn] = useState<'checking' | 'online' | 'offline'>('checking');
+  const checkConnection = useCallback(async () => {
+    setConn('checking');
+    const r = await probeServerUrl(getApiBaseUrl());
+    setConn(r.ok ? 'online' : 'offline');
+  }, []);
+  useEffect(() => { void checkConnection(); }, [checkConnection]);
 
   useEffect(() => {
     let cancelled = false;
@@ -549,6 +563,25 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </Card>
           </Section>
 
+          <Section title="Availability">
+            <Card level={1}>
+              {/* Self-service time off. The scheduler already honours leave, so this is what
+                  keeps offers away while the assayer is out — no HR round-trip. */}
+              <Tappable onPress={onOpenAvailability}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+                  <Icon name="calendar-outline" size={18} color={t.colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="small">Set your time off</AppText>
+                    <AppText variant="caption" tone="faint">
+                      Mark days you're unavailable — you won't be offered audits then.
+                    </AppText>
+                  </View>
+                  <Icon name="chevron-forward" size={16} color={t.colors.textFaint} />
+                </View>
+              </Tappable>
+            </Card>
+          </Section>
+
           <Section title="Location & Recommendations">
             <Card level={1}>
               <Toggle
@@ -634,24 +667,31 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             </Card>
           </Section>
 
-          <Section title="Diagnostics & Storage">
+          <Section title="Connection">
             <Card level={1} style={{ gap: t.space.md }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <View style={{ gap: 2 }}>
-                  <AppText variant="small">Live REST Server</AppText>
-                  <AppText variant="caption" tone="faint">Connected to PostgreSQL backend</AppText>
+                <View style={{ gap: 2, flex: 1, minWidth: 0 }}>
+                  <AppText variant="small">Server</AppText>
+                  <AppText variant="caption" tone="faint" numberOfLines={1}>
+                    {getApiBaseUrl().replace(/^https?:\/\//, '').replace(/\/api\/v1$/, '')}
+                  </AppText>
                 </View>
-                <Badge label="ONLINE" tone="primary" icon="cloud-done-outline" />
+                {conn === 'checking' ? (
+                  <Badge label="CHECKING" tone="neutral" icon="sync-outline" />
+                ) : conn === 'online' ? (
+                  <Badge label="ONLINE" tone="success" icon="cloud-done-outline" />
+                ) : (
+                  <Badge label="OFFLINE" tone="danger" icon="cloud-offline-outline" />
+                )}
               </View>
               <Divider spacing={t.space.xs} />
               <Button
-                label="Clear Cache & Re-sync"
+                label={conn === 'checking' ? 'Checking…' : 'Check connection'}
                 icon="refresh-outline"
                 variant="neutral"
                 size="sm"
-                onPress={() => {
-                  onSaveProfile();
-                }}
+                loading={conn === 'checking'}
+                onPress={() => { void checkConnection(); }}
               />
             </Card>
           </Section>

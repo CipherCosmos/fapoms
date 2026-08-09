@@ -82,10 +82,10 @@ export const Dashboard: React.FC = () => {
 
   const funnelMax = Math.max(1, ...(data?.funnel ?? []).map((f) => f.count));
   const dueSoon = (data?.due ?? []).filter((d) => d.daysAway >= 0).slice(0, 8);
-  // Only administrators and operations run the coverage map; linking others to a
-  // page they cannot open would be a dead end.
+  // Only the roles that /executive-map actually admits (see config/route-permissions.ts) get the
+  // button — linking anyone else there just round-trips them back here through ProtectedRoute.
   const canSeeCommandCenter = !!data?.roles.some((r) =>
-    ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR', 'OPERATIONS_MANAGER', 'OPERATIONS_EXECUTIVE', 'FINANCE_MANAGER'].includes(r));
+    ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR', 'OPERATIONS_MANAGER', 'READ_ONLY_AUDITOR'].includes(r));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -97,7 +97,7 @@ export const Dashboard: React.FC = () => {
             {data?.focus ?? 'What needs doing, what’s at risk, and where the book stands.'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all })}
             className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <RefreshCw size={14} /> Refresh

@@ -8,9 +8,11 @@ import { Platform } from 'react-native';
  * own padding, radius and type size inline. This replaces that with one source
  * of truth: two full palettes (dual tone), and scales everything else keys off.
  *
- * The identity is the Sumeru flame: the primary is the logo's own orange, and the
- * accent its amber, so the app and the mark are one family. Nothing in
- * here resembles the previous indigo-on-black.
+ * The identity is the Sumeru flame. The primary and accent are sampled directly
+ * from sumeru-logo.png — the flame's mid-body (#EF6E10) through its bright tips
+ * (#F0873C) — so the UI is the same orange as the mark and the wordmark. Warning
+ * is held at a distinct gold, because a warning the same colour as every button
+ * stops working as a warning.
  */
 
 export type Mode = 'light' | 'dark';
@@ -55,58 +57,53 @@ export interface Palette {
 }
 
 const dark: Palette = {
-  /* Near-black with only a trace of warmth, and three clearly separated surface
-     tiers above it.
-
-     The previous ground (#14100C) was heavily brown, which forced every card to
-     carry a visible border to separate from it — the "boxes drawn on boxes" look
-     that dated the app. Depth now comes from the tier gap between bg/surface/
-     surfaceAlt plus elevation, so borders can drop to a hairline hint. Enough
-     warmth remains that the flame orange still reads as part of the family
-     rather than an accent bolted on. */
-  bg: '#121014',
-  surface: '#1C191E',
-  surfaceAlt: '#252128',
+  /* A warm near-black with three clearly separated surface tiers above it, so the
+     flame orange reads as part of the family rather than an accent bolted onto a
+     cold ground. Depth comes from the tier gap between bg/surface/surfaceAlt plus
+     elevation, so borders stay a hairline seam rather than an outline around every
+     box. */
+  bg: '#131017',
+  surface: '#1D1922',
+  surfaceAlt: '#26212B',
   surfacePress: 'rgba(255,255,255,0.06)',
-  /* Halved from 0.12. At this weight a border is a seam, not an outline —
-     it separates adjacent surfaces without drawing a box around every element. */
-  border: 'rgba(255,255,255,0.06)',
-  borderStrong: 'rgba(255,255,255,0.14)',
+  border: 'rgba(255,255,255,0.07)',
+  borderStrong: 'rgba(255,255,255,0.15)',
 
-  text: '#F4F2F6',
-  textMuted: '#A8A2AE',
-  textFaint: '#7B7583',
+  text: '#F5F2F6',
+  textMuted: '#A9A2AE',
+  textFaint: '#7C7583',
 
-  /* The logo's own orange, unmodified — 7.6:1 on this ground. Reserved for the
-     single primary action on a screen; everything else uses neutrals or status. */
-  primary: '#FF8534',
-  /* Softs dropped from 0.15 to 0.10. At 0.15 a "subtle" tint competed with the
-     solid primary button for attention, so nothing read as the main action. */
-  primarySoft: 'rgba(255,133,52,0.10)',
-  onPrimary: '#1C1207',
+  /* The Sumeru flame's bright tip, sampled from the logo (#F0873C). Reserved for
+     the single primary action on a screen; everything else is neutrals or status. */
+  primary: '#F0873C',
+  primarySoft: 'rgba(240,135,60,0.12)',
+  onPrimary: '#1C1206',
 
-  accent: '#FFA53D',
-  accentSoft: 'rgba(255,165,61,0.10)',
-  onAccent: '#1C1207',
+  /* The flame's warmer amber — for money and highlights, one step off the primary
+     so a balance figure and a primary button do not compete. */
+  accent: '#F7A24A',
+  accentSoft: 'rgba(247,162,74,0.12)',
+  onAccent: '#1C1206',
 
   /* Status hues desaturated toward the ground so a screen of badges reads as
      information rather than a set of competing alerts. */
   success: '#63B383',
-  successSoft: 'rgba(99,179,131,0.10)',
+  successSoft: 'rgba(99,179,131,0.11)',
   /* Held at gold, distinct from the orange primary — a warning the same colour as
      every button stops functioning as a warning. */
   warning: '#D9AE3F',
-  warningSoft: 'rgba(217,174,63,0.10)',
+  warningSoft: 'rgba(217,174,63,0.11)',
   danger: '#DC6459',
-  dangerSoft: 'rgba(220,100,89,0.10)',
+  dangerSoft: 'rgba(220,100,89,0.11)',
   info: '#7AA9DB',
-  infoSoft: 'rgba(122,169,219,0.10)',
+  infoSoft: 'rgba(122,169,219,0.11)',
 
-  scrim: 'rgba(8,6,10,0.78)',
+  scrim: 'rgba(8,6,10,0.80)',
 };
 
 const light: Palette = {
-  /* Warm off-white, matching the web app's --flame-cream. */
+  /* Warm off-white, a flame-cream ground that keeps the light theme in the same
+     family as the orange mark. */
   bg: '#FFFAF5',
   surface: '#FFFFFF',
   surfaceAlt: '#FFFFFF',
@@ -118,9 +115,9 @@ const light: Palette = {
   textMuted: '#6B5648',
   textFaint: '#7A6657',
 
-  /* Deepened flame. The logo's #FF6B00 is only 2.9:1 on white — fine for the mark,
+  /* Deepened flame. The logo's orange is only ~3:1 on white — fine for the mark,
      unreadable as a label or a link, so light mode carries the same hue further
-     down the ramp to reach 5.0:1. */
+     down the ramp to reach ~5:1. */
   primary: '#C2410C',
   primarySoft: 'rgba(194,65,12,0.10)',
   onPrimary: '#FFFFFF',
@@ -131,6 +128,7 @@ const light: Palette = {
 
   success: '#2F7D4F',
   successSoft: 'rgba(47,125,79,0.10)',
+  /* Gold warning, distinct from the orange primary. */
   warning: '#8A5A00',
   warningSoft: 'rgba(138,90,0,0.12)',
   danger: '#B3261E',
@@ -169,9 +167,12 @@ export const radius = {
  * below the readable floor for a phone used outdoors in the field.
  */
 export const type = {
+  /** Apple large-title: the hero line on a screen (greeting, balance). Tight negative
+      tracking is what makes big type read as crafted rather than merely big. */
+  largeTitle: { fontSize: 34, lineHeight: 41, fontWeight: '800' as const, letterSpacing: -0.7 },
   display: { fontSize: 30, lineHeight: 36, fontWeight: '800' as const, letterSpacing: -0.5 },
-  h1: { fontSize: 24, lineHeight: 30, fontWeight: '800' as const, letterSpacing: -0.3 },
-  h2: { fontSize: 19, lineHeight: 25, fontWeight: '700' as const, letterSpacing: -0.2 },
+  h1: { fontSize: 24, lineHeight: 30, fontWeight: '800' as const, letterSpacing: -0.4 },
+  h2: { fontSize: 19, lineHeight: 25, fontWeight: '700' as const, letterSpacing: -0.3 },
   h3: { fontSize: 16, lineHeight: 22, fontWeight: '700' as const },
   body: { fontSize: 15, lineHeight: 21, fontWeight: '500' as const },
   bodyStrong: { fontSize: 15, lineHeight: 21, fontWeight: '700' as const },
@@ -194,7 +195,9 @@ export const type = {
  */
 export function elevation(mode: Mode, level: 0 | 1 | 2 | 3) {
   if (level === 0) return {};
-  const iosOpacity = mode === 'dark' ? [0, 0.28, 0.36, 0.45][level] : [0, 0.06, 0.09, 0.13][level];
+  // Apple dark UI builds depth from the bg/surface/surfaceAlt tier gap, not heavy shadow, so the
+  // dark opacities are softer than before — cards read as lifted, not outlined in black.
+  const iosOpacity = mode === 'dark' ? [0, 0.18, 0.24, 0.32][level] : [0, 0.06, 0.09, 0.13][level];
   return Platform.select({
     ios: {
       shadowColor: mode === 'dark' ? '#000' : '#0F172A',

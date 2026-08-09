@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { OperationsExecutionGroupEntity, ExecutionGroupStatus } from './operations-execution-group.entity';
 import { OperationsExecutionConversationEntity, NegotiationParticipant } from './operations-execution-conversation.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -42,12 +42,12 @@ export class OperationsExecutionService {
     // Relate the targeted assignments to the new group. (The comment here previously read
     // "Mock update execution relation" — the code below is a real persisted update, so the
     // label was stale and misleading rather than describing a stub.)
-    for (const aid of dto.assignmentIds) {
-      const assignment = await this.assignmentRepository.findOne({ where: { id: aid } });
-      if (assignment) {
-        assignment.executionGroupId = group.id;
-        await this.assignmentRepository.save(assignment);
-      }
+    // One bulk UPDATE rather than a find+save per id (which was 2N queries for an N-assignment group).
+    if (dto.assignmentIds.length > 0) {
+      await this.assignmentRepository.update(
+        { id: In(dto.assignmentIds) },
+        { executionGroupId: group.id },
+      );
     }
 
     return this.groupRepository.findOne({ where: { id: group.id }, relations: ['assignments'] }) as Promise<OperationsExecutionGroupEntity>;

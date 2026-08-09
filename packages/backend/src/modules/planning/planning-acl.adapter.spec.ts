@@ -29,6 +29,8 @@ describe('PlanningAntiCorruptionLayer', () => {
   };
   const mockAssignmentRepo = {
     createQueryBuilder: jest.fn(),
+    // No branch is already covered by an active assignment in this fixture.
+    find: jest.fn().mockResolvedValue([]),
   };
   const mockProjectBranchRepo = {
     find: jest.fn().mockResolvedValue([

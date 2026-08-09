@@ -91,7 +91,12 @@ export const Holidays: React.FC = () => {
     queryKey: ['holidays', yearFilter, clientFilter],
     queryFn: () => api.request<Holiday[]>(`/holidays?year=${yearFilter}${clientFilter !== 'ALL' ? `&clientId=${clientFilter}` : ''}&limit=200`),
   });
-  const holidays = (Array.isArray(holidaysResponse) ? holidaysResponse : (holidaysResponse as any)?.data) || [];
+  // Memoized so its identity is stable across renders — otherwise the `byDate` Map below rebuilt on
+  // every render (form typing, etc.), not just when the data changed.
+  const holidays = useMemo(
+    () => (Array.isArray(holidaysResponse) ? holidaysResponse : (holidaysResponse as any)?.data) || [],
+    [holidaysResponse],
+  );
 
   const byDate = useMemo(() => {
     const m = new Map<string, Holiday[]>();
@@ -293,7 +298,8 @@ export const Holidays: React.FC = () => {
               <p>No holidays registered for {yearFilter}.</p>
             </div>
           ) : (
-            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ overflowX: 'auto' }}>
+            <table className="table" style={{ width: '100%', minWidth: '640px', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: '12px' }}>
                   <th style={{ padding: '10px' }}>Date</th>
@@ -335,6 +341,7 @@ export const Holidays: React.FC = () => {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       )}

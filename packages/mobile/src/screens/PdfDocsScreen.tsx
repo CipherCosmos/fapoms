@@ -12,6 +12,7 @@ interface PdfDocsScreenProps {
   onOpenScanner?: () => void;
   onSubmitCompletedPdf: () => void;
   onOpenExpenseModal: () => void;
+  onReportIssue: () => void;
 }
 
 /**
@@ -29,6 +30,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   onOpenScanner,
   onSubmitCompletedPdf,
   onOpenExpenseModal,
+  onReportIssue,
 }) => {
   const t = useTheme();
 
@@ -111,7 +113,13 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
         )}
       </Section>
 
-      <Button label="Log an expense for this trip" icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} full />
+      <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+        <Button label="Log an expense" icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} style={{ flex: 1 }} />
+        {/* The field app's one route to raise a problem to the desk — it cannot cancel or
+            reassign the job, so this is how an assayer signals "I can't do this / something's
+            wrong" and the desk picks it up. */}
+        <Button label="Report an issue" icon="flag-outline" variant="ghost" onPress={onReportIssue} style={{ flex: 1 }} />
+      </View>
     </View>
   );
 };

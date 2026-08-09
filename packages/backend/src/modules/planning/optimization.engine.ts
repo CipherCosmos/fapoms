@@ -35,7 +35,7 @@ export class OptimizationEngine {
   /**
    * Generates an optimized deployment plan for the project using a greedy solver.
    */
-  async generateProjectDeploymentPlan(projectId: string): Promise<OptimizationPlan> {
+  async generateProjectDeploymentPlan(projectId: string, weights: Record<string, number> = {}): Promise<OptimizationPlan> {
     const project = await this.projectQueryService.findOne(projectId);
     if (!project) {
       throw new NotFoundException(`Project ${projectId} not found.`);
@@ -63,7 +63,7 @@ export class OptimizationEngine {
     for (const pb of unassignedPBs) {
       let candidates: AssayerRecommendation[] = [];
       try {
-        candidates = await this.planningService.getRecommendedCandidates(pb.branchId);
+        candidates = await this.planningService.getRecommendedCandidates(pb.branchId, weights);
       } catch (err) {
         console.error(`Failed to fetch recommendations for branch ${pb.branchId}:`, err);
       }

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+import { CircuitBreaker } from '../../infrastructure/resilience/circuit-breaker';
 
 export type RoutingMode = 'driving' | 'walking' | 'cycling';
 
@@ -121,6 +122,13 @@ export class PostGISRoutingProvider implements RoutingProvider {
 @Injectable()
 export class OSRMRoutingProvider implements RoutingProvider {
   private readonly baseUrl: string;
+  // Trips after repeated OSRM failures and skips the call (straight to PostGIS) during the cooldown, so
+  // a sustained routing outage doesn't make every planning request pay the fetch timeout first.
+  private readonly breaker = new CircuitBreaker({
+    name: 'osrm',
+    failureThreshold: Number(process.env.OSRM_BREAKER_THRESHOLD) || 5,
+    cooldownMs: Number(process.env.OSRM_BREAKER_COOLDOWN_MS) || 30_000,
+  });
 
   constructor(
     private readonly configService: ConfigService,
@@ -136,15 +144,32 @@ export class OSRMRoutingProvider implements RoutingProvider {
     return mode === 'walking' ? 'foot' : mode === 'cycling' ? 'cycling' : 'driving';
   }
 
+  /**
+   * fetch() with a hard timeout. Without it, a stalled OSRM server holds the request open until the
+   * OS TCP timeout (minutes) before the try/catch can fall back to PostGIS — so a slow external routing
+   * service would freeze planning. AbortController fails fast so the PostGIS fallback kicks in quickly.
+   */
+  private async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+    const timeoutMs = Number(process.env.OSRM_TIMEOUT_MS) || 4000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async calculateRoute(
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     mode?: RoutingMode,
   ): Promise<RouteResult> {
-    try {
+    const fallback = () => this.postGISProvider.calculateRoute(origin, destination, mode);
+    return this.breaker.run(async () => {
       const profile = this.osrmProfile(mode);
       const url = `${this.baseUrl}/route/v1/${profile}/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=false`;
-      const res = await fetch(url);
+      const res = await this.fetchWithTimeout(url);
       if (!res.ok) throw new Error(`OSRM HTTP error: ${res.status}`);
       const data = await res.json();
       if (data.code === 'Ok' && data.routes?.[0]) {
@@ -154,10 +179,9 @@ export class OSRMRoutingProvider implements RoutingProvider {
           durationMinutes: parseFloat((route.duration / 60).toFixed(2)),
         };
       }
-    } catch (e) {
-      // Fallback silently to PostGIS
-    }
-    return this.postGISProvider.calculateRoute(origin, destination, mode);
+      // OSRM answered but had no usable route — it's up, so don't trip the breaker; use PostGIS.
+      return fallback();
+    }, fallback);
   }
 
   async calculateDistances(
@@ -165,14 +189,15 @@ export class OSRMRoutingProvider implements RoutingProvider {
     destinations: DestinationCoords[],
     mode?: RoutingMode,
   ): Promise<Record<string, RouteResult>> {
-    try {
+    const fallback = () => this.postGISProvider.calculateDistances(origin, destinations, mode);
+    return this.breaker.run(async () => {
       const profile = this.osrmProfile(mode);
       const coords = [
         `${origin.longitude},${origin.latitude}`,
         ...destinations.map((d) => `${d.longitude},${d.latitude}`),
       ].join(';');
       const url = `${this.baseUrl}/table/v1/${profile}/${coords}?sources=0`;
-      const res = await fetch(url);
+      const res = await this.fetchWithTimeout(url);
       if (!res.ok) throw new Error(`OSRM HTTP error: ${res.status}`);
       const data = await res.json();
       if (data.code === 'Ok' && data.durations?.[0] && data.distances?.[0]) {
@@ -187,10 +212,8 @@ export class OSRMRoutingProvider implements RoutingProvider {
         });
         return results;
       }
-    } catch (e) {
-      // Fallback to PostGIS
-    }
-    return this.postGISProvider.calculateDistances(origin, destinations, mode);
+      return fallback();
+    }, fallback);
   }
 
   async optimizeRoute(
@@ -204,14 +227,15 @@ export class OSRMRoutingProvider implements RoutingProvider {
     totalDurationMinutes: number;
     steps: { destinationId: string; distanceKm: number; durationMinutes: number }[];
   }> {
-    try {
+    const fallback = () => this.postGISProvider.optimizeRoute(origin, destinations, roundTrip, mode);
+    return this.breaker.run(async () => {
       const profile = this.osrmProfile(mode);
       const coords = [
         `${origin.longitude},${origin.latitude}`,
         ...destinations.map((d) => `${d.longitude},${d.latitude}`),
       ].join(';');
       const url = `${this.baseUrl}/table/v1/${profile}/${coords}?annotations=distance,duration`;
-      const res = await fetch(url);
+      const res = await this.fetchWithTimeout(url);
       if (!res.ok) throw new Error(`OSRM HTTP error: ${res.status}`);
       const data = await res.json();
       if (data.code === 'Ok' && data.durations && data.distances) {
@@ -232,10 +256,8 @@ export class OSRMRoutingProvider implements RoutingProvider {
 
         return solveTSP(origin, destinations, matrix, roundTrip);
       }
-    } catch (e) {
-      // Fallback to PostGIS
-    }
-    return this.postGISProvider.optimizeRoute(origin, destinations, roundTrip, mode);
+      return fallback();
+    }, fallback);
   }
 }
 

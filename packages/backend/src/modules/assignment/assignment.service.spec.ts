@@ -16,6 +16,7 @@ import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
@@ -120,6 +121,27 @@ const mockNotificationService = {
     getRepository: jest.fn().mockReturnValue(mockUserRepoViaDataSource),
   };
 
+  // The real UnitOfWork releases emitted events through the publisher after commit; this
+  // double runs the work with a manager and routes emit() to the same publisher mock, so the
+  // domain-event assertions below exercise the events the service now emits from inside its
+  // transaction rather than publishing after it.
+  const mockUnitOfWork = {
+    run: jest.fn(async (work: any) =>
+      work(
+        {
+          save: jest.fn((arg: any) => Promise.resolve(arg)),
+          getRepository: jest.fn().mockReturnValue({
+            findOne: jest.fn(),
+            save: jest.fn((arg: any) => Promise.resolve(arg)),
+            create: jest.fn((arg: any) => arg),
+          }),
+        },
+        (event: string, payload: any) =>
+          mockDomainEventPublisher.publish(event, { ...payload, timestamp: new Date() }),
+      ),
+    ),
+  };
+
   const mockConstraintEvaluator = {
     checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
@@ -155,6 +177,7 @@ const mockNotificationService = {
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: DataSource, useValue: mockDataSource },
+        { provide: UnitOfWork, useValue: mockUnitOfWork },
         { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
         { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
         { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },

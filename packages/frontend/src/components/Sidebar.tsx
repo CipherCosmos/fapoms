@@ -14,7 +14,7 @@ import {
   Sliders,
   Building2,
   Receipt,
-  UserCog, Inbox } from 'lucide-react';
+  UserCog, Inbox, Flag } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { BrandLogo } from './BrandLogo';
@@ -43,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Stage 1: Planning', path: '/planning', icon: Map },
         { name: 'Stage 2: Schedule Dispatch', path: '/scheduling', icon: CalendarDays },
         { name: 'Stage 3: Field Execution', path: '/assignments', icon: ClipboardList },
+        { name: 'Field Issues', path: '/field-issues', icon: Flag },
       ],
     },
     {
@@ -60,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       category: 'Administration',
       items: [
         { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
+        { name: 'Territorial Zones', path: '/zones', icon: Map },
         { name: 'Rule Engine', path: '/rules', icon: Sliders },
         { name: 'User Management', path: '/users', icon: Users },
       ],

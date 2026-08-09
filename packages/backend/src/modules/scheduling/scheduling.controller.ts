@@ -83,6 +83,28 @@ export class SchedulingController {
     };
   }
 
+  // Declared before @Get(':id') so the literal "assayer-workload" is not swallowed by that route's
+  // ParseUUIDPipe (which would 400) — the same ordering discipline assignment.controller uses for
+  // its "field-issues" route. Without this the over-booking warning in the schedule modal is dead.
+  @Get('assayer-workload')
+  @Roles(...STAFF_ROLES)
+  @ApiOperation({ summary: 'Get number of confirmed/tentative schedules for an assayer around a date' })
+  async getAssayerWorkload(
+    @Query('assayerId') assayerId: string,
+    @Query('date') date: string,
+  ) {
+    if (!assayerId || !date) {
+      return { success: true, data: { count: 0, schedules: [] } };
+    }
+    const dt = new Date(date);
+    const weekStart = new Date(dt);
+    weekStart.setDate(dt.getDate() - dt.getDay());
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    const data = await this.schedulingService.getAssayerWorkloadInRange(assayerId, weekStart, weekEnd);
+    return { success: true, data };
+  }
+
   @Get(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get details for a single schedule by ID' })
@@ -108,25 +130,6 @@ export class SchedulingController {
       success: true,
       data: schedule,
     };
-  }
-
-  @Get('assayer-workload')
-  @Roles(...STAFF_ROLES)
-  @ApiOperation({ summary: 'Get number of confirmed/tentative schedules for an assayer around a date' })
-  async getAssayerWorkload(
-    @Query('assayerId') assayerId: string,
-    @Query('date') date: string,
-  ) {
-    if (!assayerId || !date) {
-      return { success: true, data: { count: 0, schedules: [] } };
-    }
-    const dt = new Date(date);
-    const weekStart = new Date(dt);
-    weekStart.setDate(dt.getDate() - dt.getDay());
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-    const data = await this.schedulingService.getAssayerWorkloadInRange(assayerId, weekStart, weekEnd);
-    return { success: true, data };
   }
 
   @Get(':id/timeline')

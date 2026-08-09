@@ -292,6 +292,12 @@ export class MobileApiService {
     if (response.status === 401) {
       const refreshed = await this.tryRefresh();
       if (refreshed) {
+        // Rebuild the Authorization header from the NEW token before retrying. `headers` was
+        // captured with the pre-refresh token, so retrying with it resent the stale token and
+        // 401'd again — turning every access-token expiry into a full session loss (and, since
+        // the refresh had already rotated the refresh token, an unrecoverable one) on the next
+        // cold start.
+        if (this.authToken) headers['Authorization'] = `Bearer ${this.authToken}`;
         response = await this.fetchWithTimeout(cacheBust, { ...options, headers }, timeoutMs);
       }
     }
@@ -549,6 +555,55 @@ export class MobileApiService {
   static async rejectAssignment(assignmentId: string, reason: string): Promise<{ success: boolean; error?: string }> {
     const ok = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
     return { success: ok, error: ok ? undefined : 'Failed to reject assignment' };
+  }
+
+  /**
+   * The assayer's own availability: the days they are off and the hours they work.
+   *
+   * The scheduler already refuses to place an audit on a day the assayer is on leave
+   * (ConstraintEvaluator.checkLeaves), so this is what lets a field worker stop the desk
+   * offering them work while they are away — without phoning HR. Sent through the same
+   * self-profile endpoint; the backend now lists these among the self-editable fields.
+   */
+  static async updateAvailability(
+    assayerId: string,
+    data: { leaves?: { startDate: string; endDate: string }[]; workingHours?: { start: string; end: string } },
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+      const body = await response.json().catch(() => ({}));
+      return { success: response.ok && body?.success !== false, error: body?.message };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error updating availability' };
+    }
+  }
+
+  /**
+   * Flag a problem on an assignment to the operations desk.
+   *
+   * The field app cannot cancel or reassign work — that stays with the desk. This is the
+   * assayer's channel to raise a problem (can't attend, branch shut, safety concern) so the
+   * desk gets a real signal to act on, instead of the assayer having to phone someone with
+   * nothing recorded.
+   */
+  static async reportAssignmentIssue(
+    assignmentId: string,
+    category: string,
+    note?: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/report-issue`, {
+        method: 'POST',
+        body: JSON.stringify({ category, note: note?.trim() || undefined }),
+      });
+      const data = await response.json().catch(() => ({}));
+      return { success: response.ok && data?.success !== false, error: data?.message };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error reporting the issue' };
+    }
   }
 
   static async submitExpense(
@@ -1259,14 +1314,6 @@ export class MobileApiService {
     } catch {
       return [];
     }
-  }
-
-  static async respondToQuery(queryId: string, responseText: string, attachments?: any[]): Promise<boolean> {
-    const response = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/respond`, {
-      method: 'POST',
-      body: JSON.stringify({ response: responseText, attachments }),
-    });
-    return response.ok;
   }
 
   /**

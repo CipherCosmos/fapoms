@@ -27,6 +27,14 @@ describe('OperationsControlCenterService', () => {
 
   const mockAssignmentRepo = {
     find: jest.fn().mockResolvedValue([]),
+    count: jest.fn().mockResolvedValue(0),
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    })),
   };
 
   const mockProjectMetricsProvider = {

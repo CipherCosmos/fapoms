@@ -99,7 +99,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
             <button type="submit" disabled={add.isPending} className="btn btn-primary">{add.isPending ? 'Saving...' : 'Save Contract'}</button>
           </>
         }>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <StyledInput placeholder="Contract Number *" value={form.contractNumber} onChange={(e) => setForm((f) => ({ ...f, contractNumber: e.target.value }))} required />
             <StyledInput placeholder="Title *" value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} required />
             <StyledInput placeholder="Effective From *" type="date" value={form.effectiveFrom} onChange={(e) => setForm((f) => ({ ...f, effectiveFrom: e.target.value }))} required />

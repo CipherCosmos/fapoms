@@ -324,7 +324,8 @@ const PreferencesPanel: React.FC = () => {
           turning a switch off only takes effect from this point on.
         </p>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', alignItems: 'center', padding: '10px 20px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
+      <div style={{ overflowX: 'auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '10px 20px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
         <span>Category</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><MonitorSmartphone size={12} /> In-app</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><Smartphone size={12} /> Push</span>
@@ -333,7 +334,7 @@ const PreferencesPanel: React.FC = () => {
       {prefs.map((p) => {
         const meta = CATEGORY_META[p.category];
         return (
-          <div key={p.category} style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-hair)' }}>
+          <div key={p.category} style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-hair)' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', fontWeight: 600 }}>
               <meta.icon size={15} style={{ color: meta.tone }} /> {meta.label}
             </span>
@@ -349,6 +350,7 @@ const PreferencesPanel: React.FC = () => {
           </div>
         );
       })}
+      </div>
     </div>
   );
 };

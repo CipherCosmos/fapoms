@@ -14,6 +14,7 @@ describe('assertProductionSafeConfig', () => {
     DB_SYNCHRONIZE: 'false',
     CORS_ORIGINS: 'https://fapoms.example.com',
     DB_PASSWORD: 'a-genuinely-random-production-password',
+    STORAGE_DRIVER: 's3',
   };
 
   beforeEach(() => {
@@ -59,6 +60,22 @@ describe('assertProductionSafeConfig', () => {
     delete env.CORS_ORIGINS;
     process.env = env;
     expect(() => assertProductionSafeConfig()).toThrow(/CORS_ORIGINS/);
+  });
+
+  it('refuses local-disk storage in production — audit evidence must go to s3', () => {
+    const env: any = { ...process.env, ...safeProduction };
+    delete env.STORAGE_DRIVER;
+    process.env = env;
+    expect(() => assertProductionSafeConfig()).toThrow(/STORAGE_DRIVER/);
+  });
+
+  it('refuses a JWT secret that was committed to git history', () => {
+    process.env = {
+      ...process.env,
+      ...safeProduction,
+      JWT_SECRET: 'fapoms-docker-dev-secret-key-change-in-production',
+    };
+    expect(() => assertProductionSafeConfig()).toThrow(/JWT_SECRET/);
   });
 
   it('reports every problem at once rather than one per restart', () => {

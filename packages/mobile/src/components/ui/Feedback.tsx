@@ -3,6 +3,7 @@ import { View, Animated, Platform, Alert, Pressable } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Icon } from './primitives';
 import type { IconName } from './primitives';
+import * as haptics from '../../lib/haptics';
 
 export type Tone = 'success' | 'error' | 'warning' | 'info';
 
@@ -85,8 +86,8 @@ export const FeedbackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const api = useMemo<FeedbackApi>(
     () => ({
       notify,
-      success: (t, m) => notify('success', t, m),
-      error: (t, m) => notify('error', t, m),
+      success: (t, m) => { haptics.success(); notify('success', t, m); },
+      error: (t, m) => { haptics.error(); notify('error', t, m); },
       warning: (t, m) => notify('warning', t, m),
       info: (t, m) => notify('info', t, m),
       confirm: (title, message, confirmLabel = 'Confirm') =>

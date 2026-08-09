@@ -7,7 +7,8 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Between } from 'typeorm';
+import { Repository, In, Between, EntityManager } from 'typeorm';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
@@ -17,6 +18,7 @@ import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 import {
   BillingLevel,
   BillingState,
@@ -70,6 +72,9 @@ export interface SplitEntryDto {
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+/** Rounding slack when comparing money. Two figures within this are equal. */
+const MONEY_EPSILON = 0.01;
+
 /** Work that is real revenue but has not reached an invoice yet. */
 const UNBILLED_STATES: BillingState[] = [
   BillingState.PENDING_BILLING,
@@ -102,7 +107,133 @@ export class BillingEngineService implements OnModuleInit {
     @InjectRepository(ProjectEntity)
     private readonly projectRepository: Repository<ProjectEntity>,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly cache: CacheService,
+    private readonly uow: UnitOfWork,
   ) {}
+
+  // -----------------------------------------------------------------------
+  // Transaction + row-locking primitives
+  //
+  // Every method in this file that moves money or changes a billing state runs
+  // inside `inTx`. Before this, each of them was a sequence of independent
+  // autocommitted saves: `recordPayment` wrote the payment row, then the invoice,
+  // then one row per entry — 2+N separate transactions. A crash, a statement
+  // timeout or a lost connection anywhere in that sequence left the ledger in a
+  // state no code could produce deliberately: a payment recorded against an
+  // unadjusted invoice, or an invoice marked PAID whose entries still showed the
+  // full amount outstanding. Nothing detected it and nothing could repair it,
+  // because there was no record of how far the sequence had got.
+  // -----------------------------------------------------------------------
+
+  /**
+   * Run `work` in one database transaction, releasing its domain events only after commit.
+   *
+   * The isolation level and the after-COMMIT event ordering now live in `UnitOfWork`, so this
+   * is a name rather than a mechanism — kept because the 16 call sites below read better as
+   * `inTx` than as `uow.run`, and because it keeps the locking helpers and the boundary they
+   * depend on adjacent in the file.
+   */
+  private inTx<T>(
+    work: (
+      manager: EntityManager,
+      emit: (event: string, payload: Record<string, unknown>) => void,
+    ) => Promise<T>,
+  ): Promise<T> {
+    return this.uow.run(work);
+  }
+
+  /**
+   * Load one billing entry with a write lock held for the rest of the transaction.
+   *
+   * `@VersionColumn()` has been on every one of these entities since the beginning and has
+   * never protected anything: TypeORM only compares versions when a caller explicitly asks
+   * for an optimistic lock, and no call site here ever did. The column incremented and the
+   * lost update happened anyway.
+   *
+   * A write lock is also the better fit than fixing that. Optimistic locking would let the
+   * second writer evaluate every guard against stale data and only then reject it. A lock
+   * makes the second writer wait and then evaluate the guards against what actually
+   * committed — so a transition that has become invalid, or a payment that would now
+   * overpay, is refused for the right reason instead of being refused as a version clash.
+   */
+  private async lockEntry(manager: EntityManager, entryId: string): Promise<BillingEntryEntity> {
+    const entry = await manager.findOne(BillingEntryEntity, {
+      where: { id: entryId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!entry) throw new NotFoundException(`Billing entry ${entryId} not found.`);
+    return entry;
+  }
+
+  /**
+   * Write-lock a set of entries, acquired in a stable order.
+   *
+   * The ordering is what keeps two overlapping operations from deadlocking: if a payment
+   * against invoice X and a merge both touch entries {A, B}, both take A before B and one
+   * simply waits. Without it they can take them in opposite orders and Postgres kills one
+   * with a deadlock (40P01).
+   *
+   * This makes the common deadlock impossible rather than merely unlikely — the executor
+   * is free to lock in scan order, so a 40P01 remains theoretically reachable. It surfaces
+   * as a failed request with the whole transaction rolled back, never as half-applied money.
+   */
+  private async lockEntriesById(
+    manager: EntityManager,
+    entryIds: string[],
+  ): Promise<BillingEntryEntity[]> {
+    if (!entryIds.length) return [];
+    return manager
+      .createQueryBuilder(BillingEntryEntity, 'e')
+      .setLock('pessimistic_write')
+      .where('e.id IN (:...entryIds)', { entryIds })
+      .orderBy('e.id', 'ASC')
+      .getMany();
+  }
+
+  /** Write-lock every entry attached to an invoice, in the same stable order. */
+  private async lockEntriesByInvoice(
+    manager: EntityManager,
+    invoiceId: string,
+  ): Promise<BillingEntryEntity[]> {
+    return manager
+      .createQueryBuilder(BillingEntryEntity, 'e')
+      .setLock('pessimistic_write')
+      .where('e.invoice_id = :invoiceId', { invoiceId })
+      .orderBy('e.id', 'ASC')
+      .getMany();
+  }
+
+  /**
+   * Write-lock one invoice, without its relations.
+   *
+   * Postgres refuses `FOR UPDATE` on the nullable side of an outer join, and `getInvoice`
+   * eager-loads `entries` and `payments` as LEFT JOINs — so locking and loading have to be
+   * two steps. Entries are locked separately by `lockEntriesByInvoice`.
+   */
+  private async lockInvoice(
+    manager: EntityManager,
+    invoiceId: string,
+  ): Promise<BillingInvoiceEntity> {
+    const invoice = await manager.findOne(BillingInvoiceEntity, {
+      where: { id: invoiceId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+    return invoice;
+  }
+
+  /** Write-lock one assayer payable. */
+  private async lockPayable(
+    manager: EntityManager,
+    payableId: string,
+  ): Promise<AssayerPayableEntity> {
+    const payable = await manager.findOne(AssayerPayableEntity, {
+      where: { id: payableId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!payable) throw new NotFoundException(`Payable ${payableId} not found.`);
+    return payable;
+  }
 
   /** Auto-sync: when an assignment completes, create its billing entry automatically. */
   onModuleInit() {
@@ -113,24 +244,33 @@ export class BillingEngineService implements OnModuleInit {
       }
       const assignmentId = payload?.assignmentId;
       if (!assignmentId) return;
-      try {
-        const result = await this.syncAssignment(assignmentId);
-        if (result.created) {
-          this.logger.log(`Auto-billed completed assignment ${assignmentId} (entry ${result.entryId}).`);
+
+      // Serialize concurrent syncs for the SAME assignment across all replicas. The event
+      // bus can deliver two status changes back-to-back (e.g. IN_PROGRESS then COMPLETED),
+      // and without this their check-then-create in syncAssignment / syncPayableForAssignment
+      // can interleave into a duplicate billing entry AND payable — a double-bill and a
+      // double-pay. Fail-open: if Redis is unavailable, the "already billed / already exists"
+      // guards inside the sync methods remain the correctness backstop.
+      await this.cache.withLock(`lock:billing:sync:${assignmentId}`, 30, async () => {
+        try {
+          const result = await this.syncAssignment(assignmentId);
+          if (result.created) {
+            this.logger.log(`Auto-billed completed assignment ${assignmentId} (entry ${result.entryId}).`);
+          }
+        } catch (err) {
+          this.logger.error(`Auto-bill failed for assignment ${assignmentId}: ${(err as Error).message}`);
         }
-      } catch (err) {
-        this.logger.error(`Auto-bill failed for assignment ${assignmentId}: ${(err as Error).message}`);
-      }
-      // Cost leg, recorded from the same event so revenue and cost can never drift
-      // apart. Failure here must not roll back the receivable above, hence separate.
-      try {
-        const payable = await this.syncPayableForAssignment(assignmentId);
-        if (payable.created) {
-          this.logger.log(`Auto-created assayer payable for assignment ${assignmentId} (payable ${payable.payableId}).`);
+        // Cost leg, recorded from the same event so revenue and cost can never drift
+        // apart. Failure here must not roll back the receivable above, hence separate.
+        try {
+          const payable = await this.syncPayableForAssignment(assignmentId);
+          if (payable.created) {
+            this.logger.log(`Auto-created assayer payable for assignment ${assignmentId} (payable ${payable.payableId}).`);
+          }
+        } catch (err) {
+          this.logger.error(`Auto-payable failed for assignment ${assignmentId}: ${(err as Error).message}`);
         }
-      } catch (err) {
-        this.logger.error(`Auto-payable failed for assignment ${assignmentId}: ${(err as Error).message}`);
-      }
+      });
     });
   }
 
@@ -181,8 +321,11 @@ export class BillingEngineService implements OnModuleInit {
    * Falls back to Indian audit-services defaults when a client has no billing
    * record yet rather than failing the sale.
    */
-  private async clientTaxRates(clientId: string): Promise<{ gstRate: number; tdsRate: number; paymentTerms: string | null }> {
-    const rows = await this.entryRepository.manager.query(
+  private async clientTaxRates(
+    clientId: string,
+    manager?: EntityManager,
+  ): Promise<{ gstRate: number; tdsRate: number; paymentTerms: string | null }> {
+    const rows = await (manager ?? this.entryRepository.manager).query(
       `SELECT gst_rate, tds_rate, payment_terms FROM client_billing WHERE client_id = $1 AND is_active = true LIMIT 1`,
       [clientId],
     );
@@ -209,12 +352,12 @@ export class BillingEngineService implements OnModuleInit {
   /** Small cache: the same operator writes many history rows per request. */
   private readonly userNameCache = new Map<string, string>();
 
-  private async resolveUserName(userId: string): Promise<string> {
+  private async resolveUserName(userId: string, manager?: EntityManager): Promise<string> {
     if (!userId || userId === 'system') return 'System (automated)';
     const cached = this.userNameCache.get(userId);
     if (cached) return cached;
     try {
-      const rows = await this.entryRepository.manager.query(
+      const rows = await (manager ?? this.entryRepository.manager).query(
         `SELECT display_name FROM users WHERE id = $1 LIMIT 1`,
         [userId],
       );
@@ -226,19 +369,30 @@ export class BillingEngineService implements OnModuleInit {
     }
   }
 
+  /**
+   * Append one immutable row to the money trail.
+   *
+   * `manager` is not optional in spirit: every caller that changes money passes the
+   * transaction's manager, so the history row commits or rolls back with the change it
+   * describes. Writing it on its own connection is what previously allowed a state change
+   * to land with no record of who made it or what it replaced — the one thing an audit
+   * trail for a bank cannot do. The parameter stays optional only for the read-only and
+   * not-yet-transactional callers.
+   */
   private async history(
     userId: string,
     h: Partial<BillingHistoryEntity>,
+    manager?: EntityManager,
   ): Promise<BillingHistoryEntity> {
     const rec = this.historyRepository.create({
       ...h,
       // The column existed but nothing ever wrote it, so the audit trail could only
       // ever show a raw user id — useless for "who approved this invoice?".
-      userName: h.userName ?? (await this.resolveUserName(userId)),
+      userName: h.userName ?? (await this.resolveUserName(userId, manager)),
       createdBy: userId,
       updatedBy: userId,
     } as BillingHistoryEntity);
-    return this.historyRepository.save(rec);
+    return manager ? manager.save(rec) : this.historyRepository.save(rec);
   }
 
   private async publish(event: string, payload: Record<string, unknown>): Promise<void> {
@@ -262,10 +416,11 @@ export class BillingEngineService implements OnModuleInit {
       throw new BadRequestException('assignmentId is required for ASSIGNMENT-level billing.');
     }
 
+    return this.inTx(async (m, emit) => {
     // Tax treatment falls back to the client's contracted rates when the caller
     // does not state them, so auto-generated lines are taxed the same as manual
     // ones instead of silently going out at 0%.
-    const contract = await this.clientTaxRates(dto.clientId);
+    const contract = await this.clientTaxRates(dto.clientId, m);
 
     const entry = this.entryRepository.create({
       entryNumber: `BE-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
@@ -302,7 +457,7 @@ export class BillingEngineService implements OnModuleInit {
       updatedBy: userId,
     });
     this.recompute(entry);
-    const saved = await this.entryRepository.save(entry);
+    const saved = await m.save(entry);
 
     await this.history(userId, {
       clientId: saved.clientId,
@@ -316,16 +471,19 @@ export class BillingEngineService implements OnModuleInit {
       toState: saved.state,
       newValue: this.moneyOf(saved),
       reason: dto.description ?? null,
-    });
-    await this.publish('billing:entry-created', { entryId: saved.id, level: saved.level, clientId: saved.clientId });
+    }, m);
+    emit('billing:entry-created', { entryId: saved.id, level: saved.level, clientId: saved.clientId });
 
-    // Duplicate detection fires at creation (spec §7) — never silently.
-    const duplicates = await this.findDuplicates(saved);
+    // Duplicate detection fires at creation (spec §7) — never silently. It runs in the
+    // same transaction as the entry it is about, so a line can never commit without the
+    // conflict that flags it.
+    const duplicates = await this.findDuplicates(saved, m);
     for (const dup of duplicates) {
-      await this.raiseDuplicateConflict(saved, dup, userId);
+      await this.raiseDuplicateConflict(saved, dup, userId, m, emit);
     }
 
     return saved;
+    });
   }
 
   /**
@@ -609,64 +767,97 @@ export class BillingEngineService implements OnModuleInit {
     return String(d).slice(0, 10);
   }
 
+  /**
+   * Move one billing entry to a new state.
+   *
+   * The read, the three guards and the write are now one atomic, serialized unit. They used
+   * to be a read-modify-write on an unlocked row: two operators approving the same entry
+   * both read `SUBMITTED`, both found the transition valid, and both wrote — the second
+   * silently overwriting the first, with two history rows claiming to describe the same
+   * change from the same starting state. Worse, the conflict-freeze check below could pass
+   * against a conflict raised microseconds later, letting a disputed line be invoiced.
+   *
+   * Holding the row lock across the guards is the point: the entry cannot change between
+   * "is this transition legal?" and "apply it".
+   */
   async transitionEntry(entryId: string, targetState: BillingState, userId: string, reason?: string): Promise<BillingEntryEntity> {
-    const entry = await this.entryRepository.findOne({ where: { id: entryId } });
-    if (!entry) throw new NotFoundException(`Billing entry ${entryId} not found.`);
+    return this.inTx(async (m, emit) => {
+      const { saved } = await this.transitionEntryLocked(m, emit, entryId, targetState, userId, reason);
+      return saved;
+    });
+  }
 
-    if (entry.state === targetState) throw new ConflictException(`Entry is already ${targetState}.`);
+  /**
+   * The transition itself, assuming an open transaction.
+   *
+   * Split out so `bulkTransitionEntries` can give each row its own transaction while still
+   * reporting the state each row actually moved *from* — read under the row lock rather
+   * than from an earlier unlocked glance that a concurrent writer may have invalidated.
+   */
+  private async transitionEntryLocked(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    entryId: string,
+    targetState: BillingState,
+    userId: string,
+    reason?: string,
+  ): Promise<{ saved: BillingEntryEntity; fromState: BillingState }> {
+      const entry = await this.lockEntry(m, entryId);
 
-    // An unresolved blocking conflict freezes the entries it names (spec §8).
-    // This used to count every open blocking conflict in the system regardless of
-    // which entries it referenced, so a single disputed line halted billing for
-    // every client in the database. Only conflicts naming *this* entry may stop it.
-    if (![BillingState.ON_HOLD, BillingState.DISPUTED].includes(targetState)) {
-      const blocking = await this.conflictRepository
-        .createQueryBuilder('c')
-        .where('c.status = :status', { status: BillingConflictStatus.OPEN })
-        .andWhere('c.blocks_billing = true')
-        .andWhere('c.entry_ids @> :entryId::jsonb', { entryId: JSON.stringify([entryId]) })
-        .getOne();
-      if (blocking) {
-        throw new ConflictException(
-          `Blocked by unresolved conflict ${blocking.conflictNumber}: ${blocking.description}. Resolve it first.`,
+      if (entry.state === targetState) throw new ConflictException(`Entry is already ${targetState}.`);
+
+      // An unresolved blocking conflict freezes the entries it names (spec §8).
+      // This used to count every open blocking conflict in the system regardless of
+      // which entries it referenced, so a single disputed line halted billing for
+      // every client in the database. Only conflicts naming *this* entry may stop it.
+      if (![BillingState.ON_HOLD, BillingState.DISPUTED].includes(targetState)) {
+        const blocking = await m
+          .createQueryBuilder(BillingConflictEntity, 'c')
+          .where('c.status = :status', { status: BillingConflictStatus.OPEN })
+          .andWhere('c.blocks_billing = true')
+          .andWhere('c.entry_ids @> :entryId::jsonb', { entryId: JSON.stringify([entryId]) })
+          .getOne();
+        if (blocking) {
+          throw new ConflictException(
+            `Blocked by unresolved conflict ${blocking.conflictNumber}: ${blocking.description}. Resolve it first.`,
+          );
+        }
+      }
+
+      if (!isValidTransition(BILLING_STATE_TRANSITIONS, entry.state, targetState)) {
+        throw new BadRequestException(
+          `Cannot transition billing entry from ${entry.state} to ${targetState}.`,
         );
       }
-    }
 
-    if (!isValidTransition(BILLING_STATE_TRANSITIONS, entry.state, targetState)) {
-      throw new BadRequestException(
-        `Cannot transition billing entry from ${entry.state} to ${targetState}.`,
-      );
-    }
+      const fromState = entry.state;
+      entry.state = targetState;
+      entry.updatedBy = userId;
 
-    const fromState = entry.state;
-    entry.state = targetState;
-    entry.updatedBy = userId;
+      // Keeping payment state in sync as money moves through the pipeline.
+      if (targetState === BillingState.PAID) entry.paymentState = PaymentState.PAID;
+      if (targetState === BillingState.PARTIALLY_PAID) entry.paymentState = PaymentState.PARTIALLY_PAID;
+      if (targetState === BillingState.CANCELLED) {
+        entry.paymentState = PaymentState.REVERSED;
+        entry.cancelledAmount = entry.totalAmount;
+        entry.outstandingAmount = 0;
+      }
 
-    // Keeping payment state in sync as money moves through the pipeline.
-    if (targetState === BillingState.PAID) entry.paymentState = PaymentState.PAID;
-    if (targetState === BillingState.PARTIALLY_PAID) entry.paymentState = PaymentState.PARTIALLY_PAID;
-    if (targetState === BillingState.CANCELLED) {
-      entry.paymentState = PaymentState.REVERSED;
-      entry.cancelledAmount = entry.totalAmount;
-      entry.outstandingAmount = 0;
-    }
-
-    const saved = await this.entryRepository.save(entry);
-    await this.history(userId, {
-      clientId: saved.clientId,
-      projectId: saved.projectId,
-      assignmentId: saved.assignmentId,
-      assayerId: saved.assayerId,
-      entityType: BillingEntityType.ENTRY,
-      entityId: saved.id,
-      action: 'ENTRY_STATE_CHANGED',
-      fromState,
-      toState: targetState,
-      reason: reason ?? null,
-    });
-    await this.publish('billing:entry-state-changed', { entryId: saved.id, fromState, toState: targetState });
-    return saved;
+      const saved = await m.save(entry);
+      await this.history(userId, {
+        clientId: saved.clientId,
+        projectId: saved.projectId,
+        assignmentId: saved.assignmentId,
+        assayerId: saved.assayerId,
+        entityType: BillingEntityType.ENTRY,
+        entityId: saved.id,
+        action: 'ENTRY_STATE_CHANGED',
+        fromState,
+        toState: targetState,
+        reason: reason ?? null,
+      }, m);
+      emit('billing:entry-state-changed', { entryId: saved.id, fromState, toState: targetState });
+      return { saved, fromState };
   }
 
   /**
@@ -674,6 +865,13 @@ export class BillingEngineService implements OnModuleInit {
    * runs through the normal transition rules (conflict freeze, valid transition)
    * and is history-logged individually. Per-row errors are isolated so one bad
    * entry never aborts the rest; rows already in the target state are skipped.
+   *
+   * Deliberately one transaction PER ROW rather than one around the batch. The
+   * per-row error isolation above is the documented contract — an operator selecting
+   * two hundred lines expects the hundred and ninety-eight valid ones to move — and a
+   * single enclosing transaction would roll all of them back on the first bad row.
+   * Each row is still atomic with its own history entry, which is the property that
+   * was missing.
    */
   async bulkTransitionEntries(
     entryIds: string[],
@@ -690,30 +888,40 @@ export class BillingEngineService implements OnModuleInit {
     const failed: { id: string; reason: string }[] = [];
 
     for (const entryId of entryIds) {
-      const entry = await this.entryRepository.findOne({ where: { id: entryId } });
-      if (!entry) {
-        failed.push({ id: entryId, reason: `Billing entry ${entryId} not found.` });
-        continue;
-      }
-      if (entry.state === targetState) {
-        skipped.push({ id: entryId, current: entry.state, reason: `Already ${targetState}` });
-        continue;
-      }
       try {
-        const from = entry.state;
-        await this.transitionEntry(entryId, targetState, userId, reason);
-        succeeded.push({ id: entryId, from, to: targetState });
+        // The from-state comes back from inside the row lock, so the report describes
+        // the transition that actually happened rather than one read beforehand.
+        const { fromState } = await this.inTx((m, emit) =>
+          this.transitionEntryLocked(m, emit, entryId, targetState, userId, reason),
+        );
+        succeeded.push({ id: entryId, from: fromState, to: targetState });
       } catch (e) {
-        failed.push({ id: entryId, reason: (e as Error).message });
+        // "Already in the target state" is a skip, not a failure — the row is where the
+        // operator wanted it. It arrives here as the ConflictException raised under the
+        // lock, which is the only reading of "already" that cannot be stale.
+        const message = (e as Error).message;
+        if (e instanceof ConflictException && message.includes(`already ${targetState}`)) {
+          skipped.push({ id: entryId, current: targetState, reason: `Already ${targetState}` });
+          continue;
+        }
+        failed.push({ id: entryId, reason: message });
       }
     }
 
     return { succeeded, skipped, failed };
   }
 
+  /**
+   * Re-price an entry by `delta`.
+   *
+   * Locked because the "nothing collected yet" guard is a check-then-act against money:
+   * unlocked, a payment landing between the check and the save re-priced a line that had
+   * just been paid, leaving `paidAmount` above the new `totalAmount` — a negative balance
+   * owed to the client that no report expects to exist.
+   */
   async adjustEntry(entryId: string, delta: number, reason: string, userId: string): Promise<BillingEntryEntity> {
-    const entry = await this.entryRepository.findOne({ where: { id: entryId } });
-    if (!entry) throw new NotFoundException(`Billing entry ${entryId} not found.`);
+    return this.inTx(async (m, emit) => {
+    const entry = await this.lockEntry(m, entryId);
 
     // Money that has already been collected cannot be quietly re-priced; that
     // needs a credit note, not an in-place edit.
@@ -732,7 +940,7 @@ export class BillingEngineService implements OnModuleInit {
     entry.state = BillingState.ADJUSTED;
     entry.updatedBy = userId;
     this.recompute(entry);
-    const saved = await this.entryRepository.save(entry);
+    const saved = await m.save(entry);
 
     await this.history(userId, {
       clientId: saved.clientId,
@@ -749,9 +957,10 @@ export class BillingEngineService implements OnModuleInit {
       previousValue: { adjustmentAmount: previousAdjustment, totalAmount: previousTotal },
       newValue: { adjustmentAmount: Number(saved.adjustmentAmount), totalAmount: Number(saved.totalAmount) },
       reason,
-    });
-    await this.publish('billing:entry-adjusted', { entryId: saved.id, delta, totalAmount: Number(saved.totalAmount) });
+    }, m);
+    emit('billing:entry-adjusted', { entryId: saved.id, delta, totalAmount: Number(saved.totalAmount) });
     return saved;
+    });
   }
 
   async findEntries(filters: {
@@ -834,9 +1043,13 @@ export class BillingEngineService implements OnModuleInit {
    *   - CLIENT: same period + amount, no project tie.
    * An entry that is a split/merge child (parentEntryId set) is excluded.
    */
-  private async findDuplicates(entry: BillingEntryEntity): Promise<BillingEntryEntity[]> {
-    const q = this.entryRepository
-      .createQueryBuilder('e')
+  private async findDuplicates(
+    entry: BillingEntryEntity,
+    manager?: EntityManager,
+  ): Promise<BillingEntryEntity[]> {
+    const q = (manager
+      ? manager.createQueryBuilder(BillingEntryEntity, 'e')
+      : this.entryRepository.createQueryBuilder('e'))
       .where('e.is_active = :ia', { ia: true })
       .andWhere('e.id != :id', { id: entry.id })
       .andWhere('e.parent_entry_id IS NULL')
@@ -856,7 +1069,13 @@ export class BillingEngineService implements OnModuleInit {
     return q.getMany();
   }
 
-  private async raiseDuplicateConflict(entry: BillingEntryEntity, duplicateOf: BillingEntryEntity, userId: string): Promise<void> {
+  private async raiseDuplicateConflict(
+    entry: BillingEntryEntity,
+    duplicateOf: BillingEntryEntity,
+    userId: string,
+    manager: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+  ): Promise<void> {
     const conflict = this.conflictRepository.create({
       conflictNumber: `BC-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
       severity: BillingConflictSeverity.WARNING,
@@ -870,7 +1089,7 @@ export class BillingEngineService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    const saved = await this.conflictRepository.save(conflict);
+    const saved = await manager.save(conflict);
     await this.history(userId, {
       clientId: entry.clientId,
       projectId: entry.projectId,
@@ -880,8 +1099,8 @@ export class BillingEngineService implements OnModuleInit {
       action: 'DUPLICATE_FLAGGED',
       newValue: { entryIds: [entry.id, duplicateOf.id] },
       reason: conflict.description,
-    });
-    await this.publish('billing:duplicate-detected', { conflictId: saved.id, entryIds: conflict.entryIds });
+    }, manager);
+    emit('billing:duplicate-detected', { conflictId: saved.id, entryIds: conflict.entryIds });
   }
 
   // -----------------------------------------------------------------------
@@ -900,6 +1119,7 @@ export class BillingEngineService implements OnModuleInit {
     userId: string,
   ): Promise<BillingConflictEntity> {
     if (!dto.entryIds?.length) throw new BadRequestException('At least one entryId is required.');
+    return this.inTx(async (m) => {
     const conflict = this.conflictRepository.create({
       conflictNumber: `BC-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
       severity: dto.severity,
@@ -913,7 +1133,7 @@ export class BillingEngineService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    const saved = await this.conflictRepository.save(conflict);
+    const saved = await m.save(conflict);
     await this.history(userId, {
       entityType: BillingEntityType.CONFLICT,
       entityId: saved.id,
@@ -921,8 +1141,9 @@ export class BillingEngineService implements OnModuleInit {
       toState: BillingConflictStatus.OPEN,
       newValue: { entryIds: dto.entryIds, severity: dto.severity },
       reason: dto.description,
-    });
+    }, m);
     return saved;
+    });
   }
 
   async resolveConflict(
@@ -934,7 +1155,13 @@ export class BillingEngineService implements OnModuleInit {
     },
     userId: string,
   ): Promise<BillingConflictEntity> {
-    const conflict = await this.conflictRepository.findOne({ where: { id: conflictId } });
+    return this.inTx(async (m, emit) => {
+    // Locked: resolving a conflict is what unfreezes the entries it names, so two
+    // resolvers racing here could otherwise both believe they released the block.
+    const conflict = await m.findOne(BillingConflictEntity, {
+      where: { id: conflictId },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!conflict) throw new NotFoundException(`Conflict ${conflictId} not found.`);
 
     const fromStatus = conflict.status;
@@ -944,7 +1171,7 @@ export class BillingEngineService implements OnModuleInit {
     conflict.resolvedById = userId;
     conflict.resolvedAt = new Date();
     conflict.updatedBy = userId;
-    const saved = await this.conflictRepository.save(conflict);
+    const saved = await m.save(conflict);
 
     await this.history(userId, {
       entityType: BillingEntityType.CONFLICT,
@@ -954,9 +1181,10 @@ export class BillingEngineService implements OnModuleInit {
       toState: saved.status,
       newValue: { action: dto.action },
       reason: dto.note,
-    });
-    await this.publish('billing:conflict-resolved', { conflictId: saved.id, status: saved.status });
+    }, m);
+    emit('billing:conflict-resolved', { conflictId: saved.id, status: saved.status });
     return saved;
+    });
   }
 
   async findConflicts(status?: BillingConflictStatus): Promise<any[]> {
@@ -990,15 +1218,33 @@ export class BillingEngineService implements OnModuleInit {
   // Split / Merge (spec §9)
   // -----------------------------------------------------------------------
 
+  /**
+   * Replace one entry with N children whose amounts sum to its total.
+   *
+   * Atomic because a partial split is unbillable in both directions: children created but
+   * the parent left billable double-counts the revenue, and a parent retired before its
+   * children exist loses it. Both were reachable — the children were saved one autocommit
+   * at a time and the parent was retired in a separate one at the end.
+   */
   async splitEntry(entryId: string, dto: SplitEntryDto, userId: string): Promise<BillingEntryEntity[]> {
-    const entry = await this.getEntry(entryId);
+    return this.inTx(async (m) => {
+    const entry = await this.lockEntry(m, entryId);
     if (entry.parentEntryId) throw new BadRequestException('Cannot split an entry that is itself a split/merge child.');
     if (!dto.amounts?.length || dto.amounts.some((a) => a <= 0)) {
       throw new BadRequestException('Split requires a non-empty list of positive amounts.');
     }
     const total = round2(dto.amounts.reduce((a, b) => a + b, 0));
-    if (Math.abs(total - entry.totalAmount) > 0.01) {
+    if (Math.abs(total - Number(entry.totalAmount)) > MONEY_EPSILON) {
       throw new BadRequestException(`Split amounts (${total}) must sum to the entry total (${entry.totalAmount}).`);
+    }
+    // A line that has been invoiced or part-paid is already attached to money that has
+    // moved; splitting it would detach that money from the rows recording it. `mergeEntries`
+    // has always refused this — the split path did not, so the same line could be split
+    // after invoicing and the invoice would reference a parent no longer billable.
+    if (entry.invoiceId || Number(entry.paidAmount) > 0) {
+      throw new ConflictException(
+        `Cannot split ${entry.entryNumber}: it is already invoiced or part-paid.`,
+      );
     }
 
     // Mark the parent as split into children (kept for traceability, no longer billable itself).
@@ -1038,7 +1284,7 @@ export class BillingEngineService implements OnModuleInit {
         updatedBy: userId,
       });
       this.recompute(child);
-      const saved = await this.entryRepository.save(child);
+      const saved = await m.save(child);
       savedChildren.push(saved);
       await this.history(userId, {
         clientId: child.clientId,
@@ -1052,22 +1298,27 @@ export class BillingEngineService implements OnModuleInit {
         previousValue: { parentEntryId: entry.id, totalAmount: entry.totalAmount },
         newValue: { totalAmount: Number(child.totalAmount) },
         reason: dto.notes ?? null,
-      });
+      }, m);
     }
 
     // Preserve traceability on the parent: it is superseded by its children.
     entry.state = BillingState.ADJUSTED;
     entry.updatedBy = userId;
-    await this.entryRepository.save(entry);
+    await m.save(entry);
 
     return savedChildren;
+    });
   }
 
   async mergeEntries(entryIds: string[], userId: string, note?: string): Promise<BillingEntryEntity> {
     if (!entryIds?.length || entryIds.length < 2) {
       throw new BadRequestException('Merge requires at least two entries.');
     }
-    const entries = await this.entryRepository.find({ where: { id: In(entryIds) } });
+    return this.inTx(async (m) => {
+    // Locked in id order so a merge and a payment touching the same lines serialize
+    // instead of deadlocking. The invoiced/part-paid guard below is a check-then-act
+    // against money, so it is only sound while these rows are held.
+    const entries = await this.lockEntriesById(m, entryIds);
     if (entries.length !== entryIds.length) throw new NotFoundException('One or more entries not found.');
 
     // Merging across clients would move one client's money onto another's ledger,
@@ -1084,7 +1335,14 @@ export class BillingEngineService implements OnModuleInit {
       );
     }
 
-    const first = entries[0];
+    // The merged line inherits level, client, project and tax rate from one source entry.
+    // That used to be whichever row Postgres returned first from an unordered `find`, so
+    // the same merge could produce a different `projectId` on a retry. It is now explicitly
+    // the first id the caller listed — the one an operator would name as the line they are
+    // merging the others into. (Rows are locked in id order, which is a different order and
+    // deliberately so: lock ordering is about deadlocks, not about semantics.)
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const first = byId.get(entryIds[0]) ?? entries[0];
     const total = round2(entries.reduce((a, e) => a + Number(e.totalAmount), 0));
     const baseTotal = round2(entries.reduce((a, e) => a + Number(e.baseAmount), 0));
     const taxTotal = round2(entries.reduce((a, e) => a + Number(e.taxAmount), 0));
@@ -1124,7 +1382,7 @@ export class BillingEngineService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    const saved = await this.entryRepository.save(merged);
+    const saved = await m.save(merged);
 
     // Source entries become children of the merge (traceable, not separately billable).
     for (const e of entries) {
@@ -1134,7 +1392,7 @@ export class BillingEngineService implements OnModuleInit {
       e.parentEntryId = saved.id;
       e.state = BillingState.ADJUSTED;
       e.updatedBy = userId;
-      await this.entryRepository.save(e);
+      await m.save(e);
       await this.history(userId, {
         clientId: e.clientId,
         projectId: e.projectId,
@@ -1147,7 +1405,7 @@ export class BillingEngineService implements OnModuleInit {
         previousValue: { totalAmount: Number(e.totalAmount) },
         newValue: { mergedInto: saved.id },
         reason: note ?? null,
-      });
+      }, m);
     }
 
     await this.history(userId, {
@@ -1161,8 +1419,9 @@ export class BillingEngineService implements OnModuleInit {
       toState: first.state,
       newValue: { sourceEntryIds: entryIds, totalAmount: total },
       reason: note ?? null,
-    });
+    }, m);
     return saved;
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -1179,7 +1438,13 @@ export class BillingEngineService implements OnModuleInit {
     notes?: string;
   }, userId: string): Promise<BillingInvoiceEntity> {
     if (!dto.entryIds?.length) throw new BadRequestException('At least one entry is required to invoice.');
-    const entries = await this.entryRepository.find({ where: { id: In(dto.entryIds) } });
+    return this.inTx(async (m, emit) => {
+    // Every entry is write-locked before the guards run. The `alreadyInvoiced` check is the
+    // one that matters: unlocked, two operators invoicing overlapping selections both read
+    // `invoiceId = null`, both passed, and the same work was billed to the client twice on
+    // two invoices — the second silently overwriting the first's `invoiceId` on the shared
+    // entries, so the first invoice's total no longer matched any entry pointing at it.
+    const entries = await this.lockEntriesById(m, dto.entryIds);
     if (entries.length !== dto.entryIds.length) throw new NotFoundException('One or more entries not found.');
 
     // Only APPROVED entries may be invoiced.
@@ -1212,7 +1477,7 @@ export class BillingEngineService implements OnModuleInit {
     const discount = round2(entries.reduce((a, e) => a + Number(e.discountAmount), 0));
     const total = round2(entries.reduce((a, e) => a + Number(e.totalAmount), 0));
 
-    const contract = await this.clientTaxRates(dto.clientId);
+    const contract = await this.clientTaxRates(dto.clientId, m);
     const issueDate = dto.issueDate ?? new Date().toISOString().slice(0, 10);
 
     const invoice = this.invoiceRepository.create({
@@ -1237,7 +1502,7 @@ export class BillingEngineService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    const saved = await this.invoiceRepository.save(invoice);
+    const saved = await m.save(invoice);
 
     for (const e of entries) {
       e.invoiceId = saved.id;
@@ -1245,7 +1510,7 @@ export class BillingEngineService implements OnModuleInit {
       e.billedAmount = Number(e.totalAmount);
       e.outstandingAmount = Number(e.totalAmount);
       e.updatedBy = userId;
-      await this.entryRepository.save(e);
+      await m.save(e);
       await this.history(userId, {
         clientId: e.clientId,
         projectId: e.projectId,
@@ -1256,7 +1521,7 @@ export class BillingEngineService implements OnModuleInit {
         fromState: BillingState.APPROVED,
         toState: BillingState.INVOICED,
         newValue: { invoiceId: saved.id, billedAmount: e.billedAmount },
-      });
+      }, m);
     }
 
     await this.history(userId, {
@@ -1268,14 +1533,19 @@ export class BillingEngineService implements OnModuleInit {
       fromState: null,
       toState: InvoiceStatus.DRAFT,
       newValue: { total: saved.total, entryIds: dto.entryIds },
-    });
-    await this.publish('billing:invoice-created', { invoiceId: saved.id, clientId: saved.clientId });
+    }, m);
+    emit('billing:invoice-created', { invoiceId: saved.id, clientId: saved.clientId });
     return saved;
+    });
   }
 
   async transitionInvoice(invoiceId: string, target: InvoiceStatus, userId: string, reason?: string): Promise<BillingInvoiceEntity> {
-    const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId } });
-    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+    return this.inTx(async (m, emit) => {
+    // Locked against `recordPayment`, which also moves this row's status. Unlocked, an
+    // operator cancelling an invoice at the moment a payment lands could overwrite the
+    // PAID status the payment had just written, leaving collected money against a
+    // CANCELLED invoice.
+    const invoice = await this.lockInvoice(m, invoiceId);
     if (invoice.status === target) throw new ConflictException(`Invoice is already ${target}.`);
     if (!isValidTransition(INVOICE_TRANSITIONS, invoice.status, target)) {
       throw new BadRequestException(`Cannot transition invoice from ${invoice.status} to ${target}.`);
@@ -1284,7 +1554,7 @@ export class BillingEngineService implements OnModuleInit {
     invoice.status = target;
     if (target === InvoiceStatus.ISSUED && !invoice.issueDate) invoice.issueDate = new Date().toISOString().slice(0, 10);
     invoice.updatedBy = userId;
-    const saved = await this.invoiceRepository.save(invoice);
+    const saved = await m.save(invoice);
     await this.history(userId, {
       clientId: saved.clientId,
       projectId: saved.projectId,
@@ -1294,9 +1564,10 @@ export class BillingEngineService implements OnModuleInit {
       fromState,
       toState: target,
       reason: reason ?? null,
-    });
-    await this.publish('billing:invoice-status-changed', { invoiceId: saved.id, fromState, toState: target });
+    }, m);
+    emit('billing:invoice-status-changed', { invoiceId: saved.id, fromState, toState: target });
     return saved;
+    });
   }
 
   async findInvoices(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoiceEntity[]> {
@@ -1320,6 +1591,23 @@ export class BillingEngineService implements OnModuleInit {
   // Payments (spec §10)
   // -----------------------------------------------------------------------
 
+  /**
+   * Record money received against an invoice.
+   *
+   * This was the worst of the untransacted paths: 2 + N autocommitted writes — the payment
+   * row, then the invoice, then one row per entry. Anything that interrupted the sequence
+   * left a ledger no code could produce on purpose. A statement timeout after the invoice
+   * save committed an invoice marked PAID whose entries still carried the full amount
+   * outstanding; a crash before it recorded cash received against an invoice that still
+   * looked unpaid. Both survive a restart and neither is detectable afterwards, because the
+   * partial trail looks exactly like a completed one.
+   *
+   * Concurrency was the other half. Two finance users allocating against the same invoice
+   * both read the same `outstandingAmount`, both passed the overpayment guard, and both
+   * wrote — collecting more than the invoice was for, with the second write erasing the
+   * first's arithmetic. The invoice row is now write-locked before the guard, so the second
+   * user waits and is refused against the balance the first actually left.
+   */
   async recordPayment(dto: {
     invoiceId: string;
     paymentReference: string;
@@ -1329,68 +1617,125 @@ export class BillingEngineService implements OnModuleInit {
     allocatedToEntryIds?: string[];
     notes?: string;
   }, userId: string): Promise<BillingPaymentEntity> {
-    const invoice = await this.getInvoice(dto.invoiceId);
     if (dto.amount <= 0) throw new BadRequestException('Payment amount must be positive.');
-    const remaining = round2(Number(invoice.outstandingAmount) - dto.amount);
-    if (remaining < -0.01) {
-      throw new BadRequestException(`Payment exceeds outstanding (${invoice.outstandingAmount}).`);
-    }
 
-    const payment = this.paymentRepository.create({
-      invoice,
-      paymentReference: dto.paymentReference,
-      direction: PaymentDirection.INBOUND,
-      method: dto.method,
-      amount: dto.amount,
-      currency: invoice.currency,
-      receivedDate: dto.receivedDate ?? new Date().toISOString().slice(0, 10),
-      status: PaymentStatus.RECEIVED,
-      allocatedToEntryIds: dto.allocatedToEntryIds ?? null,
-      notes: dto.notes ?? null,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await this.paymentRepository.save(payment);
+    return this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, dto.invoiceId);
 
-    // Update invoice money and status.
-    invoice.paidAmount = round2(Number(invoice.paidAmount) + dto.amount);
-    invoice.outstandingAmount = round2(Number(invoice.outstandingAmount) - dto.amount);
-    if (Math.abs(invoice.outstandingAmount) < 0.01) invoice.outstandingAmount = 0;
-    invoice.status = invoice.outstandingAmount <= 0 ? InvoiceStatus.PAID : InvoiceStatus.PARTIALLY_PAID;
-    invoice.updatedBy = userId;
-    await this.invoiceRepository.save(invoice);
+      // Idempotency. A retried POST carries the same `paymentReference`, so if this invoice
+      // already has an INBOUND payment under it, this call is that retry and returns the
+      // original rather than recording a second one. The invoice write lock above makes this
+      // safe under concurrency: a racing retry blocks until the first commits, then re-reads
+      // here and finds it. `UQ_billing_payments_inbound_ref` is the backstop for any path that
+      // reaches an INSERT without this lock — it turns a double-insert into a failed request
+      // instead of a double-payment. The check precedes the overpayment guard deliberately: on
+      // a retry the balance is already reduced, so that guard would otherwise reject the retry
+      // with a misleading "exceeds outstanding" rather than treating it as the no-op it is.
+      const existingPayment = await m.findOne(BillingPaymentEntity, {
+        where: {
+          invoice: { id: invoice.id },
+          paymentReference: dto.paymentReference,
+          direction: PaymentDirection.INBOUND,
+        },
+      });
+      if (existingPayment) return existingPayment;
 
-    // Reflect payment across the invoice's entries (pro-rata unless allocated).
-    const entries = invoice.entries || [];
-    if (entries.length) {
-      const totalOutstanding = entries.reduce((a, e) => a + Number(e.outstandingAmount), 0) || 1;
-      for (const e of entries) {
-        const share = dto.allocatedToEntryIds?.includes(e.id)
-          ? (dto.amount / (dto.allocatedToEntryIds.length || 1))
-          : round2(Number(e.outstandingAmount) * (dto.amount / totalOutstanding));
-        const applied = Math.min(share, Number(e.outstandingAmount));
-        e.paidAmount = round2(Number(e.paidAmount) + applied);
-        e.outstandingAmount = round2(Number(e.outstandingAmount) - applied);
-        if (e.outstandingAmount < 0.01) e.outstandingAmount = 0;
-        e.paymentState = e.outstandingAmount <= 0 ? PaymentState.PAID : PaymentState.PARTIALLY_PAID;
-        e.updatedBy = userId;
-        await this.entryRepository.save(e);
+      const remaining = round2(Number(invoice.outstandingAmount) - dto.amount);
+      if (remaining < -MONEY_EPSILON) {
+        throw new BadRequestException(`Payment exceeds outstanding (${invoice.outstandingAmount}).`);
       }
-    }
 
-    await this.history(userId, {
-      clientId: invoice.clientId,
-      projectId: invoice.projectId,
-      entityType: BillingEntityType.PAYMENT,
-      entityId: saved.id,
-      action: 'PAYMENT_RECEIVED',
-      fromState: invoice.status === InvoiceStatus.PAID ? 'PARTIALLY_PAID' : 'ISSUED',
-      toState: invoice.status,
-      newValue: { amount: dto.amount, paymentReference: dto.paymentReference, invoiceId: invoice.id },
-      reason: dto.notes ?? null,
+      // Locked in the same id order every other multi-entry operation uses.
+      const entries = await this.lockEntriesByInvoice(m, invoice.id);
+
+      const payment = this.paymentRepository.create({
+        invoice,
+        paymentReference: dto.paymentReference,
+        direction: PaymentDirection.INBOUND,
+        method: dto.method,
+        amount: dto.amount,
+        currency: invoice.currency,
+        receivedDate: dto.receivedDate ?? new Date().toISOString().slice(0, 10),
+        status: PaymentStatus.RECEIVED,
+        allocatedToEntryIds: dto.allocatedToEntryIds ?? null,
+        notes: dto.notes ?? null,
+        createdBy: userId,
+        updatedBy: userId,
+      });
+      const saved = await m.save(payment);
+
+      // Captured before the mutation below. The history row used to infer the prior status
+      // from the new one ("PAID now, so it must have been PARTIALLY_PAID"), which was simply
+      // wrong whenever a single payment settled an ISSUED invoice outright — the common case.
+      const fromStatus = invoice.status;
+
+      // Update invoice money and status.
+      invoice.paidAmount = round2(Number(invoice.paidAmount) + dto.amount);
+      invoice.outstandingAmount = round2(Number(invoice.outstandingAmount) - dto.amount);
+      if (Math.abs(invoice.outstandingAmount) < MONEY_EPSILON) invoice.outstandingAmount = 0;
+      invoice.status = invoice.outstandingAmount <= 0 ? InvoiceStatus.PAID : InvoiceStatus.PARTIALLY_PAID;
+      invoice.updatedBy = userId;
+      await m.save(invoice);
+
+      // Reflect payment across the invoice's entries (pro-rata unless allocated).
+      if (entries.length) {
+        const totalOutstanding = entries.reduce((a, e) => a + Number(e.outstandingAmount), 0) || 1;
+        let totalApplied = 0;
+        for (const e of entries) {
+          const share = dto.allocatedToEntryIds?.includes(e.id)
+            ? (dto.amount / (dto.allocatedToEntryIds.length || 1))
+            : round2(Number(e.outstandingAmount) * (dto.amount / totalOutstanding));
+          const applied = Math.min(share, Number(e.outstandingAmount));
+          totalApplied = round2(totalApplied + applied);
+          e.paidAmount = round2(Number(e.paidAmount) + applied);
+          e.outstandingAmount = round2(Number(e.outstandingAmount) - applied);
+          if (e.outstandingAmount < MONEY_EPSILON) e.outstandingAmount = 0;
+          e.paymentState = e.outstandingAmount <= 0 ? PaymentState.PAID : PaymentState.PARTIALLY_PAID;
+          e.updatedBy = userId;
+          await m.save(e);
+        }
+
+        /**
+         * The entries must never absorb more than the payment was worth.
+         *
+         * The allocation rule above does not enforce that on its own. When
+         * `allocatedToEntryIds` names only some of the invoice's entries, the named ones
+         * each take `amount / count` while the unnamed ones *still* take a pro-rata slice of
+         * the full amount, so the two allocations overlap. The `Math.min(share, outstanding)`
+         * clamp hides this whenever the payment settles the invoice outright — each entry can
+         * only absorb its own balance and those sum to the invoice — which is why it went
+         * unnoticed. On a part-payment the clamp does not bind: ₹500 allocated to one of two
+         * entries outstanding ₹600 and ₹400 credits ₹500 + ₹200 = ₹700.
+         *
+         * Deciding what partial allocation *should* mean is a product question, not a
+         * transactional one, so the semantics are left exactly as they were. What changes is
+         * that the transaction now refuses to commit an over-allocation instead of silently
+         * persisting one. Raising it as a hard failure is the point: it surfaces the case the
+         * moment someone hits it, with the money still intact.
+         */
+        if (totalApplied - dto.amount > MONEY_EPSILON) {
+          throw new ConflictException(
+            `Allocation error: ₹${totalApplied} would be credited across entries for a ₹${dto.amount} payment. ` +
+            `This happens when 'allocatedToEntryIds' names only some of the invoice's entries. ` +
+            `Either allocate across every entry or omit the allocation to split pro-rata.`,
+          );
+        }
+      }
+
+      await this.history(userId, {
+        clientId: invoice.clientId,
+        projectId: invoice.projectId,
+        entityType: BillingEntityType.PAYMENT,
+        entityId: saved.id,
+        action: 'PAYMENT_RECEIVED',
+        fromState: fromStatus,
+        toState: invoice.status,
+        newValue: { amount: dto.amount, paymentReference: dto.paymentReference, invoiceId: invoice.id },
+        reason: dto.notes ?? null,
+      }, m);
+      emit('billing:payment-received', { paymentId: saved.id, invoiceId: invoice.id, amount: dto.amount });
+      return saved;
     });
-    await this.publish('billing:payment-received', { paymentId: saved.id, invoiceId: invoice.id, amount: dto.amount });
-    return saved;
   }
 
   // -----------------------------------------------------------------------
@@ -1421,6 +1766,7 @@ export class BillingEngineService implements OnModuleInit {
     const tds = round2(gross * (Number(dto.tdsRate || 0) / 100));
     const total = round2(gross + tax - tds);
 
+    return this.inTx(async (m) => {
     const payable = this.payableRepository.create({
       payableNumber: `PY-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
       assayerId: dto.assayerId,
@@ -1440,7 +1786,7 @@ export class BillingEngineService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    const saved = await this.payableRepository.save(payable);
+    const saved = await m.save(payable);
     await this.history(userId, {
       clientId: dto.clientId ?? null,
       projectId: dto.projectId ?? null,
@@ -1453,13 +1799,17 @@ export class BillingEngineService implements OnModuleInit {
       toState: AssayerPayableStatus.PENDING,
       newValue: { totalAmount: total },
       reason: dto.remarks ?? null,
-    });
+    }, m);
     return saved;
+    });
   }
 
   async transitionPayable(payableId: string, target: AssayerPayableStatus, userId: string, reason?: string): Promise<AssayerPayableEntity> {
-    const payable = await this.payableRepository.findOne({ where: { id: payableId } });
-    if (!payable) throw new NotFoundException(`Payable ${payableId} not found.`);
+    return this.inTx(async (m, emit) => {
+    // Locked against `recordDisbursement`, which also writes `status` and `paidAmount` on
+    // this row. Approval is the control that gates money leaving the business, so the two
+    // must not interleave.
+    const payable = await this.lockPayable(m, payableId);
     if (payable.status === target) throw new ConflictException(`Payable is already ${target}.`);
     if (!isValidTransition(PAYABLE_TRANSITIONS, payable.status, target)) {
       throw new BadRequestException(`Cannot transition payable from ${payable.status} to ${target}.`);
@@ -1469,7 +1819,7 @@ export class BillingEngineService implements OnModuleInit {
     if (target === AssayerPayableStatus.APPROVED) { payable.approvedAt = new Date(); payable.approvedBy = userId; }
     if (target === AssayerPayableStatus.PAID) { payable.paidAt = new Date(); payable.paidBy = userId; payable.paidAmount = payable.totalAmount; }
     payable.updatedBy = userId;
-    const saved = await this.payableRepository.save(payable);
+    const saved = await m.save(payable);
     await this.history(userId, {
       clientId: payable.clientId,
       projectId: payable.projectId,
@@ -1481,9 +1831,10 @@ export class BillingEngineService implements OnModuleInit {
       fromState,
       toState: target,
       reason: reason ?? null,
-    });
-    await this.publish('billing:payable-status-changed', { payableId: saved.id, fromState, toState: target });
+    }, m);
+    emit('billing:payable-status-changed', { payableId: saved.id, fromState, toState: target });
     return saved;
+    });
   }
 
   /**
@@ -1504,8 +1855,28 @@ export class BillingEngineService implements OnModuleInit {
     paidDate?: string;
     notes?: string;
   }, userId: string): Promise<BillingPaymentEntity> {
-    const payable = await this.payableRepository.findOne({ where: { id: dto.payableId } });
-    if (!payable) throw new NotFoundException(`Payable ${dto.payableId} not found.`);
+    return this.inTx(async (m, emit) => {
+    // Write-locked before the outstanding-balance guard. Unlocked, two operators
+    // disbursing the same approved payable both read the same `paidAmount`, both computed
+    // the same outstanding, both passed the "does not exceed what is owed" check, and both
+    // paid — money out of the business twice against one obligation, with the second
+    // `paidAmount` write erasing the first.
+    const payable = await this.lockPayable(m, dto.payableId);
+
+    // Idempotency, mirroring `recordPayment`: a retried disbursement carries the same
+    // `paymentReference`, so if this payable already has an OUTBOUND payment under that
+    // reference, return it rather than paying the assayer a second time. The payable write
+    // lock serialises a concurrent retry; `UQ_billing_payments_outbound_ref` backstops any
+    // unlocked path. Placed before the balance guard so a retry is not rejected as exceeding
+    // what is now (post-first-payment) owed.
+    const existingDisbursement = await m.findOne(BillingPaymentEntity, {
+      where: {
+        payableId: payable.id,
+        paymentReference: dto.paymentReference,
+        direction: PaymentDirection.OUTBOUND,
+      },
+    });
+    if (existingDisbursement) return existingDisbursement;
 
     // Paying out unapproved work is how duplicate and fraudulent payments happen;
     // approval is the control that has to precede money leaving the business.
@@ -1521,24 +1892,29 @@ export class BillingEngineService implements OnModuleInit {
     }
     const amount = round2(dto.amount ?? outstanding);
     if (amount <= 0) throw new BadRequestException('Disbursement amount must be positive.');
-    if (amount - outstanding > 0.01) {
+    if (amount - outstanding > MONEY_EPSILON) {
       throw new BadRequestException(`Disbursement ₹${amount} exceeds the ₹${outstanding} still owed on this payable.`);
     }
 
+    const fromStatus = payable.status;
     payable.paidAmount = round2(Number(payable.paidAmount) + amount);
-    const fullyPaid = Number(payable.totalAmount) - payable.paidAmount <= 0.01;
+    const fullyPaid = Number(payable.totalAmount) - payable.paidAmount <= MONEY_EPSILON;
     if (fullyPaid) {
       payable.status = AssayerPayableStatus.PAID;
       payable.paidAt = new Date();
       payable.paidBy = userId;
     }
     payable.updatedBy = userId;
-    await this.payableRepository.save(payable);
+    await m.save(payable);
 
     // Balance still owed to this assayer across all their payables, after this
     // payment — the running statement the old ledger tried to maintain, now
     // derived from real obligations instead of a free-floating counter.
-    const balance = await this.assayerOutstanding(payable.assayerId);
+    //
+    // Computed on the transaction's own connection so it sees the `paidAmount` written a
+    // few lines above. On a separate connection it would read the pre-payment figure and
+    // stamp a running balance onto the payment row that was stale the moment it was written.
+    const balance = await this.assayerOutstanding(payable.assayerId, m);
 
     const payment = this.paymentRepository.create({
       paymentReference: dto.paymentReference,
@@ -1556,7 +1932,7 @@ export class BillingEngineService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    const saved = await this.paymentRepository.save(payment);
+    const saved = await m.save(payment);
 
     await this.history(userId, {
       clientId: payable.clientId,
@@ -1566,20 +1942,24 @@ export class BillingEngineService implements OnModuleInit {
       entityType: BillingEntityType.PAYMENT,
       entityId: saved.id,
       action: 'DISBURSEMENT_PAID',
-      fromState: AssayerPayableStatus.APPROVED,
+      // Was hardcoded to APPROVED. A second, settling disbursement against a payable that
+      // was already PAID recorded the same false starting point, so the trail could not
+      // distinguish a first payment from a top-up.
+      fromState: fromStatus,
       toState: payable.status,
       newValue: { amount, paymentReference: dto.paymentReference, payableId: payable.id, balanceAfter: balance },
       reason: dto.notes ?? null,
-    });
-    await this.publish('billing:disbursement-paid', {
+    }, m);
+    emit('billing:disbursement-paid', {
       paymentId: saved.id, payableId: payable.id, assayerId: payable.assayerId, amount,
     });
     return saved;
+    });
   }
 
   /** Total still owed to an assayer across every payable not yet fully paid. */
-  private async assayerOutstanding(assayerId: string): Promise<number> {
-    const rows = await this.payableRepository.manager.query(
+  private async assayerOutstanding(assayerId: string, manager?: EntityManager): Promise<number> {
+    const rows = await (manager ?? this.payableRepository.manager).query(
       `SELECT COALESCE(SUM(total_amount - paid_amount), 0) AS owed
          FROM assayer_payables
         WHERE assayer_id = $1 AND is_active = true

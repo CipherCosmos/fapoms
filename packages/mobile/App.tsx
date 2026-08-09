@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text, BackHandler, AppState } from 'react-native';
+import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text, BackHandler, AppState, KeyboardAvoidingView, Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
@@ -45,6 +45,8 @@ import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 import { RejectionModal } from './src/components/RejectionModal';
 import { ExpenseModal } from './src/components/ExpenseModal';
 import { NegotiateModal } from './src/components/NegotiateModal';
+import { ReportIssueModal } from './src/components/ReportIssueModal';
+import { AvailabilityModal, LeavePeriod } from './src/components/AvailabilityModal';
 
 /**
  * How recently a notification must have arrived for a launch to count as "opened from it".
@@ -61,6 +63,9 @@ function AppMain() {
 
   const [selectedTab, setSelectedTab] = useState<TabType>('HOME');
   const [refreshing, setRefreshing] = useState(false);
+  // The id of the assignment whose accept/check-in is in flight, so its button shows a spinner
+  // and a second tap can't fire a duplicate accept or a duplicate on-site check-in.
+  const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const feedback = useFeedback();
   /**
    * Claim totals, read back from the server.
@@ -106,13 +111,24 @@ function AppMain() {
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectAssignmentId, setRejectAssignmentId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
 
   // Negotiate modal state
   const [negotiateModalVisible, setNegotiateModalVisible] = useState(false);
   const [negotiateAssignment, setNegotiateAssignment] = useState<AssayerAssignment | null>(null);
 
-  // Expense modal state
+  // Expense modal state. The assignment a claim is filed against is tracked explicitly rather
+  // than defaulting to assignments[0] — see the modal below.
   const [expenseModalVisible, setExpenseModalVisible] = useState(false);
+  const [expenseAssignment, setExpenseAssignment] = useState<AssayerAssignment | null>(null);
+
+  // Report-an-issue modal state — the assayer's channel to flag a problem to the desk.
+  const [issueAssignment, setIssueAssignment] = useState<AssayerAssignment | null>(null);
+
+  // Availability (self-service time off). Held separately from the profile form because it is
+  // its own calendar UI, not a text field.
+  const [availabilityVisible, setAvailabilityVisible] = useState(false);
+  const [availabilityLeaves, setAvailabilityLeaves] = useState<LeavePeriod[]>([]);
 
   // Notification modal state
   const [notifModalVisible, setNotifModalVisible] = useState(false);
@@ -242,6 +258,14 @@ function AppMain() {
           totalAssignments: p.totalAssignments ?? 0,
           averageRating: p.averageRating ?? prev.averageRating,
         }));
+        // Normalise the leave calendar to plain YYYY-MM-DD ranges for the availability picker.
+        setAvailabilityLeaves(
+          Array.isArray(p.leaves)
+            ? p.leaves
+                .filter((l: any) => l?.startDate && l?.endDate)
+                .map((l: any) => ({ startDate: String(l.startDate).slice(0, 10), endDate: String(l.endDate).slice(0, 10) }))
+            : [],
+        );
       }
     } catch (e) {
       console.error('Error fetching assayer profile:', e);
@@ -401,21 +425,32 @@ function AppMain() {
   };
 
   const handleAcceptAssignment = async (id: string) => {
-    const res = await updateAssignmentStatus(id, 'ACCEPTED');
-    if (!res.success) {
-      feedback.error('Not accepted', res.error || 'The assignment could not be accepted.');
+    if (busyActionId) return;
+    setBusyActionId(id);
+    try {
+      const res = await updateAssignmentStatus(id, 'ACCEPTED');
+      if (!res.success) {
+        feedback.error('Not accepted', res.error || 'The assignment could not be accepted.');
+      }
+    } finally {
+      setBusyActionId(null);
     }
   };
 
   const handleConfirmReject = async () => {
-    if (!rejectAssignmentId) return;
-    const res = await rejectAssignment(rejectAssignmentId, rejectReason || 'Declined by assayer');
-    if (res.success) {
-      setRejectModalVisible(false);
-      setRejectAssignmentId(null);
-      setRejectReason('');
-    } else {
-      feedback.error('Not declined', res.error || 'The assignment could not be declined.');
+    if (!rejectAssignmentId || rejectSubmitting) return;
+    setRejectSubmitting(true);
+    try {
+      const res = await rejectAssignment(rejectAssignmentId, rejectReason || 'Declined by assayer');
+      if (res.success) {
+        setRejectModalVisible(false);
+        setRejectAssignmentId(null);
+        setRejectReason('');
+      } else {
+        feedback.error('Not declined', res.error || 'The assignment could not be declined.');
+      }
+    } finally {
+      setRejectSubmitting(false);
     }
   };
 
@@ -433,6 +468,8 @@ function AppMain() {
      * far better record: the assayer is told exactly what to do, and nobody is ever falsely
      * placed at — or falsely absent from — a branch.
      */
+    if (busyActionId) return;
+
     let fix = location;
     if (!fix) {
       fix = await refreshLocation();
@@ -447,12 +484,17 @@ function AppMain() {
       return;
     }
 
-    const res = await MobileApiService.checkInBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
-    if (res.success) {
-      await loadAssignments();
-      feedback.success('Checked In', `Checked in at ${assignment.branchName}`);
-    } else {
-      feedback.error('Could not check in', res.error || 'Check-in failed. Please try again.');
+    setBusyActionId(assignment.id);
+    try {
+      const res = await MobileApiService.checkInBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
+      if (res.success) {
+        await loadAssignments();
+        feedback.success('Checked In', `Checked in at ${assignment.branchName}`);
+      } else {
+        feedback.error('Could not check in', res.error || 'Check-in failed. Please try again.');
+      }
+    } finally {
+      setBusyActionId(null);
     }
   };
 
@@ -681,9 +723,15 @@ function AppMain() {
         onOpenProfile={() => handleSelectTab('MY_PROFILE')}
       />
 
-      {/* Main Content Area */}
+      {/* Main Content Area — keyboard-avoiding so the Profile/Work form fields below the
+          fold scroll into view instead of sitting under the on-screen keyboard. */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
       <ScrollView
         ref={scrollRef}
+        keyboardShouldPersistTaps="handled"
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingHorizontal: theme.space.lg,
@@ -728,7 +776,13 @@ function AppMain() {
               setScannerModalVisible(true);
             }}
             onSubmitCompletedPdf={handleSubmitCompletedPdf}
-            onOpenExpenseModal={() => setExpenseModalVisible(true)}
+            onOpenExpenseModal={() => {
+              // Claim is filed against the assignment whose paperwork is open — the one the
+              // assayer is demonstrably working on.
+              setExpenseAssignment(pdfDocsAssignment);
+              setExpenseModalVisible(true);
+            }}
+            onReportIssue={() => setIssueAssignment(pdfDocsAssignment)}
           />
           </>
         ) : (
@@ -748,8 +802,14 @@ function AppMain() {
               setScannerModalVisible(true);
             }}
             onNavigate={(a) => setNavAssignment(a)}
+            onAcceptOffer={(a) => handleAcceptAssignment(a.id)}
+            onDeclineOffer={(a) => {
+              setRejectAssignmentId(a.id);
+              setRejectModalVisible(true);
+            }}
             onSeeSchedule={() => setSelectedTab('SCHEDULE')}
             onSeeQueries={() => setSelectedTab('QUERIES')}
+            busyActionId={busyActionId}
             stale={stale}
             lastSyncedAt={lastSyncedAt}
           />
@@ -758,6 +818,7 @@ function AppMain() {
         {selectedTab === 'SCHEDULE' && (
           <ScheduleScreen
             assignments={assignments}
+            busyActionId={busyActionId}
             onAcceptAssignment={handleAcceptAssignment}
             onOpenRejectModal={(id) => {
               setRejectAssignmentId(id);
@@ -806,7 +867,16 @@ function AppMain() {
             claims={claims}
             claimSummary={expenseSummary}
             statement={statement}
-            onOpenExpenseModal={() => setExpenseModalVisible(true)}
+            onOpenExpenseModal={() => {
+              // From the Earnings tab there is no open job, so tie the claim to the one the
+              // assayer is currently on (checked in / in progress / accepted). If there is
+              // none, the modal explains it must be filed from the assignment.
+              const active = assignments.find(
+                (a) => a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS' || a.status === 'ACCEPTED',
+              );
+              setExpenseAssignment(active ?? null);
+              setExpenseModalVisible(true);
+            }}
           />
         )}
 
@@ -820,12 +890,14 @@ function AppMain() {
             resolvedQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status === 'RESOLVED' || q.status === 'CLOSED').length, 0)}
             onUpdateProfileField={handleUpdateProfileField}
             onSaveProfile={handleSaveProfile}
+            onOpenAvailability={() => setAvailabilityVisible(true)}
             onLogout={logout}
           />
         )}
         </>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Floating Animated Navigation Dock */}
       <TabDock selected={selectedTab} onSelect={handleSelectTab} queryCount={queryCount} />
@@ -834,6 +906,7 @@ function AppMain() {
       <RejectionModal
         visible={rejectModalVisible}
         rejectReason={rejectReason}
+        submitting={rejectSubmitting}
         onChangeReason={setRejectReason}
         onConfirm={handleConfirmReject}
         onCancel={() => {
@@ -990,24 +1063,68 @@ function AppMain() {
           visible={expenseModalVisible}
           onClose={() => setExpenseModalVisible(false)}
           onAddExpense={async (category, amount, description) => {
-            if (assignments[0]?.id) {
-              const res = await submitExpense(assignments[0].id, {
-                category: category as any,
-                amount: Number(amount) || 0,
-                description,
-              });
-              if (res.success) {
-                feedback.success('Claim filed', `₹${amount} for ${category} is awaiting approval.`);
-                setExpenseModalVisible(false);
-                // Pull the totals back so the new claim shows on Home immediately rather
-                // than only after the next manual pull-to-refresh.
-                loadExpenseSummary();
-              } else {
-                feedback.error('Claim not filed', res.error || 'The expense could not be submitted.');
-              }
-            } else {
-              setExpenseModalVisible(false);
+            // Against the assignment chosen at the entry point, never assignments[0]. The old
+            // code filed every claim against whatever assignment happened to sort first — so a
+            // travel claim for today's branch could land on a completed job from weeks ago, and
+            // with an empty list it was silently dropped with no error.
+            if (!expenseAssignment?.id) {
+              feedback.error(
+                'No assignment selected',
+                'Open the assignment you are claiming for and file the expense from there.',
+              );
+              return;
             }
+            const res = await submitExpense(expenseAssignment.id, {
+              category: category as any,
+              amount: Number(amount) || 0,
+              description,
+            });
+            if (res.success) {
+              feedback.success('Claim filed', `₹${amount} for ${category} is awaiting approval.`);
+              setExpenseModalVisible(false);
+              // Pull the totals back so the new claim shows on Home immediately rather
+              // than only after the next manual pull-to-refresh.
+              loadExpenseSummary();
+            } else {
+              feedback.error('Claim not filed', res.error || 'The expense could not be submitted.');
+            }
+          }}
+        />
+      )}
+
+      {issueAssignment && (
+        <ReportIssueModal
+          visible={!!issueAssignment}
+          assignment={issueAssignment}
+          onClose={() => setIssueAssignment(null)}
+          onSubmit={async (category, note) => {
+            const res = await MobileApiService.reportAssignmentIssue(issueAssignment.id, category, note);
+            if (res.success) {
+              feedback.success('Reported to desk', 'The operations team has been notified and will follow up.');
+              return true;
+            }
+            feedback.error('Not sent', res.error || 'The issue could not be reported. Please try again.');
+            return false;
+          }}
+        />
+      )}
+
+      {availabilityVisible && (
+        <AvailabilityModal
+          visible={availabilityVisible}
+          initialLeaves={availabilityLeaves}
+          onClose={() => setAvailabilityVisible(false)}
+          onSave={async (leaves) => {
+            if (!user?.id) return false;
+            const res = await MobileApiService.updateAvailability(user.id, { leaves });
+            if (res.success) {
+              setAvailabilityLeaves(leaves);
+              feedback.success('Availability saved', 'You won\u2019t be offered audits on your days off.');
+              void loadAssayerProfile();
+              return true;
+            }
+            feedback.error('Not saved', res.error || 'Your availability could not be saved.');
+            return false;
           }}
         />
       )}
@@ -1064,10 +1181,10 @@ class AppErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#121014', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#131017', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <StatusBar barStyle="light-content" />
           <View style={{ gap: 12, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color="#FF6B00" />
+            <ActivityIndicator size="large" color="#F0873C" />
             <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>Karat</Text>
             <Text style={{ color: '#ef4444', textAlign: 'center', marginVertical: 10 }}>
               {String(this.state.error?.message || this.state.error || 'App encountered an error')}
@@ -1103,7 +1220,7 @@ export default function App() {
   if (!apiReady) {
     return (
       <ThemeProvider>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121014' }}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#131017' }}>
           <ActivityIndicator color="#FF8534" />
         </View>
       </ThemeProvider>

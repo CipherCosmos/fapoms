@@ -1,9 +1,11 @@
 import { Controller, Get, Inject, Optional } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { NoEnvelope } from './infrastructure/http/response.interceptor';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from './infrastructure/redis/redis-client.module';
+import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 
 /**
  * Unauthenticated liveness/readiness checks.
@@ -14,6 +16,9 @@ import { REDIS_CLIENT } from './infrastructure/redis/redis-client.module';
  * answer, and nothing about the data itself, so exposing it discloses nothing.
  */
 @ApiTags('Health')
+// Body shape is a deployment contract read by load balancers, container healthchecks and the
+// mobile "test this server address" button — none of which redeploy with the application.
+@NoEnvelope()
 @Controller('health')
 export class HealthController {
   constructor(
@@ -57,8 +62,20 @@ export class HealthController {
     // Redis absent (not configured) is treated as "not blocking readiness" so a
     // single-node deployment without Redis still reports ready; a configured-but-
     // unreachable Redis reports down.
-    const ready = database === 'up' && redis !== 'down';
-    return { status: ready ? 'ok' : 'degraded', database, redis };
+    const realtime = this.realtimeStatus();
+    const ready = database === 'up' && redis !== 'down' && realtime !== 'degraded';
+    return { status: ready ? 'ok' : 'degraded', database, redis, realtime };
+  }
+
+  /**
+   * `single-node` — Redis realtime not configured (dev / single replica); not a problem.
+   * `ok` — the Socket.IO Redis adapter connected; cross-replica realtime works.
+   * `degraded` — Redis was configured but the adapter fell back to in-memory, so this replica
+   * cannot deliver realtime across nodes and should be pulled from rotation.
+   */
+  private realtimeStatus(): 'ok' | 'degraded' | 'single-node' {
+    if (!realtimeHealth.redisConfigured) return 'single-node';
+    return realtimeHealth.redisAdapterConnected ? 'ok' : 'degraded';
   }
 
   private async pingRedis(): Promise<'up' | 'down' | 'absent'> {

@@ -7,7 +7,7 @@ import { HolidayService } from '../holiday/holiday.service';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
-import { AssignmentStatus } from '@fapoms/shared';
+import { AssignmentStatus, businessDateKey } from '@fapoms/shared';
 
 export interface ConstraintContext {
   assayer: AssayerEntity;
@@ -92,7 +92,9 @@ export class ConstraintEvaluator {
     const doubleBooked = await this.assignmentRepository.findOne({
       where: {
         assayerId,
-        scheduledDate,
+        // `scheduledDate` is a `date` column — match on the date-only key, not a Date-with-time,
+        // which never equals a midnight `date` value in Postgres and silenced this guard.
+        scheduledDate: businessDateKey(scheduledDate) as any,
         status: In([AssignmentStatus.ACCEPTED]),
         isActive: true,
       },

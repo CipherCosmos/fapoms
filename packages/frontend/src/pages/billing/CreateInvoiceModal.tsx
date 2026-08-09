@@ -97,7 +97,7 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
         <StyledInput placeholder="Issue date" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} style={{ width: '100%' }} />
         <StyledInput placeholder="Due date" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: '100%' }} />
       </div>

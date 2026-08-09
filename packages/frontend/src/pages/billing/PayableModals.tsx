@@ -4,9 +4,10 @@ import { Modal, StyledInput, DetailDrawer, useToast } from '../../components/ui'
 import { useCreatePayable, useTransitionPayable, useBillingPayables, useDisbursePayable } from '../../hooks/useBilling';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { PAYABLE_TRANSITIONS, AssayerPayableStatus } from '@fapoms/shared';
+import { PAYABLE_TRANSITIONS, AssayerPayableStatus, SystemRole } from '@fapoms/shared';
 import type { PaymentMethod } from '@fapoms/shared';
 import { formatRupees as money } from '@fapoms/shared';
+import { useCurrentRoles, hasAnyRole } from '../../hooks/useCurrentRoles';
 
 interface AssayerOption { id: string; name: string; displayName?: string; }
 
@@ -65,7 +66,7 @@ export const CreatePayableModal: React.FC<{ onClose: () => void }> = ({ onClose 
         <option value="">Select assayer…</option>
         {assayers.map((a) => <option key={a.id} value={a.id}>{a.displayName ?? a.name}</option>)}
       </select>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         <StyledInput placeholder="Base amount *" type="number" value={form.baseAmount} onChange={(e) => setForm((f) => ({ ...f, baseAmount: e.target.value }))} style={{ width: '100%' }} />
         <StyledInput placeholder="Travel amount" type="number" value={form.travelAmount} onChange={(e) => setForm((f) => ({ ...f, travelAmount: e.target.value }))} style={{ width: '100%' }} />
         <StyledInput placeholder="Tax rate %" type="number" value={form.taxRate} onChange={(e) => setForm((f) => ({ ...f, taxRate: e.target.value }))} style={{ width: '100%' }} />
@@ -86,6 +87,10 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
   const [payRef, setPayRef] = useState('');
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState<PaymentMethod>('BANK_TRANSFER' as PaymentMethod);
+  // Disbursement is gated backend-side to these roles (billing:approve:organization). An OPERATIONS_MANAGER
+  // can reach the drawer and even approve a payable, but POST /disburse would 403 — so only show Pay to
+  // roles the server will actually let move money.
+  const canPay = hasAnyRole(useCurrentRoles(), [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.FINANCE_MANAGER]);
 
   if (!payable) return <DetailDrawer open onClose={onClose} title="Loading…" width={560}><div /></DetailDrawer>;
 
@@ -94,8 +99,9 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
 
   const allowed = PAYABLE_TRANSITIONS[rec.status] ?? [];
   const outstanding = Number(rec.totalAmount) - Number(rec.paidAmount ?? 0);
-  // Money only leaves the business against an approved obligation.
-  const canDisburse = rec.status === 'APPROVED' && outstanding > 0;
+  // Money only leaves the business against an approved obligation, and only by a role the backend
+  // will accept — otherwise the Pay button is a guaranteed 403 after the "cannot be undone" confirm.
+  const canDisburse = rec.status === 'APPROVED' && outstanding > 0 && canPay;
 
   const doDisburse = async () => {
     if (!payRef.trim()) { toast('error', 'A payment reference is required.'); return; }
@@ -151,7 +157,7 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
             Disburse — {money(outstanding)} owed
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8, marginBottom: 8 }}>
             <StyledInput placeholder="Payment reference *" value={payRef} onChange={(e) => setPayRef(e.target.value)} style={{ width: '100%' }} />
             <select value={payMethod} onChange={(e) => setPayMethod(e.target.value as PaymentMethod)} style={selStyle}>
               {['BANK_TRANSFER', 'NEFT', 'RTGS', 'UPI', 'CHEQUE', 'OTHER'].map((m) => <option key={m} value={m}>{m}</option>)}

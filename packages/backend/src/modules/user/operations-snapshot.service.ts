@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { branchStatusLabel, ProjectBranchStatus } from '@fapoms/shared';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 
 /**
  * The operational home view: what is stuck, what is due, and what it is worth.
@@ -17,7 +18,10 @@ import { branchStatusLabel, ProjectBranchStatus } from '@fapoms/shared';
  */
 @Injectable()
 export class OperationsSnapshotService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
   /**
    * Which sections a role is shown.
@@ -103,7 +107,14 @@ export class OperationsSnapshotService {
     ];
     const STAGES = STAGE_ORDER.map((key) => ({ key, label: branchStatusLabel(key) }));
 
-    const [funnelRows, dueRows, docRows, moneyRows, capacityRows, projectRows, activityRows] = await Promise.all([
+    // These seven are org-wide operational aggregates — identical for every viewer — but were run
+    // fresh on every dashboard load by every user (7 heavy queries × hundreds of staff × their poll
+    // rate). Cache the whole bundle cluster-wide for a short TTL so it runs at most once per interval
+    // across all replicas; the per-user validation counts below stay fresh. Fault-tolerant: a Redis
+    // outage degrades to running the queries (a cache miss), never an error.
+    const DASH_TTL = Number(process.env.DASHBOARD_CACHE_TTL_S) || 15;
+    const [funnelRows, dueRows, docRows, moneyRows, capacityRows, projectRows, activityRows] =
+      await this.cache.wrap('dash:snapshot:orgwide:v1', DASH_TTL, () => Promise.all([
       this.dataSource.query(`
         SELECT pb.status, COUNT(*)::int AS c, COALESCE(SUM(pb.packet_count),0)::int AS packets
           FROM project_branches pb
@@ -182,7 +193,7 @@ export class OperationsSnapshotService {
       this.dataSource.query(`
         SELECT id, event_type AS action, remarks AS detail, occurred_at AS "occurredAt"
           FROM audit_events ORDER BY occurred_at DESC LIMIT 12`),
-    ]);
+    ]));
 
     // Validation is only queried for roles that can act on it — a validator's
     // queue is meaningless to finance and vice versa.

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { defaultRouteForRoles } from './config/route-permissions';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
@@ -33,6 +34,8 @@ const AssayerStatementPage = React.lazy(() => import('./pages/billing/AssayerSta
 const Rules = React.lazy(() => import('./pages/Rules'));
 const Notifications = React.lazy(() => import('./pages/Notifications'));
 const Holidays = React.lazy(() => import('./pages/Holidays'));
+const Zones = React.lazy(() => import('./pages/Zones'));
+const FieldIssues = React.lazy(() => import('./pages/FieldIssues').then((m) => ({ default: m.FieldIssues })));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
@@ -118,7 +121,9 @@ export const App: React.FC = () => {
     localStorage.setItem('fapoms_token', jwtToken);
     localStorage.setItem('fapoms_refresh_token', refreshToken);
     setToken(jwtToken);
-    navigate('/dashboard');
+    // Land on the role's home rather than a fixed page — the '/' route resolves it once the
+    // profile (and therefore the roles) has loaded.
+    navigate('/');
   };
 
   const handleLogout = () => {
@@ -166,6 +171,16 @@ export const App: React.FC = () => {
     <Layout onLogout={handleLogout} user={currentUser || undefined}>
       <Suspense fallback={<RouteFallback />}>
       <Routes>
+        {/* Root sends each role to the first screen of their actual work. Wait for the profile
+            so an admin is not flashed the auditor's default before roles resolve. */}
+        <Route
+          path="/"
+          element={
+            isLoadingUser && userRoles.length === 0
+              ? <RouteFallback />
+              : <Navigate to={defaultRouteForRoles(userRoles)} replace />
+          }
+        />
         <Route path="/dashboard" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Dashboard /></ProtectedRoute>} />
         <Route path="/executive-map" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><ExecutiveMap /></ProtectedRoute>} />
         <Route path="/projects" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Projects /></ProtectedRoute>} />
@@ -205,10 +220,12 @@ export const App: React.FC = () => {
         <Route path="/billing/statement" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerStatementPage /></ProtectedRoute>} />
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
         <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
+        <Route path="/zones" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Zones /></ProtectedRoute>} />
+        <Route path="/field-issues" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FieldIssues /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Settings /></ProtectedRoute>} />
         
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       </Suspense>
     </Layout>

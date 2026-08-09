@@ -4,11 +4,14 @@ import {
   X, ExternalLink, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
-import { formatRupees, nextAssayerLifecycleStates } from '@fapoms/shared';
+import { nextAssayerLifecycleStates } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import type { Assayer } from './assayer-shared';
-import { STATUS_COLORS } from './assayer-shared';
+import {
+  STATUS_COLORS, fmtDate, fmtWhen, money, missingCriticalFields,
+  fieldLabelStyle as label,
+} from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 
@@ -24,14 +27,6 @@ import { CommercialProfileModal, type CommercialProfile } from './CommercialProf
  */
 
 
-const CRITICAL: { key: keyof Assayer; label: string; why: string }[] = [
-  { key: 'panNumber', label: 'PAN', why: 'TDS and statutory filing' },
-  { key: 'bankAccountNumber', label: 'Bank account', why: 'Payouts' },
-  { key: 'ifscCode', label: 'IFSC', why: 'Payouts' },
-  { key: 'joiningDate', label: 'Joining date', why: 'Tenure and settlement' },
-  { key: 'emergencyContactPhone', label: 'Emergency contact', why: 'Duty of care' },
-];
-
 const TABS = [
   { key: 'summary', label: 'Summary', icon: User },
   { key: 'commercial', label: 'Pay', icon: CreditCard },
@@ -40,18 +35,6 @@ const TABS = [
   { key: 'history', label: 'History', icon: Clock },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
-
-const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-const fmtWhen = (d?: string | null) =>
-  d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-// Keeps this screen's em-dash-for-unknown behaviour, now expressed through the shared formatter.
-const money = (n?: number | null) => formatRupees(n, { emptyAs: '—' });
-
-const label: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em', color: 'var(--text-muted)',
-};
 
 export const AssayerDetailDrawer: React.FC<{
   assayerId: string;
@@ -98,10 +81,7 @@ export const AssayerDetailDrawer: React.FC<{
       .catch(() => setLoaded((p) => ({ ...p, [tab]: [] })));
   }, [tab, assayerId, loaded]);
 
-  const missing = useMemo(
-    () => (a ? CRITICAL.filter((f) => { const v = a[f.key]; return v == null || String(v).trim() === ''; }) : []),
-    [a],
-  );
+  const missing = useMemo(() => missingCriticalFields(a), [a]);
 
   const transitions = a ? nextAssayerLifecycleStates(a.lifecycleStatus) : [];
 
@@ -149,10 +129,14 @@ export const AssayerDetailDrawer: React.FC<{
     if (resetting) return;
     setResetting(true); setErr(null); setTempPassword(null);
     try {
+      // The endpoint returns a pre-enveloped body ({ success, temporaryPassword, message }) with no
+      // `data` key, so it must be read with withMeta — otherwise api.request unwraps `.data` (undefined)
+      // and the one-time password, which the server never stores readably, is lost.
       const res = await api.request<{ temporaryPassword?: string }>(`/assayers/${assayerId}/reset-password`, {
         method: 'POST',
         body: JSON.stringify({}),
-      });
+        withMeta: true,
+      } as any);
       setTempPassword(res.temporaryPassword ?? '(set, but not returned)');
     } catch (e) { setErr(userMessage(e)); }
     setResetting(false);
@@ -213,7 +197,7 @@ export const AssayerDetailDrawer: React.FC<{
               </div>
             </header>
 
-            <nav style={{ display: 'flex', gap: '2px', padding: '0 12px', borderBottom: '1px solid var(--border-color)' }}>
+            <nav style={{ display: 'flex', gap: '2px', padding: '0 12px', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
               {TABS.map((t) => {
                 const Icon = t.icon;
                 const on = tab === t.key;
@@ -222,6 +206,7 @@ export const AssayerDetailDrawer: React.FC<{
                     style={{
                       display: 'flex', alignItems: 'center', gap: '5px', padding: '9px 11px',
                       fontSize: '12px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
+                      whiteSpace: 'nowrap', flexShrink: 0,
                       color: on ? 'var(--accent)' : 'var(--text-muted)',
                       borderBottom: `2px solid ${on ? 'var(--accent)' : 'transparent'}`,
                     }}>

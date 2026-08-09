@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil } from 'lucide-react';
 import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge } from '../components/ui';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
@@ -80,6 +81,7 @@ const Clients: React.FC = () => {
   const [limit, setLimit] = useState(10);
   const [sortBy, setSortBy] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showLifecycle, setShowLifecycle] = useState(false);
@@ -95,6 +97,17 @@ const Clients: React.FC = () => {
     const t = setTimeout(() => setDebouncedSearch(search), 350);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Open the client the user picked from global search (/clients?id=…), mirroring the other list
+  // pages, then drop the param so a later manual close does not silently reopen it.
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (!id) return;
+    setSelectedId(id);
+    const next = new URLSearchParams(searchParams);
+    next.delete('id');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const { data, isLoading, isFetching, refetch } = useClientsList({
     page,
@@ -216,14 +229,14 @@ const Clients: React.FC = () => {
 
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Building2 size={20} /> Clients
           </h2>
           <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>Manage client records, lifecycle, contacts, contracts and billing.</p>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
             <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
@@ -234,7 +247,7 @@ const Clients: React.FC = () => {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ width: 260 }}><SearchInput value={search} onChange={setSearch} placeholder="Search clients..." /></div>
+        <div style={{ width: 260, maxWidth: '100%', flex: '1 1 200px' }}><SearchInput value={search} onChange={setSearch} placeholder="Search clients..." /></div>
         <FilterSelect value={status} onChange={(v) => setStatus(v)} options={LIFECYCLE_FILTERS.map((s) => ({ value: s, label: clientLifecycleLabel(s) }))} label="Lifecycle" />
         <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))} label="Type" />
         <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={PRIORITY_FILTERS.map((p) => ({ value: p, label: p }))} label="Priority" />
@@ -331,7 +344,7 @@ const Clients: React.FC = () => {
         }
       />
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{data?.meta.total ?? 0} clients</div>
         <Pagination
           page={page}
@@ -374,7 +387,7 @@ const Clients: React.FC = () => {
                 <ExternalLink size={12} /> {selectedClient.website}
               </a>
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, fontSize: 13 }}>
               {[
                 ['Contact Person', selectedClient.contactPerson],
                 ['Email', selectedClient.contactEmail],
@@ -427,7 +440,7 @@ const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts
     { key: 'config' as const, label: 'Config & Planning' },
   ];
   return (
-    <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border-color)' }}>
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)' }}>
       {tabs.map((t) => (
         <button
           key={t.key}

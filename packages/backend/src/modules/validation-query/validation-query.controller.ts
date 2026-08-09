@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { memoryStorage } from 'multer';
 import { IsOptional, IsString, IsArray, IsNumber, IsObject, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -17,7 +18,6 @@ import { SystemRole } from '@fapoms/shared';
 import { Response } from 'express';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { DocumentAccessTokenService } from '../document/document-access-token.service';
-import { AuthService } from '../auth/auth.service';
 
 /**
  * Multer memory-storage configuration for chat attachments.
@@ -84,7 +84,6 @@ export class ValidationQueryController {
     private readonly threadService: QueryThreadService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly documentAccessTokenService: DocumentAccessTokenService,
-    private readonly authService: AuthService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -95,7 +94,7 @@ export class ValidationQueryController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Upload chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FilesInterceptor('files', 10, chatMulterOptions))
+  @UseInterceptors(FilesInterceptor('files', 10, chatMulterOptions), FileScanInterceptor)
   async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
     // Previously `(files || []).map(...)` — a request carrying no files produced an empty
     // result set and HTTP 201, so a failed attach looked to the caller exactly like a
@@ -132,7 +131,7 @@ export class ValidationQueryController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
   @ApiOperation({ summary: 'Upload single chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file', chatMulterOptions))
+  @UseInterceptors(FileInterceptor('file', chatMulterOptions), FileScanInterceptor)
   async uploadSingleAttachment(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
     // Was `return { success: false, ... }`, which still went out as HTTP 201 Created. Any
     // client branching on the status code — including anything using `response.ok` — read a
@@ -197,22 +196,19 @@ export class ValidationQueryController {
     const rawKey = Array.isArray(pathParam) ? pathParam.join('/') : pathParam;
     const key = decodeURIComponent(rawKey);
 
-    // Check 1: User is already populated by Passport (e.g. Bearer header)
-    let user = req.user;
+    // Check 1: User is already populated by Passport (Bearer header)
+    const user = req.user;
 
-    // Check 2: Try verifying `token` query param as a JWT access token
-    if (!user && token) {
-      try {
-        const payload = await this.authService.verifyJwtToken(token);
-        if (payload) {
-          user = await this.authService.validateJwtPayload(payload);
-        }
-      } catch {
-        // Not a valid JWT token — fallback to checking if it is an HMAC download token
-      }
-    }
-
-    // Check 3: If still no authenticated user, verify as a short-lived HMAC download token
+    /**
+     * Check 2: otherwise it must be a short-lived HMAC token bound to this exact key.
+     *
+     * A second branch used to sit above this one, accepting a full session JWT from `?token=`.
+     * It is gone for the reason set out in `JwtStrategy`: a session token in a URL must be
+     * assumed disclosed, and this one would have granted its bearer every attachment in the
+     * system rather than the one the link was for. `GET /validation-queries/attachment-token`
+     * issues the correct instrument — an HMAC over this key alone, expiring in five minutes —
+     * and the assayer app already uses it.
+     */
     if (!user) {
       try {
         this.documentAccessTokenService.verify(key, token);

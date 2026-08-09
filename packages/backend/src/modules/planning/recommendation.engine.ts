@@ -6,7 +6,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { AssignmentStatus, AssayerStatus, calculateHaversineDistance } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, calculateHaversineDistance, businessDateKey } from '@fapoms/shared';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
@@ -1294,7 +1294,11 @@ export class RecommendationEngine {
         ? this.assignmentRepository.find({
             where: {
               assayerId: In(assayerIds),
-              scheduledDate,
+              // The column is `date`; comparing it to a full Date-with-time is always false in
+              // Postgres (a mid-afternoon `new Date()` never equals a midnight date), which
+              // silently emptied this set and defeated the double-booking guard. Match on the
+              // date-only business key so it actually fires.
+              scheduledDate: businessDateKey(scheduledDate) as any,
               status: In([AssignmentStatus.ACCEPTED]),
               isActive: true,
             },

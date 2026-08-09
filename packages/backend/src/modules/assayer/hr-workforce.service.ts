@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 
 import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
@@ -58,50 +59,59 @@ const RECORD_FIELDS: {
 
 @Injectable()
 export class HrWorkforceService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
   private static num(v: any): number {
     return Number(v ?? 0);
   }
 
   async overview(): Promise<any> {
-    const [
-      headcount,
-      pipeline,
-      compliance,
-      expiries,
-      capability,
-      deployment,
-      utilisation,
-      attrition,
-      activity,
-    ] = await Promise.all([
-      this.headcount(),
-      this.onboardingPipeline(),
-      this.recordCompliance(),
-      this.expiries(),
-      this.capability(),
-      this.deployment(),
-      this.utilisation(),
-      this.attrition(),
-      this.recentActivity(),
-    ]);
+    // ~22 queries across nine org-wide panels. HR data (headcount, compliance, expiries) changes
+    // slowly, so cache the whole payload cluster-wide for a short TTL instead of re-running all of it
+    // on every /hr overview load. Fault-tolerant: a Redis miss just runs the queries.
+    const TTL = Number(process.env.HR_OVERVIEW_CACHE_TTL_S) || 30;
+    return this.cache.wrap('hr:workforce:overview', TTL, async () => {
+      const [
+        headcount,
+        pipeline,
+        compliance,
+        expiries,
+        capability,
+        deployment,
+        utilisation,
+        attrition,
+        activity,
+      ] = await Promise.all([
+        this.headcount(),
+        this.onboardingPipeline(),
+        this.recordCompliance(),
+        this.expiries(),
+        this.capability(),
+        this.deployment(),
+        this.utilisation(),
+        this.attrition(),
+        this.recentActivity(),
+      ]);
 
-    return {
-      generatedAt: new Date().toISOString(),
-      headcount,
-      pipeline,
-      compliance,
-      expiries,
-      capability,
-      deployment,
-      utilisation,
-      attrition,
-      activity,
-      // Surfaced first in the UI: the handful of things HR should act on today,
-      // ranked, rather than left for someone to infer from nine panels.
-      actions: this.deriveActions({ pipeline, compliance, expiries, deployment, utilisation }),
-    };
+      return {
+        generatedAt: new Date().toISOString(),
+        headcount,
+        pipeline,
+        compliance,
+        expiries,
+        capability,
+        deployment,
+        utilisation,
+        attrition,
+        activity,
+        // Surfaced first in the UI: the handful of things HR should act on today,
+        // ranked, rather than left for someone to infer from nine panels.
+        actions: this.deriveActions({ pipeline, compliance, expiries, deployment, utilisation }),
+      };
+    });
   }
 
   // ── Headcount ────────────────────────────────────────────────────────────

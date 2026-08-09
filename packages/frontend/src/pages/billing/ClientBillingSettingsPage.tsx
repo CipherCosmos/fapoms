@@ -117,6 +117,10 @@ export const ClientBillingSettingsPage: React.FC = () => {
       <div style={cardStyle}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>{selectedName || 'Client'}</div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Billing rate card and tax terms</div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>
+          Billing status, banking details and remarks are managed on the client's record under{' '}
+          <Link to="/clients" style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Clients → Billing</Link>.
+        </div>
       </div>
 
       {!hasBaseFee && (
@@ -171,7 +175,7 @@ const cardStyle: React.CSSProperties = {
   background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md, 10px)', padding: 16,
 };
 const inputStyle: React.CSSProperties = {
-  width: 200, padding: '7px 10px', fontSize: 13, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)',
+  width: 200, maxWidth: '100%', padding: '7px 10px', fontSize: 13, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)',
 };
 
 const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (

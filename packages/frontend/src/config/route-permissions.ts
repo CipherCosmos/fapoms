@@ -46,6 +46,17 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
+    // The desk's queue of problems the field flagged — same operations roles that act on
+    // assignments, since acting on the assignment is how an issue is cleared.
+    path: '/field-issues',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+    ],
+  },
+  {
     // Operations executives work this queue daily; finance needs it to see what was billable.
     path: '/assignments',
     allowedRoles: [
@@ -117,11 +128,17 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
+    // Mirrors the backend GET /assayers/:id/profile @Roles — operations and finance are allowed the
+    // (field-scoped) dossier, and global search links every user to this route, so the gate must not
+    // be narrower than the API or those clicks dead-end on an access-denied redirect.
     path: '/assayers/:id',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.HR_MANAGER,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.FINANCE_MANAGER,
     ],
   },
   {
@@ -168,6 +185,17 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.SUPER_ADMINISTRATOR,
       SystemRole.ADMINISTRATOR,
       SystemRole.OPERATIONS_MANAGER,
+    ],
+  },
+  {
+    // Territorial zones group branches for coverage planning. Read for ops; create/edit gated
+    // by canManageZones(). Mirrors the zone controller's own role list.
+    path: '/zones',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
     ],
   },
   {
@@ -226,6 +254,28 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
  *    default is the other way round: an unlisted path is denied, and the omission shows up as a
  *    missing page rather than as a leak.
  */
+/**
+ * The page each role should land on — the first screen of their actual work, not a generic
+ * dashboard. This is the "what do I do when I log in" answer the nav could not give before.
+ *
+ * A user may hold several roles, so the most operationally specific home wins while admins, who
+ * run the whole board, get the overview. Every target below is a route the matching role can
+ * already open per ROUTE_PERMISSIONS, so a landing redirect can never bounce into a denied page.
+ */
+export function defaultRouteForRoles(userRoles: SystemRole[]): string {
+  const has = (r: SystemRole) => userRoles.includes(r);
+  if (has(SystemRole.SUPER_ADMINISTRATOR) || has(SystemRole.ADMINISTRATOR)) return '/dashboard';
+  if (has(SystemRole.OPERATIONS_MANAGER)) return '/executive-map';   // live pipeline overview
+  if (has(SystemRole.FINANCE_MANAGER)) return '/billing';            // the billing book
+  if (has(SystemRole.HR_MANAGER)) return '/hr';                      // workforce console
+  if (has(SystemRole.OPERATIONS_EXECUTIVE)) return '/assignments';   // field-execution queue
+  if (has(SystemRole.DOCUMENT_EXECUTIVE)) return '/documents';       // document desk
+  if (has(SystemRole.VALIDATION_MANAGER) || has(SystemRole.VALIDATOR) || has(SystemRole.DATA_ENTRY_HEAD)) {
+    return '/data-entry';                                            // validation / data-entry desk
+  }
+  return '/dashboard';                                               // auditor and anyone else: read-only overview
+}
+
 export function canAccessRoute(userRoles: SystemRole[], path: string): boolean {
   const matches = ROUTE_PERMISSIONS.filter((rp) => {
     if (rp.path.includes(':id')) {

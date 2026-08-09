@@ -1,11 +1,13 @@
 import React from 'react';
-import { Modal, View, TextInput, TextStyle } from 'react-native';
+import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
 
 interface RejectionModalProps {
   visible: boolean;
   rejectReason: string;
+  /** True while the decline is being persisted — drives the button spinner + prevents double-submit. */
+  submitting?: boolean;
   onChangeReason: (text: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -14,6 +16,7 @@ interface RejectionModalProps {
 export const RejectionModal: React.FC<RejectionModalProps> = ({
   visible,
   rejectReason,
+  submitting,
   onChangeReason,
   onConfirm,
   onCancel,
@@ -38,12 +41,13 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
-      <View style={{
-        flex: 1,
-        backgroundColor: t.colors.scrim,
-        justifyContent: 'center',
-        padding: t.space.xl,
-      }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <View style={{
+          flex: 1,
+          backgroundColor: t.colors.scrim,
+          justifyContent: 'center',
+          padding: t.space.xl,
+        }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
           <AppText variant="h2">Decline Assignment</AppText>
 
@@ -60,11 +64,12 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
           </View>
 
           <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label="Decline Assignment" variant="danger" icon="close" onPress={onConfirm} style={{ flex: 1 }} />
-            <Button label="Cancel" variant="neutral" onPress={onCancel} style={{ flex: 1 }} />
+            <Button label="Decline Assignment" variant="danger" icon="close" loading={submitting} disabled={submitting} onPress={onConfirm} style={{ flex: 1 }} />
+            <Button label="Cancel" variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
           </View>
         </Card>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

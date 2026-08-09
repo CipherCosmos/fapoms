@@ -4,6 +4,7 @@ import type { OverviewData } from './documents/DocumentControlPanel';
 import { BranchDocumentPanel } from './documents/BranchDocumentPanel';
 import { DocumentModelLegend } from './documents/DocumentModelLegend';
 import { DailyRunPanel } from './documents/DailyRunPanel';
+import { CustomerMasterVersions } from './CustomerMasterVersions';
 import { RefreshCw } from 'lucide-react';
 import { AlertBanner } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
@@ -84,6 +85,46 @@ async function apiUploadRaw(endpoint: string, formData: FormData): Promise<any> 
   return json;
 }
 
+/**
+ * Upload one document, preferring the presigned direct-to-storage path (POST
+ * /documents/upload/presign → client PUT straight to object storage → POST
+ * /documents/upload/finalize) so the file bytes never buffer through the API process.
+ *
+ * Falls back to the original multipart `/documents/upload` on ANY failure of the presigned path
+ * — the local-disk storage driver (no presign), a storage endpoint the browser cannot reach, or
+ * a bucket without CORS. The fallback guarantees this can never upload *less* reliably than
+ * before; it only upgrades the transport when direct-to-storage is actually available.
+ */
+async function uploadDocumentSmart(assessmentId: string, type: string, file: File): Promise<any> {
+  const contentType = file.type || 'application/octet-stream';
+  try {
+    const presign = await apiPost('/documents/upload/presign', { fileName: file.name, contentType });
+    if (!presign?.uploadUrl || !presign?.objectKey) throw new Error('presign unavailable');
+
+    const put = await fetch(presign.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: file,
+    });
+    if (!put.ok) throw new Error(`storage PUT failed (${put.status})`);
+
+    return await apiPost('/documents/upload/finalize', {
+      objectKey: presign.objectKey,
+      assessmentId,
+      type,
+      fileName: file.name,
+      contentType,
+    });
+  } catch {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiUpload(
+      `/documents/upload?assessmentId=${encodeURIComponent(assessmentId)}&type=${encodeURIComponent(type)}`,
+      formData,
+    );
+  }
+}
+
 export const Documents: React.FC = () => {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -98,7 +139,7 @@ export const Documents: React.FC = () => {
   // The daily run leads: the client's file arrives per audit date and drives that
   // day's work, so that is the view someone opens this page to act on. The
   // branch and file views remain for looking across dates.
-  const [view, setView] = useState<'daily' | 'branch' | 'flat'>('daily');
+  const [view, setView] = useState<'daily' | 'branch' | 'flat' | 'versions'>('daily');
   const [projectId, setProjectId] = useState<string>('');
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
 
@@ -170,9 +211,7 @@ export const Documents: React.FC = () => {
     setError(null);
     setSuccessMsg(null);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiUpload(`/documents/upload?assessmentId=${projectBranchId}&type=${type}`, formData);
+      await uploadDocumentSmart(projectBranchId, type, file);
       setSuccessMsg(`"${file.name}" uploaded.`);
       await loadOverview();
     } catch (err: any) {
@@ -223,8 +262,8 @@ export const Documents: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header */}
-      <div style={{ background: 'linear-gradient(90deg, var(--status-pending-bg) 0%, var(--status-completed-bg) 100%)', border: '1px solid var(--status-pending-bg)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ background: 'linear-gradient(90deg, var(--status-pending-bg) 0%, var(--status-completed-bg) 100%)', border: '1px solid var(--status-pending-bg)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
           <span style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             Document Management
           </span>
@@ -260,6 +299,9 @@ export const Documents: React.FC = () => {
             <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
               All Files
             </button>
+            <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              Customer Master
+            </button>
             {view === 'daily' && projects.length > 1 && (
               <select value={projectId} onChange={(e) => setProjectId(e.target.value)}
                 style={{ padding: '6px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, marginLeft: 4 }}>
@@ -267,7 +309,9 @@ export const Documents: React.FC = () => {
               </select>
             )}
           </div>
-          {view === 'daily' ? (
+          {view === 'versions' ? (
+            <CustomerMasterVersions embedded />
+          ) : view === 'daily' ? (
             <DailyRunPanel
               projectId={projectId}
               apiGet={apiGet}

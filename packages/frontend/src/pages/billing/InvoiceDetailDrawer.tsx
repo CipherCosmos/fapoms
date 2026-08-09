@@ -85,13 +85,13 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
     >
       {payOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             <select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
               {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
             <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             <StyledInput placeholder={`Amount (outstanding ${money(invoice.outstandingAmount)}) *`} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
             <StyledInput placeholder="Received date" type="date" value={receivedDate} onChange={(e) => setReceivedDate(e.target.value)} />
           </div>

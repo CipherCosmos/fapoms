@@ -16,7 +16,10 @@ describe('NotificationDispatchService', () => {
   let auditCalls: any[];
   let queuedJobs: any[];
 
-  const mockQueue = { add: jest.fn(async (name: string, data: any) => { queuedJobs.push({ name, data }); return { id: '1' }; }) };
+  const mockQueue = {
+    add: jest.fn(async (name: string, data: any) => { queuedJobs.push({ name, data }); return { id: '1' }; }),
+    addBulk: jest.fn(async (jobs: any[]) => { for (const j of jobs) queuedJobs.push({ name: j.name, data: j.data }); return jobs.map((_, i) => ({ id: String(i) })); }),
+  };
   const publishCalls: any[] = [];
   const mockEventPublisher = { publish: jest.fn((event: string, payload: any) => { publishCalls.push({ event, payload }); }) };
 
@@ -60,6 +63,7 @@ describe('NotificationDispatchService', () => {
     queuedJobs = [];
     publishCalls.length = 0;
     mockQueue.add.mockClear();
+    mockQueue.addBulk.mockClear();
     mockUserQb.getMany.mockReset();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -239,7 +243,7 @@ describe('NotificationDispatchService', () => {
     it('a dead queue delays the push instead of failing the business action', async () => {
       // Redis down. The rows are already written, so the sweeper will find them;
       // what must not happen is this throwing back into the caller.
-      mockQueue.add.mockRejectedValueOnce(new Error('Redis connection lost'));
+      mockQueue.addBulk.mockRejectedValueOnce(new Error('Redis connection lost'));
       mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
 
       await expect(

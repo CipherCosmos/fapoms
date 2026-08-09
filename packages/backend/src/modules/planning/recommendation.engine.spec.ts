@@ -68,6 +68,10 @@ describe('RecommendationEngine', () => {
 
   const mockAssayerRepo = {
     find: jest.fn(),
+    // The geo pre-filter issues a raw ST_DistanceSphere query. Returning [] makes
+    // findNearbyActiveAssayerIds fall back to the full active pool, so these tests see
+    // every mocked assayer exactly as before the pre-filter was added.
+    query: jest.fn().mockResolvedValue([]),
   };
 
   const mockAssignmentRepo = {

@@ -18,6 +18,10 @@ export const RecommendationPanel: React.FC<{
   onToggleSla: (v: boolean) => void;
   slaRadius: number;
   onSlaRadiusChange: (v: number) => void;
+  maxRadiusEnabled: boolean;
+  onToggleMaxRadius: (v: boolean) => void;
+  maxRadius: number;
+  onMaxRadiusChange: (v: number) => void;
   onRefresh: () => void;
   onAccept: (assignmentId: string, proposedFee: number) => void;
   onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
@@ -26,6 +30,7 @@ export const RecommendationPanel: React.FC<{
 }> = ({
   selectedPb, renderCandidatesList, width = 380, flex = false, horizontal = false,
   showAllCandidates, onToggleShowAll, slaEnabled, onToggleSla, slaRadius, onSlaRadiusChange,
+  maxRadiusEnabled, onToggleMaxRadius, maxRadius, onMaxRadiusChange,
   onRefresh, onAccept, onCounter, onDecline, onViewHistory,
 }) => {
   const isDone = selectedPb && (
@@ -108,21 +113,48 @@ export const RecommendationPanel: React.FC<{
                 </button>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                  <input type="checkbox" checked={showAllCandidates} onChange={(e) => onToggleShowAll(e.target.checked)} />
-                  Show Distant (&gt;700km)
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* Max radius: "show assayers WITHIN X km" — the intuitive service-radius filter. */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: maxRadiusEnabled ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                  <input type="checkbox" checked={maxRadiusEnabled} onChange={(e) => onToggleMaxRadius(e.target.checked)} />
+                  Within
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                {maxRadiusEnabled && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                    <input
+                      type="number" min={0} step={10} value={maxRadius} list="radius-presets"
+                      aria-label="Maximum radius in kilometres — show assayers within this distance"
+                      onChange={e => onMaxRadiusChange(Math.max(0, Number(e.target.value) || 0))}
+                      style={{ width: '60px', fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--accent)', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: '10px', color: 'var(--accent)' }}>km</span>
+                  </span>
+                )}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
+                  title="Ignore the max-radius bound and show every candidate regardless of distance">
+                  <input type="checkbox" checked={showAllCandidates} onChange={(e) => onToggleShowAll(e.target.checked)} />
+                  Show all distances
+                </label>
+                {/* Min radius: the audit-independence floor (hide assayers TOO CLOSE to the branch). */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
+                  title="Independence floor: hide assayers closer than this to the branch">
                   <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
-                  Min Radius Filter
+                  Min radius
                 </label>
                 {slaEnabled && (
-                  <select value={slaRadius} onChange={e => onSlaRadiusChange(Number(e.target.value))}
-                    style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none', cursor: 'pointer' }}>
-                    {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
-                  </select>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                    <input
+                      type="number" min={0} step={5} value={slaRadius} list="radius-presets"
+                      aria-label="Minimum radius in kilometres — independence floor"
+                      onChange={e => onSlaRadiusChange(Math.max(0, Number(e.target.value) || 0))}
+                      style={{ width: '56px', fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: '10px', color: 'var(--warning)' }}>km</span>
+                  </span>
                 )}
+                <datalist id="radius-presets">
+                  {[0, 25, 50, 75, 100, 150, 200, 300, 500, 700].map(v => <option key={v} value={v} />)}
+                </datalist>
               </div>
             </div>
 

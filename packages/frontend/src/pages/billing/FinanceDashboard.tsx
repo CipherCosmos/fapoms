@@ -80,7 +80,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
             <CheckCircle2 size={16} /> Nothing waiting — everything billed, approved and collected.
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(270px, 100%), 1fr))', gap: 12 }}>
             {actions.map((a) => (
               <div key={a.title} style={{ background: 'var(--bg-secondary)', border: `1px solid color-mix(in srgb, ${a.tone} 25%, transparent)`, borderLeft: `3px solid ${a.tone}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: a.tone, fontSize: 12, fontWeight: 700 }}>
@@ -125,7 +125,7 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
       {/* ── 3. Where the money is ───────────────────────────────────────── */}
       <div>
         <SectionLabel>Where the money is</SectionLabel>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(330px, 100%), 1fr))', gap: 14 }}>
           <Card title="Receivable — money coming in" accent="var(--accent)">
             {/* The order is the actual lifecycle a rupee travels through. */}
             <Pipeline

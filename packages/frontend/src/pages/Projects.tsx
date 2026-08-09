@@ -1,5 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+
+/** Collapses the table+detail split to a single column on narrow viewports. */
+const useIsNarrow = (max = 900): boolean => {
+  const [narrow, setNarrow] = useState(
+    typeof window !== 'undefined' ? window.innerWidth <= max : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${max}px)`);
+    const handler = () => setNarrow(mq.matches);
+    handler();
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [max]);
+  return narrow;
+};
 import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
 import { ProjectStatus, Priority, projectStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
@@ -187,6 +202,7 @@ const statusBadge = (status: ProjectStatus) => ({
 
 export const Projects: React.FC = () => {
   const navigate = useNavigate();
+  const isNarrow = useIsNarrow();
   const [searchParams] = useSearchParams();
   const projectIdParam = searchParams.get('id');
   const roles = useCurrentRoles();
@@ -616,12 +632,12 @@ export const Projects: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
       {/* Page Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Projects</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>Manage all client audit cycles and monitor progress</p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <button onClick={async () => {
             try {
               const data = projects.length > 0 ? projects : await api.request<ProjectItem[]>('/projects');
@@ -718,7 +734,7 @@ export const Projects: React.FC = () => {
       </div>
 
       {/* Main Grid: Table + Detail Panel */}
-      <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '1fr 420px' : '1fr', gap: '24px', alignItems: 'start', transition: 'grid-template-columns 0.2s' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: selectedId && !isNarrow ? 'minmax(0, 1fr) 420px' : '1fr', gap: '24px', alignItems: 'start', transition: 'grid-template-columns 0.2s' }}>
 
         {/* Projects Table */}
         <div className="table-container" style={{ overflow: 'hidden' }}>

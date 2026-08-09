@@ -411,6 +411,8 @@ export interface Assignment extends ExtendedAuditMetadata {
   status: AssignmentStatus;
   proposedFee?: number;
   agreedFee?: number;
+  // Number of counter-offer rounds; present on assignment payloads and read by negotiation UIs.
+  negotiationCount?: number;
   scheduledDate?: string;
   completionDate?: string;
   remarks?: string;

@@ -49,9 +49,10 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       alignItems: 'center',
       justifyContent: 'center',
       minHeight: '100vh',
-      width: '100vw',
+      width: '100%',
       background: 'radial-gradient(circle at 10% 20%, rgba(216,174,71,0.15) 0%, var(--bg-page) 90.2%)',
-      padding: '24px'
+      padding: '24px',
+      boxSizing: 'border-box'
     }}>
       <div className="glass-card" style={{
         width: '100%',
@@ -220,38 +221,24 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
           </form>
 
-          {/* Quick Demo Login Selector */}
-          <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px dashed var(--border-color)' }}>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', textAlign: 'center' }}>
-              Quick Demo Login:
-            </p>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => setDemoAccount('admin', 'admin123')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
-              >
-                Super Admin
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => setDemoAccount('ops_manager', 'ops123')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
-              >
-                Ops Manager
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => setDemoAccount('hr_manager', 'hr123')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
-              >
-                HR Manager
-              </button>
+          {/*
+            Quick-demo login buttons removed. They shipped clickable super-admin, ops-manager
+            and HR-manager credentials on every build (admin/admin123 etc.) that filled the
+            form with the real seeded accounts — a one-click privileged sign-in on the public
+            login page. Kept only behind the dev flag so local work still has the convenience.
+          */}
+          {import.meta.env.DEV && (
+            <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px dashed var(--border-color)' }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', textAlign: 'center' }}>
+                Quick Demo Login (dev only):
+              </p>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('admin', 'admin123')} style={{ fontSize: '11px', padding: '4px 10px' }}>Super Admin</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('ops_manager', 'ops123')} style={{ fontSize: '11px', padding: '4px 10px' }}>Ops Manager</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('hr_manager', 'hr123')} style={{ fontSize: '11px', padding: '4px 10px' }}>HR Manager</button>
+              </div>
             </div>
-          </div>
+          )}
 
         </div>
       </div>

@@ -24,8 +24,33 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, MinLength, MaxLength, ValidateNested, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+
+/**
+ * A block of time an assayer is unavailable. Real nested classes rather than an inline type:
+ * with `whitelist: true` an inline `{ startDate, endDate }[]` is transformed into an array of
+ * empty objects because the inner properties carry no validation metadata to keep — the same
+ * defect that once stored query attachments as `[[]]`. `@ValidateNested` + `@Type` preserve them.
+ */
+class LeavePeriodDto {
+  @IsDateString()
+  startDate: string;
+
+  @IsDateString()
+  endDate: string;
+}
+
+class WorkingHoursDto {
+  // 24-hour HH:MM. Validated so a malformed time cannot reach the scheduler's window check.
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'start must be HH:MM (24-hour)' })
+  start: string;
+
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'end must be HH:MM (24-hour)' })
+  end: string;
+}
 
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
@@ -65,6 +90,11 @@ const SELF_EDITABLE_FIELDS: string[] = [
   'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
   'languages', 'skills', 'experienceYears',
   'preferredRegions',
+  // Availability is the assayer's own to declare: when they are off and the hours they work.
+  // The scheduler already honours both (ConstraintEvaluator.checkLeaves / working hours), so
+  // letting an assayer set their own time off is what stops the desk offering them work on a
+  // day they are away — without an HR round-trip.
+  'leaves', 'workingHours',
 ];
 
 /**
@@ -183,11 +213,11 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsNumber()
   performanceRating?: number;
 
-  @IsOptional() @IsArray()
-  leaves?: { startDate: string; endDate: string }[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => LeavePeriodDto)
+  leaves?: LeavePeriodDto[];
 
-  @IsOptional() @IsObject()
-  workingHours?: { start: string; end: string };
+  @IsOptional() @ValidateNested() @Type(() => WorkingHoursDto)
+  workingHours?: WorkingHoursDto;
 
   @IsOptional() @IsInt()
   maxDailyWorkload?: number;
@@ -308,11 +338,11 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsNumber()
   performanceRating?: number;
 
-  @IsOptional() @IsArray()
-  leaves?: { startDate: string; endDate: string }[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => LeavePeriodDto)
+  leaves?: LeavePeriodDto[];
 
-  @IsOptional() @IsObject()
-  workingHours?: { start: string; end: string };
+  @IsOptional() @ValidateNested() @Type(() => WorkingHoursDto)
+  workingHours?: WorkingHoursDto;
 
   @IsOptional() @IsInt()
   maxDailyWorkload?: number;
@@ -1174,7 +1204,7 @@ export class AssayerController {
   @Post('/upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
   @RequirePermissions('assayer:create:organization')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
   async uploadAssayers(@UploadedFile() file: any, @Req() req: any) {
     // A submitted form with no file attached reaches here as `undefined`, and reading

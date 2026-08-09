@@ -122,7 +122,10 @@ export const NotificationDropdown: React.FC = () => {
       socket.on('assignment:created', handleNewEvent);
     }
 
-    const interval = setInterval(refreshCount, 10_000);
+    // Real-time freshness comes from the socket events subscribed above; this poll is only a safety
+    // net for a missed/ dropped socket, so 30s is plenty. At 10s it was ~3x the unread-count query load
+    // across every signed-in user for no real benefit.
+    const interval = setInterval(refreshCount, 30_000);
     return () => {
       clearInterval(interval);
       if (socket) {

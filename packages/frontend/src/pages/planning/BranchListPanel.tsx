@@ -110,7 +110,9 @@ export const BranchListPanel: React.FC<{
           const isAssigned = !!pb.assignment;
           const isDone = ['CLOSED'].includes(pb.status);
           const isValidationPending = ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED'].includes(pb.status) || pb.assignment?.status === 'COMPLETED';
-          const isNegotiating = pb.status === 'NEGOTIATION' || pb.assignment?.status === 'COUNTER_OFFER';
+          // Negotiation is a project-branch state; COUNTER_OFFER is only a transition verb, never an
+          // AssignmentStatus value — so pb.status === 'NEGOTIATION' is the real (and only) signal.
+          const isNegotiating = pb.status === 'NEGOTIATION';
 
           const badgeBg = isDone ? 'var(--status-active-bg)' : isValidationPending ? 'var(--status-pending-bg)' : isAssigned ? 'rgba(216,174,71,0.15)' : isNegotiating ? 'rgba(216,174,71,0.2)' : 'var(--border-hair)';
           const badgeColor = isDone ? 'var(--success)' : isValidationPending ? 'var(--warning)' : isAssigned ? 'var(--accent)' : isNegotiating ? 'var(--accent)' : 'var(--text-muted)';

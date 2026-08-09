@@ -9,6 +9,8 @@ import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -42,6 +44,18 @@ describe('AuthService', () => {
     recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
+  // Cache always misses in tests so validateJwtPayload exercises the real DB path.
+  const mockCache = {
+    getJson: jest.fn().mockResolvedValue(null),
+    setJson: jest.fn().mockResolvedValue(undefined),
+    del: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockEvents = {
+    subscribe: jest.fn(),
+    publish: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -52,6 +66,8 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: AuditService, useValue: mockAuditService },
+        { provide: CacheService, useValue: mockCache },
+        { provide: DomainEventPublisher, useValue: mockEvents },
       ],
     }).compile();
 

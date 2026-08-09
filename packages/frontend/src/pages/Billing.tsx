@@ -38,9 +38,12 @@ import { RaiseConflictModal, ConflictDetailDrawer } from './billing/ConflictModa
 import { useToast } from '../components/ui';
 import { userMessage } from '../services/errors';
 import { formatRupees as money } from '@fapoms/shared';
+import { SystemRole } from '@fapoms/shared';
+import { ExpenseReview } from './ExpenseReview';
+import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 
 
-type Tab = 'finance' | 'overview' | 'hierarchy' | 'entries' | 'invoices' | 'payables' | 'conflicts' | 'history';
+type Tab = 'finance' | 'overview' | 'hierarchy' | 'entries' | 'invoices' | 'payables' | 'conflicts' | 'history' | 'expenses';
 
 const STATE_BADGE: Record<BillingState, string> = {
   NOT_BILLABLE: 'var(--text-muted)',
@@ -138,7 +141,17 @@ export const Billing: React.FC = () => {
   // drawers and client scope are shared across all of them; splitting the money screen's state
   // apart carries more risk than the addressability is worth.
   const [params, setParams] = useSearchParams();
-  const VALID_TABS: Tab[] = ['finance', 'overview', 'hierarchy', 'entries', 'invoices', 'payables', 'conflicts', 'history'];
+  const roles = useCurrentRoles();
+  // Reimbursement approval is narrower than viewing billing (RO auditors can see billing but
+  // cannot act on a claim), so the Assayer Expenses tab only shows for the roles the backend
+  // lets act on /expenses/:id/review.
+  const canReviewExpenses = hasAnyRole(roles, [
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.FINANCE_MANAGER,
+  ]);
+  const VALID_TABS: Tab[] = ['finance', 'overview', 'hierarchy', 'entries', 'invoices', 'payables', 'conflicts', 'history', 'expenses'];
   const tab = (VALID_TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'finance') as Tab;
   const setTab = (t: Tab) => {
     const next = new URLSearchParams(params);
@@ -335,6 +348,9 @@ export const Billing: React.FC = () => {
         <TabButton active={tab === 'payables'} onClick={() => setTab('payables')}>Assayer Payables</TabButton>
         <TabButton active={tab === 'conflicts'} onClick={() => setTab('conflicts')}>Conflicts</TabButton>
         <TabButton active={tab === 'history'} onClick={() => setTab('history')}>History</TabButton>
+        {canReviewExpenses && (
+          <TabButton active={tab === 'expenses'} onClick={() => setTab('expenses')}>Assayer Expenses</TabButton>
+        )}
         {/* New standalone pages surfacing capability the backend always had. */}
         <Link to={clientId ? `/billing/ledger?type=client&id=${clientId}` : '/billing/ledger'}
           style={{ padding: '7px 13px', fontSize: 13, fontWeight: 600, borderRadius: 8, textDecoration: 'none', color: 'var(--accent)', border: '1px solid var(--border-color)' }}>Ledger →</Link>
@@ -398,6 +414,7 @@ export const Billing: React.FC = () => {
       )}
 
       {tab === 'finance' && <FinanceDashboard onNavigate={(t) => setTab(t as Tab)} />}
+      {tab === 'expenses' && canReviewExpenses && <ExpenseReview embedded />}
 
       {tab === 'hierarchy' && <ClientHierarchyPanel clientId={clientId || null} />}
 
@@ -610,7 +627,8 @@ const Table: React.FC<{
       </div>
     )}
     {!loading && !empty && (
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+      <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: 640 }}>
         <thead>
           <tr>
             {selectable && (
@@ -656,6 +674,7 @@ const Table: React.FC<{
           ))}
         </tbody>
       </table>
+      </div>
     )}
   </Card>
 );

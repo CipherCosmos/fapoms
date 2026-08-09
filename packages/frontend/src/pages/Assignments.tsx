@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
 import { StatusBadge, KpiCard, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
-import { ProjectBranchStatus } from '@fapoms/shared';
+import { ProjectBranchStatus, SystemRole } from '@fapoms/shared';
+import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { anyStatusLabel, branchStatusLabel, branchStatusTone, assessmentStatusLabel } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
@@ -130,11 +131,19 @@ function WorkflowBreadcrumb({ onNavigate }: { onNavigate: (path: string) => void
 
 export const Assignments: React.FC = () => {
   const navigate = useNavigate();
+  // FINANCE_MANAGER and READ_ONLY_AUDITOR reach this page as viewers, but the backend only lets
+  // operations drive the lifecycle — so the write actions are hidden from everyone else rather than
+  // offered as buttons that 403 after a confirm dialog.
+  const canActOnAssignments = hasAnyRole(useCurrentRoles(), [
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+  ]);
   const [searchParams] = useSearchParams();
   const assignmentIdParam = searchParams.get('id');
   const [selectedAsnId, setSelectedAsnId] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
-  const [error] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -220,7 +229,7 @@ export const Assignments: React.FC = () => {
     ? ''
     : `projectBranchStatus=${statusFilter}`;
 
-  const { data: mainData, isLoading } = useQuery({
+  const { data: mainData, isLoading, isError, refetch: refetchList } = useQuery({
     queryKey: queryKeys.assignments.list(page, statusFilter),
     queryFn: () => api.request<{ data: Assignment[]; meta: { pagination: { total: number } } }>(
       `/assignments?page=${page}&limit=${PAGE_SIZE}&${queryString}`,
@@ -259,7 +268,17 @@ export const Assignments: React.FC = () => {
   // the total and disagreed with the dashboard.
   const totalCount = grandTotalQ.data?.meta?.pagination?.total ?? 0;
 
-  const selectedAsn = assignments.find(a => a.id === selectedAsnId);
+  // When the selected assignment isn't on the current page (deep-link ?id=, a socket update that
+  // moved the row off-page, or a filter that excludes it), fetch it directly so the detail panel
+  // still renders instead of collapsing to "No Assignment Selected".
+  const onPage = assignments.find(a => a.id === selectedAsnId);
+  const { data: fetchedSelected } = useQuery({
+    queryKey: ['assignment-detail', selectedAsnId],
+    queryFn: () => api.request<Assignment>(`/assignments/${selectedAsnId}`),
+    enabled: !!selectedAsnId && !onPage,
+    staleTime: 15_000,
+  });
+  const selectedAsn = onPage ?? (fetchedSelected?.id === selectedAsnId ? fetchedSelected : undefined);
 
   /**
    * Reimbursement claims raised by the assayer on this assignment.
@@ -433,7 +452,7 @@ export const Assignments: React.FC = () => {
           pipeline-bar + gradient banner + h2 (three blocks, same fact repeated). */}
       <WorkflowBreadcrumb onNavigate={navigate} />
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Field Execution Workspace</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
@@ -449,7 +468,14 @@ export const Assignments: React.FC = () => {
         </button>
       </div>
 
-      {error && <AlertBanner type="error" message={error} />}
+      {isError && (
+        <AlertBanner type="error">
+          <span style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            Could not load assignments. Check your connection and try again.
+            <button onClick={() => refetchList()} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '11px' }}>Retry</button>
+          </span>
+        </AlertBanner>
+      )}
 
       {/* KPI Cards — clickable, filter the single table below. "Needs Attention"
           is not a separate list: it's the same filter mechanism switched to the
@@ -612,7 +638,7 @@ export const Assignments: React.FC = () => {
               </div>
 
               {/* Lifecycle actions — contextual to the current status. Touch-friendly hit targets for ops. */}
-              {selectedAsn.status !== 'COMPLETED' && (
+              {canActOnAssignments && selectedAsn.status !== 'COMPLETED' && (
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px', background: 'var(--bg-surface-2)' }}>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                     {selectedAsn.status === 'PENDING' && (

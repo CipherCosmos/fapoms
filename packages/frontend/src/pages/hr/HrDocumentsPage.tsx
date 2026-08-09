@@ -55,9 +55,21 @@ const STATUS_META = {
 const daysUntil = (iso: string | null): number | null =>
   iso ? Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000) : null;
 
+/** Stacks the two-pane layout below this width so the picker/detail don't overlap on phones. */
+function useNarrow(breakpoint = 760): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < breakpoint);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < breakpoint);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [breakpoint]);
+  return narrow;
+}
+
 export const HrDocumentsPage: React.FC = () => {
   const roles = useCurrentRoles();
   const canManage = canManageAssayers(roles);
+  const narrow = useNarrow();
   // Deletion of an identity document is admin-only on the backend; verify is HR.
   const canDelete = roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
 
@@ -132,8 +144,8 @@ export const HrDocumentsPage: React.FC = () => {
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
-      <div style={{ ...card, padding: '12px', position: 'sticky', top: '12px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'minmax(240px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
+      <div style={{ ...card, padding: '12px', position: narrow ? 'static' : 'sticky', top: '12px' }}>
         <div style={{ position: 'relative', marginBottom: '10px' }}>
           <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"

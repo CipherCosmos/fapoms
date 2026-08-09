@@ -7,7 +7,7 @@ import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { AssignmentService } from '../assignment/assignment.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory } from '@fapoms/shared';
+import { EventCategory, businessTodayDateKey } from '@fapoms/shared';
 
 export interface PlanOverrideDto {
   branchId: string;
@@ -41,10 +41,26 @@ export class OperationsPlanningService {
 
     const calculatedData = await this.planningEngine.generateCoveragePlan(projectId);
 
-    // Apply manual overrides to the generated plan in memory
+    // Apply manual overrides to the generated plan in memory.
+    //
+    // This used to set only `assignedAssayerName` and match clusters by `c.id.includes(branchId)`
+    // — so deployment (which reads `assignedAssayerId` and iterates `branchIds`) ignored the
+    // override entirely and shipped the engine's original pick, while the saved plan version
+    // *displayed* the operator's choice. Approved-vs-deployed divergence on the assayer who
+    // actually gets sent. Match on the real branch list and set the id deployment reads.
     for (const ov of overrides) {
-      const cluster = calculatedData.clusters.find((c) => c.id.includes(ov.branchId) || c.id === ov.branchId);
+      const cluster = calculatedData.clusters.find(
+        (c) => (c.branchIds ?? []).includes(ov.branchId) || c.id === ov.branchId,
+      );
       if (cluster) {
+        // Override the specific branch's per-branch assignment (what deploy now reads). Also update
+        // the cluster-level display fields so the saved version reflects the operator's choice.
+        const ba = cluster.branchAssignments?.find((b) => b.branchId === ov.branchId);
+        if (ba) {
+          ba.assayerId = ov.assayerId;
+          ba.assayerName = `Override: ${ov.assayerId}`;
+        }
+        cluster.assignedAssayerId = ov.assayerId;
         cluster.assignedAssayerName = `Override: ${ov.assayerId}`;
       }
     }
@@ -132,7 +148,11 @@ export class OperationsPlanningService {
   /**
    * Executes an approved plan, spawning standard operational assignments for scheduling.
    */
-  async executeApprovedPlan(planId: string, userId: string, scheduledDateInput?: string): Promise<void> {
+  async executeApprovedPlan(
+    planId: string,
+    userId: string,
+    scheduledDateInput?: string,
+  ): Promise<{ deployed: Array<{ branchId: string; assignmentId: string }>; skipped: Array<{ clusterId: string; branchId: string | null; reason: string }> }> {
     const plan = await this.planRepository.findOne({ where: { id: planId }, relations: ['versions'] });
     if (!plan) {
       throw new NotFoundException(`Coverage plan ${planId} not found.`);
@@ -160,45 +180,53 @@ export class OperationsPlanningService {
     const branchById = new Map((projectBranches ?? []).map((pb: any) => [pb.branchId, pb]));
     // Defaults to today only when the caller states no date; a plan approved on a Friday for
     // next week should not silently deploy against Friday.
-    const scheduledDate = scheduledDateInput || new Date().toISOString().split('T')[0];
+    // Default to the business-timezone "today", not the UTC date (which is still yesterday for IST
+    // before 05:30 and would schedule the audit a day early).
+    const scheduledDate = scheduledDateInput || businessTodayDateKey();
 
     const deployed: Array<{ branchId: string; assignmentId: string }> = [];
     const skipped: Array<{ clusterId: string; branchId: string | null; reason: string }> = [];
 
     for (const cluster of clusters) {
-      if (!cluster.assignedAssayerId) {
-        skipped.push({ clusterId: cluster.id, branchId: null, reason: 'Plan left this cluster uncovered — no assayer was matched at approval time.' });
-        continue;
-      }
+      // Prefer the per-branch assignments the engine now records — each branch deploys to its OWN
+      // recommended assayer at its own quoted fee. Older/parallel plans without per-branch data fall
+      // back to the cluster-wide assayer + an even fee split (legacy behaviour).
+      const perBranch: Array<{ branchId: string; assayerId: string | null; fee: number | null }> =
+        Array.isArray(cluster.branchAssignments) && cluster.branchAssignments.length > 0
+          ? cluster.branchAssignments.map((ba: any) => ({ branchId: ba.branchId, assayerId: ba.assayerId, fee: ba.fee }))
+          : (() => {
+              const branchIds: string[] = cluster.branchIds ?? [];
+              const perBranchFee = cluster.estimatedTotalFee != null && branchIds.length > 0
+                ? Math.round((Number(cluster.estimatedTotalFee) / branchIds.length) * 100) / 100
+                : null;
+              return branchIds.map((branchId) => ({ branchId, assayerId: cluster.assignedAssayerId ?? null, fee: perBranchFee }));
+            })();
 
-      // The fee was quoted for the cluster as a whole; each branch carries its share, matching
-      // how the day planner splits a shared route.
-      const branchIds: string[] = cluster.branchIds ?? [];
-      const perBranchFee = cluster.estimatedTotalFee != null && branchIds.length > 0
-        ? Math.round((Number(cluster.estimatedTotalFee) / branchIds.length) * 100) / 100
-        : null;
-
-      for (const branchId of branchIds) {
-        const projectBranch = branchById.get(branchId);
-        if (!projectBranch) {
-          skipped.push({ clusterId: cluster.id, branchId, reason: 'Branch is no longer part of this project.' });
+      for (const item of perBranch) {
+        if (!item.assayerId) {
+          skipped.push({ clusterId: cluster.id, branchId: item.branchId, reason: 'Plan left this branch uncovered — no assayer was matched at approval time.' });
           continue;
         }
-        if (perBranchFee == null) {
-          skipped.push({ clusterId: cluster.id, branchId, reason: 'Plan carries no quoted fee for this cluster.' });
+        const projectBranch = branchById.get(item.branchId);
+        if (!projectBranch) {
+          skipped.push({ clusterId: cluster.id, branchId: item.branchId, reason: 'Branch is no longer part of this project.' });
+          continue;
+        }
+        if (item.fee == null) {
+          skipped.push({ clusterId: cluster.id, branchId: item.branchId, reason: 'Plan carries no quoted fee for this branch.' });
           continue;
         }
 
         try {
           const assignment = await this.assignmentService.create({
             projectBranchId: projectBranch.id,
-            assayerId: cluster.assignedAssayerId,
-            proposedFee: perBranchFee,
+            assayerId: item.assayerId,
+            proposedFee: item.fee,
             scheduledDate,
           }, userId);
-          deployed.push({ branchId, assignmentId: assignment.id });
+          deployed.push({ branchId: item.branchId, assignmentId: assignment.id });
         } catch (err) {
-          skipped.push({ clusterId: cluster.id, branchId, reason: err instanceof Error ? err.message : String(err) });
+          skipped.push({ clusterId: cluster.id, branchId: item.branchId, reason: err instanceof Error ? err.message : String(err) });
         }
       }
     }
@@ -239,5 +267,9 @@ export class OperationsPlanningService {
       remarks: `Deployed version ${plan.currentVersion}: ${deployed.length} assignment(s) created${skipped.length > 0 ? `, ${skipped.length} skipped` : ''}.`,
       metadata: { projectId: plan.projectId, version: plan.currentVersion, deployed, skipped },
     });
+
+    // Surfaced to the caller so ops sees exactly how many branches deployed vs were skipped and
+    // why — instead of a bare "success" that hides a plan where half the branches failed to staff.
+    return { deployed, skipped };
   }
 }

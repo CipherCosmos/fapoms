@@ -108,6 +108,18 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
+  ASSIGNMENT_ISSUE_REPORTED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    // To the desk, not the assayer who raised it: this is the signal that pulls ops in to
+    // reassign, reschedule or clear the problem the field flagged.
+    roles: [...OPS, ...ADMINS],
+    channels: BOTH_CHANNELS,
+    title: 'Field issue reported',
+    body: '${branchName}: ${categoryLabel}. ${note}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   ASSIGNMENT_AUTO_DECLINED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,

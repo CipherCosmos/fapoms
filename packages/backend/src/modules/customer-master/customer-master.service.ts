@@ -56,7 +56,7 @@ export class CustomerMasterService {
     const sheetName = workbook.SheetNames[0];
     const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-    let totalRows = rows.length;
+    const totalRows = rows.length;
     let duplicateAccounts = 0;
     let unmappedBranchCodes = 0;
     const accountSet = new Set<string>();

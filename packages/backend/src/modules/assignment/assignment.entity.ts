@@ -13,6 +13,9 @@ import { AssignmentStatus, Priority } from '@fapoms/shared';
 @Index(['assessmentId'])
 @Index(['projectId'])
 @Index(['assayerId'])
+// Hot-path filters on status / (sla_status,status) / (assayer_id,scheduled_date,status) are indexed
+// as partial indexes in migration 1788100000000-IndexAssignmentHotFilters (migration-only, matching
+// how the project_branches.scheduled_date index is managed).
 export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'assignment_number', length: 50, unique: true })
   assignmentNumber: string;

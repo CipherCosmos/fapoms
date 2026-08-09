@@ -124,7 +124,7 @@ async function googleGeocode(
   if (addrLine) results = await geocoder(`${addrLine}${city ? ', ' + city : ''}`, pin);
   if (!results.length && addrLine) results = await geocoder(addrLine, pin);
   if (!results.length && (city || district) && state) results = await geocoder(`${city || district}, ${state}`, undefined);
-  let result = preferInState(results);
+  const result = preferInState(results);
   if (!result) return null;
 
   // State sanity: Google usually names the state; a cross-state result is a wrong hit.

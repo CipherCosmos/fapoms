@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, TextInput, TextStyle } from 'react-native';
+import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
 
@@ -81,12 +81,13 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
-      <View style={{
-        flex: 1,
-        backgroundColor: t.colors.scrim,
-        justifyContent: 'center',
-        padding: t.space.xl,
-      }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <View style={{
+          flex: 1,
+          backgroundColor: t.colors.scrim,
+          justifyContent: 'center',
+          padding: t.space.xl,
+        }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
           <AppText variant="h2">Negotiate Audit Fee</AppText>
           <AppText variant="caption" tone="muted">
@@ -126,7 +127,8 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
             <Button label="Cancel" variant="neutral" onPress={onCancel} style={{ flex: 1 }} />
           </View>
         </Card>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

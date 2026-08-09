@@ -6,7 +6,7 @@ import { Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentService } from './document.service';
-import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod } from '@fapoms/shared';
+import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod, businessDateKey } from '@fapoms/shared';
 
 @Injectable()
 @Processor('document-dispatch')
@@ -37,7 +37,9 @@ export class DocumentDispatchWorker {
     let dispatchedCount = 0;
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    // Business-timezone dates so the "one day before the audit" window lines up with the IST audit
+    // date, not the UTC calendar day (which flips 5.5h early).
+    const tomorrowStr = businessDateKey(tomorrow);
 
     // The audit date is owned by project_branches.scheduled_date — that is what
     // scheduling writes and what a reschedule updates. `assessments.audit_date` is
@@ -60,7 +62,7 @@ export class DocumentDispatchWorker {
       if (!doc.assessment) continue;
 
       const scheduled = scheduledByBranch.get(`${doc.assessment.projectId}:${doc.assessment.branchId}`);
-      const auditDate = scheduled ? new Date(scheduled).toISOString().split('T')[0] : null;
+      const auditDate = scheduled ? businessDateKey(scheduled) : null;
       if (!auditDate) {
         // No confirmed date yet — nothing to dispatch against.
         continue;

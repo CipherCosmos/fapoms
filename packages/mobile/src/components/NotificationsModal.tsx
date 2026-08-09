@@ -1,8 +1,8 @@
 import React from 'react';
-import { View, Modal, ScrollView, Pressable } from 'react-native';
+import { View, Modal, ScrollView } from 'react-native';
 import { AppNotification } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Card, EmptyState, Icon, IconButton, Divider } from './ui/primitives';
+import { AppText, Card, EmptyState, Icon, IconButton, Divider, Tappable } from './ui/primitives';
 
 interface NotificationsModalProps {
   visible: boolean;
@@ -77,8 +77,9 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             <ScrollView style={{ flexGrow: 0 }}>
               <View style={{ gap: t.space.sm }}>
                 {notifications.map((n) => (
-                  <Pressable
+                  <Tappable
                     key={n.id}
+                    accessibilityLabel={n.title}
                     onPress={() => {
                       if (!n.isRead) onMarkRead(n.id);
                       onTapNotification(n);
@@ -103,7 +104,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                         </View>
                       </View>
                     </Card>
-                  </Pressable>
+                  </Tappable>
                 ))}
               </View>
             </ScrollView>

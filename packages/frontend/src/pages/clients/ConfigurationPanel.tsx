@@ -144,7 +144,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <h4 style={sectionTitle}><ShieldCheck size={14} /> Service &amp; SLA</h4>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={labelStyle}>
             Service Level
             <select style={inputStyle} value={serviceLevel} onChange={(e) => setServiceLevel(e.target.value)}>
@@ -195,7 +195,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <h4 style={sectionTitle}><SlidersHorizontal size={14} /> Planning &amp; Recommendations</h4>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           <label style={labelStyle}>
             Minimum Distance (km)
             <input style={inputStyle} type="number" value={minDistanceKm} onChange={(e) => setMinDistanceKm(e.target.value)} />
@@ -205,7 +205,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
             <input style={inputStyle} type="number" value={maxDistanceKm} onChange={(e) => setMaxDistanceKm(e.target.value)} />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           <label style={labelStyle}>
             Required Skills
             <input style={inputStyle} value={requiredSkills} onChange={(e) => setRequiredSkills(e.target.value)} placeholder="Gold Valuation, ..." />
@@ -254,7 +254,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
         <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
           For each field below, enter the exact column heading used in the client's branch Excel/CSV file. This maps imported columns to the system fields.
         </p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           {IMPORT_FIELDS.map((f) => (
             <label key={f.key} style={labelStyle}>
               {f.label} column

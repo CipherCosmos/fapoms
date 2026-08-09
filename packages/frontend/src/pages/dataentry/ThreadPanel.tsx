@@ -41,6 +41,17 @@ interface Props {
 const fmtWhen = (d: string) =>
   new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
+// Crop/attachment URLs are stored as `/api/v1/validation-queries/attachment/<encodedKey>`, whose
+// download route is @Public but demands a short-lived signed token — so a bare <img>/<a> 401s.
+// Pull the object key back out so it can be exchanged for a signed downloadUrl.
+const ATTACHMENT_MARKER = '/validation-queries/attachment/';
+const attachmentKey = (u: string): string | null => {
+  const i = u.indexOf(ATTACHMENT_MARKER);
+  if (i === -1) return null;
+  const enc = u.slice(i + ATTACHMENT_MARKER.length).split('?')[0];
+  try { return decodeURIComponent(enc); } catch { return enc; }
+};
+
 
 export const ThreadPanel: React.FC<Props> = ({
   queryId, status, pending, onClearPending, onFocusRegion, onResolved, onChanged,
@@ -49,6 +60,8 @@ export const ThreadPanel: React.FC<Props> = ({
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // raw attachment URL → signed downloadUrl (with ?token=), resolved after each load.
+  const [signed, setSigned] = useState<Record<string, string>>({});
   const endRef = useRef<HTMLDivElement>(null);
 
   const load = () => {
@@ -57,7 +70,37 @@ export const ThreadPanel: React.FC<Props> = ({
       .catch(() => setMessages([]));
   };
 
-  useEffect(() => { setMessages(null); load(); }, [queryId]);
+  useEffect(() => { setMessages(null); setSigned({}); load(); }, [queryId]);
+
+  // Exchange every crop/attachment key for a signed URL so the browser can actually load it.
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    const raw = new Set<string>();
+    for (const m of messages) {
+      if (m.snapshotPath) raw.add(m.snapshotPath);
+      for (const a of m.attachments ?? []) if (a?.url) raw.add(a.url);
+    }
+    const pending = [...raw].filter((u) => signed[u] === undefined && attachmentKey(u));
+    if (pending.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        pending.map(async (u) => {
+          const key = attachmentKey(u)!;
+          try {
+            const res = await api.request<{ downloadUrl: string }>(
+              `/validation-queries/attachment-token?key=${encodeURIComponent(key)}`,
+            );
+            return [u, (res as any)?.downloadUrl ?? u] as const;
+          } catch {
+            return [u, u] as const;
+          }
+        }),
+      );
+      if (!cancelled) setSigned((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+    })();
+    return () => { cancelled = true; };
+  }, [messages, signed]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const send = async () => {
@@ -121,6 +164,7 @@ export const ThreadPanel: React.FC<Props> = ({
       <div style={{
         padding: '10px 14px', borderBottom: '1px solid var(--border-color)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: '8px', flexWrap: 'wrap',
         background: 'var(--bg-surface-2)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -217,7 +261,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 {m.snapshotPath && (
                   <div style={{ marginBottom: '8px', overflow: 'hidden', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.1)' }}>
                     <img
-                      src={m.snapshotPath}
+                      src={signed[m.snapshotPath] ?? m.snapshotPath}
                       alt={`Marked crop on page ${m.pageNumber}`}
                       onClick={() => m.pageNumber && onFocusRegion({ pageNumber: m.pageNumber, region: m.region })}
                       style={{ maxWidth: '100%', display: 'block', cursor: 'pointer' }}
@@ -228,7 +272,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 {m.body && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>}
 
                 {(m.attachments ?? []).map((a) => (
-                  <a key={a.url} href={a.url} target="_blank" rel="noreferrer"
+                  <a key={a.url} href={signed[a.url] ?? a.url} target="_blank" rel="noreferrer"
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px',
                       marginTop: '8px', padding: '4px 8px', borderRadius: '6px',

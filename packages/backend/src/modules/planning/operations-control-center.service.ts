@@ -39,7 +39,6 @@ export class OperationsControlCenterService {
     const totalProjects = await this.metricsProvider.getTotalProjectsCount();
     const activeProjectsCount = await this.metricsProvider.getActiveProjectsCount();
 
-    const assignments = await this.assignmentRepository.find({ where: { isActive: true } });
     const branchCounts = await this.metricsProvider.getProjectBranchCounts();
 
     // Deployment tracking calculation
@@ -47,23 +46,31 @@ export class OperationsControlCenterService {
     const deployedPBs = branchCounts.deployed;
     const deploymentPercentage = totalPBs > 0 ? parseFloat(((deployedPBs / totalPBs) * 100).toFixed(1)) : 0;
 
-    const acceptedCount = assignments.filter((a) => a.status === AssignmentStatus.ACCEPTED).length;
-    const totalAssignments = assignments.length;
+    // Aggregate in the database. This used to load every active assignment into memory just to count
+    // it by status (`.filter().length`) — the whole active-assignment table pulled into Node on each
+    // dashboard load. These are cheap counts that return a handful of numbers instead.
+    const [totalAssignments, acceptedCount, pendingAssignmentsCount, delayedCount] = await Promise.all([
+      this.assignmentRepository.count({ where: { isActive: true } }),
+      this.assignmentRepository.count({ where: { isActive: true, status: AssignmentStatus.ACCEPTED } }),
+      this.assignmentRepository.count({ where: { isActive: true, status: AssignmentStatus.PENDING } }),
+      this.assignmentRepository.count({ where: { isActive: true, slaStatus: 'BREACHED' } }),
+    ]);
     const acceptancePercentage = totalAssignments > 0 ? parseFloat(((acceptedCount / totalAssignments) * 100).toFixed(1)) : 0;
-
-    const pendingAssignmentsCount = assignments.filter((a) => a.status === AssignmentStatus.PENDING).length;
-    const delayedCount = assignments.filter((a) => a.slaStatus === 'BREACHED').length;
 
     const openTasks = await this.taskRepository.find({ where: { status: OperationsTaskStatus.OPEN } });
     const criticalTasksCount = openTasks.filter((t) => t.priority === OperationsTaskPriority.CRITICAL || t.priority === OperationsTaskPriority.HIGH).length;
 
-    // Risks evaluation
-    const breachedCounts: Record<string, number> = {};
-    for (const a of assignments) {
-      if (a.slaStatus === 'BREACHED') {
-        breachedCounts[a.projectId] = (breachedCounts[a.projectId] || 0) + 1;
-      }
-    }
+    // SLA-breached assignments grouped by project, in one query rather than a JS reduce over the table.
+    const breachedRows = await this.assignmentRepository
+      .createQueryBuilder('a')
+      .select('a.projectId', 'projectId')
+      .addSelect('COUNT(*)', 'c')
+      .where('a.isActive = :active AND a.slaStatus = :breached', { active: true, breached: 'BREACHED' })
+      .groupBy('a.projectId')
+      .getRawMany();
+    const breachedCounts: Record<string, number> = Object.fromEntries(
+      breachedRows.map((r) => [r.projectId, Number(r.c)]),
+    );
     const projectsAtRiskCount = await this.metricsProvider.getProjectsAtRiskCount(breachedCounts);
 
     return {

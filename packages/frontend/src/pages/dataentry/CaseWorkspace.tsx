@@ -87,6 +87,20 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   const [pending, setPending] = useState<RegionCapture | null>(null);
   const [focus, setFocus] = useState<{ pageNumber: number; region: Region | null } | null>(null);
 
+  // The PDF + clarifications split is a fixed two-column grid on the desktop it was
+  // built for; below ~900px the two panels overlap and the 360px-min right column
+  // pushes the layout wider than the screen. Track viewport width and stack them
+  // vertically when narrow. Guarded for SSR/non-browser just in case.
+  const [narrow, setNarrow] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 900 : false,
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setNarrow(window.innerWidth < 900);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   const loadCase = useCallback(async () => {
     try {
       const list = await api.request<CaseRow[]>(`/validation?projectBranchId=${projectBranchId}&limit=1`);
@@ -209,10 +223,15 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
       </div>
 
       <div style={{
-        display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(360px, 1fr)',
-        gap: '12px', height: 'calc(100vh - 190px)', minHeight: '520px',
+        display: 'grid',
+        gridTemplateColumns: narrow ? '1fr' : 'minmax(0, 1.35fr) minmax(360px, 1fr)',
+        gap: '12px',
+        // Stacked, a single fixed viewport height would squash both panels; give
+        // each its own workable height and let the page scroll instead.
+        height: narrow ? 'auto' : 'calc(100vh - 190px)',
+        minHeight: narrow ? 0 : '520px',
       }}>
-        <section style={panel}>
+        <section style={{ ...panel, minWidth: 0, ...(narrow ? { height: '70vh' } : null) }}>
           {!returnedDoc && docs !== null && (
             <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
               <FileWarning size={24} style={{ opacity: 0.4 }} />
@@ -228,7 +247,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           {fileUrl && <PdfRegionViewer fileUrl={fileUrl} focus={focus} onCapture={setPending} />}
         </section>
 
-        <section style={{ ...panel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <section style={{ ...panel, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, ...(narrow ? { height: '75vh' } : null) }}>
           {/* Case decision — only present once a case exists, and only offered to
               the roles that make the call. */}
           {validationCase === undefined ? (
@@ -302,9 +321,10 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           <div style={{
             padding: '10px 14px', borderBottom: '1px solid var(--border-color)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: '8px', flexWrap: 'wrap',
             background: 'var(--bg-surface-2)',
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
               <MessageSquare size={15} style={{ color: 'var(--accent)' }} />
               <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Assayer Chat & Clarifications {openCount > 0 && <span style={{ color: 'var(--warning)', marginLeft: '4px' }}>({openCount} open)</span>}

@@ -72,7 +72,7 @@ describe('DayPlannerService', () => {
             find: jest.fn().mockResolvedValue([PROJECT]),
           },
         },
-        { provide: getRepositoryToken(BranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: getRepositoryToken(BranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null), find: jest.fn().mockResolvedValue([]) } },
         // No assayers: these tests assert clustering/date logic, which runs before candidate
         // scoring and is unaffected by it.
         { provide: getRepositoryToken(AssayerEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },

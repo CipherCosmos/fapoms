@@ -46,6 +46,13 @@ export const Modal: React.FC<{
 }) => {
   const panelRef = React.useRef<HTMLDivElement>(null);
 
+  // Never let the panel grow wider than the viewport (minus a small gutter) on
+  // narrow screens. Works whether `width` is a number (px) or a CSS string.
+  const panelWidth =
+    typeof width === 'number'
+      ? `min(${width}px, calc(100vw - 24px))`
+      : `min(${width}, calc(100vw - 24px))`;
+
   // Hold the latest onClose in a ref so the focus-management effect below does NOT depend on it.
   // onClose is almost always an inline arrow at the call site, so it is a new reference on every
   // render — if the effect depended on it, every keystroke inside the modal would re-run the
@@ -108,16 +115,17 @@ export const Modal: React.FC<{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 100,
+        padding: '12px',
+        zIndex: 1100,
       }}
       onClick={onClose}
     >
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="glass-card"
+        className="glass-card modal-panel"
         onClick={(e) => e.stopPropagation()}
-        style={{ width, maxHeight, height, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
+        style={{ width: panelWidth, maxWidth: '100%', maxHeight: maxHeight ?? 'calc(100vh - 24px)', height, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
       >
         {title !== undefined && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>

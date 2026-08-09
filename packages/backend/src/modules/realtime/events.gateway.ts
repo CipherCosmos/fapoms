@@ -26,6 +26,18 @@ interface AuthenticatedSocket extends Socket {
     credentials: true,
   },
   namespace: '/events',
+  // Field assayers work on 2G/3G inside bank vaults, so a socket routinely drops for a few seconds.
+  // Connection-state recovery lets a client that reconnects within the window get its rooms back AND
+  // replay the events it missed while away, instead of silently losing live updates until a manual
+  // refresh. Auth still re-runs in handleConnection on every (re)connect.
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+    skipMiddlewares: true,
+  },
+  // The v4 defaults (pingTimeout 20s) are too aggressive for high-latency field networks and cause
+  // spurious disconnect/reconnect churn. Give a slow link more room before the socket is declared dead.
+  pingInterval: 25000,
+  pingTimeout: 60000,
 })
 export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -79,17 +91,19 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         organizationId: payload.organizationId,
       };
 
-      client.join(`user:${userId}`);
+      // With the Redis adapter, join() is async (room membership propagates across nodes). Await it
+      // so a broadcast issued right after connect can't race ahead of the socket joining its rooms.
+      await client.join(`user:${userId}`);
 
       if (payload.roles) {
         for (const role of payload.roles) {
           const roleName = typeof role === 'string' ? role : role.name;
-          if (roleName) client.join(`role:${roleName}`);
+          if (roleName) await client.join(`role:${roleName}`);
         }
       }
 
       if (payload.organizationId) {
-        client.join(`org:${payload.organizationId}`);
+        await client.join(`org:${payload.organizationId}`);
       }
 
       /**
@@ -119,7 +133,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const isInternalStaff =
         roleNames.length > 0 && roleNames.some((r) => !EXTERNAL_ROLES.includes(r));
       if (isInternalStaff) {
-        client.join('staff');
+        await client.join('staff');
       }
 
       if (!this.userSockets.has(userId)) {
@@ -148,30 +162,30 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('subscribe:assignment')
-  handleSubscribeAssignment(client: AuthenticatedSocket, assignmentId: string) {
+  async handleSubscribeAssignment(client: AuthenticatedSocket, assignmentId: string) {
     if (client.user?.id) {
-      client.join(`assignment:${assignmentId}`);
+      await client.join(`assignment:${assignmentId}`);
     }
   }
 
   @SubscribeMessage('unsubscribe:assignment')
-  handleUnsubscribeAssignment(client: AuthenticatedSocket, assignmentId: string) {
+  async handleUnsubscribeAssignment(client: AuthenticatedSocket, assignmentId: string) {
     if (client.user?.id) {
-      client.leave(`assignment:${assignmentId}`);
+      await client.leave(`assignment:${assignmentId}`);
     }
   }
 
   @SubscribeMessage('subscribe:query')
-  handleSubscribeQuery(client: AuthenticatedSocket, queryId: string) {
+  async handleSubscribeQuery(client: AuthenticatedSocket, queryId: string) {
     if (client.user?.id) {
-      client.join(`query:${queryId}`);
+      await client.join(`query:${queryId}`);
     }
   }
 
   @SubscribeMessage('unsubscribe:query')
-  handleUnsubscribeQuery(client: AuthenticatedSocket, queryId: string) {
+  async handleUnsubscribeQuery(client: AuthenticatedSocket, queryId: string) {
     if (client.user?.id) {
-      client.leave(`query:${queryId}`);
+      await client.leave(`query:${queryId}`);
     }
   }
 
@@ -385,18 +399,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       case 'project:deleted': {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
-        }
-        this.emitOperational(eventType, payload);
-        break;
-      }
-
-      case 'audit:started':
-      case 'audit:closed': {
-        if (payload.assayerId) {
-          this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
-        }
-        if (payload.projectId) {
-          this.server.to(`project:${payload.projectId}`).emit(eventType, payload);
         }
         this.emitOperational(eventType, payload);
         break;

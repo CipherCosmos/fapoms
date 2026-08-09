@@ -38,8 +38,6 @@ import { ValidationModule } from './modules/validation/validation.module';
 import { OcrModule } from './infrastructure/ocr/ocr.module';
 import { GeoModule } from './modules/geo/geo.module';
 import { SearchModule } from './modules/search/search.module';
-import { AuditHistoryModule } from './modules/audit-history/audit-history.module';
-import { AuditPlatformModule } from './modules/audit/audit.module';
 import { CustomerMasterModule } from './modules/customer-master/customer-master.module';
 import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
@@ -50,6 +48,9 @@ import { BillingEngineModule } from './modules/billing-engine/billing-engine.mod
 import { RedisClientModule } from './infrastructure/redis/redis-client.module';
 import { CacheModule } from './infrastructure/cache/cache.module';
 import { ObservabilityModule } from './infrastructure/observability/observability.module';
+import { SecurityModule } from './infrastructure/security/security.module';
+import { TenancyModule } from './infrastructure/tenancy/tenancy.module';
+import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -58,6 +59,7 @@ import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
+    SecurityModule,
     // Environment configuration
     ConfigModule.forRoot({
       isGlobal: true,
@@ -130,6 +132,12 @@ import { APP_GUARD } from '@nestjs/core';
     // Prometheus metrics: /metrics endpoint + global HTTP timing interceptor.
     ObservabilityModule,
 
+    // Request-scoped tenant context. Global so any repository over organisation-owned data
+    // can inject it without a module import. Replaces the singleton TenantContextResolver,
+    // which held per-request state in a process-wide field.
+    TenancyModule,
+    PersistenceModule,
+
     // Core modules
     AuditModule,
     AuthModule,
@@ -155,9 +163,7 @@ import { APP_GUARD } from '@nestjs/core';
     OcrModule,
     GeoModule,
     SearchModule,
-    AuditHistoryModule,
     BillingEngineModule,
-    AuditPlatformModule,
     CustomerMasterModule,
     ValidationQueryModule,
 

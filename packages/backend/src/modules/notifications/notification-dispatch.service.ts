@@ -218,23 +218,26 @@ export class NotificationDispatchService {
     // Enqueue failure is logged, never thrown: the row still exists and the
     // stranded-row sweeper will pick it up, so Redis being down delays a push
     // rather than losing it.
-    if (def.channels.includes(NotificationChannel.PUSH)) {
-      for (const row of createdRows) {
-        try {
-          await this.deliveryQueue.add(
-            'deliver',
-            { notificationId: row.id },
-            {
+    if (def.channels.includes(NotificationChannel.PUSH) && createdRows.length > 0) {
+      // One bulk enqueue rather than a Redis round-trip per recipient — a fan-out to a whole role
+      // (e.g. every operations user on a project event) was N sequential `add()` calls.
+      try {
+        await this.deliveryQueue.addBulk(
+          createdRows.map((row) => ({
+            name: 'deliver',
+            data: { notificationId: row.id },
+            opts: {
               attempts: 5,
               backoff: { type: 'exponential', delay: 5000 },
               removeOnComplete: true,
               // Kept so a failed delivery can still be inspected in the queue.
               removeOnFail: false,
             },
-          );
-        } catch (err: any) {
-          this.logger.warn(`Could not enqueue push for ${row.id}: ${err?.message}`);
-        }
+          })),
+        );
+      } catch (err: any) {
+        // Never thrown: the rows exist, so the stranded-row sweeper still delivers if Redis is down.
+        this.logger.warn(`Could not bulk-enqueue push for ${createdRows.length} notification(s): ${err?.message}`);
       }
     }
 

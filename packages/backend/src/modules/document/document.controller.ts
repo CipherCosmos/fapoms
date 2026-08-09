@@ -2,10 +2,13 @@ import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDP
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { Response } from 'express';
 import * as xlsx from 'xlsx';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { DocumentService } from './document.service';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
@@ -65,6 +68,65 @@ class AssignDataEntryRequestDto {
   assigneeId: string;
 }
 
+/**
+ * Content types the document pipeline accepts: audit PDFs, the photo formats field devices produce,
+ * and the spreadsheet/CSV formats customer-master imports use. Anything else (executables, archives,
+ * HTML) is refused at the point a presigned URL is minted. `application/octet-stream` is tolerated as a
+ * generic fallback but is still size-capped on finalize — full magic-byte + malware scanning is the
+ * next layer (see docs/integration-audit-handoff.md).
+ */
+const ALLOWED_UPLOAD_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'text/csv', 'application/csv',
+  'application/octet-stream',
+]);
+const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || 50) * 1024 * 1024;
+
+/** Request a presigned URL to upload a large file straight to object storage. */
+class PresignUploadRequestDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  fileName: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  contentType?: string;
+}
+
+/** Register a file already uploaded via a presigned URL as a document. */
+class FinalizeUploadRequestDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(512)
+  objectKey: string;
+
+  // Accepts an assessment, project-branch, or assignment id — DocumentService.create resolves it.
+  @IsUUID()
+  assessmentId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  fileName: string;
+
+  @IsEnum(DocumentType)
+  type: DocumentType;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  contentType?: string;
+
+  @IsOptional()
+  @IsUUID()
+  customerMasterVersionId?: string;
+}
+
 @ApiTags('Documents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -84,11 +146,12 @@ export class DocumentController {
     private readonly assignmentService: AssignmentService,
     private readonly documentAccessTokenService: DocumentAccessTokenService,
     private readonly chunkedUploadService: ChunkedUploadService,
+    private readonly fileScanner: FileScanService,
   ) {}
 
   @Post('upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file for an assessment' })
   async uploadFile(
@@ -115,6 +178,99 @@ export class DocumentController {
       type: targetType,
       customerMasterVersionId,
     }, req?.user?.id || '00000000-0000-0000-0000-000000000000');
+
+    return { success: true, data: doc };
+  }
+
+  /**
+   * Direct-to-storage upload for large back-office files (generated PDF batches, customer
+   * master). The bytes go straight from the client to object storage via a presigned PUT, so
+   * they never buffer through this process — the API only mints the URL and, on finalize,
+   * records the resulting object as a document.
+   *
+   * Flow: presign → client PUTs to the returned URL → finalize. Requires an S3/MinIO backend
+   * (the local-disk driver has no presign; callers there use POST /documents/upload or the
+   * chunked endpoints). The bucket must allow PUT from the caller's origin (CORS). Objects
+   * that are presigned but never finalized are orphaned — reap them with a storage lifecycle
+   * rule on the `documents/direct/` prefix.
+   */
+  @Post('upload/presign')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @ApiOperation({ summary: 'Get a presigned URL to upload a file directly to object storage' })
+  async presignUpload(@Body() body: PresignUploadRequestDto) {
+    if (typeof this.storage.getSignedUploadUrl !== 'function') {
+      throw new BadRequestException(
+        'Direct-to-storage upload is not available on this storage backend. Use POST /documents/upload or the resumable chunked upload endpoints.',
+      );
+    }
+    const contentType = body.contentType || 'application/octet-stream';
+    if (!ALLOWED_UPLOAD_TYPES.has(contentType.toLowerCase())) {
+      throw new BadRequestException(
+        `Files of type "${contentType}" are not accepted. Allowed: PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV.`,
+      );
+    }
+    const safeName = (body.fileName || 'upload.bin').replace(/[^\w.-]+/g, '_').slice(0, 120) || 'upload.bin';
+    const objectKey = `documents/direct/${randomUUID()}/${safeName}`;
+    const expiresIn = 900; // 15 minutes to complete the PUT
+    const uploadUrl = await this.storage.getSignedUploadUrl(objectKey, contentType, expiresIn);
+    return {
+      success: true,
+      data: { objectKey, uploadUrl, method: 'PUT', headers: { 'Content-Type': contentType }, expiresIn },
+    };
+  }
+
+  @Post('upload/finalize')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @ApiOperation({ summary: 'Register a file uploaded via a presigned URL as a document' })
+  async finalizeUpload(@Body() body: FinalizeUploadRequestDto, @Req() req: any) {
+    // Only keys minted by presignUpload can be finalized — never an arbitrary storage key,
+    // so a caller cannot register another namespace's object (a pre-field PDF, someone
+    // else's return) as their own document.
+    if (!body.objectKey.startsWith('documents/direct/')) {
+      throw new BadRequestException('objectKey is not a direct-upload key issued by /documents/upload/presign.');
+    }
+    // Confirm the object actually landed before creating a row that claims it did.
+    let size = 0;
+    try {
+      size = (await this.storage.statFile(body.objectKey)).size;
+    } catch {
+      throw new BadRequestException('No uploaded object found at objectKey. Complete the presigned PUT before finalizing.');
+    }
+    if (!size || size <= 0) {
+      throw new BadRequestException('Uploaded object is empty.');
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      // Delete the oversized object so an over-limit PUT can't leave a costly orphan behind.
+      await this.storage.deleteFile(body.objectKey).catch(() => undefined);
+      throw new BadRequestException(
+        `Uploaded file is ${(size / 1024 / 1024).toFixed(1)} MB, over the ${(MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0)} MB limit.`,
+      );
+    }
+    // Malware-scan the object the client PUT straight to storage — the presigned upload bypassed the
+    // API, so this is the first point the bytes can be inspected. Delete + reject on a hit (or when a
+    // required scan can't run), so an infected object is never registered as a document.
+    try {
+      const stream = await this.storage.getFileStream(body.objectKey);
+      const parts: Buffer[] = [];
+      for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      await this.fileScanner.scanOrThrow(Buffer.concat(parts), body.fileName);
+    } catch (err) {
+      await this.storage.deleteFile(body.objectKey).catch(() => undefined);
+      throw err;
+    }
+
+    const doc = await this.documentService.create(
+      {
+        assessmentId: body.assessmentId,
+        fileName: body.fileName,
+        filePath: body.objectKey,
+        fileSize: size,
+        mimeType: body.contentType,
+        type: body.type,
+        customerMasterVersionId: body.customerMasterVersionId,
+      },
+      req?.user?.id || '00000000-0000-0000-0000-000000000000',
+    );
 
     return { success: true, data: doc };
   }
@@ -198,7 +354,7 @@ export class DocumentController {
     SystemRole.OPERATIONS_EXECUTIVE,
     SystemRole.DOCUMENT_EXECUTIVE,
   )
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Binary audited-return upload (no base64 inflation)' })
   async mobileUploadBinary(
@@ -407,6 +563,20 @@ export class DocumentController {
     // assemble() calls S3 CompleteMultipartUpload — the object is now in MinIO
     // under s3Key. No buffer assembly happens in this process; no filesystem I/O.
     const { s3Key, session } = await this.chunkedUploadService.assemble(uploadId);
+
+    // Scan the assembled object before registering it. Chunks are meaningless individually, so this
+    // is the correct point to inspect the whole file; reject + delete on a hit.
+    try {
+      const stream = await this.storage.getFileStream(s3Key);
+      const parts: Buffer[] = [];
+      for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      await this.fileScanner.scanOrThrow(Buffer.concat(parts), session.fileName);
+    } catch (err) {
+      await this.storage.deleteFile(s3Key).catch(() => undefined);
+      await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
+      throw err;
+    }
+
     const doc = await this.documentService.create(
       {
         assessmentId: session.assessmentId,
@@ -490,7 +660,7 @@ export class DocumentController {
   @Post('validate-customer-excel')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('document:create:organization')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiOperation({ summary: 'Validate Customer Master Excel file' })
   async validateCustomerExcel(@UploadedFile() file: any) {
     // A submitted form with no file attached reaches here as `undefined`, and reading
@@ -503,7 +673,7 @@ export class DocumentController {
     const sheetName = workbook.SheetNames[0];
     const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-    let totalRows = rows.length;
+    const totalRows = rows.length;
     let duplicateAccountsCount = 0;
     let missingBranchesCount = 0;
     const accountNumbersSeen = new Set<string>();
@@ -772,6 +942,8 @@ export class DocumentController {
     return { success: true, data: list };
   }
 
+  // Must admit every role the frontend /documents route (and the document-list gate) allows, or the
+  // page's first call 403s and renders only an error banner for validation/audit viewers.
   @Get('operations/overview')
   @Roles(
     SystemRole.SUPER_ADMINISTRATOR,
@@ -780,6 +952,9 @@ export class DocumentController {
     SystemRole.OPERATIONS_EXECUTIVE,
     SystemRole.DOCUMENT_EXECUTIVE,
     SystemRole.DATA_ENTRY_HEAD,
+    SystemRole.VALIDATION_MANAGER,
+    SystemRole.VALIDATOR,
+    SystemRole.READ_ONLY_AUDITOR,
   )
   @ApiOperation({ summary: 'Document control console: branch context, transport trail, pipeline and action queues' })
   async operationsOverview(
@@ -798,7 +973,7 @@ export class DocumentController {
     SystemRole.OPERATIONS_EXECUTIVE,
     SystemRole.DOCUMENT_EXECUTIVE,
   )
-  @UseInterceptors(FilesInterceptor('files', 100))
+  @UseInterceptors(FilesInterceptor('files', 100), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
   async uploadGeneratedBatch(
@@ -934,7 +1109,7 @@ export class DocumentController {
 
   @Post('upload-excel')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload generated Excel report for an assessment from External OCR' })
   async uploadExcelReport(

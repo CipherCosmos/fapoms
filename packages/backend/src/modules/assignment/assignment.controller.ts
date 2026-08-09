@@ -18,11 +18,11 @@ import {
   BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
 
 /**
  * Request bodies for the two assignment-mutating routes.
@@ -67,6 +67,15 @@ class EscalateAssignmentRequestDto {
 class AddCommentRequestDto {
   @IsString() @IsNotEmpty() @MaxLength(4000)
   comment: string;
+}
+
+/** An assayer flagging a problem on their assignment: a known category and an optional note. */
+class ReportIssueRequestDto {
+  @IsIn(ASSIGNMENT_ISSUE_CATEGORIES as unknown as string[])
+  category: string;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  note?: string;
 }
 
 class UpdateAssignmentDetailsRequestDto implements UpdateAssignmentDetailsDto {
@@ -230,6 +239,18 @@ export class AssignmentController {
     };
   }
 
+  /**
+   * The desk's queue of problems the field has flagged. Declared before `@Get(':id')` so the
+   * literal "field-issues" is never parsed as an assignment id by that route's ParseUUIDPipe.
+   */
+  @Get('field-issues')
+  @Roles(...STAFF_ROLES)
+  @ApiOperation({ summary: 'Field issues assayers have reported, newest first' })
+  async fieldIssues() {
+    const issues = await this.assignmentService.listFieldIssues();
+    return { success: true, data: issues };
+  }
+
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
@@ -257,8 +278,18 @@ export class AssignmentController {
     };
   }
 
+  // Driving the assignment lifecycle (accept/reject/cancel/complete/negotiate) is an operations
+  // action — and COMPLETED feeds billing — so it is NOT open to the full STAFF_ROLES read set.
+  // READ_ONLY_AUDITOR/FINANCE_MANAGER/validation/doc/HR roles are viewers here. ASSAYER is allowed
+  // but constrained to their own assignment and a subset of transitions by the guard below.
   @Post(':id/transition')
-  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR,
+    SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER,
+    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.ASSAYER,
+  )
   @ApiOperation({ summary: 'Transition assignment status' })
   async transition(
     @Param('id') id: string,
@@ -353,6 +384,34 @@ export class AssignmentController {
       success: true,
       data: assignment,
     };
+  }
+
+  /**
+   * The field app's one channel for an assayer to raise a problem to the desk on their own
+   * initiative. Escalation above is ops-only (desk → field); this is field → desk.
+   */
+  @Post(':id/report-issue')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Assayer flags a problem on their assignment to the operations desk' })
+  async reportIssue(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: ReportIssueRequestDto,
+    @Req() req: any,
+  ) {
+    const userId = req.user.id;
+
+    // An assayer may only flag an assignment that is theirs; staff may flag any.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
+    if (!isStaff) {
+      const owned = await this.assignmentService.findOne(id);
+      if (!owned || owned.assayerId !== userId) {
+        throw new ForbiddenException('You can only report an issue on an assignment that is assigned to you.');
+      }
+    }
+
+    const assignment = await this.assignmentService.reportIssue(id, userId, body.category, body.note);
+    return { success: true, data: assignment };
   }
 
   @Get(':id/timeline')

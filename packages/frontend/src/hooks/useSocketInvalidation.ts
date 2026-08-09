@@ -8,6 +8,10 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:counter-offered', queryKeys.assignments.all, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
   ['assignment:created', queryKeys.assignments.all, queryKeys.dashboard.metrics, queryKeys.projects.all],
   ['assignment:fee-updated', queryKeys.assignments.all],
+  // An assayer flagged a problem from the field — refresh the Field Issues queue and the
+  // assignment views so the flag shows without a manual reload.
+  ['assignment:issue-reported', queryKeys.assignments.fieldIssues, queryKeys.assignments.all, queryKeys.dashboard.all],
+  ['assignment:escalated', queryKeys.assignments.all, queryKeys.dashboard.all],
   ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
   ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
   ['ProjectCompleted', queryKeys.projects.all, queryKeys.dashboard.all],
@@ -34,19 +38,32 @@ export function useSocketInvalidation() {
     const socket = connectSocket();
     if (!socket) return;
 
+    // Debounce invalidations. A burst of events (e.g. a bulk transition of 50 assignments fires 50
+    // `assignment:status-changed`) would otherwise invalidate the same broad keys 50×, refetching the
+    // active list and dashboard in a storm. Accumulating unique keys over a short window collapses the
+    // burst into a single refetch — imperceptible to the user, far less load on client and server.
+    const pending = new Map<string, any>();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      timer = null;
+      const keys = [...pending.values()];
+      pending.clear();
+      for (const key of keys) queryClient.invalidateQueries({ queryKey: key });
+    };
+
     const handlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
     for (const [event, ...keys] of EVENT_KEYS) {
       const handler = () => {
-        for (const key of keys) {
-          queryClient.invalidateQueries({ queryKey: key as any });
-        }
+        for (const key of keys) pending.set(JSON.stringify(key), key);
+        if (!timer) timer = setTimeout(flush, 300);
       };
       socket.on(event, handler);
       handlers.push({ event, handler });
     }
 
     return () => {
+      if (timer) clearTimeout(timer);
       for (const { event, handler } of handlers) {
         socket.off(event, handler);
       }

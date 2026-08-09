@@ -123,7 +123,7 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
         </button>
       </>
     }>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, overflowY: 'auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, overflowY: 'auto' }}>
         <select value={form.level} onChange={(e) => set('level', e.target.value as BillingLevel)} style={selStyle}>
           {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
         </select>

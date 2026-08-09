@@ -25,8 +25,13 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
           port: config.get<number>('REDIS_PORT', 6379),
           // Only include password in config when it is actually set.
           ...(password ? { password } : {}),
-          // Retry up to 5 times with exponential back-off; null stops retrying.
-          retryStrategy: (times: number) => (times > 5 ? null : Math.min(times * 100, 3000)),
+          // Reconnect forever with capped back-off. Returning null from an ioredis
+          // retryStrategy ENDS the connection permanently — so the previous "stop after 5
+          // tries" turned any brief Redis blip (failover, restart, network hiccup) into a
+          // dead client for the life of the process: chunked uploads, multi-node realtime
+          // and rate limiting all silently stopped until a redeploy. The Socket.IO Redis
+          // adapter already assumes an always-reconnecting client.
+          retryStrategy: (times: number) => Math.min(times * 200, 5000),
         });
         return client;
       },

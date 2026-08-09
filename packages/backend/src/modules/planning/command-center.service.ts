@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 
 /**
  * Branch and assayer state names come from different sources — client branch
@@ -25,7 +26,21 @@ const SERVICEABLE_RADIUS_KM = 150;
 
 @Injectable()
 export class CommandCenterService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
+
+  /**
+   * Cached wrapper. The map loads every active branch and assayer and aggregates them in memory, so
+   * it is expensive; the coverage picture changes slowly, so a short cluster-wide cache keyed by the
+   * filters keeps repeated Command Room loads off the database. Fault-tolerant via CacheService.
+   */
+  async overview(filters: { clientId?: string; state?: string } = {}): Promise<any> {
+    const TTL = Number(process.env.COMMAND_CENTER_CACHE_TTL_S) || 20;
+    const key = `planning:command-center:${filters.clientId ?? 'all'}:${filters.state ?? 'all'}`;
+    return this.cache.wrap(key, TTL, () => this.computeOverview(filters));
+  }
 
   /**
    * Geographic intelligence for the executive view.
@@ -36,7 +51,7 @@ export class CommandCenterService {
    * matching state names, because the names disagree across sources and distance
    * is what actually determines whether an assayer can service a branch.
    */
-  async overview(filters: { clientId?: string; state?: string } = {}): Promise<any> {
+  private async computeOverview(filters: { clientId?: string; state?: string } = {}): Promise<any> {
     const params: any[] = [];
     const where: string[] = ['b.is_active = true'];
     if (filters.clientId) { params.push(filters.clientId); where.push(`p.client_id = $${params.length}`); }

@@ -1,3 +1,5 @@
+import { ValidationQueryStatus } from '@fapoms/shared';
+
 export interface CustomerRecord {
   id: string;
   customerName: string;
@@ -25,7 +27,9 @@ export interface ValidationQuery {
   queryText: string;
   assayerResponse?: string;
   // RESPONDED = assayer has submitted a response but a validator hasn't closed it yet.
-  status: 'OPEN' | 'RESPONDED' | 'RESOLVED';
+  // Derived from the shared enum (as a string union, so `=== 'RESOLVED'` comparisons still typecheck)
+  // rather than a hand-copied literal set that could drift from @fapoms/shared.
+  status: `${ValidationQueryStatus}`;
   createdAt: string;
 }
 

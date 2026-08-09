@@ -11,8 +11,13 @@ let socket: Socket | null = null;
  * MobileApiService. On a real handset that address is unroutable, so the socket could never
  * connect from the field. Nothing surfaced the failure: the app silently fell back to its
  * 30-second poll, so "real-time" was permanently off for every physical device.
+ *
+ * Computed inside connectMobileSocket, not at module load. `getApiOrigin()` reads the mutable
+ * API base URL, which is only finalised after the stored/on-device server override is applied
+ * during startup — well after this module is first imported. A module-scope const captured the
+ * pre-override default (the emulator alias), so on exactly the installs the server-settings
+ * screen exists for, the socket dialled an unroutable address forever while REST worked.
  */
-const WS_URL = `${MobileApiService.getApiOrigin()}/events`;
 
 export function connectMobileSocket(): Socket | null {
   if (socket) return socket;
@@ -20,7 +25,8 @@ export function connectMobileSocket(): Socket | null {
   const token = MobileApiService.getAuthToken();
   if (!token) return null;
 
-  socket = io(WS_URL, {
+  const wsUrl = `${MobileApiService.getApiOrigin()}/events`;
+  socket = io(wsUrl, {
     // Read the token fresh on every (re)connection attempt — a static value here would
     // keep resending a token captured at connect time, which is wrong once it's refreshed.
     auth: (cb) => cb({ token: MobileApiService.getAuthToken() }),

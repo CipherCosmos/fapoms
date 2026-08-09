@@ -18,7 +18,12 @@ export const databaseConfig = (
   password: configService.get<string>('DB_PASSWORD', 'fapoms_dev'),
   database: configService.get<string>('DB_DATABASE', 'fapoms'),
   autoLoadEntities: true,
-  synchronize: configService.get<boolean>('DB_SYNCHRONIZE', false),
+  // Compared to the literal 'true' rather than read as <boolean>. ConfigModule has no
+  // schema, so ConfigService.get returns the raw environment string — and every non-empty
+  // string, including 'false', is truthy. `DB_SYNCHRONIZE=false` therefore ENABLED
+  // synchronize, letting TypeORM rewrite the live schema from the entities and drop any
+  // column, index or constraint it does not recognise. Mirrors the DB_LOGGING line below.
+  synchronize: configService.get<string>('DB_SYNCHRONIZE', 'false') === 'true',
   logging: configService.get<string>('DB_LOGGING', 'false') === 'true',
   // Survive a database that is briefly unavailable at boot (rolling DB restart,
   // cold start behind a pooler) instead of crashing the whole API on the first

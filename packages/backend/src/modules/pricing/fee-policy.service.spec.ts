@@ -10,6 +10,7 @@ import {
 import { ClientConfigurationEntity } from '../client/client-configuration.entity';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectEntity } from '../project/project.entity';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 
 /**
  * These lock in the behaviour that the two old duplicate implementations disagreed on:
@@ -39,6 +40,17 @@ describe('FeePolicyService', () => {
         { provide: getRepositoryToken(ClientConfigurationEntity), useValue: clientConfigRepo },
         { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: commercialRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
+        {
+          provide: CacheService,
+          useValue: {
+            // Read-through: run the loader so these tests hit the real resolution logic.
+            wrap: jest.fn((_key: string, _ttl: number, load: () => any) => load()),
+            getJson: jest.fn().mockResolvedValue(null),
+            setJson: jest.fn(),
+            del: jest.fn(),
+            delByPattern: jest.fn(),
+          },
+        },
       ],
     }).compile();
 

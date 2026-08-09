@@ -2,6 +2,10 @@ import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+// Single source of truth lives in @fapoms/shared so backend, web and mobile validate the same set.
+// Re-exported here to keep existing `from './expense.entity'` imports working unchanged.
+import { ExpenseCategory, ExpenseStatus } from '@fapoms/shared';
+export { ExpenseCategory, ExpenseStatus } from '@fapoms/shared';
 
 /**
  * A reimbursement claim raised by an assayer against one assignment.
@@ -12,20 +16,6 @@ import { AssayerEntity } from '../assayer/assayer.entity';
  * Every claim a field assayer submitted returned 404 and was silently discarded, which is why
  * the app has always shown "₹0 claimed" no matter what was entered. This is the missing half.
  */
-
-export enum ExpenseCategory {
-  /** Distance-based travel beyond the contracted allowance. */
-  TRAVEL_KM = 'TRAVEL_KM',
-  TOLL = 'TOLL',
-  FOOD = 'FOOD',
-  OTHER = 'OTHER',
-}
-
-export enum ExpenseStatus {
-  PENDING = 'PENDING',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
-}
 
 @Entity('assignment_expenses')
 @Index(['assignmentId'])

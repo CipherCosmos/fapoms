@@ -44,7 +44,7 @@ class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;
 
   async request<T>(endpoint: string, options?: RequestInit & { raw?: boolean; withMeta?: boolean }): Promise<T> {
-    let token = localStorage.getItem('fapoms_token');
+    const token = localStorage.getItem('fapoms_token');
     const headers: Record<string, string> = {
       ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

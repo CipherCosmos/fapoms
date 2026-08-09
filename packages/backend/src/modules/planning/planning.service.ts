@@ -81,7 +81,7 @@ export class PlanningService {
     private readonly feePolicyService: FeePolicyService,
   ) {}
 
-  async getRecommendedCandidates(branchId: string): Promise<AssayerRecommendation[]> {
+  async getRecommendedCandidates(branchId: string, weights: Record<string, number> = {}): Promise<AssayerRecommendation[]> {
     const branch = await this.branchQueryService.findOne(branchId);
 
     if (!branch) {
@@ -91,7 +91,9 @@ export class PlanningService {
     // One date for the whole call: the same instant the engine scores against is the instant
     // the fee is quoted for, so the score and the price can never describe different days.
     const scheduledDate = new Date();
-    const results = await this.recommendationEngine.recommend(branch, scheduledDate);
+    // `weights` lets the scenario sandbox pass its overrides all the way into scoring; empty by
+    // default, in which case `recommend` resolves the client's own configured weights as before.
+    const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights);
     const rates = await this.feePolicyService.getRates(branch.clientId ?? null);
 
     const recommendations: AssayerRecommendation[] = [];

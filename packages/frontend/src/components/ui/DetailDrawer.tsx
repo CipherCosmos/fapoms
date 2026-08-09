@@ -50,7 +50,7 @@ export const DetailDrawer: React.FC<{
           bottom: 0,
           background: 'rgba(0,0,0,0.35)',
           backdropFilter: 'blur(2px)',
-          zIndex: 89,
+          zIndex: 1090,
         }}
       />
       <div
@@ -61,11 +61,12 @@ export const DetailDrawer: React.FC<{
           top: 0,
           right: 0,
           bottom: 0,
-          width: Math.min(width, typeof window !== 'undefined' ? window.innerWidth : width),
+          width: `min(${width}px, 100vw)`,
+          maxWidth: '100vw',
           background: 'var(--bg-secondary)',
           borderLeft: '1px solid var(--border-color)',
           boxShadow: 'var(--shadow-lg)',
-          zIndex: 90,
+          zIndex: 1091,
           display: 'flex',
           flexDirection: 'column',
           animation: 'drawerIn 0.2s ease-out',

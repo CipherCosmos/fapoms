@@ -3,13 +3,13 @@ import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider }
 import { PlanningBranch, BranchId, PlanningAssayer, AssayerId, SkillSet } from './planning-domain-contracts';
 import { GeoCoordinate } from '../../core/value-objects/geo-coordinate.value-object';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
-import { AssayerStatus } from '@fapoms/shared';
+import { AssayerStatus, ProjectBranchStatus } from '@fapoms/shared';
 import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 
 @Injectable()
@@ -29,10 +29,34 @@ export class PlanningAntiCorruptionLayer
   ) {}
 
   async getBranchesForPlanning(projectId: string): Promise<PlanningBranch[]> {
-    const projectBranches = await this.projectBranchRepository.find({
-      where: { projectId, isActive: true },
+    // Only branches that actually still need an assayer. This used to return EVERY active
+    // project-branch, so the coverage plan tried to cover branches that were already audited,
+    // closed, or assigned — and deployment then (correctly) refused them, surfacing a wall of
+    // "already completed / Branch Busy" skips. Plan only over the coverage-eligible statuses…
+    const plannable = await this.projectBranchRepository.find({
+      where: {
+        projectId,
+        isActive: true,
+        status: In([
+          ProjectBranchStatus.IMPORTED,
+          ProjectBranchStatus.PLANNING,
+          ProjectBranchStatus.CANDIDATE_SEARCH,
+        ]),
+      },
       relations: ['branch'],
     });
+
+    // …and, defensively, exclude any that already carry an active/committed assignment even if
+    // their status hasn't caught up (the "Branch Busy: an active assignment already exists" case).
+    const pbIds = plannable.map((pb) => pb.id);
+    const busy = pbIds.length
+      ? await this.assignmentRepository.find({
+          where: { projectBranchId: In(pbIds), status: In(COMMITTED_ASSIGNMENT_STATUSES), isActive: true },
+          select: ['projectBranchId'],
+        })
+      : [];
+    const busyPbIds = new Set(busy.map((a) => a.projectBranchId));
+    const projectBranches = plannable.filter((pb) => !busyPbIds.has(pb.id));
 
     return projectBranches.map((pb) => {
       const b = pb.branch;

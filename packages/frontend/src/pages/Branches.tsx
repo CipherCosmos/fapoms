@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } from '../components/ui';
@@ -114,6 +114,9 @@ const BRANCH_TYPES = ['MAIN', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
 export const Branches: React.FC = () => {
   const { toast } = useToast();
   const [branches, setBranches] = useState<Branch[]>([]);
+  // The true server-side total, so the UI can tell the operator when the loaded list is truncated
+  // rather than silently showing a partial list as if it were everything.
+  const [branchesTotal, setBranchesTotal] = useState(0);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -140,10 +143,18 @@ export const Branches: React.FC = () => {
   const navigate = useNavigate();
   const branchIdParam = searchParams.get('id');
 
+  // The socket handler below subscribes once (mount), so it must read the *current* selected client
+  // through a ref — capturing selectedClientId in the closure would freeze it at its initial '' and a
+  // live event would never refresh the branches of whatever client is actually selected.
+  const selectedClientIdRef = useRef(selectedClientId);
+
   useEffect(() => {
     loadClients();
     const socket = connectSocket();
-    const refresh = () => { loadClients(); if (selectedClientId) loadBranches(selectedClientId); };
+    const refresh = () => {
+      loadClients();
+      if (selectedClientIdRef.current) loadBranches(selectedClientIdRef.current);
+    };
     socket?.on('ProjectPlanningStarted', refresh);
     socket?.on('ProjectBranchAssignmentConfirmed', refresh);
     return () => {
@@ -151,7 +162,10 @@ export const Branches: React.FC = () => {
       socket?.off('ProjectBranchAssignmentConfirmed', refresh);
     };
   }, []);
-  useEffect(() => { if (selectedClientId) loadBranches(selectedClientId); }, [selectedClientId]);
+  useEffect(() => {
+    selectedClientIdRef.current = selectedClientId;
+    if (selectedClientId) loadBranches(selectedClientId);
+  }, [selectedClientId]);
 
   useEffect(() => {
     if (branchIdParam && branches.length > 0) {
@@ -168,12 +182,18 @@ export const Branches: React.FC = () => {
     } catch (err) { console.error('Failed to load clients'); }
   };
 
+  const BRANCH_PAGE_LIMIT = 1000;
   const loadBranches = async (clientId?: string) => {
     setIsLoading(true);
     try {
-      const url = clientId ? `/branches?clientId=${clientId}&limit=500` : '/branches?limit=500';
-      const response = await api.request<Branch[]>(url);
-      setBranches(response);
+      const base = clientId ? `/branches?clientId=${clientId}` : '/branches?';
+      const url = `${base}${clientId ? '&' : ''}limit=${BRANCH_PAGE_LIMIT}`;
+      // withMeta so we learn the true total and can warn when the list is capped, instead of
+      // silently dropping branches past the limit (a bank client can exceed it).
+      const response = await api.request<{ data: Branch[]; meta?: { pagination?: { total?: number } } }>(url, { withMeta: true });
+      const rows = Array.isArray(response) ? (response as unknown as Branch[]) : (response?.data ?? []);
+      setBranches(rows);
+      setBranchesTotal(response?.meta?.pagination?.total ?? rows.length);
     } catch (err) { console.error('Failed to load branches'); }
     finally { setIsLoading(false); }
   };
@@ -209,11 +229,19 @@ export const Branches: React.FC = () => {
       });
       const { importedCount, errors } = data;
       let msg = `Successfully imported ${importedCount} branches.`;
-      if (errors && errors.length > 0) msg += ` Excluded ${errors.length} rows due to validation errors.`;
-      setMessage({ type: 'success', text: msg });
+      if (errors && errors.length > 0) {
+        // Show what actually failed, not just a count — the backend returns per-row reasons.
+        const detail = errors
+          .slice(0, 5)
+          .map((er: any) => (typeof er === 'string' ? er : er?.reason || er?.message || JSON.stringify(er)))
+          .join('; ');
+        msg += ` Excluded ${errors.length} row(s): ${detail}${errors.length > 5 ? '…' : ''}`;
+      }
+      setMessage({ type: errors && errors.length > 0 ? 'error' : 'success', text: msg });
       loadBranches(selectedClientId);
     } catch (err) {
-      setMessage({ type: 'error', text: 'Network connection error during file upload.' });
+      // The real failure (e.g. a 400 with a validation message), not a blanket "network error".
+      setMessage({ type: 'error', text: userMessage(err) });
     } finally { setIsUploading(false); e.target.value = ''; }
   };
 
@@ -229,7 +257,8 @@ export const Branches: React.FC = () => {
   const states = [...new Set(branches.map(b => b.state).filter(Boolean))].sort();
   const regions = [...new Set(branches.map(b => b.region).filter((r): r is string => r !== null))].sort();
 
-  const totalCount = branches.length;
+  const totalCount = branchesTotal || branches.length;
+  const isTruncated = branchesTotal > branches.length;
   const regionCount = new Set(branches.map(b => b.region).filter(Boolean)).size;
   const highRiskCount = branches.filter(b => b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL').length;
   const standardCount = branches.filter(b => b.complexity === 'STANDARD').length;
@@ -260,6 +289,13 @@ export const Branches: React.FC = () => {
       </div>
 
       {message && <AlertBanner type={message.type} message={message.text} />}
+
+      {isTruncated && (
+        <AlertBanner type="error">
+          Showing {branches.length.toLocaleString()} of {branchesTotal.toLocaleString()} branches — the list is capped.
+          Use the search and filters to narrow down, or select a specific client, so no branches are hidden.
+        </AlertBanner>
+      )}
 
       <div className="responsive-grid-split" style={{ alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

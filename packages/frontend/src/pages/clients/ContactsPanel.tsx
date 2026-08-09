@@ -63,7 +63,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
                 {c.isPrimary && <span style={{ fontSize: 10, color: 'var(--accent-secondary)', fontWeight: 700, marginLeft: 6 }}>PRIMARY</span>}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{c.designation}{c.department ? ` • ${c.department}` : ''}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Mail size={11} /> {c.email}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={11} /> {c.phone}</span>
               </div>
@@ -80,7 +80,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
             <button type="submit" disabled={add.isPending} className="btn btn-primary">{add.isPending ? 'Saving...' : 'Save Contact'}</button>
           </>
         }>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <StyledInput placeholder="Name *" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required />
             <StyledInput placeholder="Email *" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required />
             <StyledInput placeholder="Phone *" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} required />

@@ -82,4 +82,65 @@ export class CacheService {
     await this.setJson(key, fresh, ttlSeconds);
     return fresh;
   }
+
+  /**
+   * Run `fn` while holding a cluster-wide lock on `key`, so concurrent callers for the
+   * same key run one-at-a-time. Used to make check-then-create flows (e.g. auto-billing
+   * an assignment) safe against the event bus delivering two events that would otherwise
+   * interleave into a duplicate.
+   *
+   * FAIL-OPEN by design: if Redis is absent, errors, or the lock can't be acquired within
+   * the retry budget, `fn` still runs (unlocked). A distributed lock must never be able to
+   * wedge the pipeline shut — the caller's own idempotency guard is the correctness
+   * backstop; this lock only closes the concurrency window in the common case.
+   */
+  async withLock<T>(
+    key: string,
+    ttlSeconds: number,
+    fn: () => Promise<T>,
+    opts?: { retries?: number; retryDelayMs?: number },
+  ): Promise<T> {
+    if (!this.redis) return fn();
+
+    const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const retries = opts?.retries ?? 20;
+    const retryDelayMs = opts?.retryDelayMs ?? 150;
+
+    let acquired = false;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const res = await this.redis.set(key, token, 'EX', Math.max(1, Math.floor(ttlSeconds)), 'NX');
+        if (res === 'OK') {
+          acquired = true;
+          break;
+        }
+      } catch (err) {
+        this.logger.warn(`withLock acquire "${key}" failed: ${(err as Error).message}; proceeding unlocked.`);
+        return fn();
+      }
+      if (attempt < retries) await new Promise((r) => setTimeout(r, retryDelayMs));
+    }
+
+    if (!acquired) {
+      this.logger.warn(`withLock "${key}" not acquired after ${retries} retries; proceeding unlocked.`);
+      return fn();
+    }
+
+    try {
+      return await fn();
+    } finally {
+      // Compare-and-delete so we only ever release our own lock, never one that already
+      // expired and was re-acquired by someone else.
+      try {
+        await this.redis.eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          1,
+          key,
+          token,
+        );
+      } catch {
+        /* lock will expire on its own via its TTL */
+      }
+    }
+  }
 }

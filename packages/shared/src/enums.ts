@@ -57,6 +57,24 @@ export enum AssignmentStatus {
   CANCELLED = 'CANCELLED',
 }
 
+/**
+ * Assayer reimbursement claim category and review state. Kept here (not in the backend entity) so the
+ * mobile submit form and the web review queue validate against the same set the backend DTO enforces —
+ * a backend-added category must not silently 400 a field submission.
+ */
+export enum ExpenseCategory {
+  TRAVEL_KM = 'TRAVEL_KM',
+  TOLL = 'TOLL',
+  FOOD = 'FOOD',
+  OTHER = 'OTHER',
+}
+
+export enum ExpenseStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
 export enum ScheduleStatus {
   TENTATIVE = 'TENTATIVE',
   CONFIRMED = 'CONFIRMED',

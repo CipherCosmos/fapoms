@@ -1,7 +1,8 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Res, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { MetricsService } from './metrics.service';
+import { MetricsAuthGuard } from './metrics-auth.guard';
 
 /**
  * Prometheus scrape endpoint.
@@ -12,6 +13,7 @@ import { MetricsService } from './metrics.service';
  * from the internal network / scrape subnet at the infrastructure layer.
  */
 @ApiTags('Observability')
+@UseGuards(MetricsAuthGuard)
 @Controller('metrics')
 export class MetricsController {
   constructor(private readonly metrics: MetricsService) {}

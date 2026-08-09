@@ -103,7 +103,9 @@ export const DirectoryPanel: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await api.request<UserProfile[]>('/users');
+      // Without an explicit limit the API returns only the first 20 users, silently truncating the
+      // directory and every KPI/holder count derived from it. Pull a full working page.
+      const response = await api.request<UserProfile[]>('/users?limit=500');
       const list = Array.isArray(response) ? response : (response as any)?.data ?? [];
       setUsers(list);
       // Keep the open edit panel in sync after an action (e.g. unlock) refetches.
@@ -261,7 +263,7 @@ export const DirectoryPanel: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
         <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={filteredUsers.length} label="Total Users" />
         <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active" />
         <Kpi icon={<Lock size={20} />} tone="var(--danger)" value={users.filter(isLocked).length} label="Locked Out" />
@@ -349,7 +351,8 @@ export const DirectoryPanel: React.FC = () => {
           {isLoading ? (
             <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading users list...</div>
           ) : (
-            <table className="planning-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ overflowX: 'auto' }}>
+            <table className="planning-table" style={{ width: '100%', minWidth: '720px', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
                   <th style={{ padding: '12px 6px 12px 24px', width: '28px' }}>
@@ -436,6 +439,7 @@ export const DirectoryPanel: React.FC = () => {
                 }))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
 
@@ -471,7 +475,7 @@ export const DirectoryPanel: React.FC = () => {
               )}
 
               <form onSubmit={handleUpdateUser} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
                   <div><label className="form-label">First Name</label><input type="text" className="form-input" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} required /></div>
                   <div><label className="form-label">Last Name</label><input type="text" className="form-input" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} required /></div>
                 </div>
@@ -540,7 +544,7 @@ export const DirectoryPanel: React.FC = () => {
             <div><label className="form-label">Username</label><input type="text" className="form-input" value={username} onChange={(e) => setUsername(e.target.value)} required /></div>
             <div><label className="form-label">Email Address</label><input type="email" className="form-input" value={email} onChange={(e) => setEmail(e.target.value)} required /></div>
             <div><label className="form-label">Initial Password</label><input type="password" className="form-input" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} /></div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
               <div><label className="form-label">First Name</label><input type="text" className="form-input" value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></div>
               <div><label className="form-label">Last Name</label><input type="text" className="form-input" value={lastName} onChange={(e) => setLastName(e.target.value)} required /></div>
             </div>

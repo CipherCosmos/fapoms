@@ -42,11 +42,14 @@ export const RolesPermissionsPanel: React.FC = () => {
   });
   const { data: usersRes } = useQuery({
     queryKey: ['users', 'all', 'for-role-counts'],
-    queryFn: () => api.request<UserRow[]>('/users'),
+    // Match DirectoryPanel: the default 20-row page would undercount every role's holder tally.
+    queryFn: () => api.request<UserRow[]>('/users?limit=500'),
   });
 
   const roles = (Array.isArray(rolesRes) ? rolesRes : (rolesRes as any)?.data) || [];
-  const users = (Array.isArray(usersRes) ? usersRes : (usersRes as any)?.data) || [];
+  // Memoized so `holderCount` (a Map over every user × their roles) is rebuilt only when the user list
+  // changes — not on every render, e.g. each time a role row is expanded.
+  const users = useMemo(() => (Array.isArray(usersRes) ? usersRes : (usersRes as any)?.data) || [], [usersRes]);
 
   const holderCount = useMemo(() => {
     const m = new Map<string, number>();

@@ -79,6 +79,17 @@ export function canManageHolidays(roles: SystemRole[]): boolean {
 }
 
 /** Business rules feed candidate scoring directly — operations own this too. */
+export function canManageZones(roles: SystemRole[]): boolean {
+  return roles.some((r) =>
+    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),
+  );
+}
+
+/** Deletion is the only zone action reserved to admins — it can strand branches. */
+export function canDeleteZones(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
 export function canManageRules(roles: SystemRole[]): boolean {
   return roles.some((r) =>
     [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),

@@ -51,4 +51,18 @@ export class AssignmentStateMachine {
     assignment.cancelReason = reason ?? 'Cancelled';
     return { previousState: prev, newState: assignment.status, userId };
   }
+
+  /**
+   * Completion must go through the machine like every other transition. Bypassing it let an
+   * assignment be marked COMPLETED straight from PENDING/ACCEPTED — no on-site check-in, no
+   * evidence — which then triggered the auto-bill listener and produced a real client invoice
+   * and assayer payable for a visit that never happened. VALID_PATHS only permits
+   * CHECKED_IN/IN_PROGRESS -> COMPLETED, so this refuses completion of work that was never begun.
+   */
+  static completeAudit(assignment: AssignmentEntity, userId: string) {
+    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.COMPLETED);
+    const prev = assignment.status;
+    assignment.status = AssignmentStatus.COMPLETED;
+    return { previousState: prev, newState: assignment.status, userId };
+  }
 }

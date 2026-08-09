@@ -5,7 +5,6 @@ import Constants from 'expo-constants';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Icon, IconButton, Tappable } from './ui/primitives';
 import { AssayerAssignment } from '../types/mobile-app';
-import { styles } from '../theme/styles';
 import { InteractiveMap } from './MapEntry';
 import { calculateHaversineDistance } from '@fapoms/shared';
 
@@ -593,7 +592,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
     return (
       <RNModal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }}>
+        <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
           <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel="Dismiss">
             <View style={{ flex: 1 }} />
           </Tappable>
@@ -609,16 +608,19 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           }}>
             <View style={{ alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: t.colors.border }} />
 
-            <View style={{ gap: t.space.xs }}>
-              <AppText variant="h2" numberOfLines={1}>{assignment?.branchName || 'Branch'}</AppText>
-              {assignment?.branchAddress ? (
-                <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                  <Icon name="location-outline" size={14} color={t.colors.textFaint} style={{ marginTop: 3 }} />
-                  <AppText variant="small" tone="muted" style={{ flex: 1 }} numberOfLines={3}>
-                    {assignment.branchAddress}
-                  </AppText>
-                </View>
-              ) : null}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
+              <View style={{ flex: 1, gap: t.space.xs }}>
+                <AppText variant="h2" numberOfLines={1}>{assignment?.branchName || 'Branch'}</AppText>
+                {assignment?.branchAddress ? (
+                  <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                    <Icon name="location-outline" size={14} color={t.colors.textFaint} style={{ marginTop: 3 }} />
+                    <AppText variant="small" tone="muted" style={{ flex: 1 }} numberOfLines={3}>
+                      {assignment.branchAddress}
+                    </AppText>
+                  </View>
+                ) : null}
+              </View>
+              <IconButton icon="close" onPress={onClose} accessibilityLabel="Close" size={38} />
             </View>
 
             {/* Time and distance as a pair of tiles: they are the two numbers the sheet exists
@@ -706,7 +708,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
   return (
     <RNModal visible={visible} animationType="slide" transparent={false} onRequestClose={() => { setNavigating(false); setExpanded(false); }}>
-      <View style={{ flex: 1, backgroundColor: '#090d16' }}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         {/* Header */}
         <View
           style={{
@@ -715,9 +717,9 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
             justifyContent: 'space-between',
             paddingHorizontal: 16,
             paddingVertical: 14,
-            backgroundColor: '#0f172a',
+            backgroundColor: t.colors.surface,
             borderBottomWidth: 1,
-            borderBottomColor: 'rgba(99,102,241,0.2)',
+            borderBottomColor: t.colors.border,
           }}
         >
           <View style={{ flex: 1 }}>
@@ -735,7 +737,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
         {/* Live turn-by-turn banner */}
         {navigating && steps.length > 0 && (
-          <View style={{ backgroundColor: '#1e1b4b', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(99,102,241,0.3)' }}>
+          <View style={{ backgroundColor: t.colors.primarySoft, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: t.colors.border }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <View style={{ width: 46, height: 46, borderRadius: 12, backgroundColor: t.colors.primarySoft, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name={maneuverIcon(steps[activeStepIndex]?.maneuver)} size={26} color={t.colors.primary} />
@@ -851,7 +853,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                           const isActive = navigating && i === activeStepIndex;
                           return (
                             <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3, backgroundColor: isActive ? t.colors.primarySoft : 'transparent', borderRadius: 6, paddingHorizontal: isActive ? 6 : 0 }}>
-                              <Icon name={maneuverIcon(s.maneuver)} size={14} color={isActive ? t.colors.primary : '#64748b'} />
+                              <Icon name={maneuverIcon(s.maneuver)} size={14} color={isActive ? t.colors.primary : t.colors.textFaint} />
                               <AppText variant="small" style={{ flex: 1 }} numberOfLines={2} tone={isActive ? 'primary' : undefined}>
                                 {s.instruction}
                               </AppText>

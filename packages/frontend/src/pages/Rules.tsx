@@ -197,8 +197,8 @@ export const Rules: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Business Rule Engine</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
             These rules decide who is eligible and how they rank during candidate recommendation.
@@ -217,7 +217,7 @@ export const Rules: React.FC = () => {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
         <Kpi icon={<Sliders size={20} />} tone="var(--accent-primary)" value={rules.length} label="Total Rules" />
         <Kpi icon={<Shield size={20} />} tone="var(--accent-primary)" value={rules.filter((r) => r.scope === 'GLOBAL').length} label="Global" />
         <Kpi icon={<Shield size={20} />} tone="var(--status-active)" value={rules.filter((r) => r.ruleType === 'SKILL' || r.ruleType === 'CERTIFICATION').length} label="Skill / Cert Rules" />
@@ -230,7 +230,7 @@ export const Rules: React.FC = () => {
         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} rules</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(340px, 100%), 1fr))', gap: '16px' }}>
         {loading ? (
           <div style={{ gridColumn: '1 / -1', padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>
         ) : filtered.length === 0 ? (

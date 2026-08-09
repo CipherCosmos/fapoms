@@ -24,6 +24,7 @@ import {
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -218,7 +219,7 @@ export class ProjectController {
   ) {
     return {
       success: true,
-      data: await this.projectService.markBranchUnableToCover(projectBranchId, req.user.userId, dto.reason),
+      data: await this.projectService.markBranchUnableToCover(projectBranchId, req.user.id, dto.reason),
     };
   }
 
@@ -231,7 +232,7 @@ export class ProjectController {
   ) {
     return {
       success: true,
-      data: await this.projectService.reopenBranchCoverage(projectBranchId, req.user.userId),
+      data: await this.projectService.reopenBranchCoverage(projectBranchId, req.user.id),
     };
   }
 
@@ -320,7 +321,7 @@ export class ProjectController {
   @Post(':id/branches/upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('project:create:organization')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiOperation({ summary: 'Upload branches from Excel spreadsheet and associate with project' })
   async uploadBranches(
     @Param('id', ParseUUIDPipe) id: string,

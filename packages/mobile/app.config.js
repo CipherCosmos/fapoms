@@ -9,13 +9,13 @@ module.exports = {
     splash: {
       image: './assets/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#14100C',
+      backgroundColor: '#131017',
     },
     assetBundlePatterns: ['**/*'],
     /**
      * Draw behind the system bars.
      *
-     * The status bar was painted a fixed `#14100C`, so the app stopped at a solid dark strip
+     * The status bar was painted a fixed `#131017`, so the app stopped at a solid dark strip
      * instead of filling the screen — and in light theme that strip did not match the page
      * underneath it either. Transparent and translucent lets content run edge to edge; the
      * top bar already reserves `StatusBar.currentHeight` so nothing sits under the clock.
@@ -72,7 +72,7 @@ module.exports = {
       },
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon.png',
-        backgroundColor: '#14100C',
+        backgroundColor: '#131017',
       },
     },
     plugins: [

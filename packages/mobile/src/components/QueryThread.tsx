@@ -232,7 +232,11 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                   <AppText variant="caption" tone="primary" numberOfLines={1}>
                     {a.fileName}
                   </AppText>
-                  <Tappable onPress={() => setPending((prev) => prev.filter((_, idx) => idx !== i))}>
+                  <Tappable
+                    onPress={() => setPending((prev) => prev.filter((_, idx) => idx !== i))}
+                    accessibilityLabel={`Remove ${a.fileName}`}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
                     <Icon name="close" size={13} color={t.colors.primary} />
                   </Tappable>
                 </View>

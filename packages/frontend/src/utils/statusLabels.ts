@@ -23,6 +23,7 @@ export {
   BRANCH_ACTIVE_COVERED_STATUSES,
   localDateKey,
   todayDateKey,
+  formatDateOnly,
 } from '@fapoms/shared';
 
 /** Semantic tone for a branch status — single source of truth for badge colours. */

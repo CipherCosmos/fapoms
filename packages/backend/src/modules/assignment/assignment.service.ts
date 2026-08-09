@@ -24,6 +24,7 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { AssignmentStateMachine } from './assignment.state-machine';
 import { ProjectBranchStateMachine } from '../project/project.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { ProjectEntity } from '../project/project.entity';
 import { COMMITTED_ASSIGNMENT_STATUSES } from './assignment-workload';
@@ -31,7 +32,7 @@ import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal } from '@fapoms/shared';
 
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
@@ -100,6 +101,7 @@ export class AssignmentService {
     private readonly documentService: DocumentService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly uow: UnitOfWork,
   ) {}
 
 
@@ -351,6 +353,17 @@ export class AssignmentService {
       assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
       assignment.slaDueDate = slaDueDate;
       assignment.slaStatus = 'COMPLIANT';
+      // Reset per-assayer evidence and negotiation state. Reusing the record for a NEW assayer
+      // must not carry over the previous assayer's GPS check-in (which would read as this
+      // assayer having stood in the branch — falsified audit evidence) or their spent
+      // negotiation rounds (which would auto-decline a fresh offer prematurely).
+      assignment.checkInLatitude = null;
+      assignment.checkInLongitude = null;
+      assignment.checkInAccuracyMeters = null;
+      assignment.checkInDistanceMeters = null;
+      assignment.checkedInAt = null;
+      assignment.negotiationCount = 0;
+      assignment.priority = projectBranch.priority;
       assignment.updatedBy = userId;
       assignment.isActive = true;
     } else {
@@ -377,7 +390,7 @@ export class AssignmentService {
       });
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    return this.uow.run(async (manager, emit) => {
       if (projectBranch && !projectBranch.scheduledDate && scheduledDateObj) {
         projectBranch.scheduledDate = scheduledDateObj;
         await manager.save(projectBranch);
@@ -398,6 +411,19 @@ export class AssignmentService {
           : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
       });
 
+      // Through the outbox rather than a post-commit publish: the event now commits with the
+      // assignment and is redelivered if the process dies before it reaches the gateway. The
+      // try/catch this replaces could only log a lost event, never recover it.
+      emit('assignment:created', {
+        eventType: 'assignment:created',
+        assignmentId: savedAssignment.id,
+        assignmentNumber: savedAssignment.assignmentNumber,
+        assayerId: savedAssignment.assayerId,
+        organizationId: (savedAssignment as any).projectBranch?.project?.organizationId,
+        branchName: projectBranch.branch?.name,
+        status: savedAssignment.status,
+      });
+
       return savedAssignment;
     }).then(async (saved) => {
       // The offer notification.
@@ -409,6 +435,10 @@ export class AssignmentService {
       // no record that it had, so a missed offer left no trace either way.
       // Both channels now go through one emit against the assayer's own id,
       // and the row records whether it actually arrived.
+      //
+      // Stays outside the transaction on purpose: NotificationDispatchService is Bull-backed
+      // and has its own durability, and a notification is a side effect of the offer, not part
+      // of its atomic write.
       this.notificationDispatch.emitSafe({
         type: 'ASSIGNMENT_OFFERED',
         entityType: 'ASSIGNMENT',
@@ -425,21 +455,6 @@ export class AssignmentService {
           proposedFee: dto.proposedFee,
         },
       });
-
-      // Emit real-time event
-      try {
-        this.eventPublisher.publish('assignment:created', {
-          eventType: 'assignment:created',
-          assignmentId: saved.id,
-          assignmentNumber: saved.assignmentNumber,
-          assayerId: saved.assayerId,
-          organizationId: (saved as any).projectBranch?.project?.organizationId,
-          branchName: projectBranch.branch?.name,
-          status: saved.status,
-        });
-      } catch (err) {
-        console.error('Failed to publish assignment:created event:', err);
-      }
 
       return saved;
     });
@@ -581,8 +596,9 @@ export class AssignmentService {
         assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
       }
     } else if (targetStatus === AssignmentStatus.COMPLETED) {
-      event = { previousState: prevStatus, newState: AssignmentStatus.COMPLETED, userId };
-      assignment.status = AssignmentStatus.COMPLETED;
+      // Validated: only CHECKED_IN/IN_PROGRESS may complete. Prevents marking un-visited work done
+      // and auto-billing it (see AssignmentStateMachine.completeAudit).
+      event = AssignmentStateMachine.completeAudit(assignment, userId);
       assignment.completionDate = new Date();
       if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.AUDIT_COMPLETED) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);
@@ -602,7 +618,7 @@ export class AssignmentService {
 
     await this.syncAssessmentStatus(assignment);
 
-    const saved = await this.dataSource.transaction(async (manager) => {
+    const saved = await this.uow.run(async (manager, emit) => {
       if (assignment.projectBranch) {
         await manager.save(assignment.projectBranch);
       }
@@ -628,12 +644,38 @@ export class AssignmentService {
         remarks: reason ?? `Transitioned assignment to ${targetStatus}`,
       });
 
+      // The status change is emitted through the outbox from inside the transaction, so it
+      // commits atomically with the transition and survives a crash before delivery.
+      //
+      // This is the event billing's auto-bill listener consumes: a COMPLETED assignment that
+      // committed but whose event was published post-commit by the raw publisher (as it was
+      // before) would, if the process died in that window, never be billed and never create an
+      // assayer payable — completed work, no invoice, no trace. Routing it here closes that.
+      // Delivery is at-least-once; the billing listener is already idempotent (its
+      // already-billed guards plus a Redis lock), which is the precondition for moving it here.
+      if (event) {
+        emit('assignment:status-changed', {
+          eventType: 'assignment:status-changed',
+          assignmentId: savedAssign.id,
+          assignmentNumber: savedAssign.assignmentNumber,
+          previousState: event.previousState || prevStatus,
+          newState: savedAssign.status,
+          assayerId: savedAssign.assayerId,
+          organizationId: (savedAssign as any).projectBranch?.project?.organizationId,
+          userId: event.userId,
+          metadata: event.metadata,
+        });
+      }
+
+      // The project-branch transition rides the same transaction. No named subscriber depends
+      // on it being a class instance — only the realtime gateway's broadcast — so a plain
+      // payload is equivalent and is what the outbox stores.
+      if (pbEvent) {
+        emit(pbEvent.constructor.name, { ...pbEvent });
+      }
+
       return savedAssign;
     });
-
-    if (pbEvent) {
-      this.eventPublisher.publish(pbEvent.constructor.name, pbEvent);
-    }
 
     // Notifications.
     //
@@ -673,11 +715,12 @@ export class AssignmentService {
     if (targetStatus === AssignmentStatus.COMPLETED) {
       try {
         if (saved.projectBranchId) {
-          await this.validationService.create(
-            {
-              projectBranchId: saved.projectBranchId,
-              assessmentId: saved.assessmentId || undefined,
-            },
+          // getOrCreateForBranch (not create) so completion is idempotent: if a case
+          // already exists for this branch — data-entry delegation opened one, or a
+          // re-delivered completion event — it is reused rather than duplicated.
+          await this.validationService.getOrCreateForBranch(
+            saved.projectBranchId,
+            saved.assessmentId ?? null,
             userId,
           );
         }
@@ -697,6 +740,14 @@ export class AssignmentService {
 
   async proposeCounterFee(id: string, userId: string, counterFee: number, remarks?: string): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
+    // A counter-offer only makes sense while the offer is still open. Without this guard it could
+    // mutate proposedFee on a COMPLETED assignment (diverging from what was already billed) or
+    // re-open a CANCELLED/CHECKED_IN branch by flipping it back to NEGOTIATION.
+    if (assignment.status !== AssignmentStatus.PENDING) {
+      throw new BadRequestException(
+        `A counter-offer can only be made on an open offer (PENDING), not '${assignment.status}'.`,
+      );
+    }
     const currentCount = assignment.negotiationCount || 0;
     if (currentCount >= 3) {
       // Auto-decline when negotiation round limit (3) is exceeded
@@ -769,20 +820,19 @@ export class AssignmentService {
   }
 
   async acceptOffer(id: string, userId: string, fee?: number, reason?: string): Promise<AssignmentEntity> {
-    const { saved, event } = await this.executeAssignmentTransition(id, AssignmentStatus.ACCEPTED, userId, reason, fee);
-    if (event) this.publishAssignmentEvent('assignment:status-changed', saved, event);
+    // The status-changed event is emitted inside executeAssignmentTransition's transaction now
+    // (through the outbox), so callers no longer publish it afterwards.
+    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.ACCEPTED, userId, reason, fee);
     return saved;
   }
 
   async rejectOffer(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved, event } = await this.executeAssignmentTransition(id, AssignmentStatus.REJECTED, userId, reason);
-    if (event) this.publishAssignmentEvent('assignment:status-changed', saved, event);
+    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.REJECTED, userId, reason);
     return saved;
   }
 
   async cancelAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved, event } = await this.executeAssignmentTransition(id, AssignmentStatus.CANCELLED, userId, reason);
-    if (event) this.publishAssignmentEvent('assignment:status-changed', saved, event);
+    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.CANCELLED, userId, reason);
     return saved;
   }
 
@@ -792,8 +842,7 @@ export class AssignmentService {
    * This is the AUDIT workflow completion — separate from query/validation workflow.
    */
   async completeAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved, event } = await this.executeAssignmentTransition(id, AssignmentStatus.COMPLETED, userId, reason);
-    if (event) this.publishAssignmentEvent('assignment:status-changed', saved, event);
+    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.COMPLETED, userId, reason);
     return saved;
   }
 
@@ -848,6 +897,125 @@ export class AssignmentService {
     this.publishAssignmentEvent('assignment:escalated', saved, { userId, previousState: assignment.status, timestamp: new Date() });
 
     return saved;
+  }
+
+  /**
+   * An assayer flags a problem on their own assignment to the operations desk.
+   *
+   * The field app deliberately cannot cancel or reassign work — those are back-office
+   * decisions (see the transition controller). But before this the assayer had no way to tell
+   * the desk anything on their own initiative either: queries are desk-initiated, escalation
+   * is ops-only. So an assayer standing at a shut branch, or one who has fallen ill the morning
+   * of an audit, could only phone someone — nothing was recorded, and the desk had no signal in
+   * the system to act on.
+   *
+   * This is that missing signal. It changes no status and frees no branch; it records the flag,
+   * notifies the assigning user and operations, and emits a realtime event so the desk can then
+   * take the back-office action (reassign, reschedule, cancel) that remains theirs to take.
+   */
+  async reportIssue(
+    id: string,
+    userId: string,
+    category: string,
+    note?: string,
+  ): Promise<AssignmentEntity> {
+    const assignment = await this.findOne(id);
+
+    if (assignment.status === AssignmentStatus.COMPLETED) {
+      throw new BadRequestException('This assignment is already completed.');
+    }
+
+    const branchName = assignment.projectBranch?.branch?.name ?? assignment.assignmentNumber;
+    const summary = `${assignmentIssueCategoryLabel(category)}${note ? `: ${note}` : ''}`;
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSIGNMENT_ISSUE_REPORTED',
+      entityType: 'ASSIGNMENT',
+      entityId: assignment.id,
+      userId,
+      remarks: `Assayer flagged ${assignment.assignmentNumber} (${branchName}) — ${summary}`,
+      // Structured so the desk's field-issues view can render category and note without
+      // re-parsing the remarks string.
+      metadata: {
+        category,
+        categoryLabel: assignmentIssueCategoryLabel(category),
+        note: note ?? '',
+        assignmentNumber: assignment.assignmentNumber,
+        branchName,
+      },
+    });
+
+    this.notificationDispatch.emitSafe({
+      type: 'ASSIGNMENT_ISSUE_REPORTED',
+      entityType: 'ASSIGNMENT',
+      entityId: assignment.id,
+      actorUserId: userId,
+      ownerUserId: assignment.createdBy,
+      // Not deduped on the assignment alone — an assayer may legitimately flag the same job
+      // twice (branch shut, then a safety concern), and each must reach the desk.
+      payload: {
+        assignmentId: assignment.id,
+        assignmentNumber: assignment.assignmentNumber,
+        branchName,
+        category,
+        categoryLabel: assignmentIssueCategoryLabel(category),
+        note: note ?? '',
+      },
+    });
+
+    this.publishAssignmentEvent('assignment:issue-reported', assignment, {
+      userId,
+      previousState: assignment.status,
+      timestamp: new Date(),
+    });
+
+    return assignment;
+  }
+
+  /**
+   * The desk's list of problems the field has flagged.
+   *
+   * Read from the audit log rather than a bespoke table: `reportIssue` already records every
+   * flag as an `ASSIGNMENT_ISSUE_REPORTED` event with the category and note in its metadata, so
+   * this needs no new schema. The list is self-clearing — an issue is "open" only while its
+   * assignment is still actionable; once the desk reassigns, reschedules or cancels the job (or
+   * it completes), `open` flips to false and it drops out of the default filter. That makes the
+   * assignment's own state the source of truth for "handled", with no separate resolve step to
+   * forget.
+   */
+  async listFieldIssues(limit = 100): Promise<any[]> {
+    const { events } = await this.auditService.getByEventType('ASSIGNMENT_ISSUE_REPORTED', limit);
+    if (events.length === 0) return [];
+
+    // Batch-load the referenced assignments so the current status/branch/assayer is fresh,
+    // rather than trusting the point-in-time metadata — and without a query per event.
+    const ids = Array.from(new Set(events.map((e) => e.entityId).filter(Boolean)));
+    const assignments = await this.assignmentRepository.find({
+      where: { id: In(ids) },
+      relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+    });
+    const byId = new Map(assignments.map((a) => [a.id, a]));
+
+    return events.map((e) => {
+      const a = byId.get(e.entityId);
+      const meta = (e.metadata ?? {}) as Record<string, any>;
+      const open = !!a && !isAssignmentTerminal(a.status);
+      return {
+        id: e.id,
+        reportedAt: e.occurredAt,
+        assignmentId: e.entityId,
+        assignmentNumber: a?.assignmentNumber ?? meta.assignmentNumber ?? null,
+        branchName: a?.projectBranch?.branch?.name ?? meta.branchName ?? null,
+        assayerName: a?.assayer?.displayName ?? e.userDisplayName ?? null,
+        assayerId: a?.assayerId ?? null,
+        category: meta.category ?? null,
+        categoryLabel: meta.categoryLabel ?? null,
+        note: meta.note ?? '',
+        assignmentStatus: a?.status ?? null,
+        open,
+      };
+    });
   }
 
   async scheduleAudit(id: string, userId: string, scheduledDate: string, remarks?: string): Promise<AssignmentEntity> {

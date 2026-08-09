@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Save, ArrowLeftRight, MessageSquarePlus, CreditCard, ArrowRight, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Save, ArrowLeftRight, MessageSquarePlus, CreditCard, ArrowRight, Plus, SlidersHorizontal } from 'lucide-react';
 import { StatusBadge, useToast } from '../../components/ui';
 import {
   useClientBilling,
@@ -52,7 +53,6 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   useEffect(() => {
     if (billing) {
       setForm({
-        paymentTerms: billing.paymentTerms,
         currency: billing.currency,
         taxIdentifier: billing.taxIdentifier ?? '',
         invoiceCycle: billing.invoiceCycle,
@@ -73,7 +73,6 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       await update.mutateAsync({
         clientId,
         payload: {
-          paymentTerms: form.paymentTerms,
           currency: form.currency,
           taxIdentifier: form.taxIdentifier || undefined,
           invoiceCycle: form.invoiceCycle,
@@ -157,8 +156,8 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       {/* Add remark */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <h4 style={sectionTitle}><MessageSquarePlus size={14} /> Add Remark</h4>
-        <form onSubmit={handleAddRemark} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input type="text" placeholder="Add a note about billing..." value={remark} onChange={(e) => setRemark(e.target.value)} style={inputStyle} />
+        <form onSubmit={handleAddRemark} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input type="text" placeholder="Add a note about billing..." value={remark} onChange={(e) => setRemark(e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 180 }} />
           <button type="submit" disabled={!remark.trim() || addRemark.isPending} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
             <Plus size={14} /> Add
           </button>
@@ -221,12 +220,15 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       {/* Profile edit */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
         <h4 style={sectionTitle}><Save size={14} /> Billing Details</h4>
+        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6, marginTop: -4 }}>
+          <SlidersHorizontal size={12} />
+          Rate card (base fee, GST/TDS) and payment terms are set in{' '}
+          <Link to={`/billing/settings?client=${clientId}`} style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>
+            Client billing settings
+          </Link>.
+        </div>
         <form onSubmit={handleProfileSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <label style={labelStyle}>
-              Payment Terms
-              <input style={inputStyle} value={form.paymentTerms ?? ''} onChange={(e) => set('paymentTerms', e.target.value)} />
-            </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <label style={labelStyle}>
               Currency
               <input style={inputStyle} value={form.currency ?? ''} onChange={(e) => set('currency', e.target.value)} />
