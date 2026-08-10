@@ -61,7 +61,7 @@ export interface CoveragePlanOutput {
      * cluster edge can have a different best assayer than the cluster centre), and deployment
      * honours these rather than stamping one cluster-wide assayer onto every branch.
      */
-    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null }>;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }>;
   }>;
 }
 
@@ -138,7 +138,7 @@ export class CoveragePlanningEngine {
     branchIds: string[];
     /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
     estimatedTotalFee: number | null;
-    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null }>;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }>;
   }> = [];
 
     // Client and assayer roster are identical for every cluster in one project, so they are
@@ -160,7 +160,7 @@ export class CoveragePlanningEngine {
     // different top assayer than the cluster centre, and the plan must honour that. The old code
     // scored once against the centroid and stamped that single assayer onto every branch.
     for (const cluster of clusters) {
-      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null }> = [];
+      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }> = [];
       const assayerCountInCluster = new Map<string, number>();
       let clusterFeeSum = 0;
 
@@ -168,6 +168,12 @@ export class CoveragePlanningEngine {
         let assayerId: string | null = null;
         let assayerName: string | null = null;
         let fee: number | null = null;
+        // Which rank in this branch's own recommendation list the chosen assayer held (1 = the
+        // engine's top pick), and why any higher-ranked candidates were passed over. This is what
+        // lets ops distinguish "#2 because #1 was already at capacity in this very plan" from a
+        // wrong pick — without it the two are indistinguishable.
+        let rank: number | null = null;
+        let selectionNote: string | null = null;
 
         if (branch.latitude == null || branch.longitude == null) {
           uncoveredBranches.push({ branchId: branch.id, branchName: branch.name, reason: 'Branch has no usable coordinates, so no assayer could be scored against it.' });
@@ -176,9 +182,17 @@ export class CoveragePlanningEngine {
           // resolve; `preloaded` keeps the client + assayer roster loaded once across all branches.
           const branchForScoring = { ...branch, clientId: project.clientId } as any;
           const candidates = await this.recommendationEngine.recommend(branchForScoring, new Date(), {}, preloaded);
-          const valid = candidates.filter((c) => {
+
+          // Walk the ranked list in order, recording why each higher-ranked candidate is skipped,
+          // and stop at the first one that can actually take the work.
+          const passedOver: string[] = [];
+          for (let i = 0; i < candidates.length; i++) {
+            const c = candidates[i];
             const hasCapacity = (allocationMap[c.assayer.id] || 0) < (c.assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY);
-            if (!hasCapacity) return false;
+            if (!hasCapacity) {
+              passedOver.push(`#${i + 1} ${c.assayer.displayName} — at weekly capacity`);
+              continue;
+            }
             // Enforce the client's hard distance ceiling, matching what assignment creation checks —
             // so we never propose an assayer the deploy step will then reject as out of range.
             if (Number.isFinite(clientMaxDistanceKm)) {
@@ -186,22 +200,29 @@ export class CoveragePlanningEngine {
               const aLng = (c.assayer as any).effectiveLongitude;
               if (aLat != null && aLng != null && branch.latitude != null && branch.longitude != null) {
                 const d = calculateHaversineDistance(Number(branch.latitude), Number(branch.longitude), Number(aLat), Number(aLng));
-                if (d > clientMaxDistanceKm) return false;
+                if (d > clientMaxDistanceKm) {
+                  passedOver.push(`#${i + 1} ${c.assayer.displayName} — ${d.toFixed(0)}km exceeds the ${clientMaxDistanceKm}km limit`);
+                  continue;
+                }
               }
             }
-            return true;
-          });
-          if (valid.length > 0) {
-            const top = valid[0].assayer;
-            assayerId = top.id;
-            assayerName = top.displayName;
-            allocationMap[top.id] = (allocationMap[top.id] || 0) + 1;
-            assignedAssayerIds.add(top.id);
+
+            // This candidate takes the branch.
+            assayerId = c.assayer.id;
+            assayerName = c.assayer.displayName;
+            rank = i + 1;
+            selectionNote = passedOver.length > 0 ? `Passed over: ${passedOver.join('; ')}` : null;
+            break;
+          }
+
+          if (assayerId) {
+            allocationMap[assayerId] = (allocationMap[assayerId] || 0) + 1;
+            assignedAssayerIds.add(assayerId);
             matchedCount += 1;
-            assayerCountInCluster.set(top.id, (assayerCountInCluster.get(top.id) || 0) + 1);
+            assayerCountInCluster.set(assayerId, (assayerCountInCluster.get(assayerId) || 0) + 1);
 
             const quote = await this.feePolicyService.quote({
-              assayerId: top.id,
+              assayerId,
               clientId: project.clientId ?? null,
               distanceKm: 0, // per-branch travel resolved at assign time
               branchCount: 1,
@@ -210,11 +231,17 @@ export class CoveragePlanningEngine {
             clusterFeeSum += quote.total;
             totalEstimatedCost += quote.total;
           } else {
-            uncoveredBranches.push({ branchId: branch.id, branchName: branch.name, reason: 'No eligible assayer with available capacity for this branch.' });
+            uncoveredBranches.push({
+              branchId: branch.id,
+              branchName: branch.name,
+              reason: passedOver.length > 0
+                ? `All ${candidates.length} recommended candidate(s) unavailable: ${passedOver.slice(0, 3).join('; ')}${passedOver.length > 3 ? '…' : ''}`
+                : 'No eligible assayer with available capacity for this branch.',
+            });
           }
         }
 
-        branchAssignments.push({ branchId: branch.id, branchName: branch.name, assayerId, assayerName, fee });
+        branchAssignments.push({ branchId: branch.id, branchName: branch.name, assayerId, assayerName, fee, rank, selectionNote });
       }
 
       // Cluster-level display fields summarise the per-branch decisions: the assayer covering the

@@ -22,6 +22,13 @@ export const RecommendationPanel: React.FC<{
   onToggleMaxRadius: (v: boolean) => void;
   maxRadius: number;
   onMaxRadiusChange: (v: number) => void;
+  /**
+   * The audit date candidates are evaluated FOR (YYYY-MM-DD). Availability, double-booking
+   * and fee quotes all describe this date — changing it re-fetches the ranking. Without it
+   * the engine assumed "today", which is rarely the day being planned.
+   */
+  planDate?: string;
+  onPlanDateChange?: (v: string) => void;
   onRefresh: () => void;
   onAccept: (assignmentId: string, proposedFee: number) => void;
   onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
@@ -31,6 +38,7 @@ export const RecommendationPanel: React.FC<{
   selectedPb, renderCandidatesList, width = 380, flex = false, horizontal = false,
   showAllCandidates, onToggleShowAll, slaEnabled, onToggleSla, slaRadius, onSlaRadiusChange,
   maxRadiusEnabled, onToggleMaxRadius, maxRadius, onMaxRadiusChange,
+  planDate, onPlanDateChange,
   onRefresh, onAccept, onCounter, onDecline, onViewHistory,
 }) => {
   const isDone = selectedPb && (
@@ -114,6 +122,21 @@ export const RecommendationPanel: React.FC<{
               </div>
 
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* The date this ranking answers for. Leads the row because every other control
+                    filters WITHIN the answer; this one changes the question ("who can audit on…"). */}
+                {planDate != null && onPlanDateChange && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)', userSelect: 'none' }}
+                    title="Audit date — availability, workload and fees are evaluated for this day">
+                    <span style={{ fontWeight: 700 }}>Audit on</span>
+                    <input
+                      type="date"
+                      value={planDate}
+                      onChange={e => { if (e.target.value) onPlanDateChange(e.target.value); }}
+                      aria-label="Audit date candidates are evaluated for"
+                      style={{ fontSize: '10.5px', padding: '2px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--accent)', fontWeight: 600, outline: 'none' }}
+                    />
+                  </label>
+                )}
                 {/* Max radius: "show assayers WITHIN X km" — the intuitive service-radius filter. */}
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: maxRadiusEnabled ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={maxRadiusEnabled} onChange={(e) => onToggleMaxRadius(e.target.checked)} />

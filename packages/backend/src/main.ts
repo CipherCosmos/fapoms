@@ -32,6 +32,7 @@ const ALL_QUEUE_NAMES = [
 import * as express from 'express';
 import * as compression from 'compression';
 import helmet from 'helmet';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 
 /**
  * Configuration that must never reach production, checked before anything connects.
@@ -181,6 +182,23 @@ async function bootstrap() {
   // (document.controller — a PDF inflates ~33% as base64). It's env-tunable so a deployment that has
   // moved off that path can shrink the JSON DoS surface (e.g. MAX_JSON_BODY=2mb). Rate limiting
   // (the throttler) already caps how fast large bodies can be sent.
+  /**
+   * LiveKit signaling proxy. Clients never talk to the SFU directly — the browser/app
+   * connects to `/livekit` on THIS server, and the WebSocket is piped to the livekit
+   * container over the docker network. Its 7880 port is not published on the host.
+   * Mounted before the body parsers so proxied requests stream through untouched.
+   * (Voice media itself is WebRTC — encrypted SRTP over the SFU's UDP range — which
+   * cannot ride an HTTP proxy; only signaling/auth/discovery pass through here.)
+   */
+  const livekitProxy = createProxyMiddleware({
+    pathFilter: '/livekit',
+    target: process.env.LIVEKIT_HOST || 'http://livekit:7880',
+    ws: true,
+    changeOrigin: true,
+    pathRewrite: { '^/livekit': '' },
+  });
+  app.use(livekitProxy);
+
   const bodyLimit = process.env.MAX_JSON_BODY || '50mb';
   app.use(express.json({ limit: bodyLimit }));
   app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
@@ -269,6 +287,15 @@ async function bootstrap() {
   // to avoid the well-known connection-reuse race. `requestTimeout` stays generous so a slow field-network
   // upload (chunked/base64 on 2G) still completes — shrink it where uploads go direct-to-storage.
   const httpServer = app.getHttpServer();
+
+  // WebSocket upgrades for the LiveKit signaling proxy. Scoped strictly to /livekit so
+  // socket.io's own upgrade handling (path /socket.io) is untouched.
+  httpServer.on('upgrade', (req: any, socket: any, head: any) => {
+    if (req.url?.startsWith('/livekit')) {
+      (livekitProxy as any).upgrade(req, socket, head);
+    }
+  });
+
   httpServer.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS) || 61_000;
   httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 65_000;
   httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 300_000;

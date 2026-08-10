@@ -20,6 +20,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
+import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
@@ -97,7 +98,10 @@ class UpdateAssignmentDetailsRequestDto implements UpdateAssignmentDetailsDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('assignments')
 export class AssignmentController {
-  constructor(private readonly assignmentService: AssignmentService) {}
+  constructor(
+    private readonly assignmentService: AssignmentService,
+    private readonly operationsInbox: OperationsInboxService,
+  ) {}
 
   // Was @Public(), and any non-UUID path segment fell through to findAll() — so
   // `GET /assignments/assayer/x` returned the entire assignment book to an
@@ -251,6 +255,26 @@ export class AssignmentController {
     return { success: true, data: issues };
   }
 
+  /**
+   * The Operations Inbox — every assignment needing a human decision, as one queue: call tasks
+   * (phone-channel offers + app offers gone quiet), open negotiations, declines needing a
+   * replacement, accepted-but-unscheduled, overdue-without-check-in, plus the field issues.
+   * Declared before `:id` so "inbox" is never parsed as an assignment id.
+   */
+  @Get('inbox')
+  @Roles(...STAFF_ROLES)
+  @ApiOperation({ summary: 'Operations inbox: all assignments awaiting a desk decision' })
+  async operationsInboxQueue() {
+    const [inbox, fieldIssues] = await Promise.all([
+      this.operationsInbox.getInbox(),
+      this.assignmentService.listFieldIssues(),
+    ]);
+    return {
+      success: true,
+      data: { ...inbox, fieldIssues: fieldIssues.filter((i: any) => i.open), suggestNextAfterAttempts: SUGGEST_NEXT_AFTER_ATTEMPTS },
+    };
+  }
+
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
@@ -339,7 +363,15 @@ export class AssignmentController {
       }
       assignment = await this.assignmentService.proposeCounterFee(id, userId, Number(feeVal), body.reason ?? body.remarks);
     } else if (targetStatus === 'ACCEPTED') {
-      assignment = await this.assignmentService.acceptOffer(id, userId, undefined, body.reason ?? body.remarks);
+      // `fee` lets the desk accept on an assayer's behalf at a verbally-agreed number — the
+      // phone-channel flow, where the negotiation happened inside the call, not in the app.
+      const acceptFee = body.fee ?? body.agreedFee;
+      assignment = await this.assignmentService.acceptOffer(
+        id,
+        userId,
+        acceptFee != null && !isNaN(Number(acceptFee)) ? Number(acceptFee) : undefined,
+        body.reason ?? body.remarks,
+      );
     } else if (targetStatus === 'REJECTED') {
       assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
     } else if (targetStatus === 'CHECKED_IN') {

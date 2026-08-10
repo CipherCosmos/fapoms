@@ -24,7 +24,7 @@ export interface ExpenseModalProps {
   onSubmit?: () => void;
   onCancel?: () => void;
   onClose?: () => void;
-  onAddExpense?: (category: ExpenseCategory, amount: string, description: string) => void;
+  onAddExpense?: (category: ExpenseCategory, amount: string, description: string) => void | Promise<void>;
 }
 
 export const ExpenseModal: React.FC<ExpenseModalProps> = ({
@@ -87,14 +87,22 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   const amountValue = parseFloat(amt);
   const amountValid = !Number.isNaN(amountValue) && amountValue > 0;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     // Block empty/zero claims and double-taps; the parent only validated the assignment.
     if (!amountValid || busy) return;
     setBusy(true);
-    if (onAddExpense) {
-      onAddExpense(cat, amt, desc);
-    } else {
-      onSubmit?.();
+    try {
+      if (onAddExpense) {
+        // Awaited so the button un-freezes on failure. On success the parent closes the sheet
+        // and this is a no-op; but a rejected claim or a "no assignment selected" early-return
+        // left the sheet open with `busy` stuck true forever — a permanently spinning, unusable
+        // Submit that the previous fire-and-forget call could not recover from.
+        await onAddExpense(cat, amt, desc);
+      } else {
+        onSubmit?.();
+      }
+    } finally {
+      setBusy(false);
     }
   };
 

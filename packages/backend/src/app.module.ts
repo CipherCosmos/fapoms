@@ -53,6 +53,7 @@ import { TenancyModule } from './infrastructure/tenancy/tenancy.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
+import { CallsModule } from './modules/calls/calls.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { APP_GUARD } from '@nestjs/core';
@@ -166,6 +167,7 @@ import { APP_GUARD } from '@nestjs/core';
     BillingEngineModule,
     CustomerMasterModule,
     ValidationQueryModule,
+    CallsModule,
 
     // Background job queue
     QueueModule,

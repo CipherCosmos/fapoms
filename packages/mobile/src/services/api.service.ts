@@ -1073,7 +1073,10 @@ export class MobileApiService {
     const resData = await response.json().catch(() => ({}));
     return {
       success: response.ok && resData.success !== false,
-      error: resData.error,
+      // The human sentence, not the machine code. The server refuses check-ins with a code
+      // ("NOT_SCHEDULED_TODAY", "TOO_FAR_FROM_BRANCH") *and* a message explaining what to do;
+      // surfacing the code put "TOO_FAR_FROM_BRANCH" in the assayer's toast.
+      error: resData.message || resData.error,
     };
   }
 

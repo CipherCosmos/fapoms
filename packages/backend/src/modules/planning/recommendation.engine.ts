@@ -29,6 +29,21 @@ const EXCLUSION_REASONS: Record<string, string> = {
   distancePolicy: "Outside the client's permitted distance band for this branch",
 };
 
+/**
+ * What KIND of exclusion each filter produces — because they are not equally final.
+ * A DATE exclusion (booked that day, on leave) is a perfectly good candidate for another
+ * date and should be offered as such, not buried; SKILLS/POLICY exclusions are structural.
+ */
+const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS'> = {
+  availability: 'DATE',
+  consecutiveBranchAudit: 'ROTATION',
+  distancePolicy: 'DISTANCE',
+  clientRestriction: 'POLICY',
+  clientEligibility: 'POLICY',
+  ruleEngineEligibility: 'POLICY',
+  requiredSkills: 'SKILLS',
+};
+
 export interface PlanningContext {
   branch: BranchEntity;
   client: ClientEntity | null;
@@ -1388,7 +1403,15 @@ export class RecommendationEngine {
     // "why isn't <assayer> in this list?" — a shorter list with no explanation is the least
     // actionable possible answer, and it hides genuine data problems (an expired
     // certification, a full diary) behind an apparently-normal result.
-    const excluded: { assayerId: string; displayName: string; reason: string; detail?: string }[] = [];
+    const excluded: {
+      assayerId: string;
+      displayName: string;
+      reason: string;
+      detail?: string;
+      kind: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS';
+      distanceKm: number | null;
+      nextAvailableDate: string | null;
+    }[] = [];
 
     for (const assayer of assayers) {
       let blockedBy: string | null = null;
@@ -1404,11 +1427,34 @@ export class RecommendationEngine {
         if (blockedBy === this.ruleEngineEligibilityFilter.name) {
           detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
         }
+
+        // DATE-kind exclusions are candidates for ANOTHER day, and ops needs enough to act on
+        // that: when the block is a leave, the first day after it; when it is a booking, any
+        // other date works (nextAvailableDate stays null and the kind alone says "date-bound").
+        const kind = EXCLUSION_KINDS[blockedBy] ?? 'POLICY';
+        let nextAvailableDate: string | null = null;
+        if (kind === 'DATE') {
+          const dateKey = businessDateKey(context.scheduledDate);
+          const leave = ((assayer as any).leaves ?? []).find(
+            (l: { startDate?: string; endDate?: string }) =>
+              l?.startDate && l?.endDate && l.startDate <= dateKey && dateKey <= l.endDate,
+          );
+          if (leave) {
+            const after = new Date(`${leave.endDate}T00:00:00`);
+            after.setDate(after.getDate() + 1);
+            nextAvailableDate = after.toISOString().slice(0, 10);
+          }
+        }
+
         excluded.push({
           assayerId: assayer.id,
           displayName: assayer.displayName,
           reason: EXCLUSION_REASONS[blockedBy] ?? blockedBy,
           detail,
+          kind,
+          // Already computed for the whole pool — free context for the ops decision.
+          distanceKm: routeByAssayer[assayer.id]?.distanceKm ?? null,
+          nextAvailableDate,
         });
         continue;
       }

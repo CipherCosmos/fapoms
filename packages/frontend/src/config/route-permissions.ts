@@ -46,6 +46,18 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
+    // The Operations Inbox: every assignment awaiting a desk decision (call tasks for
+    // phone-channel assayers, counters, replacements, unscheduled, overdue). Same roles that
+    // may transition assignments, since every card action IS an assignment transition.
+    path: '/inbox',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+    ],
+  },
+  {
     // The desk's queue of problems the field flagged — same operations roles that act on
     // assignments, since acting on the assignment is how an issue is cleared.
     path: '/field-issues',

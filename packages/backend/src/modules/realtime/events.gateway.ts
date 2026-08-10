@@ -421,6 +421,25 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
+      /**
+       * Voice-call signalling (ring / answered / ended). Strictly targeted: a call event
+       * goes only to the users named on it — never to an org-wide room, because "the phone
+       * is ringing" pushed to every staff browser would ring desks that were never called.
+       * The one exception is a ring with no resolvable callee (`ringStaffRoom`), where the
+       * clarification has no recorded raiser and the whole desk is better than nobody.
+       */
+      case 'call:incoming':
+      case 'call:answered':
+      case 'call:ended': {
+        for (const uid of payload.targetUserIds ?? []) {
+          this.server.to(`user:${uid}`).emit(eventType, payload);
+        }
+        if (eventType === 'call:incoming' && payload.ringStaffRoom) {
+          this.server.to('staff').emit(eventType, payload);
+        }
+        break;
+      }
+
       default: {
         this.broadcastGenericEvent(eventType, payload);
         break;

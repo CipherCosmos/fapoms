@@ -4,7 +4,7 @@
  * Implements candidate recommendations using PostGIS proximity search (Part 3 Module 5, Part 7 §6).
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -13,6 +13,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 
 import { RecommendationEngine } from './recommendation.engine';
+import { ConstraintEvaluator } from './constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { generateExplanation, ExplanationReason } from './explainability.mapper';
 import { AuditService } from '../../core/audit/audit.service';
@@ -79,9 +80,58 @@ export class PlanningService {
     private readonly routingService: RoutingService,
     private readonly auditService: AuditService,
     private readonly feePolicyService: FeePolicyService,
+    private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
-  async getRecommendedCandidates(branchId: string, weights: Record<string, number> = {}): Promise<AssayerRecommendation[]> {
+  /**
+   * The smart default audit date for a branch: the first day the audit could actually be
+   * worked, starting tomorrow (field audits are scheduled ahead, not same-day).
+   *
+   * Skips Sundays, state public holidays and non-working Saturdays via the same
+   * ConstraintEvaluator rule that assignment creation enforces — so the date the planner
+   * seeds is never one the platform would later reject with "Holiday Conflict". Ops can
+   * always override it in the date picker; this only answers "if I don't choose, when?".
+   */
+  async suggestAuditDate(branchId: string): Promise<{ date: string; skipped: Array<{ date: string; reason: string }> }> {
+    const branch = await this.branchQueryService.findOne(branchId);
+    if (!branch) {
+      throw new NotFoundException(`Branch ${branchId} not found.`);
+    }
+
+    const skipped: Array<{ date: string; reason: string }> = [];
+    const candidate = new Date();
+    candidate.setDate(candidate.getDate() + 1);
+    const key = (d: Date) => {
+      // Local calendar date, not UTC — an IST evening must not roll the date back a day.
+      const y = d.getFullYear(); const m = String(d.getMonth() + 1).padStart(2, '0'); const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (candidate.getDay() === 0) {
+        skipped.push({ date: key(candidate), reason: 'Sunday' });
+      } else {
+        const holiday = await this.constraintEvaluator.checkHoliday(branch.state || '', candidate, branch.clientId ?? undefined);
+        if (holiday.passed) {
+          return { date: key(candidate), skipped };
+        }
+        skipped.push({ date: key(candidate), reason: holiday.reason || 'Holiday' });
+      }
+      candidate.setDate(candidate.getDate() + 1);
+    }
+
+    // Nothing workable within a month — hand back tomorrow rather than inventing a date,
+    // and let the skipped list tell ops the calendar itself is the problem.
+    const fallback = new Date();
+    fallback.setDate(fallback.getDate() + 1);
+    return { date: key(fallback), skipped };
+  }
+
+  async getRecommendedCandidates(
+    branchId: string,
+    weights: Record<string, number> = {},
+    forDate?: string,
+  ): Promise<AssayerRecommendation[]> {
     const branch = await this.branchQueryService.findOne(branchId);
 
     if (!branch) {
@@ -90,7 +140,16 @@ export class PlanningService {
 
     // One date for the whole call: the same instant the engine scores against is the instant
     // the fee is quoted for, so the score and the price can never describe different days.
-    const scheduledDate = new Date();
+    //
+    // The date is the CALLER'S choice, not an assumption. This used to hardcode "now", so the
+    // availability filter answered "who is free TODAY?" while ops was planning an audit for
+    // some other day entirely — people free tomorrow showed as unavailable, and people busy
+    // tomorrow showed as free. The UI passes its date picker; absent, today is kept for
+    // backward-compatible callers.
+    const scheduledDate = forDate ? new Date(`${forDate.slice(0, 10)}T00:00:00`) : new Date();
+    if (Number.isNaN(scheduledDate.getTime())) {
+      throw new BadRequestException(`Invalid date '${forDate}'. Use YYYY-MM-DD.`);
+    }
     // `weights` lets the scenario sandbox pass its overrides all the way into scoring; empty by
     // default, in which case `recommend` resolves the client's own configured weights as before.
     const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights);

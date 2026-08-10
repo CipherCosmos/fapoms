@@ -7,6 +7,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
 import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
+import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
@@ -98,6 +99,41 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   const done = assignments.filter((a) => isAssignmentTerminal(a.status));
   const shown = tab === 'ACTIVE' ? active : done;
 
+  /**
+   * Active stops as a route plan, not a pile.
+   *
+   * The flat list made the assayer do the calendar work themselves: every card showed a bare
+   * date and nothing marked today, tomorrow, or the stop that slipped. Grouped by calendar
+   * day — soonest first, overdue naturally rising to the top, unscheduled last — with the
+   * day's stop count and its total fee on the header, the screen answers "what does my week
+   * look like and what is each day worth" at a glance. History stays a flat reverse-
+   * chronological record; grouping a done-pile adds nothing.
+   */
+  const groups = React.useMemo(() => {
+    if (tab === 'DONE') {
+      return [{ key: 'done', header: null as string | null, tone: 'neutral' as Tone, items: done }];
+    }
+    const sorted = [...active].sort((a, b) => {
+      if (!a.scheduledDate) return 1;
+      if (!b.scheduledDate) return -1;
+      return +new Date(a.scheduledDate) - +new Date(b.scheduledDate);
+    });
+    const byDay = new Map<string, AssayerAssignment[]>();
+    for (const a of sorted) {
+      const k = dayKey(a.scheduledDate);
+      const bucket = byDay.get(k);
+      if (bucket) bucket.push(a);
+      else byDay.set(k, [a]);
+    }
+    return [...byDay.entries()].map(([key, items]) => ({
+      key,
+      header: dayGroupHeader(items[0].scheduledDate),
+      tone: relativeDay(items[0].scheduledDate).tone as Tone,
+      items,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, assignments]);
+
   return (
     <View style={{ gap: t.space.lg }}>
       <Segmented
@@ -118,7 +154,17 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             : 'Audits you finish or decline are kept here for your records.'}
         />
       ) : (
-        shown.map((a, i) => {
+        groups.map((g) => (
+          <View key={g.key} style={{ gap: t.space.md }}>
+            {g.header && (
+              <DayHeader
+                header={g.header}
+                tone={g.tone}
+                count={g.items.length}
+                totalFee={g.items.reduce((s, x) => s + getAssignmentTotalFee(x), 0)}
+              />
+            )}
+            {g.items.map((a, i) => {
           // Wording from @fapoms/shared, tone from the app's one tone map — this screen used
           // to keep its own copy of both, and they had drifted from HomeScreen's.
           const meta = { label: assignmentStatusLabel(a.status), tone: assignmentStatusTone(a.status) as Tone };
@@ -255,8 +301,34 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
               </Card>
             </FadeIn>
           );
-        })
+            })}
+          </View>
+        ))
       )}
+    </View>
+  );
+};
+
+/**
+ * A day's header on the route: when, how many stops, and what the day is worth.
+ * The fee total is the figure an assayer plans a travel day around, and it was
+ * previously only computable by opening every card and adding in your head.
+ */
+const DayHeader: React.FC<{ header: string; tone: Tone; count: number; totalFee: number }> = ({
+  header, tone, count, totalFee,
+}) => {
+  const t = useTheme();
+  const toneColor = {
+    neutral: t.colors.textFaint, primary: t.colors.primary, accent: t.colors.accent,
+    success: t.colors.success, warning: t.colors.warning, danger: t.colors.danger, info: t.colors.info,
+  }[tone];
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, paddingHorizontal: t.space.xs, marginTop: t.space.sm }}>
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: toneColor }} />
+      <AppText variant="overline" style={{ color: toneColor, flex: 1 }}>{header.toUpperCase()}</AppText>
+      <AppText variant="caption" tone="faint">
+        {count} {count === 1 ? 'stop' : 'stops'}{totalFee > 0 ? ` · ${money(totalFee)}` : ''}
+      </AppText>
     </View>
   );
 };

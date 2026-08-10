@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle, Pressable, Image,
+  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle, Pressable,
+  Easing, Image,
 } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
+import { AmbientGlow, AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
 import { probeServerUrl, normaliseServerUrl } from '../services/server-config';
 import { getPreference } from '../services/preferences';
@@ -18,6 +19,94 @@ interface LoginScreenProps {
   onVerifyIdentity?: (id: string) => Promise<any>;
   onBiometricLogin?: () => void | Promise<any>;
 }
+
+/**
+ * The Orbit mark — a living logo, not a static drawing.
+ *
+ * Two satellites revolve around a core at different speeds and opposite directions, and the
+ * core breathes with a pulsing halo. All of it runs on the native driver (transform + opacity
+ * only), so it animates off the JS thread and stays smooth. This is the "dynamic" the flat
+ * ringed version was missing.
+ */
+const OrbitMark: React.FC<{ size?: number }> = ({ size = 120 }) => {
+  const t = useTheme();
+  const spin = useRef(new Animated.Value(0)).current;
+  const spinRev = useRef(new Animated.Value(0)).current;
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loops = [
+      Animated.loop(Animated.timing(spin, { toValue: 1, duration: 9000, easing: Easing.linear, useNativeDriver: true })),
+      Animated.loop(Animated.timing(spinRev, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true })),
+      Animated.loop(Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1500, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])),
+    ];
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
+  }, [spin, spinRev, pulse]);
+
+  const rot = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const rotRev = spinRev.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-360deg'] });
+  const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] });
+  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0.06] });
+
+  const outer = size;
+  const inner = size * 0.62;
+  const core = size * 0.32;
+  const sat = size * 0.115;
+  const satInner = size * 0.08;
+
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      {/* ambient halo */}
+      <View style={{
+        position: 'absolute', width: size * 1.5, height: size * 1.5, borderRadius: size * 0.75,
+        backgroundColor: t.colors.primary, opacity: 0.12,
+      }} />
+
+      {/* rings */}
+      <View style={{ position: 'absolute', width: outer, height: outer, borderRadius: outer / 2, borderWidth: 1.5, borderColor: t.colors.primary + '55' }} />
+      <View style={{ position: 'absolute', width: inner, height: inner, borderRadius: inner / 2, borderWidth: 1.5, borderColor: t.colors.accent + '4D' }} />
+
+      {/* outer satellite, revolving clockwise on the outer ring */}
+      <Animated.View style={{ position: 'absolute', width: outer, height: outer, transform: [{ rotate: rot }] }}>
+        <View style={{
+          position: 'absolute', top: -sat / 2 + 0.75, left: outer / 2 - sat / 2,
+          width: sat, height: sat, borderRadius: sat / 2,
+          backgroundColor: t.colors.accent, borderWidth: 2, borderColor: t.colors.bg,
+        }} />
+      </Animated.View>
+
+      {/* inner satellite, revolving anticlockwise on the inner ring */}
+      <Animated.View style={{ position: 'absolute', width: inner, height: inner, transform: [{ rotate: rotRev }] }}>
+        <View style={{
+          position: 'absolute', top: -satInner / 2 + 0.75, left: inner / 2 - satInner / 2,
+          width: satInner, height: satInner, borderRadius: satInner / 2, backgroundColor: t.colors.primary,
+        }} />
+      </Animated.View>
+
+      {/* breathing core glow */}
+      <Animated.View style={{
+        position: 'absolute', width: core * 1.9, height: core * 1.9, borderRadius: core * 0.95,
+        backgroundColor: t.colors.primary, opacity: glowOpacity, transform: [{ scale: glowScale }],
+      }} />
+
+      {/*
+        The company's own mark at the core. The de-identified drawn planet was replaced at the
+        user's request: the identity is theirs, the orbit motion around it stays. 13:10 keeps
+        the asset's 208x160 ratio; it sits inside the inner ring rather than filling it so the
+        revolving satellite never crosses the artwork.
+      */}
+      <Image
+        source={require('../../assets/sumeru-logo.png')}
+        style={{ width: core * 1.56, height: core * 1.2, resizeMode: 'contain' }}
+        accessibilityLabel="Sumeru Global"
+      />
+    </View>
+  );
+};
 
 /**
  * Sign-in.
@@ -150,16 +239,27 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     Animated.timing(enter, { toValue: 1, duration: 420, useNativeDriver: true }).start();
   }, [enter]);
 
+  /**
+   * Focus is signalled by the border colour ONLY — never by adding shadow/elevation.
+   *
+   * A focus glow (`elevation` + `shadow*` applied when `isFocused`) made every input on this
+   * screen untypeable on Android: under the New Architecture (Fabric — always on in Expo Go),
+   * mutating elevation on the wrapper at the moment its TextInput gains focus recreates the
+   * native view, which drops the freshly-granted IME focus. Verified on the emulator —
+   * `dumpsys input_method` showed `mServedView=null` after every tap with the glow present,
+   * and a ReactEditText holding focus the moment it was removed. Border colour is a plain
+   * prop update on the same view and is safe.
+   */
   const inputWrap = (isFocused: boolean) => ({
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     gap: t.space.md,
-    backgroundColor: t.colors.bg,
-    borderRadius: t.radius.md,
+    backgroundColor: t.colors.surfaceAlt,
+    borderRadius: t.radius.lg,
     borderWidth: 1.5,
     borderColor: isFocused ? t.colors.primary : t.colors.border,
     paddingHorizontal: t.space.lg,
-    height: 54,
+    height: 56,
   });
 
   const inputStyle: TextStyle = {
@@ -176,6 +276,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       style={{ flex: 1, backgroundColor: t.colors.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <AmbientGlow />
+
       <ScrollView
         contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: t.space.xl }}
         keyboardShouldPersistTaps="handled"
@@ -185,28 +287,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
           gap: t.space['2xl'],
         }}>
-          <View style={{ alignItems: 'center', gap: t.space.md }}>
-            {/* The real Sumeru Global mark. This pointed at assets/logo.png, which is a
-                different product's logo ("Gold Audit Pro" flame-lotus). The artwork already
-                contains the wordmark, so no company name is set in type beside it — only the
-                product line below. 130x100 preserves the asset's 13:10 ratio exactly. */}
-            <Image
-              source={require('../../assets/sumeru-logo.png')}
-              style={{ width: 130, height: 100, resizeMode: 'contain' }}
-              accessibilityLabel="Sumeru Global"
-            />
-            {/*
-              Sumeru Global's mark identifies the company; the product name sits under it, so
-              an assayer with several bank apps installed can tell at the sign-in screen which
-              one they have opened.
-            */}
-            <View style={{ alignItems: 'center', gap: 2 }}>
-              <AppText variant="h1">Karat</AppText>
+          <View style={{ alignItems: 'center', gap: t.space.lg }} accessibilityLabel="Orbit">
+            <OrbitMark size={150} />
+            <View style={{ alignItems: 'center', gap: 6 }}>
+              <AppText variant="largeTitle">Orbit</AppText>
               <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>FIELD AUDIT OPERATIONS</AppText>
             </View>
           </View>
 
-          <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
+          <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
             <View style={{ gap: t.space.sm }}>
               <AppText variant="overline" tone="faint">ASSAYER CODE OR PHONE</AppText>
               <View style={inputWrap(focused === 'user')}>
@@ -263,6 +352,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               onPress={handleLoginPress}
               loading={authenticating}
               size="lg"
+              glow
               full
             />
 

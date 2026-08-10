@@ -77,6 +77,34 @@ services:
       retries: 10
 
   # ---------------------------------------------------------------------------
+  # LiveKit — self-hosted WebRTC SFU for assayer ↔ data-entry voice calls
+  #
+  # Dev configuration, deliberately simple:
+  #   - `devkey: secret` is the API keypair the backend signs access tokens with
+  #     (LIVEKIT_API_KEY/SECRET in .env.docker). Rotate BOTH for any real deploy.
+  #   - ICE over TCP (7881) is enabled so calls connect even where the UDP range
+  #     isn't reachable (emulators, strict NATs); UDP 50100-50200 is the media
+  #     range when it is. use_external_ip stays off in dev — LAN/localhost only.
+  # ---------------------------------------------------------------------------
+  livekit:
+    # v1.9+ required: livekit-client 2.2x dials the /rtc/v1 signal path; on v1.8 it
+    # falls back to a legacy path and publisher negotiation times out ("negotiation
+    # timed out" on every client, connect/drop loop every ~15s).
+    image: livekit/livekit-server:v1.9
+    container_name: fapoms-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml --bind 0.0.0.0
+    ports:
+      # 7880 (signaling ws/http) is deliberately NOT published: clients reach signaling
+      # only through the backend's /livekit proxy. Media below is WebRTC (encrypted SRTP)
+      # and must stay direct — it cannot ride an HTTP proxy.
+      - "7881:7881"                       # ICE over TCP fallback
+      - "50100-50200:50100-50200/udp"     # WebRTC media
+      - "3478:3478/udp"                   # embedded TURN relay (LAN devices' media path)
+    volumes:
+      - ./infrastructure/livekit/livekit.yaml:/etc/livekit.yaml:ro
+
+  # ---------------------------------------------------------------------------
   # Backend (NestJS) — Hot Reload via nest start --watch
   # ---------------------------------------------------------------------------
   backend:

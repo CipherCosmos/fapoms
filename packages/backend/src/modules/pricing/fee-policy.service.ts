@@ -57,7 +57,19 @@ export interface FeeBreakdown {
   rates: FeeRates;
   /** True when the assayer had no active commercial profile and defaultBaseFee was used. */
   usedFallbackBaseFee: boolean;
+  /** Where the base fee came from — shown wherever a fee is displayed, so a number is never anonymous. */
+  feeSource: 'ASSAYER_CONTRACT' | 'CLIENT_RATE_CARD' | 'PLATFORM_DEFAULT';
+  /**
+   * Sanity guard. baseFee ÷ the client's reference rate; `feeFlagged` when it exceeds
+   * FEE_FLAG_MULTIPLIER (default 1.5×). A mis-entered contract rate (the way ₹4,224 audits
+   * once shipped as offers) surfaces as a visible warning instead of silently becoming money.
+   */
+  feeDeviation: number;
+  feeFlagged: boolean;
 }
+
+/** Base fees above this multiple of the client's reference rate are flagged, never blocked. */
+export const FEE_FLAG_MULTIPLIER = Number(process.env.FEE_FLAG_MULTIPLIER) || 1.5;
 
 @Injectable()
 export class FeePolicyService {
@@ -193,6 +205,14 @@ export class FeePolicyService {
 
     const baseComponent = baseFee * branchCount;
 
+    const feeSource: FeeBreakdown['feeSource'] = !usedFallback
+      ? 'ASSAYER_CONTRACT'
+      : rates.clientConfigured
+      ? 'CLIENT_RATE_CARD'
+      : 'PLATFORM_DEFAULT';
+    const reference = rates.defaultBaseFee > 0 ? rates.defaultBaseFee : baseFee;
+    const feeDeviation = reference > 0 ? Number((baseFee / reference).toFixed(2)) : 1;
+
     return {
       baseFee,
       branchCount,
@@ -203,6 +223,9 @@ export class FeePolicyService {
       total: baseComponent + travelFee,
       rates,
       usedFallbackBaseFee: usedFallback,
+      feeSource,
+      feeDeviation,
+      feeFlagged: feeDeviation > FEE_FLAG_MULTIPLIER,
     };
   }
 }

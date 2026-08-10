@@ -18,6 +18,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { AssessmentEntity } from '../project/assessment.entity';
+import { OperationsInboxService } from './operations-inbox.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
@@ -179,6 +180,7 @@ const mockNotificationService = {
         { provide: DataSource, useValue: mockDataSource },
         { provide: UnitOfWork, useValue: mockUnitOfWork },
         { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
+        { provide: OperationsInboxService, useValue: { resolveChannels: jest.fn().mockResolvedValue(new Map()) } },
         { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
         { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
       ],
@@ -599,15 +601,78 @@ const mockNotificationService = {
       expect(assignment.checkInDistanceMeters).toBeLessThan(5);
     });
 
-    it('records how far from the branch a distant check-in was, rather than hiding it', async () => {
+    it('refuses an assayer check-in from far outside the branch geofence', async () => {
+      // Production data held an assignment CHECKED_IN 677 km from its branch. The distance
+      // was recorded but never acted on; now the check-in itself is refused, with the money
+      // question ("were you there?") answered at the door instead of in a later dispute.
       const assignment = acceptedAssignment();
       mockAssignmentRepo.findOne.mockResolvedValue(assignment);
       mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
 
       // ~1,700 km away — the old New Delhi fallback would have looked exactly like this.
-      await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'assayer-1');
+      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'assayer-1');
 
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('TOO_FAR_FROM_BRANCH');
+      expect(assignment.status).toBe(AssignmentStatus.ACCEPTED); // untouched
+    });
+
+    it('still records a distant check-in when staff perform it as a correction', async () => {
+      // The guard protects the assayer's own attestation; ops fixing a record is exactly the
+      // case that must pass — and the anomalous distance stays on the row as evidence.
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS_MANAGER' }] });
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'ops-1');
+
+      expect(res.success).toBe(true);
       expect(assignment.checkInDistanceMeters).toBeGreaterThan(1_000_000);
+    });
+
+    it('widens the geofence by the GPS fix accuracy instead of punishing a poor rural signal', async () => {
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      // ~2.7 km from the branch with a reported 1,000 m accuracy: 2000 + 1000 allowance lets
+      // it through; the same point with a sharp fix would be refused.
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.6194, undefined, 'assayer-1', 1000);
+
+      expect(res.success).toBe(true);
+      const sharp = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(sharp);
+      const refused = await service.recordCheckIn('asn-1', 12.9716, 77.6194, undefined, 'assayer-1', 10);
+      expect(refused.success).toBe(false);
+      expect(refused.error).toBe('TOO_FAR_FROM_BRANCH');
+    });
+
+    it('refuses a check-in days before the scheduled date', async () => {
+      // The nine-days-early case from production: check-in is attendance evidence for a
+      // specific visit, so it opens on the visit's own day. Ops reschedule first if the
+      // visit has genuinely moved.
+      const future = new Date();
+      future.setDate(future.getDate() + 9);
+      const assignment = acceptedAssignment({ scheduledDate: future.toISOString() });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('NOT_SCHEDULED_TODAY');
+      expect(res.message).toContain('scheduled for');
+    });
+
+    it('accepts a same-day check-in inside the geofence', async () => {
+      const assignment = acceptedAssignment({ scheduledDate: new Date().toISOString() });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 15);
+
+      expect(res.success).toBe(true);
+      expect(assignment.status).toBe(AssignmentStatus.CHECKED_IN);
     });
 
     it('leaves distance null when the branch itself has no coordinates', async () => {

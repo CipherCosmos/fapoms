@@ -67,7 +67,9 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const STATUS_COLORS: Record<string, string> = {
   TENTATIVE: 'var(--warning)',
   CONFIRMED: 'var(--success)',
-  RESCHEDULED: 'var(--accent)',
+  // Distinct hues: these two previously shared var(--accent), making a moved audit visually
+  // indistinguishable from a finished one across the grid, timeline and agenda.
+  RESCHEDULED: 'var(--info, #4A90D9)',
   COMPLETED: 'var(--accent)',
 };
 
@@ -98,14 +100,27 @@ export const Scheduling: React.FC = () => {
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  // Bulk dispatch: pick several unscheduled offers and put them on one date in a single action —
+  // a 40-branch rollout was previously 40 modal round-trips.
+  const [bulkQueueIds, setBulkQueueIds] = useState<Set<string>>(new Set());
+  const [bulkDate, setBulkDate] = useState(todayDateKey());
+  const [bulkScheduling, setBulkScheduling] = useState(false);
 
   useSocketInvalidation();
 
   const { selectedProjectId } = useProject();
 
-  const { data: rawSchedules = [], isLoading: isLoadingSchedules } = useQuery({
-    queryKey: queryKeys.schedules.list,
-    queryFn: () => api.request<Schedule[]>('/schedules'),
+  // Scoped to the visible month (± one month so navigation feels seamless). The old bare
+  // '/schedules' call hit the backend's default limit=50 ordered oldest-first — so once the org
+  // passed 50 lifetime schedules, the CURRENT month silently rendered empty. The window keeps the
+  // payload bounded no matter how much history accumulates.
+  const monthStart = new Date(currentYear, currentMonth - 1, 1);
+  const monthEnd = new Date(currentYear, currentMonth + 2, 0);
+  const dateFrom = localDateKey(monthStart);
+  const dateTo = localDateKey(monthEnd);
+  const { data: rawSchedules = [], isLoading: isLoadingSchedules, isError: schedulesError, refetch: refetchSchedules } = useQuery({
+    queryKey: [...queryKeys.schedules.list, dateFrom, dateTo],
+    queryFn: () => api.request<Schedule[]>(`/schedules?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=500`),
     staleTime: 5_000,
     retry: 1,
     refetchOnWindowFocus: true,
@@ -113,7 +128,7 @@ export const Scheduling: React.FC = () => {
   });
   const schedules = Array.isArray(rawSchedules) ? rawSchedules : [];
 
-  const { data: rawAssignments = [], isLoading: isLoadingAssignments } = useQuery({
+  const { data: rawAssignments = [], isLoading: isLoadingAssignments, isError: assignmentsError, refetch: refetchAssignments } = useQuery({
     queryKey: [...queryKeys.assignments.all, 'available'],
     queryFn: () => api.request<AssignmentOption[]>('/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100'),
     staleTime: 5_000,
@@ -144,10 +159,8 @@ export const Scheduling: React.FC = () => {
   const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
   const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
 
-  useEffect(() => {
-    if (error) { const t = setTimeout(() => setError(null), 4000); return () => clearTimeout(t); }
-  }, [error]);
-
+  // Success notices get out of the way on their own; errors stay until dismissed — a backend
+  // rejection reason ("assayer already booked at …") that vanished after 4 seconds was unreadable.
   useEffect(() => {
     if (successMsg) { const t = setTimeout(() => setSuccessMsg(null), 3000); return () => clearTimeout(t); }
   }, [successMsg]);
@@ -220,15 +233,54 @@ export const Scheduling: React.FC = () => {
     if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, selectedDate);
   };
 
+  /** Schedule every selected queue offer on one date; failures stay selected for retry. */
+  const handleBulkSchedule = async () => {
+    if (bulkQueueIds.size === 0 || !bulkDate || bulkScheduling) return;
+    setBulkScheduling(true);
+    setError(null);
+    const ids = [...bulkQueueIds];
+    const results = await Promise.allSettled(
+      ids.map((id) => api.request('/schedules', {
+        method: 'POST',
+        body: JSON.stringify({ assignmentId: id, scheduledDate: bulkDate, remarks: 'Bulk scheduled from dispatch queue' }),
+      })),
+    );
+    const failedIds = ids.filter((_, i) => results[i].status === 'rejected');
+    const okCount = ids.length - failedIds.length;
+    setBulkScheduling(false);
+    // Only successes leave the selection — what remains selected is exactly what still needs doing.
+    setBulkQueueIds(new Set(failedIds));
+    if (failedIds.length === 0) {
+      setSuccessMsg(`${okCount} audit(s) scheduled for ${bulkDate}.`);
+    } else {
+      const nameById = new Map(assignments.map((a) => [a.id, a.projectBranch?.branch?.name || a.assignmentNumber]));
+      const firstErr = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      setError(
+        `${okCount}/${ids.length} scheduled. Failed (still selected for retry): ${failedIds.map((id) => nameById.get(id)).join(', ')}` +
+        (firstErr ? ` — ${userMessage(firstErr.reason)}` : ''),
+      );
+    }
+    invalidateAll();
+  };
+
+  // In-flight guard: without it a double-click on Complete fired two transitions, the second of
+  // which failed with "Invalid Transition" — a red banner after an action that actually succeeded.
+  const [transitioningId, setTransitioningId] = useState<string | null>(null);
+
   const handleTransition = async (id: string, targetStatus: ScheduleStatus) => {
+    if (transitioningId) return;
     if (targetStatus === ScheduleStatus.RESCHEDULED) {
       setRescheduleSchId(id);
-      setRescheduleNewDate(todayDateKey());
+      // Seed with the schedule's CURRENT date, not today — ops adjusts from where the audit
+      // stands; defaulting to today made a mis-click silently pull a future audit to today.
+      const sch = schedules.find(s => s.id === id);
+      setRescheduleNewDate(sch?.scheduledDate ? localDateKey(sch.scheduledDate) : todayDateKey());
       setShowRescheduleModal(true);
       return;
     }
     if (targetStatus === ScheduleStatus.COMPLETED && !window.confirm('Mark this schedule complete? This moves the audit forward and is not reversible.')) return;
     setError(null);
+    setTransitioningId(id);
     try {
       await api.request(`/schedules/${id}/transition`, {
         method: 'POST',
@@ -241,6 +293,8 @@ export const Scheduling: React.FC = () => {
       invalidateAll();
     } catch (err: any) {
       setError(`Failed to update schedule ${userMessage(err)}`);
+    } finally {
+      setTransitioningId(null);
     }
   };
 
@@ -260,6 +314,12 @@ export const Scheduling: React.FC = () => {
       });
       setShowRescheduleModal(false);
       setSuccessMsg(`Schedule rescheduled to ${rescheduleNewDate}`);
+      // Follow the audit to its new date so the agenda and the inspector keep describing the
+      // same schedule instead of the stale day.
+      setSelectedDate(rescheduleNewDate);
+      const d = new Date(`${rescheduleNewDate}T00:00:00`);
+      setCurrentMonth(d.getMonth());
+      setCurrentYear(d.getFullYear());
       invalidateAll();
     } catch (err: any) {
       setError(`Failed to reschedule ${userMessage(err)}`);
@@ -270,21 +330,46 @@ export const Scheduling: React.FC = () => {
 
   const todayStr = todayDateKey();
 
-  const filteredSchedules = scopedSchedules.filter(s => {
+  // Memoized, and indexed by date. The unmemoized version rebuilt this filter on every render
+  // (every keystroke in the remarks field), and each of the ~31 calendar cells then re-scanned
+  // the whole list — O(days × schedules) per render. One pass builds a date-keyed Map instead.
+  const filteredSchedules = React.useMemo(() => scopedSchedules.filter(s => {
     const schDateStr = localDateKey(s.scheduledDate);
     if (statusFilter === 'ALL') return true;
     if (statusFilter === 'ONGOING') return schDateStr === todayStr && s.status !== ScheduleStatus.COMPLETED;
     if (statusFilter === 'UPCOMING') return schDateStr > todayStr && s.status !== ScheduleStatus.COMPLETED;
     if (statusFilter === 'HISTORICAL') return schDateStr < todayStr || s.status === ScheduleStatus.COMPLETED;
     return s.status === statusFilter;
-  });
+  }), [scopedSchedules, statusFilter, todayStr]);
 
-  const getSchedulesForDate = (dateStr: string) => filteredSchedules.filter(s => {
-    const sd = localDateKey(s.scheduledDate);
-    return sd === dateStr;
-  });
+  const schedulesByDate = React.useMemo(() => {
+    const m = new Map<string, Schedule[]>();
+    for (const s of filteredSchedules) {
+      const key = localDateKey(s.scheduledDate);
+      const list = m.get(key);
+      if (list) list.push(s); else m.set(key, [s]);
+    }
+    return m;
+  }, [filteredSchedules]);
+
+  const getSchedulesForDate = (dateStr: string) => schedulesByDate.get(dateStr) ?? [];
 
   const dateSchedules = getSchedulesForDate(selectedDate);
+
+  // Timeline list search — the view had no way to find a branch/assayer/assignment in a long month.
+  const [timelineSearch, setTimelineSearch] = useState('');
+  const timelineSchedules = React.useMemo(() => {
+    const q = timelineSearch.trim().toLowerCase();
+    if (!q) return filteredSchedules;
+    return filteredSchedules.filter(s =>
+      (s.assignment?.projectBranch?.branch?.name ?? '').toLowerCase().includes(q) ||
+      (s.assignment?.projectBranch?.branch?.city ?? '').toLowerCase().includes(q) ||
+      (s.assignment?.projectBranch?.branch?.state ?? '').toLowerCase().includes(q) ||
+      (s.assayer?.displayName ?? '').toLowerCase().includes(q) ||
+      (s.assignment?.assignmentNumber ?? '').toLowerCase().includes(q) ||
+      (s.project?.name ?? '').toLowerCase().includes(q),
+    );
+  }, [filteredSchedules, timelineSearch]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', minHeight: 0, padding: '0 8px 8px' }}>
@@ -345,10 +430,24 @@ export const Scheduling: React.FC = () => {
       </div>
 
       {error && (
-        <AlertBanner type="error" message={error} />
+        <AlertBanner type="error" message={error} onClose={() => setError(null)} />
       )}
       {successMsg && (
         <AlertBanner type="success" message={successMsg} />
+      )}
+      {(schedulesError || assignmentsError) && (
+        // A failed load must not masquerade as an empty calendar / clear queue.
+        <AlertBanner type="error">
+          <span style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {schedulesError ? 'Could not load schedules.' : 'Could not load the unscheduled queue.'} Check your connection and try again.
+            <button
+              onClick={() => { if (schedulesError) refetchSchedules(); if (assignmentsError) refetchAssignments(); }}
+              className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '11px' }}
+            >
+              Retry
+            </button>
+          </span>
+        </AlertBanner>
       )}
 
       {/* ── WORKSPACE BODY: RESPONSIVE 3-PANEL FLEX ── */}
@@ -378,9 +477,46 @@ export const Scheduling: React.FC = () => {
                 No unscheduled confirmed offers for the selected project.
               </div>
             ) : (
-              scopedAssignments.map(a => (
-                <div key={a.id} style={{ padding: '10px', borderRadius: '8px', marginBottom: '6px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <>
+              {/* Bulk dispatch bar — select several offers, one date, one action. */}
+              {canManageSchedules && scopedAssignments.length > 1 && (
+                <div style={{ padding: '8px', marginBottom: '6px', borderRadius: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={bulkQueueIds.size === scopedAssignments.length && scopedAssignments.length > 0}
+                      onChange={(e) => setBulkQueueIds(e.target.checked ? new Set(scopedAssignments.map(a => a.id)) : new Set())}
+                    />
+                    Select all ({scopedAssignments.length})
+                  </label>
+                  {bulkQueueIds.size > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input type="date" value={bulkDate} min={todayDateKey()} onChange={(e) => setBulkDate(e.target.value)}
+                        style={{ flex: 1, minWidth: '120px', fontSize: '11px', padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }} />
+                      <button onClick={handleBulkSchedule} disabled={bulkScheduling}
+                        className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700 }}>
+                        {bulkScheduling ? 'Scheduling…' : `Schedule ${bulkQueueIds.size}`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {scopedAssignments.map(a => (
+                <div key={a.id} style={{ padding: '10px', borderRadius: '8px', marginBottom: '6px', background: 'var(--bg-surface-2)', border: bulkQueueIds.has(a.id) ? '1px solid var(--accent)' : '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
+                    {canManageSchedules && (
+                      <input
+                        type="checkbox"
+                        checked={bulkQueueIds.has(a.id)}
+                        onChange={(e) => setBulkQueueIds(prev => {
+                          const next = new Set(prev);
+                          e.target.checked ? next.add(a.id) : next.delete(a.id);
+                          return next;
+                        })}
+                        style={{ marginTop: '1px', flexShrink: 0, cursor: 'pointer' }}
+                        aria-label={`Select ${a.projectBranch?.branch?.name || a.assignmentNumber} for bulk scheduling`}
+                      />
+                    )}
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.projectBranch?.branch?.name}</div>
                     <span style={{ fontSize: '10px', color: 'var(--warning)', fontWeight: 700 }}>₹{a.proposedFee}</span>
                   </div>
@@ -393,7 +529,8 @@ export const Scheduling: React.FC = () => {
                     <Calendar size={11} /> Quick Schedule
                   </button>
                 </div>
-              ))
+              ))}
+              </>
             )}
           </div>
         </div>
@@ -467,7 +604,12 @@ export const Scheduling: React.FC = () => {
                             </div>
                           ))}
                           {daySchedules.length > 2 && (
-                            <span style={{ fontSize: '8px', color: 'var(--accent)', fontWeight: 700 }}>+{daySchedules.length - 2} more</span>
+                            <span
+                              title={`Select the day to see all ${daySchedules.length} audits in the agenda panel`}
+                              style={{ fontSize: '8px', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}
+                            >
+                              +{daySchedules.length - 2} more
+                            </span>
                           )}
                         </div>
                       )}
@@ -478,30 +620,59 @@ export const Scheduling: React.FC = () => {
             </div>
           ) : (
             /* VIEW MODE 2: TIMELINE LIST */
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column' }}>
+              <input
+                type="search"
+                value={timelineSearch}
+                onChange={e => setTimelineSearch(e.target.value)}
+                placeholder="Search by branch, assayer, assignment #, project, city…"
+                style={{ marginBottom: '8px', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}
+              />
               {isLoadingSchedules ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
                   <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
                   Loading schedules…
                 </div>
-              ) : filteredSchedules.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No schedules match the status filter.</div>
+              ) : timelineSchedules.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                  {timelineSearch ? 'No schedules match your search.' : 'No schedules match the status filter.'}
+                </div>
               ) : (
-                filteredSchedules.map(sch => (
+                timelineSchedules.map(sch => {
+                  const days = Math.round((new Date(localDateKey(sch.scheduledDate) + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000);
+                  const fee = sch.assignment?.agreedFee ?? sch.assignment?.proposedFee;
+                  const branch = sch.assignment?.projectBranch?.branch;
+                  return (
                   <div key={sch.id} onClick={() => { setSelectedSchId(sch.id); setSelectedDate(localDateKey(sch.scheduledDate)); }}
-                    style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '6px', background: selectedSchId === sch.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-surface-2)', border: selectedSchId === sch.id ? '1px solid var(--accent)' : '1px solid var(--border-hair)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{sch.assignment?.projectBranch?.branch?.name || 'Branch Audit'}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', gap: '10px' }}>
-                        <span>👤 {sch.assayer?.displayName}</span>
-                        <span>📅 {formatDateOnly(sch.scheduledDate)}</span>
+                    style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '6px', background: selectedSchId === sch.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-surface-2)', border: selectedSchId === sch.id ? '1px solid var(--accent)' : '1px solid var(--border-hair)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {branch?.name || 'Branch Audit'}
+                        {branch?.city && <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}> · {branch.city}{branch.state ? `, ${branch.state}` : ''}</span>}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <span>{sch.assignment?.assignmentNumber}</span>
+                        <span>{sch.assayer?.displayName}</span>
+                        <span>{sch.project?.name}</span>
                       </div>
                     </div>
-                    <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700, background: (STATUS_COLORS[sch.status] || 'var(--accent)') + '20', color: STATUS_COLORS[sch.status] || 'var(--accent)' }}>
-                      {scheduleStatusLabel(sch.status)}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                      {fee != null && <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--warning)' }}>₹{Number(fee).toLocaleString('en-IN')}</span>}
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: days < 0 ? 'var(--text-muted)' : days === 0 ? 'var(--accent)' : 'var(--text-primary)' }}>
+                          {formatDateOnly(sch.scheduledDate)}
+                        </div>
+                        <div style={{ fontSize: '9.5px', color: days < 0 ? 'var(--text-muted)' : days === 0 ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: 600 }}>
+                          {days === 0 ? 'today' : days > 0 ? `in ${days}d` : `${-days}d ago`}
+                        </div>
+                      </div>
+                      <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700, background: (STATUS_COLORS[sch.status] || 'var(--accent)') + '20', color: STATUS_COLORS[sch.status] || 'var(--accent)' }}>
+                        {scheduleStatusLabel(sch.status)}
+                      </span>
+                    </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
@@ -585,15 +756,15 @@ export const Scheduling: React.FC = () => {
                     (selectedSch.status === ScheduleStatus.CONFIRMED || selectedSch.status === ScheduleStatus.RESCHEDULED) &&
                     !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes((selectedSch.assignment?.projectBranch as any)?.status) &&
                     (selectedSch.assignment as any)?.status !== 'COMPLETED' && (
-                      <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.RESCHEDULED)} className="btn btn-secondary" style={{ flex: 1, padding: '4px', fontSize: '10px' }}>
+                      <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.RESCHEDULED)} disabled={transitioningId != null} className="btn btn-secondary" style={{ flex: 1, padding: '4px', fontSize: '10px' }}>
                         Reschedule
                       </button>
                   )}
                   {canManageSchedules &&
                     selectedSch.status !== ScheduleStatus.COMPLETED &&
                     !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes((selectedSch.assignment?.projectBranch as any)?.status) && (
-                      <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.COMPLETED)} className="btn btn-primary" style={{ flex: 1, padding: '4px', fontSize: '10px', background: 'var(--success)', borderColor: 'var(--success)' }}>
-                        ✓ Complete
+                      <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.COMPLETED)} disabled={transitioningId != null} className="btn btn-primary" style={{ flex: 1, padding: '4px', fontSize: '10px', background: 'var(--success)', borderColor: 'var(--success)' }}>
+                        {transitioningId === selectedSch.id ? 'Saving…' : '✓ Complete'}
                       </button>
                   )}
                 </div>
@@ -757,9 +928,18 @@ export const Scheduling: React.FC = () => {
             </>
           }
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {(() => {
+              const sch = schedules.find(s => s.id === rescheduleSchId);
+              return sch?.scheduledDate ? (
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  Currently scheduled for <b style={{ color: 'var(--text-primary)' }}>{formatDateOnly(sch.scheduledDate)}</b>
+                  {sch.assignment?.projectBranch?.branch?.name && <> · {sch.assignment.projectBranch.branch.name}</>}
+                </div>
+              ) : null;
+            })()}
             <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>New Audit Date *</label>
-            <input type="date" value={rescheduleNewDate} onChange={e => setRescheduleNewDate(e.target.value)} required
+            <input type="date" value={rescheduleNewDate} min={todayDateKey()} onChange={e => setRescheduleNewDate(e.target.value)} required
               style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
           </div>
         </Modal>

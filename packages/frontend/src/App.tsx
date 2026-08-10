@@ -7,6 +7,7 @@ import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { api } from './services/api';
 import ForcePasswordChange from './pages/ForcePasswordChange';
+import { CallProvider } from './components/calls/CallProvider';
 
 /**
  * Route pages are code-split so the initial bundle carries only the login/shell critical path.
@@ -36,6 +37,7 @@ const Notifications = React.lazy(() => import('./pages/Notifications'));
 const Holidays = React.lazy(() => import('./pages/Holidays'));
 const Zones = React.lazy(() => import('./pages/Zones'));
 const FieldIssues = React.lazy(() => import('./pages/FieldIssues').then((m) => ({ default: m.FieldIssues })));
+const OperationsInbox = React.lazy(() => import('./pages/OperationsInbox').then((m) => ({ default: m.OperationsInbox })));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
@@ -168,6 +170,7 @@ export const App: React.FC = () => {
   }
 
   return (
+    <CallProvider>
     <Layout onLogout={handleLogout} user={currentUser || undefined}>
       <Suspense fallback={<RouteFallback />}>
       <Routes>
@@ -221,6 +224,7 @@ export const App: React.FC = () => {
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
         <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
         <Route path="/zones" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Zones /></ProtectedRoute>} />
+        <Route path="/inbox" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><OperationsInbox /></ProtectedRoute>} />
         <Route path="/field-issues" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FieldIssues /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Settings /></ProtectedRoute>} />
@@ -229,6 +233,7 @@ export const App: React.FC = () => {
       </Routes>
       </Suspense>
     </Layout>
+    </CallProvider>
   );
 };
 

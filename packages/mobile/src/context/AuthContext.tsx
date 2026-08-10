@@ -115,7 +115,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const unlock = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Unlock Karat',
+        promptMessage: 'Unlock Orbit',
         cancelLabel: 'Cancel',
         // Forces the biometric sensor rather than silently accepting the device PIN. The
         // point of the gate is to confirm the person holding the phone is the assayer the

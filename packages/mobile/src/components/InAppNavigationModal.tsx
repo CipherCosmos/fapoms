@@ -587,11 +587,33 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
    * backdrop and the back gesture already do. The assignment card's own Navigate button is
    * what opened this, so repeating that choice here asked the assayer to decide twice.
    */
-  if (!expanded) {
-    const canNavigate = steps.length > 0;
+  // Navigation can start whenever there is somewhere to go and the route has finished
+  // resolving. It used to require `steps.length > 0`, i.e. a turn-by-turn list, which only the
+  // Google Directions provider returns — with no GOOGLE_MAPS_API_KEY (the default, see
+  // app.config.js) the native path falls back to a straight-line estimate that carries no
+  // steps, so the button was permanently disabled and navigation could never begin. The
+  // expanded map is useful without steps: it shows the destination, the live position and the
+  // distance/ETA; the turn-by-turn banner simply stays hidden until steps exist.
+  const canNavigate = Boolean(destination) && !loading;
 
-    return (
-      <RNModal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+  const collapseToSheet = () => {
+    setNavigating(false);
+    setExpanded(false);
+  };
+
+  // Hardware back / gesture steps out of the full-screen map back to the summary sheet, and
+  // only the sheet dismisses the whole feature. Previously the map's own back control and its
+  // onRequestClose both only collapsed `expanded`, and there was no control that called
+  // `onClose` from the map at all — so once navigation was started the feature could not be
+  // closed from where the user actually was.
+  const handleRequestClose = () => {
+    if (expanded) collapseToSheet();
+    else onClose();
+  };
+
+  return (
+    <RNModal visible={visible} animationType="slide" transparent onRequestClose={handleRequestClose}>
+      {!expanded ? (
         <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
           <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel="Dismiss">
             <View style={{ flex: 1 }} />
@@ -702,13 +724,8 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
             </View>
           </View>
         </View>
-      </RNModal>
-    );
-  }
-
-  return (
-    <RNModal visible={visible} animationType="slide" transparent={false} onRequestClose={() => { setNavigating(false); setExpanded(false); }}>
-      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      ) : (
+        <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         {/* Header */}
         <View
           style={{
@@ -726,13 +743,18 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
             <AppText variant="h3" numberOfLines={1}>{assignment?.branchName || 'In-App Navigation'}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment?.branchAddress || ''}</AppText>
           </View>
-          <Button
-            label="Back"
-            variant="neutral"
-            icon="chevron-back"
-            onPress={() => { setNavigating(false); setExpanded(false); }}
-            size="sm"
-          />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
+            <Button
+              label="Back"
+              variant="neutral"
+              icon="chevron-back"
+              onPress={collapseToSheet}
+              size="sm"
+            />
+            {/* Direct dismissal from the map — the exit that was missing. Back returns to the
+                summary sheet; this closes the feature outright. */}
+            <IconButton icon="close" onPress={onClose} accessibilityLabel="Close navigation" size={38} />
+          </View>
         </View>
 
         {/* Live turn-by-turn banner */}
@@ -891,7 +913,8 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
             </View>
           </View>
         )}
-      </View>
+        </View>
+      )}
     </RNModal>
   );
 };

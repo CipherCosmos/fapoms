@@ -18,7 +18,22 @@ interface CoveragePreview {
   availableWorkforceCount: number;
   confidenceScore: number;
   uncoveredBranches: Array<{ branchName?: string; reason?: string }>;
-  clusters: Array<{ assignedAssayerName: string | null; branchIds: string[]; estimatedTotalFee: number | null }>;
+  clusters: Array<{
+    name?: string;
+    assignedAssayerName: string | null;
+    branchIds: string[];
+    estimatedTotalFee: number | null;
+    branchAssignments?: Array<{
+      branchId: string;
+      branchName: string;
+      assayerId: string | null;
+      assayerName: string | null;
+      fee: number | null;
+      /** 1 = the branch's own top recommendation; >1 means higher ranks were passed over. */
+      rank: number | null;
+      selectionNote: string | null;
+    }>;
+  }>;
 }
 
 const inr = (n: number | null | undefined) =>
@@ -138,6 +153,46 @@ export const CoveragePlanModal: React.FC<{
               <div style={{ padding: '8px 10px', background: 'var(--status-cancelled-bg)', borderRadius: '6px', fontSize: '11.5px', color: 'var(--danger)' }}>
                 <AlertTriangle size={12} style={{ verticalAlign: '-2px' }} /> {preview.uncoveredBranches.length} branch(es) cannot be covered by this plan and will be skipped on deploy.
               </div>
+            )}
+
+            {/* Per-branch picks with rank + why. "#2 — #1 at capacity" is an explainable decision;
+                without this it is indistinguishable from a wrong pick. */}
+            {preview.clusters.some(c => (c.branchAssignments?.length ?? 0) > 0) && (
+              <details style={{ border: '1px solid var(--border-color)', borderRadius: '8px', overflow: 'hidden' }}>
+                <summary style={{ padding: '9px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none', background: 'var(--bg-surface-2)' }}>
+                  Per-branch assignments ({preview.clusters.reduce((n, c) => n + (c.branchAssignments?.length ?? 0), 0)} branches)
+                </summary>
+                <div style={{ maxHeight: '260px', overflowY: 'auto', padding: '4px 12px 10px' }}>
+                  {preview.clusters.flatMap(c => c.branchAssignments ?? []).map((ba) => (
+                    <div key={ba.branchId} style={{ padding: '7px 0', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ba.branchName}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          {ba.assayerName ? (
+                            <>
+                              <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>{ba.assayerName}</span>
+                              {ba.rank != null && (
+                                <span
+                                  title={ba.rank === 1 ? "This branch's own top recommendation" : `Rank #${ba.rank} in this branch's recommendation list — higher ranks were unavailable (see note)`}
+                                  style={{ fontSize: '10px', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: ba.rank === 1 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: ba.rank === 1 ? 'var(--success)' : 'var(--warning)' }}
+                                >
+                                  #{ba.rank}
+                                </span>
+                              )}
+                              {ba.fee != null && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{inr(ba.fee)}</span>}
+                            </>
+                          ) : (
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--danger)' }}>Uncovered</span>
+                          )}
+                        </span>
+                      </div>
+                      {ba.selectionNote && (
+                        <div style={{ fontSize: '10.5px', color: 'var(--warning)' }}>└─ {ba.selectionNote}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
           </>
         ) : null}

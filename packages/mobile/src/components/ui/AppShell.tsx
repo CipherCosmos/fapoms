@@ -109,7 +109,7 @@ export const TabDock: React.FC<{
   // translucent glass iOS uses for its own tab bar. The translucent tint keeps text legible over
   // the blur and doubles as the fallback fill if blur is unsupported.
   const dark = t.mode === 'dark';
-  const material = dark ? 'rgba(29,25,34,0.62)' : 'rgba(255,255,255,0.62)';
+  const material = dark ? 'rgba(25,28,36,0.66)' : 'rgba(255,255,255,0.62)';
 
   return (
     <View style={{
@@ -135,6 +135,9 @@ export const TabDock: React.FC<{
             style={{
               position: 'absolute', top: 5, left: 5, bottom: 5, width: seg,
               backgroundColor: t.colors.primarySoft, borderRadius: t.radius.xl,
+              // A hairline violet edge turns the selection pill from a flat tint into the lit
+              // neon marker the identity is built on.
+              borderWidth: 1, borderColor: t.colors.primary + '55',
               transform: [{ translateX: x }],
             }}
           />

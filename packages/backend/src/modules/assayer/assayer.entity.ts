@@ -188,6 +188,17 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'employment_type', type: 'varchar', length: 50, default: 'INTERNAL' })
   employmentType: string;
 
+  /**
+   * How offers reach this assayer. Not everyone in the field uses a smartphone, so the app can
+   * never be the required channel:
+   *  - AUTO  (default) — derived: has an active device token → APP, else PHONE.
+   *  - APP   — offers wait for an in-app response (with a phone fallback when they go quiet).
+   *  - PHONE — offers become call tasks for the desk immediately, and the SLA auto-decline
+   *            never fires for them (they may never see an in-app offer to answer).
+   */
+  @Column({ name: 'preferred_contact_channel', type: 'varchar', length: 10, default: 'AUTO' })
+  preferredContactChannel: 'AUTO' | 'APP' | 'PHONE';
+
   @Column({ name: 'joining_date', type: 'date', nullable: true })
   joiningDate: Date | null;
 

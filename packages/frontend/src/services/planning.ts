@@ -59,10 +59,25 @@ export const getDayPlans = <T = unknown>(query: DayPlanQuery) => {
 };
 
 // ── Recommendations ──────────────────────────────────────────────────────────────
-/** Candidate recommendations for a branch. Response carries `data` + `meta.excluded`. */
-export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(branchId: string) =>
+/**
+ * Smart default audit date for a branch: first workable day from tomorrow, skipping
+ * Sundays, state holidays and non-working Saturdays (same rule assignment creation
+ * enforces). `skipped` explains any days that were passed over.
+ */
+export const suggestAuditDate = (branchId: string) =>
+  api.request<{ date: string; skipped: Array<{ date: string; reason: string }> }>(
+    `/planning/suggest-date?branchId=${encodeURIComponent(branchId)}`,
+    { method: 'GET' },
+  );
+
+/**
+ * Candidate recommendations for a branch. Response carries `data` + `meta.excluded`.
+ * `date` (YYYY-MM-DD) is the audit date availability/fees are evaluated against —
+ * omitted, the backend assumes today, which is rarely the day being planned.
+ */
+export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(branchId: string, date?: string) =>
   api.request<{ data: TCandidate[]; meta?: { excluded?: TExcluded[] } }>(
-    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}`,
+    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}`,
     // withMeta so the caller receives `meta.excluded` (filtered-out candidates + reasons),
     // not just the unwrapped data array.
     { method: 'GET', withMeta: true },

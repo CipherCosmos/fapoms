@@ -1,18 +1,24 @@
 import { Platform } from 'react-native';
 
 /**
- * FAPOMS Field — design tokens.
+ * Orbit — design tokens.
  *
- * The old app was a single 630-line StyleSheet of hardcoded near-black and
- * indigo, with no light mode and no shared scale — every screen re-invented its
- * own padding, radius and type size inline. This replaces that with one source
- * of truth: two full palettes (dual tone), and scales everything else keys off.
+ * One source of truth for the whole app: two full palettes (dual tone) and the
+ * scales everything else keys off — spacing, radius, type, elevation, motion.
+ * Every screen reads from here, so the look is changed in one place, not screen
+ * by screen.
  *
- * The identity is the Sumeru flame. The primary and accent are sampled directly
- * from sumeru-logo.png — the flame's mid-body (#EF6E10) through its bright tips
- * (#F0873C) — so the UI is the same orange as the mark and the wordmark. Warning
- * is held at a distinct gold, because a warning the same colour as every button
- * stops working as a warning.
+ * ## Identity — "Midnight Neon"
+ *
+ * Dark-first and premium. The ground is a near-black with a faint blue-violet
+ * undertone, layered into three surface tiers so depth comes from the tier gap
+ * rather than heavy shadow. The primary is an electric violet (#8B7CFF) and the
+ * accent an electric cyan (#22D3EE) — the two neon signals that carry the brand.
+ * Status hues (success/warning/danger/info) are held clearly apart from the
+ * violet so a warning never reads as just another button.
+ *
+ * The light palette is a clean companion, not an afterthought: the same violet
+ * and cyan carried further down the ramp so they stay legible on white.
  */
 
 export type Mode = 'light' | 'dark';
@@ -57,86 +63,89 @@ export interface Palette {
 }
 
 const dark: Palette = {
-  /* A warm near-black with three clearly separated surface tiers above it, so the
-     flame orange reads as part of the family rather than an accent bolted onto a
-     cold ground. Depth comes from the tier gap between bg/surface/surfaceAlt plus
-     elevation, so borders stay a hairline seam rather than an outline around every
-     box. */
-  bg: '#131017',
-  surface: '#1D1922',
-  surfaceAlt: '#26212B',
+  /* Near-black with a faint blue-violet undertone, and three clearly separated
+     surface tiers above it so the neon violet reads as part of the family rather
+     than an accent bolted onto a cold ground. Depth comes from the tier gap
+     between bg/surface/surfaceAlt plus elevation, so borders stay a hairline seam
+     rather than an outline around every box. */
+  bg: '#0E1016',
+  surface: '#191C24',
+  surfaceAlt: '#232733',
   surfacePress: 'rgba(255,255,255,0.06)',
-  border: 'rgba(255,255,255,0.07)',
-  borderStrong: 'rgba(255,255,255,0.15)',
+  border: 'rgba(255,255,255,0.08)',
+  borderStrong: 'rgba(255,255,255,0.16)',
 
-  text: '#F5F2F6',
-  textMuted: '#A9A2AE',
-  textFaint: '#7C7583',
+  text: '#F0F2F7',
+  textMuted: '#9CA3B4',
+  textFaint: '#6B7080',
 
-  /* The Sumeru flame's bright tip, sampled from the logo (#F0873C). Reserved for
-     the single primary action on a screen; everything else is neutrals or status. */
-  primary: '#F0873C',
-  primarySoft: 'rgba(240,135,60,0.12)',
-  onPrimary: '#1C1206',
+  /* Electric violet — the brand signal. Bright enough that near-black text sits on
+     it (see onPrimary), which is the modern neon-button look. Reserved for the
+     single primary action on a screen; everything else is neutrals or status. */
+  primary: '#8B7CFF',
+  primarySoft: 'rgba(139,124,255,0.16)',
+  onPrimary: '#0E1016',
 
-  /* The flame's warmer amber — for money and highlights, one step off the primary
-     so a balance figure and a primary button do not compete. */
-  accent: '#F7A24A',
-  accentSoft: 'rgba(247,162,74,0.12)',
-  onAccent: '#1C1206',
+  /* Electric cyan — money, highlights, the second neon. One clear step off the
+     violet so a balance figure and a primary button never compete. */
+  accent: '#22D3EE',
+  accentSoft: 'rgba(34,211,238,0.14)',
+  onAccent: '#05141A',
 
-  /* Status hues desaturated toward the ground so a screen of badges reads as
-     information rather than a set of competing alerts. */
-  success: '#63B383',
-  successSoft: 'rgba(99,179,131,0.11)',
-  /* Held at gold, distinct from the orange primary — a warning the same colour as
+  /* Status hues kept vivid but clearly apart from the violet, so a screen of
+     badges reads as information rather than a set of competing alerts. */
+  success: '#34D399',
+  successSoft: 'rgba(52,211,153,0.13)',
+  /* Amber warning, distinct from the violet primary — a warning the same colour as
      every button stops functioning as a warning. */
-  warning: '#D9AE3F',
-  warningSoft: 'rgba(217,174,63,0.11)',
-  danger: '#DC6459',
-  dangerSoft: 'rgba(220,100,89,0.11)',
-  info: '#7AA9DB',
-  infoSoft: 'rgba(122,169,219,0.11)',
+  warning: '#FBBF24',
+  warningSoft: 'rgba(251,191,36,0.13)',
+  danger: '#FB7185',
+  dangerSoft: 'rgba(251,113,133,0.13)',
+  info: '#60A5FA',
+  infoSoft: 'rgba(96,165,250,0.13)',
 
-  scrim: 'rgba(8,6,10,0.80)',
+  scrim: 'rgba(6,7,12,0.82)',
 };
 
 const light: Palette = {
-  /* Warm off-white, a flame-cream ground that keeps the light theme in the same
-     family as the orange mark. */
-  bg: '#FFFAF5',
+  /* Cool off-white with a faint violet undertone, keeping the light theme in the
+     same family as the neon mark rather than a plain grey. */
+  bg: '#F5F5FB',
   surface: '#FFFFFF',
-  surfaceAlt: '#FFFFFF',
-  surfacePress: 'rgba(28,18,7,0.05)',
-  border: 'rgba(28,18,7,0.10)',
-  borderStrong: 'rgba(28,18,7,0.20)',
+  surfaceAlt: '#FBFBFE',
+  surfacePress: 'rgba(20,18,40,0.05)',
+  border: 'rgba(20,18,40,0.10)',
+  borderStrong: 'rgba(20,18,40,0.20)',
 
-  text: '#1C1207',
-  textMuted: '#6B5648',
-  textFaint: '#7A6657',
+  text: '#16151F',
+  textMuted: '#5B5A6B',
+  textFaint: '#8A8898',
 
-  /* Deepened flame. The logo's orange is only ~3:1 on white — fine for the mark,
-     unreadable as a label or a link, so light mode carries the same hue further
-     down the ramp to reach ~5:1. */
-  primary: '#C2410C',
-  primarySoft: 'rgba(194,65,12,0.10)',
+  /* Deepened violet. The neon #8B7CFF is only ~2.5:1 on white — fine as a glow on
+     dark, unreadable as a label or a link on light — so light mode carries the same
+     hue further down the ramp to clear ~5:1 with white text on the button. */
+  primary: '#5B4BD6',
+  primarySoft: 'rgba(91,75,214,0.10)',
   onPrimary: '#FFFFFF',
 
-  accent: '#B45309',
-  accentSoft: 'rgba(180,83,9,0.10)',
+  /* Cyan pulled to teal so it reads on white; the neon cyan is a highlight on dark,
+     a legible accent here. */
+  accent: '#0891B2',
+  accentSoft: 'rgba(8,145,178,0.10)',
   onAccent: '#FFFFFF',
 
-  success: '#2F7D4F',
-  successSoft: 'rgba(47,125,79,0.10)',
-  /* Gold warning, distinct from the orange primary. */
-  warning: '#8A5A00',
-  warningSoft: 'rgba(138,90,0,0.12)',
-  danger: '#B3261E',
-  dangerSoft: 'rgba(179,38,30,0.10)',
-  info: '#1D4ED8',
-  infoSoft: 'rgba(29,78,216,0.10)',
+  success: '#16A34A',
+  successSoft: 'rgba(22,163,74,0.10)',
+  /* Deep amber warning, distinct from the violet primary. */
+  warning: '#A16207',
+  warningSoft: 'rgba(161,98,7,0.12)',
+  danger: '#E11D48',
+  dangerSoft: 'rgba(225,29,72,0.10)',
+  info: '#2563EB',
+  infoSoft: 'rgba(37,99,235,0.10)',
 
-  scrim: 'rgba(28,18,7,0.45)',
+  scrim: 'rgba(20,18,40,0.45)',
 };
 
 export const palettes: Record<Mode, Palette> = { light, dark };

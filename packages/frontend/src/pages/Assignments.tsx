@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
-import { StatusBadge, KpiCard, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
+import { StatusBadge, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
 import { ProjectBranchStatus, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
-import { anyStatusLabel, branchStatusLabel, branchStatusTone, assessmentStatusLabel } from '../utils/statusLabels';
+import { anyStatusLabel, branchStatusLabel, branchStatusTone } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
@@ -23,6 +23,12 @@ interface Assignment {
   agreedFee: number | null;
   scheduledDate: string | null;
   createdAt: string;
+  // GPS check-in evidence — the record that proves the assayer stood in the branch.
+  checkedInAt?: string | null;
+  checkInLatitude?: number | null;
+  checkInLongitude?: number | null;
+  checkInAccuracyMeters?: number | null;
+  checkInDistanceMeters?: number | null;
   project: { name: string };
   assayer: { displayName: string };
   projectBranch: { status?: string; branch: { name: string; state: string } };
@@ -34,6 +40,22 @@ interface TimelineEvent {
   timestamp: string;
   description: string;
   user: string;
+}
+
+/** A problem the field flagged from the mobile app — the desk's execution queue. */
+interface FieldIssue {
+  id: string;
+  reportedAt: string;
+  assignmentId: string;
+  assignmentNumber: string | null;
+  branchName: string | null;
+  assayerName: string | null;
+  category: string | null;
+  categoryLabel: string | null;
+  note: string;
+  assignmentStatus: string | null;
+  /** False once the assignment reached a terminal state — i.e. the issue is implicitly resolved. */
+  open: boolean;
 }
 
 // Intentional subset — the 5 "stage-3" (field execution) branch statuses this
@@ -160,7 +182,7 @@ export const Assignments: React.FC = () => {
   // comment. Accept/Reject/Cancel/Complete/Escalate call the same endpoints
   // PlanningWorkspace and the SLA scanner already use; a plain un-countered
   // PENDING offer had no manual override anywhere in the frontend before this.
-  const [actionMode, setActionMode] = useState<'REJECT' | 'CANCEL' | null>(null);
+  const [actionMode, setActionMode] = useState<'REJECT' | 'CANCEL' | 'ESCALATE' | null>(null);
   const [actionReason, setActionReason] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -193,15 +215,41 @@ export const Assignments: React.FC = () => {
     }
   };
 
-  const runEscalate = async () => {
+  // Row-level quick actions: act straight from the list without opening the detail panel first —
+  // the two commonest desk actions (confirm an offer, close out finished work) become one click.
+  const [quickBusyId, setQuickBusyId] = useState<string | null>(null);
+  const quickAction = async (asnId: string, targetStatus: 'ACCEPTED' | 'COMPLETED') => {
+    if (quickBusyId) return;
+    if (targetStatus === 'COMPLETED' && !window.confirm('Mark this assignment complete? This is not reversible.')) return;
+    setQuickBusyId(asnId);
+    try {
+      await api.request(`/assignments/${asnId}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus }),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
+    } catch (err: any) {
+      // Open the panel on the failing row so the error lands next to its context.
+      setSelectedAsnId(asnId);
+      setActionError(err?.message || 'Action failed.');
+    } finally {
+      setQuickBusyId(null);
+    }
+  };
+
+  const runEscalate = async (reason?: string) => {
     if (!selectedAsnId) return;
     setActionBusy(true);
     setActionError(null);
     try {
+      // The reason is what the escalation queue and audit trail show — a hardcoded
+      // "Manually escalated by ops" told the next reader nothing about *why*.
       await api.request(`/assignments/${selectedAsnId}/escalate`, {
         method: 'POST',
-        body: JSON.stringify({ reason: 'Manually escalated by ops' }),
+        body: JSON.stringify({ reason: reason?.trim() || 'Manually escalated by ops' }),
       });
+      setActionMode(null);
+      setActionReason('');
       queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
     } catch (err: any) {
       setActionError(err?.message || 'Escalate failed.');
@@ -213,14 +261,14 @@ export const Assignments: React.FC = () => {
   // ── Main table — one unified list driven by one filter, whether the axis is
   // branch status (the normal stage-3 views), assignment status (Needs Attention),
   // or priority (Escalated).
-  const isAttentionView = statusFilter === NEEDS_ATTENTION_FILTER;
+  const isAttentionView = statusFilter === NEEDS_ATTENTION_FILTER || statusFilter === 'PENDING' || statusFilter === 'REJECTED';
   const isEscalatedView = statusFilter === ESCALATED_FILTER;
   const isTerminalView = statusFilter === TERMINAL_FILTER;
   // 'ALL' means genuinely unfiltered. It used to constrain to the five stage-3 branch
   // statuses, which silently hid every rejected/cancelled assignment (their branch is back
   // at CANDIDATE_SEARCH) — so this page reported 3 while the dashboard reported 5.
   const queryString = isAttentionView
-    ? `status=${NEEDS_ATTENTION_FILTER}`
+    ? `status=${statusFilter === NEEDS_ATTENTION_FILTER ? NEEDS_ATTENTION_FILTER : statusFilter}`
     : isEscalatedView
     ? `priority=${ESCALATED_FILTER}`
     : isTerminalView
@@ -256,17 +304,50 @@ export const Assignments: React.FC = () => {
   const activeCountQ = useCount(`projectBranchStatus=${ACTIVE_STATUSES}`);
   const closedCountQ = useCount(`projectBranchStatus=CLOSED`);
   const cancelledCountQ = useCount(`status=${TERMINAL_FILTER}`);
-  const attentionCountQ = useCount(`status=${NEEDS_ATTENTION_FILTER}`);
+  // "Needs attention" split into its two very different situations: PENDING = waiting on the
+  // assayer's answer (chase or wait), REJECTED = declined/auto-declined and needs a REPLACEMENT
+  // (act now). One combined "54" hid which of the two the desk actually had to do.
+  const pendingCountQ = useCount('status=PENDING');
+  const rejectedCountQ = useCount('status=REJECTED');
   const escalatedCountQ = useCount(`priority=${ESCALATED_FILTER}`);
   const activeCount = activeCountQ.data?.meta?.pagination?.total ?? 0;
   const closedCount = closedCountQ.data?.meta?.pagination?.total ?? 0;
   const cancelledCount = cancelledCountQ.data?.meta?.pagination?.total ?? 0;
-  const needsAttentionCount = attentionCountQ.data?.meta?.pagination?.total ?? 0;
+  const pendingCount = pendingCountQ.data?.meta?.pagination?.total ?? 0;
+  const rejectedCount = rejectedCountQ.data?.meta?.pagination?.total ?? 0;
   const escalatedCount = escalatedCountQ.data?.meta?.pagination?.total ?? 0;
   // Queried directly rather than summing the tiles below. The tiles overlap (an escalated
   // assignment is also active) and don't cover everything, so summing them under-reported
   // the total and disagreed with the dashboard.
   const totalCount = grandTotalQ.data?.meta?.pagination?.total ?? 0;
+
+  // The desk's queue of problems the field has flagged (branch closed, access denied, safety…).
+  // This endpoint existed with no UI at all — an assayer could report an issue from the field and
+  // nobody at the desk would ever see it without calling the API by hand.
+  const { data: fieldIssues = [] } = useQuery({
+    queryKey: ['assignment-field-issues'],
+    queryFn: () => api.request<FieldIssue[]>('/assignments/field-issues'),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  // One row per affected assignment, newest report first, with a ×N badge for repeats — two
+  // reports about the same branch are one problem to solve, not two queue entries.
+  const openIssues = fieldIssues.filter(i => i.open);
+  const groupedIssues = React.useMemo(() => {
+    const byAssignment = new Map<string, { latest: FieldIssue; count: number }>();
+    for (const issue of openIssues) {
+      const existing = byAssignment.get(issue.assignmentId);
+      if (!existing) {
+        byAssignment.set(issue.assignmentId, { latest: issue, count: 1 });
+      } else {
+        existing.count += 1;
+        if (new Date(issue.reportedAt) > new Date(existing.latest.reportedAt)) existing.latest = issue;
+      }
+    }
+    return [...byAssignment.values()].sort(
+      (a, b) => new Date(b.latest.reportedAt).getTime() - new Date(a.latest.reportedAt).getTime(),
+    );
+  }, [fieldIssues]);
 
   // When the selected assignment isn't on the current page (deep-link ?id=, a socket update that
   // moved the row off-page, or a filter that excludes it), fetch it directly so the detail panel
@@ -425,18 +506,28 @@ export const Assignments: React.FC = () => {
       });
       setNewComment('');
       invalidateTimeline(selectedAsnId);
-    } catch (err) {
-      console.error('Failed to post comment');
+    } catch (err: any) {
+      // Surface it — a silently swallowed failure left the operator believing the note was saved.
+      setActionError(err?.message || 'Could not post the comment. Try again.');
     }
   };
 
-  const filteredAssignments = assignments.filter(a => {
-    if (!searchTerm) return true;
-    return a.assignmentNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.project?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.assayer?.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.projectBranch?.branch?.name?.toLowerCase().includes(searchTerm.toLowerCase());
-  });
+  // Soonest-first by default: an execution desk works today's and overdue audits before next
+  // week's. Toggled from the Scheduled column header; unscheduled rows sink to the bottom.
+  const [dateSort, setDateSort] = useState<'asc' | 'desc'>('asc');
+  const filteredAssignments = assignments
+    .filter(a => {
+      if (!searchTerm) return true;
+      return a.assignmentNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        a.project?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        a.assayer?.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        a.projectBranch?.branch?.name?.toLowerCase().includes(searchTerm.toLowerCase());
+    })
+    .sort((a, b) => {
+      const ta = a.scheduledDate ? new Date(a.scheduledDate).getTime() : Number.POSITIVE_INFINITY;
+      const tb = b.scheduledDate ? new Date(b.scheduledDate).getTime() : Number.POSITIVE_INFINITY;
+      return dateSort === 'asc' ? ta - tb : tb - ta;
+    });
 
   const selectAndShow = (id: string) => {
     setSelectedAsnId(id);
@@ -477,41 +568,80 @@ export const Assignments: React.FC = () => {
         </AlertBanner>
       )}
 
-      {/* KPI Cards — clickable, filter the single table below. "Needs Attention"
-          is not a separate list: it's the same filter mechanism switched to the
-          assignment-status axis, so PENDING/auto-declined assignments (previously
-          invisible on this page entirely) surface in the exact same table/detail
-          panel as everything else. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+      {/* Triage bar — one compact row of clickable count-chips replacing six ~180px KPI cards.
+          Same filters, ~140px of vertical space returned to the work list, and the urgent axes
+          (Needs Attention / Escalated) read left-to-right after the workload ones. */}
+      <div className="glass-card" style={{ padding: '8px 12px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
         {[
-          { label: 'Total Assignments', value: totalCount, icon: ClipboardList, color: 'var(--accent-primary)', filter: 'ALL' },
-          { label: 'Active / In Progress', value: activeCount, icon: RefreshCw, color: 'var(--accent-secondary)', filter: ACTIVE_STATUSES },
+          { label: 'All', value: totalCount, icon: ClipboardList, color: 'var(--accent-primary)', filter: 'ALL' },
+          { label: 'Active', value: activeCount, icon: RefreshCw, color: 'var(--accent-secondary)', filter: ACTIVE_STATUSES },
+          { label: 'Awaiting response', value: pendingCount, icon: AlertTriangle, color: 'var(--warning)', filter: 'PENDING' },
+          { label: 'Declined — replace', value: rejectedCount, icon: XCircle, color: 'var(--danger)', filter: 'REJECTED' },
+          { label: 'Escalated', value: escalatedCount, icon: Flame, color: 'var(--danger)', filter: ESCALATED_FILTER },
           { label: 'Closed', value: closedCount, icon: CheckCircle, color: 'var(--status-active)', filter: 'CLOSED' },
           { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: 'var(--danger)', filter: TERMINAL_FILTER },
-          { label: 'Needs Attention', value: needsAttentionCount, icon: AlertTriangle, color: 'var(--warning)', filter: NEEDS_ATTENTION_FILTER },
-          { label: 'Escalated', value: escalatedCount, icon: Flame, color: 'var(--danger)', filter: ESCALATED_FILTER },
-        ].map(card => {
-          const Icon = card.icon;
-          const isActive = statusFilter === card.filter;
+        ].map(chip => {
+          const Icon = chip.icon;
+          const isActive = statusFilter === chip.filter;
           return (
-            <KpiCard
-              key={card.label}
-              layout="label-first"
-              icon={<Icon />}
-              iconBg="var(--bg-surface-2)"
-              iconColor={card.color}
-              label={card.label}
-              value={card.value}
-              valueColor="var(--text-primary)"
-              onClick={() => applyFilter(card.filter)}
+            <button
+              key={chip.label}
+              onClick={() => applyFilter(chip.filter)}
+              className="btn btn-secondary"
               style={{
-                border: isActive ? `1px solid ${card.color}` : '1px solid var(--border-color)',
-                background: isActive ? `${card.color}10` : undefined,
+                display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 11px', fontSize: '12px',
+                fontWeight: 700, borderRadius: '16px',
+                border: isActive ? `1.5px solid ${chip.color}` : '1px solid var(--border-color)',
+                background: isActive ? `${chip.color}14` : 'transparent',
+                color: isActive ? chip.color : 'var(--text-secondary)',
               }}
-            />
+            >
+              <Icon size={13} style={{ color: chip.color }} />
+              {chip.label}
+              <span style={{ fontWeight: 800, color: isActive ? chip.color : 'var(--text-primary)' }}>{chip.value}</span>
+            </button>
           );
         })}
       </div>
+
+      {/* Field issues — problems the field flagged from the mobile app. Clicking a row jumps
+          straight to the affected assignment. Resolved implicitly when the assignment leaves an
+          actionable state, so only open ones demand attention here. */}
+      {groupedIssues.length > 0 && (
+        <details className="glass-card" style={{ border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }} open={groupedIssues.length <= 3}>
+          <summary style={{ padding: '10px 16px', cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 700, color: 'var(--warning)' }}>
+            <AlertTriangle size={15} /> {groupedIssues.length} branch{groupedIssues.length > 1 ? 'es' : ''} with field issues
+            {openIssues.length > groupedIssues.length && (
+              <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>({openIssues.length} reports)</span>
+            )}
+          </summary>
+          <div style={{ maxHeight: '220px', overflowY: 'auto', borderTop: '1px solid var(--border-color)' }}>
+            {groupedIssues.map(({ latest: issue, count }) => (
+              <div
+                key={issue.assignmentId}
+                onClick={() => selectAndShow(issue.assignmentId)}
+                style={{ padding: '9px 16px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {issue.categoryLabel || issue.category || 'Issue'} · {issue.branchName || issue.assignmentNumber || issue.assignmentId.slice(0, 8)}
+                    {count > 1 && (
+                      <span title={`${count} reports on this assignment — showing the newest`}
+                        style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                        ×{count}
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                    {issue.assayerName || 'Assayer'} · {new Date(issue.reportedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                </div>
+                {issue.note && <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>{issue.note}</span>}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       {/* Search & Filter */}
       <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -530,7 +660,10 @@ export const Assignments: React.FC = () => {
         />
       </div>
 
-      <div className="responsive-grid-split" style={{ alignItems: 'start' }}>
+      {/* The execution desk's primary surface is the WORK LIST, so it gets the width: the shared
+          split class allots the left column only 320px (built for name-lists), which truncated
+          the table's Fee/Status/Actions columns. Details panel holds a fixed readable width. */}
+      <div className="responsive-grid-split" style={{ alignItems: 'start', gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 400px)' }}>
         {/* Left Column - Assignments List */}
         <div className="glass-card" style={{ padding: 0, overflowX: 'auto' }}>
           {isLoading ? (
@@ -543,41 +676,82 @@ export const Assignments: React.FC = () => {
           ) : (
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase' }}>
-                  <th style={{ padding: '16px 24px' }}>Assignment ID</th>
-                  <th style={{ padding: '16px 24px' }}>Project / Branch</th>
-                  <th style={{ padding: '16px 24px' }}>Assayer</th>
-                  <th style={{ padding: '16px 24px' }}>Status</th>
-                  <th style={{ padding: '16px 24px' }}>{isAttentionView ? 'Waiting' : 'Branch Status'}</th>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '11.5px', textTransform: 'uppercase' }}>
+                  <th style={{ padding: '10px 14px' }}>Assignment</th>
+                  <th style={{ padding: '10px 14px' }}>Assayer</th>
+                  <th
+                    style={{ padding: '10px 14px', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                    onClick={() => setDateSort(s => (s === 'asc' ? 'desc' : 'asc'))}
+                    title="Sort by scheduled date"
+                  >
+                    Scheduled {dateSort === 'asc' ? '▲' : '▼'}
+                  </th>
+                  <th style={{ padding: '10px 14px' }}>Fee</th>
+                  <th style={{ padding: '10px 14px' }}>Status</th>
+                  <th style={{ padding: '10px 14px' }}>{isAttentionView ? 'Waiting' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredAssignments.map((asn) => (
-                  <tr key={asn.id} onClick={() => selectAndShow(asn.id)} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(216,174,71,0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
-                    <td style={{ padding: '16px 24px', fontWeight: 600 }}>{asn.assignmentNumber}</td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div><b>{asn.projectBranch?.branch?.name}</b></div>
-                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{asn.project?.name}</span>
+                {filteredAssignments.map((asn) => {
+                  const rowBusy = quickBusyId === asn.id;
+                  const canAccept = asn.status === 'PENDING';
+                  const canComplete = asn.status === 'CHECKED_IN' || asn.status === 'IN_PROGRESS';
+                  const overdue = asn.scheduledDate && new Date(asn.scheduledDate).getTime() < Date.now() - 86_400_000
+                    && !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(asn.status);
+                  return (
+                  <tr key={asn.id} onClick={() => selectAndShow(asn.id)} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '13px', cursor: 'pointer', background: selectedAsnId === asn.id ? 'rgba(216,174,71,0.08)' : 'transparent', borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent-primary)' : '4px solid transparent' }}>
+                    <td style={{ padding: '10px 14px' }}>
+                      <div style={{ fontWeight: 700 }}>{asn.projectBranch?.branch?.name || asn.assignmentNumber}</div>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{asn.assignmentNumber} · {asn.project?.name}</span>
                     </td>
-                    <td style={{ padding: '16px 24px' }}>{asn.assayer?.displayName}</td>
-                    <td style={{ padding: '16px 24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <td style={{ padding: '10px 14px' }}>
+                      {asn.assayer?.displayName}
+                      {/* On-site marker: the check-in is the attendance evidence, worth a glance here. */}
+                      {asn.checkedInAt && <span title={`Checked in ${new Date(asn.checkedInAt).toLocaleString('en-IN')}`} style={{ marginLeft: '5px', color: 'var(--success)', fontWeight: 700 }}>📍</span>}
+                    </td>
+                    <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: overdue ? 'var(--danger)' : undefined, fontWeight: overdue ? 700 : undefined }}
+                      title={overdue ? 'Scheduled date has passed without completion' : undefined}>
+                      {asn.scheduledDate ? new Date(asn.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                      {overdue && ' ⚠'}
+                    </td>
+                    <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                      {(asn.agreedFee ?? asn.proposedFee) != null ? `₹${(asn.agreedFee ?? asn.proposedFee).toLocaleString('en-IN')}` : '—'}
+                    </td>
+                    <td style={{ padding: '10px 14px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
                         <AssignmentStatusBadge status={String(asn.projectBranch?.status || asn.status)} size="sm" />
                         {asn.status === 'REJECTED' && asn.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' && <AutoDeclinedChip />}
                         <PriorityBadge priority={asn.priority} />
                       </div>
                     </td>
-                    <td style={{ padding: '16px 24px', color: isAttentionView ? 'var(--text-muted)' : undefined, fontSize: isAttentionView ? '12px' : undefined }} onClick={(e) => e.stopPropagation()}>
-                      {isAttentionView
-                        ? formatRelativeTime(asn.createdAt)
-                        : (asn.assessment?.status ? (
-                          <span className="badge" style={{ background: 'rgba(216,174,71,0.12)', color: 'var(--accent)', padding: '2px 8px', fontWeight: 600, borderRadius: '4px', fontSize: '11px' }}>
-                            {assessmentStatusLabel(asn.assessment.status)}
-                          </span>
-                        ) : '-')}
+                    <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                      {isAttentionView ? (
+                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{formatRelativeTime(asn.createdAt)}</span>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          {canAccept && (
+                            <button onClick={() => quickAction(asn.id, 'ACCEPTED')} disabled={rowBusy}
+                              className="btn btn-primary" style={{ padding: '3px 9px', fontSize: '10.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
+                              {rowBusy ? '…' : 'Accept'}
+                            </button>
+                          )}
+                          {canComplete && (
+                            <button onClick={() => quickAction(asn.id, 'COMPLETED')} disabled={rowBusy}
+                              className="btn btn-primary" style={{ padding: '3px 9px', fontSize: '10.5px' }}>
+                              {rowBusy ? '…' : 'Complete'}
+                            </button>
+                          )}
+                          {!canAccept && !canComplete && (
+                            <button onClick={() => selectAndShow(asn.id)} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: '10.5px' }}>
+                              Open
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -667,7 +841,7 @@ export const Assignments: React.FC = () => {
                       </button>
                     )}
                     {selectedAsn.priority !== 'CRITICAL' && (
-                      <button onClick={() => { if (window.confirm('Escalate this assignment? It will be flagged as critical priority.')) runEscalate(); }} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)', marginLeft: 'auto' }}>
+                      <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)', marginLeft: 'auto' }}>
                         ⚠ Escalate
                       </button>
                     )}
@@ -679,14 +853,16 @@ export const Assignments: React.FC = () => {
                         type="text"
                         value={actionReason}
                         onChange={(e) => setActionReason(e.target.value)}
-                        placeholder={actionMode === 'REJECT' ? 'Reason for rejecting...' : 'Reason for cancelling...'}
+                        placeholder={actionMode === 'REJECT' ? 'Reason for rejecting...' : actionMode === 'CANCEL' ? 'Reason for cancelling...' : 'Reason for escalating (what went wrong?)...'}
                         style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '11.5px' }}
                       />
                       <button
-                        onClick={() => runTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
+                        onClick={() => actionMode === 'ESCALATE'
+                          ? runEscalate(actionReason || undefined)
+                          : runTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
                         disabled={actionBusy}
                         className="btn btn-primary"
-                        style={{ padding: '5px 10px', fontSize: '11px', background: 'var(--danger)', borderColor: 'var(--danger)' }}
+                        style={{ padding: '5px 10px', fontSize: '11px', background: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)', borderColor: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)' }}
                       >
                         Confirm
                       </button>
@@ -710,8 +886,10 @@ export const Assignments: React.FC = () => {
                 </div>
                 <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)' }}>
                   <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Fee</span>
-                  <p style={{ fontSize: '14px', fontWeight: 800, margin: '1px 0', background: 'linear-gradient(135deg, var(--warning), var(--warning))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                    ₹{selectedAsn.agreedFee ?? selectedAsn.proposedFee}
+                  {/* Plain color: the old same-color "gradient" text-fill rendered the fee invisible
+                      if the CSS variable ever failed to resolve. */}
+                  <p style={{ fontSize: '14px', fontWeight: 800, margin: '1px 0', color: 'var(--warning)' }}>
+                    ₹{(selectedAsn.agreedFee ?? selectedAsn.proposedFee)?.toLocaleString?.('en-IN') ?? (selectedAsn.agreedFee ?? selectedAsn.proposedFee)}
                   </p>
                 </div>
                 <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>
@@ -731,6 +909,32 @@ export const Assignments: React.FC = () => {
                     <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{selectedAsn.scheduledDate ? new Date(selectedAsn.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
                   </div>
                 </div>
+                {/* On-site check-in evidence: when and how close to the branch the assayer stood.
+                    This is the attendance record the whole execution stage hinges on, and it was
+                    recorded by the backend but never shown to the desk. */}
+                {selectedAsn.checkedInAt && (
+                  <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>
+                    <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Checked in on site</span>
+                    <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
+                      {new Date(selectedAsn.checkedInAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                      {selectedAsn.checkInDistanceMeters != null && (
+                        <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · {selectedAsn.checkInDistanceMeters < 1000 ? `${selectedAsn.checkInDistanceMeters}m` : `${(selectedAsn.checkInDistanceMeters / 1000).toFixed(1)}km`} from branch</span>
+                      )}
+                      {selectedAsn.checkInAccuracyMeters != null && (
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> (±{selectedAsn.checkInAccuracyMeters}m GPS)</span>
+                      )}
+                    </p>
+                    {selectedAsn.checkInLatitude != null && selectedAsn.checkInLongitude != null && (
+                      <a
+                        href={`https://www.google.com/maps?q=${selectedAsn.checkInLatitude},${selectedAsn.checkInLongitude}`}
+                        target="_blank" rel="noreferrer"
+                        style={{ fontSize: '10.5px', color: 'var(--accent)', textDecoration: 'none' }}
+                      >
+                        View location on map ↗
+                      </a>
+                    )}
+                  </div>
+                )}
                 <div style={{ background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-pending-bg)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <ExternalLink size={13} style={{ color: 'var(--warning)' }} />
                   <div>

@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare, RotateCcw } from 'lucide-react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare, RotateCcw, Phone } from 'lucide-react';
 
 import { api } from '../../services/api';
+import { callManager } from '../../services/call.service';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { userMessage } from '../../services/errors';
 
@@ -157,6 +158,9 @@ export const ThreadPanel: React.FC<Props> = ({
   };
 
   const resolved = status === 'RESOLVED';
+  // Voice call to the assayer over this clarification. Button disables while any call is active.
+  const callState = useSyncExternalStore(callManager.subscribe, callManager.getState);
+  const callBusy = callState.status !== 'idle';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: 'var(--bg-surface)' }}>
@@ -179,6 +183,20 @@ export const ThreadPanel: React.FC<Props> = ({
           </span>
         </div>
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {!resolved && (
+          <button
+            onClick={() => callManager.startCall(queryId)}
+            disabled={callBusy}
+            className="btn btn-secondary"
+            title={callBusy ? 'A call is already in progress' : 'Call assayer'}
+            style={{
+              fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px',
+              fontWeight: 600, opacity: callBusy ? 0.55 : 1, cursor: callBusy ? 'not-allowed' : 'pointer',
+            }}>
+            <Phone size={12} /> Call assayer
+          </button>
+        )}
         {!resolved ? (
           <button onClick={resolve} disabled={busy} className="btn btn-secondary"
             style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
@@ -191,6 +209,7 @@ export const ThreadPanel: React.FC<Props> = ({
             {busy ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />} Reopen
           </button>
         )}
+        </div>
       </div>
 
       {/* Messages Feed */}

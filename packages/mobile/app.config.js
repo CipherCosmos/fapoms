@@ -1,6 +1,6 @@
 module.exports = {
   expo: {
-    name: 'Karat',
+    name: 'Orbit',
     slug: 'fapoms-mobile',
     version: '1.0.0',
     orientation: 'portrait',
@@ -9,7 +9,7 @@ module.exports = {
     splash: {
       image: './assets/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#131017',
+      backgroundColor: '#0E1016',
     },
     assetBundlePatterns: ['**/*'],
     /**
@@ -38,13 +38,15 @@ module.exports = {
       buildNumber: '1',
       infoPlist: {
         NSCameraUsageDescription:
-          'Karat requires camera access to scan gold audit sheets and capture document evidence.',
+          'Orbit requires camera access to scan gold audit sheets and capture document evidence.',
         NSLocationWhenInUseUsageDescription:
-          'Karat requires location access to verify assayer presence at bank audit branches and show navigate routes.',
+          'Orbit requires location access to verify assayer presence at bank audit branches and show navigate routes.',
         NSPhotoLibraryUsageDescription:
-          'Karat requires photo library access to upload expense receipts and audit paperwork.',
+          'Orbit requires photo library access to upload expense receipts and audit paperwork.',
         NSFaceIDUsageDescription:
-          'Karat uses Face ID to allow quick biometric sign-in.',
+          'Orbit uses Face ID to allow quick biometric sign-in.',
+        NSMicrophoneUsageDescription:
+          'Orbit uses the microphone for in-app voice calls with the operations desk about audit clarifications.',
       },
     },
     android: {
@@ -64,6 +66,11 @@ module.exports = {
         'USE_FINGERPRINT',
         'VIBRATE',
         'NOTIFICATIONS',
+        // In-app voice calling (LiveKit/WebRTC): capture the mic, route audio to the
+        // earpiece/speaker, and reach Bluetooth headsets on Android 12+.
+        'RECORD_AUDIO',
+        'BLUETOOTH_CONNECT',
+        'MODIFY_AUDIO_SETTINGS',
       ],
       config: {
         googleMaps: {
@@ -76,6 +83,10 @@ module.exports = {
       },
     },
     plugins: [
+      // Wires @livekit/react-native + react-native-webrtc into the native build (audio-mode
+      // service config, required Android/iOS project tweaks). Native builds only — Expo Go
+      // ignores config plugins, where calls.ts detects the missing module and disables calling.
+      '@livekit/react-native-expo-plugin',
       [
         'expo-location',
         {

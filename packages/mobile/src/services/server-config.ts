@@ -37,11 +37,14 @@ export function getDefaultServerUrl(): string {
   if (envUrl) return normaliseServerUrl(envUrl);
 
   if (__DEV__) {
-    // In Expo dev the bundler's host is the development machine, which is also where the
-    // backend runs — a far better guess than a loopback alias.
     const hostUri = Constants.expoConfig?.hostUri;
     if (hostUri) {
-      const ip = hostUri.split(':')[0];
+      let ip = hostUri.split(':')[0];
+      // adb reverse makes hostUri 127.0.0.1, which is the emulator's own loopback.
+      // Rewrite to 10.0.2.2 so the request reaches the host machine.
+      if (Platform.OS === 'android' && (ip === '127.0.0.1' || ip === 'localhost')) {
+        ip = '10.0.2.2';
+      }
       return `http://${ip}:${DEFAULT_PORT}/api/v1`;
     }
   }

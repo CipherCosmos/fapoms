@@ -39,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     {
       category: 'Operations',
       items: [
+        { name: 'Ops Inbox', path: '/inbox', icon: Inbox },
         { name: 'Projects', path: '/projects', icon: FolderKanban },
         { name: 'Stage 1: Planning', path: '/planning', icon: Map },
         { name: 'Stage 2: Schedule Dispatch', path: '/scheduling', icon: CalendarDays },

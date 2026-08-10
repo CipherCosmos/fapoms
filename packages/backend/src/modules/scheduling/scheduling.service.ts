@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
 import { ScheduleEntity } from './schedule.entity';
 import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
@@ -8,6 +8,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { EventCategory, ScheduleStatus, ProjectBranchStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 export interface CreateScheduleDto {
   assignmentId: string;
@@ -30,6 +31,7 @@ export class SchedulingService {
     private readonly auditService: AuditService,
     private readonly constraintEvaluator: ConstraintEvaluator,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   async create(dto: CreateScheduleDto, userId: string): Promise<ScheduleEntity> {
@@ -71,6 +73,7 @@ export class SchedulingService {
       existingSchedule.updatedBy = userId;
       const updated = await this.scheduleRepository.save(existingSchedule);
       await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate).catch(() => {});
+      this.emitDispatchNotification(assignment, updated.id, dto.scheduledDate, userId);
       return updated;
     }
 
@@ -99,6 +102,8 @@ export class SchedulingService {
       remarks: `Confirmed schedule for assignment ${assignment.assignmentNumber} on ${dto.scheduledDate}.`,
     });
 
+    this.emitDispatchNotification(assignment, saved.id, dto.scheduledDate, userId);
+
     try {
       this.eventPublisher.publish('schedule:created', {
         eventType: 'schedule:created',
@@ -116,6 +121,29 @@ export class SchedulingService {
     }
 
     return saved;
+  }
+
+  /**
+   * Tell the assayer their audit is on the calendar. Fire-and-forget by design: the schedule is
+   * already saved, and Bull gives delivery its own durability — but a dispatch nobody hears about
+   * is not a dispatch, so this fires on every create/re-date. Dedupe includes the date so moving
+   * the same schedule to a new day notifies again, while retries of one dispatch collapse.
+   */
+  private emitDispatchNotification(assignment: any, scheduleId: string, scheduledDate: string, userId: string): void {
+    this.notificationDispatch.emitSafe({
+      type: 'SCHEDULE_DISPATCHED',
+      entityType: 'SCHEDULE',
+      entityId: scheduleId,
+      actorUserId: userId,
+      assayerId: assignment.assayerId,
+      dedupeKey: `SCHEDULE_DISPATCHED:${scheduleId}:${scheduledDate}`,
+      payload: {
+        assignmentId: assignment.id,
+        assignmentNumber: assignment.assignmentNumber,
+        branchName: assignment.projectBranch?.branch?.name ?? 'the branch',
+        scheduledDate,
+      },
+    });
   }
 
   async findOne(id: string): Promise<ScheduleEntity> {
@@ -137,10 +165,16 @@ export class SchedulingService {
   ): Promise<{ schedules: ScheduleEntity[]; total: number }> {
     const where: any = { isActive: true };
     if (status) where.status = status;
-    if (dateFrom || dateTo) {
-      where.scheduledDate = {} as any;
-      if (dateFrom) where.scheduledDate.gte = new Date(dateFrom);
-      if (dateTo) where.scheduledDate.lte = new Date(dateTo);
+    // Real TypeORM operators. This used to build a plain `{gte, lte}` object, which TypeORM
+    // serialises as a literal JSON string into the SQL — `invalid input syntax for type date` —
+    // and it lay dormant because nothing sent dateFrom/dateTo until the calendar was month-scoped.
+    // Date-only strings on purpose: the column is `date`, and a Date-with-time never matches it.
+    if (dateFrom && dateTo) {
+      where.scheduledDate = Between(dateFrom, dateTo);
+    } else if (dateFrom) {
+      where.scheduledDate = MoreThanOrEqual(dateFrom);
+    } else if (dateTo) {
+      where.scheduledDate = LessThanOrEqual(dateTo);
     }
     const [schedules, total] = await this.scheduleRepository.findAndCount({
       where,
@@ -182,6 +216,8 @@ export class SchedulingService {
 
     schedule.status = targetStatus;
     if (remarks) schedule.remarks = remarks;
+    // Captured before the overwrite — the reschedule notification tells the assayer what moved.
+    const previousDate = schedule.scheduledDate;
     if (newScheduledDate) {
       schedule.scheduledDate = new Date(newScheduledDate);
       if (schedule.assignmentId) {
@@ -218,6 +254,30 @@ export class SchedulingService {
       userId,
       remarks: remarks ?? `Transitioned schedule to ${targetStatus}`,
     });
+
+    // The assayer must hear that their audit moved — the reschedule was previously silent, so a
+    // field worker could drive to a branch on the original date.
+    if (targetStatus === ScheduleStatus.RESCHEDULED && newScheduledDate) {
+      const fmt = (d: Date | string | null) => {
+        if (!d) return 'the original date';
+        const dd = typeof d === 'string' ? new Date(d) : d;
+        return Number.isNaN(dd.getTime()) ? String(d) : dd.toISOString().slice(0, 10);
+      };
+      this.notificationDispatch.emitSafe({
+        type: 'SCHEDULE_RESCHEDULED',
+        entityType: 'SCHEDULE',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        dedupeKey: `SCHEDULE_RESCHEDULED:${saved.id}:${newScheduledDate}`,
+        payload: {
+          assignmentId: saved.assignmentId,
+          branchName: (schedule.assignment as any)?.projectBranch?.branch?.name ?? 'the branch',
+          previousDate: fmt(previousDate),
+          newDate: newScheduledDate,
+        },
+      });
+    }
 
     try {
       this.eventPublisher.publish('schedule:updated', {

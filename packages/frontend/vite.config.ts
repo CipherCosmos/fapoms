@@ -93,6 +93,13 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      // LiveKit signaling rides the backend's /livekit proxy; the browser only ever
+      // connects to this dev server's origin.
+      '/livekit': {
+        target: API_TARGET,
+        ws: true,
+        changeOrigin: true,
+      },
     },
     watch: {
       // Use polling for reliable file watching inside Docker (bind mounts)

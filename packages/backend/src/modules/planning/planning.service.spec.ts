@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { PlanningService } from './planning.service';
 import { RecommendationEngine } from './recommendation.engine';
+import { ConstraintEvaluator } from './constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { BranchQueryService } from '../branch/branch-query.service';
@@ -78,6 +79,11 @@ describe('PlanningService', () => {
         {
           provide: RoutingService,
           useValue: mockRoutingService,
+        },
+        {
+          provide: ConstraintEvaluator,
+          // Every day is a working day unless a test says otherwise.
+          useValue: { checkHoliday: jest.fn().mockResolvedValue({ passed: true }) },
         },
       ],
     }).compile();

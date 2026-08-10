@@ -588,11 +588,23 @@ export class PlanningController {
     return { success: true, data: await this.commandCenterService.overview({ clientId, state }) };
   }
 
+  @Get('suggest-date')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Suggest the first workable audit date for a branch (skips Sundays, holidays, off Saturdays)' })
+  async suggestAuditDate(@Query('branchId', ParseUUIDPipe) branchId: string) {
+    return { success: true, data: await this.planningService.suggestAuditDate(branchId) };
+  }
+
   @Get('recommendations')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch' })
-  async getRecommendations(@Query('branchId', ParseUUIDPipe) branchId: string) {
-    const recommendations = await this.planningService.getRecommendedCandidates(branchId);
+  @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch, for a given audit date' })
+  async getRecommendations(
+    @Query('branchId', ParseUUIDPipe) branchId: string,
+    // The audit date availability is evaluated against (YYYY-MM-DD). Ops plans ahead, so the UI
+    // sends its date picker; omitted, today is assumed (legacy callers).
+    @Query('date') date?: string,
+  ) {
+    const recommendations = await this.planningService.getRecommendedCandidates(branchId, {}, date);
     return {
       success: true,
       data: recommendations,

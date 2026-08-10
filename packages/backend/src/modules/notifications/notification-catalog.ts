@@ -120,6 +120,31 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
+  // ── Schedule dispatch ─────────────────────────────────────────────────────
+  // The whole point of Stage 2 is telling the assayer when to show up — yet until these
+  // entries existed, creating or moving a schedule sent the assayer nothing at all.
+  SCHEDULE_DISPATCHED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Audit scheduled',
+    body: 'Your audit at ${branchName} is confirmed for ${scheduledDate}.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  SCHEDULE_RESCHEDULED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Audit date changed',
+    body: 'Your audit at ${branchName} has moved from ${previousDate} to ${newDate}.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   ASSIGNMENT_AUTO_DECLINED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,

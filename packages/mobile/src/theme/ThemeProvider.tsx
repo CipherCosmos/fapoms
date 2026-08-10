@@ -18,7 +18,7 @@ import { readPreference, writePreference } from '../services/token-store';
 
 export type ThemePreference = Mode | 'system';
 
-const STORAGE_KEY = 'fapoms_theme_preference';
+const STORAGE_KEY = 'orbit_theme_preference';
 
 /**
  * Async, because it now reads the same device store the rest of the app uses.
@@ -30,7 +30,10 @@ const STORAGE_KEY = 'fapoms_theme_preference';
 async function readStoredPreference(): Promise<ThemePreference> {
   const raw = await readPreference(STORAGE_KEY);
   if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
-  return 'system';
+  // Dark-first: the Midnight Neon identity is designed dark, so a fresh install opens dark
+  // rather than following a possibly-light system setting. Light and system remain one tap away
+  // in Profile > App > Appearance.
+  return 'dark';
 }
 
 function writeStoredPreference(pref: ThemePreference) {
@@ -58,7 +61,7 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const systemScheme = useColorScheme();
-  const [preference, setPreferenceState] = useState<ThemePreference>('system');
+  const [preference, setPreferenceState] = useState<ThemePreference>('dark');
   /**
    * Guards the first write.
    *

@@ -22,6 +22,7 @@ import {
   getPricingRates,
   getDayPlans,
   getRecommendations,
+  suggestAuditDate,
   optimizeRoute,
 } from '../services/planning';
 
@@ -78,6 +79,9 @@ interface ExcludedCandidate {
   displayName: string;
   reason: string;
   detail?: string;
+  kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS';
+  distanceKm?: number | null;
+  nextAvailableDate?: string | null;
 }
 
 interface AssayerDetail {
@@ -343,6 +347,14 @@ export const PlanningWorkspace: React.FC = () => {
     d.setDate(d.getDate() + 1);
     return localDateKey(d);
   });
+  /**
+   * Auto vs manual date mode. While false (auto), selecting a branch asks the backend for the
+   * first workable audit date (skips Sundays, state holidays, off Saturdays) and seeds the
+   * picker with it. The moment ops touches the picker, their choice is pinned and branch
+   * switches stop overwriting it — manual mode until the page reloads.
+   */
+  const planDatePinnedRef = useRef(false);
+  const pinPlanDate = (v: string) => { planDatePinnedRef.current = true; setScheduledAuditDate(v); };
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
@@ -450,6 +462,22 @@ export const PlanningWorkspace: React.FC = () => {
       setCandidates([]);
       setLastContact({});
     }
+    // scheduledAuditDate is a dep on purpose: recommendations are evaluated FOR that date, so
+    // changing the planned date must re-rank (availability and fees can both differ by day).
+  }, [selectedBranchId, branches, scheduledAuditDate]);
+
+  // Auto date mode: on branch selection, ask the backend for the first workable audit date for
+  // THIS branch (its state's holidays, working Saturdays) and seed the picker. Skipped once ops
+  // pins a date manually — their choice then survives branch switches.
+  useEffect(() => {
+    if (!selectedBranchId || planDatePinnedRef.current) return;
+    const pb = branches.find(b => b.id === selectedBranchId);
+    if (!pb) return;
+    let cancelled = false;
+    suggestAuditDate(pb.branchId)
+      .then(({ date }) => { if (!cancelled && date && !planDatePinnedRef.current) setScheduledAuditDate(date); })
+      .catch(() => { /* suggestion is best-effort; the tomorrow default stands */ });
+    return () => { cancelled = true; };
   }, [selectedBranchId, branches]);
 
   const { on: onSocketEvent } = useSocket();
@@ -817,7 +845,11 @@ export const PlanningWorkspace: React.FC = () => {
       // withMeta so we also receive `excluded` — candidates the engine filtered out, with the
       // reason. Previously they vanished silently and ops had no way to tell "nobody suitable"
       // apart from "everyone blocked by one misconfigured rule".
-      const response = await getRecommendations<Candidate, ExcludedCandidate>(branchId);
+      //
+      // Evaluated FOR the planned audit date, not for "today": availability, double-booking and
+      // fee quotes all describe scheduledAuditDate — the same date the assignment will be created
+      // with. (The backend used to assume today, so a candidate free tomorrow showed "on leave".)
+      const response = await getRecommendations<Candidate, ExcludedCandidate>(branchId, scheduledAuditDate);
       setCandidates(response.data || []);
       setExcludedCandidates(response.meta?.excluded || []);
     } catch (err: any) {
@@ -1053,7 +1085,7 @@ export const PlanningWorkspace: React.FC = () => {
    * operator's reason on the assignment. The engine's filters (min-radius, workload, soft rules) are
    * advisory; this is the deliberate, auditable override for when a human knows better.
    */
-  const handleAssignExcluded = async (candidate: ExcludedCandidate, reason: string) => {
+  const handleAssignExcluded = async (candidate: ExcludedCandidate, reason: string, scheduledDate?: string) => {
     const selectedPb = branches.find(b => b.id === selectedBranchId);
     if (!selectedPb) {
       setMessage({ type: 'error', text: 'Select a branch before assigning an excluded candidate.' });
@@ -1066,10 +1098,16 @@ export const PlanningWorkspace: React.FC = () => {
         body: JSON.stringify({
           projectBranchId: selectedPb.id,
           assayerId: candidate.assayerId,
+          // Date-bound exclusions (booked / on leave today) are assigned FOR a chosen date the
+          // assayer is free — the whole point of surfacing them instead of hiding them.
+          scheduledDate: scheduledDate || undefined,
           remarks: `Filter override — bypassed "${candidate.reason}". Reason: ${reason}`,
         }),
       });
-      setMessage({ type: 'success', text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'} (override recorded).` });
+      setMessage({
+        type: 'success',
+        text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'}${scheduledDate ? ` for ${scheduledDate}` : ''} (override recorded).`,
+      });
       if (selectedProjectId) loadProjectBranches(selectedProjectId);
       if (selectedBranchId) loadCandidates(selectedBranchId);
     } catch (err: any) {
@@ -1098,9 +1136,17 @@ export const PlanningWorkspace: React.FC = () => {
       );
     }
     if (displayCandidates.length === 0) {
-      const msg = slaEnabled
-        ? `No assayers found beyond ${slaRadius}km minimum radius.`
-        : 'No suitable assayers found within 700km.';
+      // Say what actually emptied the list. Blaming the min-radius filter when the ENGINE
+      // returned nobody sent ops chasing a filter that wasn't the problem — while the real
+      // story ("your only nearby assayer is blocked by the rotation rule") sat hidden, even
+      // though that assayer's marker was visible on the map.
+      const msg = candidates.length > 0
+        ? (slaEnabled
+            ? `All ${candidates.length} candidate${candidates.length > 1 ? 's are' : ' is'} hidden by the radius filters below.`
+            : 'All candidates are hidden by the distance filters.')
+        : excludedCandidates.length > 0
+          ? `No assayer is eligible for this date — ${excludedCandidates.length} nearby ${excludedCandidates.length > 1 ? 'were' : 'was'} excluded (reasons below).`
+          : 'No assayers found in range for this date.';
       return (
         <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} style={{ color: 'var(--accent-secondary)' }} />
@@ -1142,6 +1188,13 @@ export const PlanningWorkspace: React.FC = () => {
               Reopen for planning
             </button>
           )}
+          {/* The excluded list is MOST important exactly when the eligible list is empty — it's
+              the difference between "nobody exists near this branch" and "someone is 22 km away
+              but blocked by a rule you can override". It used to render only under a non-empty
+              candidate list, so the empty state hid the one thing that explained the map marker. */}
+          <div style={{ alignSelf: 'stretch', textAlign: 'left' }}>
+            <ExcludedCandidatesPanel excluded={excludedCandidates} onAssignAnyway={handleAssignExcluded} assigningId={assigningExcludedId} defaultOpen />
+          </div>
         </div>
       );
     }
@@ -1648,6 +1701,8 @@ export const PlanningWorkspace: React.FC = () => {
               onToggleMaxRadius={setMaxRadiusEnabled}
               maxRadius={maxRadius}
               onMaxRadiusChange={setMaxRadius}
+              planDate={scheduledAuditDate}
+              onPlanDateChange={pinPlanDate}
               onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -1745,6 +1800,8 @@ export const PlanningWorkspace: React.FC = () => {
               onToggleMaxRadius={setMaxRadiusEnabled}
               maxRadius={maxRadius}
               onMaxRadiusChange={setMaxRadius}
+              planDate={scheduledAuditDate}
+              onPlanDateChange={pinPlanDate}
                     onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
                     onAccept={handleAcceptCounterOffer}
                     onCounter={handleOpenCounterProposal}
@@ -1806,6 +1863,8 @@ export const PlanningWorkspace: React.FC = () => {
               onToggleMaxRadius={setMaxRadiusEnabled}
               maxRadius={maxRadius}
               onMaxRadiusChange={setMaxRadius}
+              planDate={scheduledAuditDate}
+              onPlanDateChange={pinPlanDate}
             onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -1920,7 +1979,7 @@ export const PlanningWorkspace: React.FC = () => {
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={11} /> Audit Scheduled Date
                 </label>
-                <input type="date" value={scheduledAuditDate} onChange={e => setScheduledAuditDate(e.target.value)} required={!counterOfferAssignmentId}
+                <input type="date" value={scheduledAuditDate} onChange={e => pinPlanDate(e.target.value)} required={!counterOfferAssignmentId}
                   style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>

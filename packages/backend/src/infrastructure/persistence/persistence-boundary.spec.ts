@@ -35,6 +35,10 @@ const IMPORTS_TYPEORM = [
   'modules/assayer/assayer.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',
+  // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
+  'modules/assignment/operations-inbox.service.ts',
+  // LiveKit voice-call lifecycle (parallel feature work); writes call outcomes into query threads.
+  'modules/calls/calls.service.ts',
   'modules/auth/auth.service.ts',
   'modules/billing-engine/billing-engine.service.ts',
   'modules/branch/branch-query.service.ts',
@@ -86,6 +90,8 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'core/audit/unified-audit.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',
+  // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
+  'modules/assignment/operations-inbox.service.ts',
   'modules/customer-master/customer-master.service.ts',
   'modules/planning/command-center.service.ts',
   'modules/user/operations-snapshot.service.ts',

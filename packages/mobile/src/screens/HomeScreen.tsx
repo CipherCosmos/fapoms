@@ -4,6 +4,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } from '../components/ui/primitives';
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
+import { relativeDay } from '../utils/dates';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
 import { getAssignmentTotalFee } from '../utils/fees';
@@ -263,9 +264,11 @@ const OfferCard: React.FC<{
   onDecline: () => void;
 }> = ({ assignment, busy, onAccept, onDecline }) => {
   const t = useTheme();
-  const when = new Date(assignment.scheduledDate);
   const fee = getAssignmentTotalFee(assignment);
   const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
+  // Accepting an offer is a commitment to a date; "Tomorrow" and "In 3 days" are different
+  // decisions, and the bare date left that arithmetic to the assayer.
+  const when = relativeDay(assignment.scheduledDate);
 
   return (
     <Card level={2} style={{ gap: t.space.lg }}>
@@ -279,8 +282,11 @@ const OfferCard: React.FC<{
         ) : null}
       </View>
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.lg }}>
-        <Meta icon="time-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: t.space.sm }}>
+        <Badge label={when.label} tone={when.tone} icon="time-outline" />
+        {when.diffDays !== 0 && (
+          <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+        )}
         {assignment.distanceKm != null && (
           <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
         )}
@@ -307,12 +313,15 @@ const CurrentJobCard: React.FC<{
   onNavigate: () => void;
 }> = ({ assignment, busy, onOpen, onCheckIn, onScan, onNavigate }) => {
   const t = useTheme();
-  const when = new Date(assignment.scheduledDate);
   const checkedIn = assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS';
   const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
+  // "Today" / "In 8 days" / "3 days overdue" — the calendar arithmetic done for the assayer.
+  // The bare date this replaces answered "when is it?" but not the question the hero card
+  // exists for: "is this now?".
+  const when = relativeDay(assignment.scheduledDate);
 
   return (
-    <Card level={2} style={{ gap: t.space.lg }}>
+    <Card level={2} style={{ gap: t.space.lg, borderColor: t.colors.primary + '40' }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
         <View style={{ flex: 1, gap: t.space.xs }}>
           <Badge
@@ -334,8 +343,14 @@ const CurrentJobCard: React.FC<{
         </View>
       </View>
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.lg }}>
-        <Meta icon="time-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: t.space.sm }}>
+        {/* Urgency first: overdue reads danger, today accent, tomorrow warning. */}
+        <Badge label={when.label} tone={when.tone} icon="time-outline" />
+        {/* The concrete date stays for anything not today — "In 8 days" alone would make the
+            assayer open Details just to write the date down. */}
+        {when.diffDays !== 0 && (
+          <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+        )}
         {assignment.distanceKm != null && (
           <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
         )}
@@ -349,10 +364,11 @@ const CurrentJobCard: React.FC<{
         navigate as three equal buttons made the assayer decide what the app already knows.
       */}
       <View style={{ gap: t.space.sm }}>
+        {/* The one glowing CTA on the screen — the next real-world step for the current job. */}
         {checkedIn ? (
-          <Button label="Scan audited return" icon="scan-outline" onPress={onScan} full />
+          <Button label="Scan audited return" icon="scan-outline" onPress={onScan} glow full />
         ) : (
-          <Button label="Check in at branch" icon="location-outline" onPress={onCheckIn} full />
+          <Button label="Check in at branch" icon="location-outline" onPress={onCheckIn} glow full />
         )}
         {/*
           Directions disappear once the assayer is checked in — they are standing in the
@@ -371,12 +387,24 @@ const CurrentJobCard: React.FC<{
   );
 };
 
+/**
+ * A meta fact as a neon chip — time, distance, customers, fee.
+ *
+ * Was a bare icon+label row that dissolved into the card. As a tinted pill with a cyan glyph
+ * it reads as a scannable tag, the pattern every modern field/delivery app uses to surface the
+ * few numbers that matter at a glance.
+ */
 const Meta: React.FC<{ icon: string; label: string }> = ({ icon, label }) => {
   const t = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}>
-      <Icon name={icon} size={14} color={t.colors.textFaint} />
-      <AppText variant="small" tone="muted">
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      backgroundColor: t.colors.surfaceAlt,
+      borderWidth: 1, borderColor: t.colors.border,
+      paddingHorizontal: 10, paddingVertical: 6, borderRadius: t.radius.pill,
+    }}>
+      <Icon name={icon} size={13} color={t.colors.accent} />
+      <AppText variant="caption" tone="muted">
         {label}
       </AppText>
     </View>

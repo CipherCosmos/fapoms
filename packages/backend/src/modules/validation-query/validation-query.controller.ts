@@ -279,6 +279,7 @@ export class ValidationQueryController {
     return { success: true, data: await this.validationQueryService.getClarificationWorklist() };
   }
 
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @Get()
   @ApiOperation({ summary: 'List validation queries (paginated; page/limit, default limit 50)' })
   async findAll(

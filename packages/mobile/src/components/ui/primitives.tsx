@@ -179,6 +179,49 @@ export const Tappable: React.FC<{
   );
 };
 
+// ─────────────────────────────────────────────────────────── Atmosphere
+
+/**
+ * A soft neon bloom, faked without a gradient library.
+ *
+ * The app ships no `expo-linear-gradient` / SVG, so a true radial gradient is unavailable.
+ * Stacking concentric discs of one low opacity brightens the centre where they overlap and
+ * fades outward — close enough to a radial glow to give a flat ground atmospheric depth.
+ * Place absolutely behind content with `pointerEvents="none"`.
+ */
+export const GlowBlob: React.FC<{ color: string; size: number; opacity: number }> = ({ color, size, opacity }) => (
+  <View pointerEvents="none" style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+    {[1, 0.72, 0.46, 0.24].map((s, i) => (
+      <View
+        key={i}
+        style={{
+          position: 'absolute', width: size * s, height: size * s, borderRadius: (size * s) / 2,
+          backgroundColor: color, opacity,
+        }}
+      />
+    ))}
+  </View>
+);
+
+/**
+ * The standard ambient wash: a violet bloom top-left, a cyan one bottom-right, far behind the
+ * content. One component so every screen breathes the same air instead of each hand-placing
+ * its own blobs.
+ */
+export const AmbientGlow: React.FC = () => {
+  const t = useTheme();
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
+      <View style={{ position: 'absolute', top: -110, left: -90 }}>
+        <GlowBlob color={t.colors.primary} size={360} opacity={t.mode === 'dark' ? 0.05 : 0.045} />
+      </View>
+      <View style={{ position: 'absolute', bottom: -120, right: -100 }}>
+        <GlowBlob color={t.colors.accent} size={320} opacity={t.mode === 'dark' ? 0.045 : 0.04} />
+      </View>
+    </View>
+  );
+};
+
 // ─────────────────────────────────────────────────────────── Surfaces
 
 export const Card: React.FC<{
@@ -244,8 +287,10 @@ export const Button: React.FC<{
   loading?: boolean;
   disabled?: boolean;
   full?: boolean;
+  /** Neon halo under the button — for THE primary action of a screen, one per screen at most. */
+  glow?: boolean;
   style?: StyleProp<ViewStyle>;
-}> = ({ label, onPress, variant = 'primary', icon, size = 'md', loading, disabled, full, style }) => {
+}> = ({ label, onPress, variant = 'primary', icon, size = 'md', loading, disabled, full, glow, style }) => {
   const t = useTheme();
 
   const spec: Record<ButtonVariant, { bg: string; fg: string; border: string }> = {
@@ -268,14 +313,26 @@ export const Button: React.FC<{
       }
     : undefined;
 
+  // The halo reads as "lit" only while the button is actionable; a glowing disabled control
+  // would promise more than it can do.
+  const glowStyle = glow && !disabled && !loading
+    ? {
+        shadowColor: s.bg === 'transparent' ? t.colors.primary : s.bg,
+        shadowOpacity: 0.5,
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 10,
+      }
+    : null;
+
   return (
     <Tappable onPress={handlePress} disabled={disabled || loading} style={[full ? { alignSelf: 'stretch' } : undefined, style]}>
       <View
-        style={{
+        style={[{
           flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm,
           backgroundColor: s.bg, borderColor: s.border, borderWidth: s.border === 'transparent' ? 0 : 1,
           paddingVertical: pad.v, paddingHorizontal: pad.h, borderRadius: t.radius.md,
-        }}
+        }, glowStyle]}
       >
         {loading ? (
           <ActivityIndicator size="small" color={s.fg} />

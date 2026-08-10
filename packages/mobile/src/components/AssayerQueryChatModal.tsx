@@ -21,6 +21,7 @@ import { QueryThread } from './QueryThread';
 import { useTheme } from '../theme/ThemeProvider';
 import { useFeedback } from './ui/Feedback';
 import { AppText, Icon, IconButton, Tappable } from './ui/primitives';
+import { callingAvailable, startCall } from '../services/calls';
 
 interface AssayerQueryChatModalProps {
   visible: boolean;
@@ -191,6 +192,25 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
             <AppText variant="h3" numberOfLines={1}>Data Entry Team</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment.branchName}</AppText>
           </View>
+          {/* Voice call to the desk about the open clarification. Only offered when the
+              native WebRTC module exists (dev-client/production build — hidden in Expo Go)
+              and the active query is still open; there is nothing to discuss on a closed one. */}
+          {callingAvailable && activeQuery && activeQuery.status !== 'RESOLVED' && activeQuery.status !== 'CLOSED' && (
+            <IconButton
+              icon="call"
+              tone="primary"
+              accessibilityLabel="Call the data entry team about this query"
+              onPress={() => {
+                startCall({
+                  queryId: activeQuery.id,
+                  peerName: 'Data Entry Team',
+                  queryText: activeQuery.queryText || '',
+                }).catch((err: any) => {
+                  feedback.error('Call not started', err?.message || 'The call could not be placed.');
+                });
+              }}
+            />
+          )}
         </View>
 
         {/*

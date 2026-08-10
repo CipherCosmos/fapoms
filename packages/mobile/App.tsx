@@ -12,6 +12,7 @@ import {
 } from './src/services/notification.service';
 import { getAssignmentTotalFee } from './src/utils/fees';
 import { connectMobileSocket } from './src/services/socket';
+import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries } from './src/utils/queries';
 import { assetToBase64 } from './src/utils/pickDocument';
 
@@ -23,7 +24,7 @@ import { AssignmentProvider, useAssignments } from './src/context/AssignmentCont
 
 // UI Shell
 import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
-import { AppText, Button, Icon, Tappable } from './src/components/ui/primitives';
+import { AmbientGlow, AppText, Button, Icon, Tappable } from './src/components/ui/primitives';
 import { FeedbackProvider, useFeedback } from './src/components/ui/Feedback';
 
 // Screens
@@ -42,6 +43,7 @@ import { NotificationsModal } from './src/components/NotificationsModal';
 import { DocumentScanner } from './src/components/DocumentScanner';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
 import { InAppNavigationModal } from './src/components/InAppNavigationModal';
+import { CallModal } from './src/components/CallModal';
 import { RejectionModal } from './src/components/RejectionModal';
 import { ExpenseModal } from './src/components/ExpenseModal';
 import { NegotiateModal } from './src/components/NegotiateModal';
@@ -325,6 +327,15 @@ function AppMain() {
       socket?.on('expense:decided', onBilling);
 
       /**
+       * Voice-call signalling. The calls service owns all call state; these three events are
+       * simply forwarded to it. In Expo Go (no WebRTC module) the service ignores incoming
+       * rings rather than offering a call it cannot answer.
+       */
+      socket?.on('call:incoming', handleIncomingCall);
+      socket?.on('call:answered', handleCallAnswered);
+      socket?.on('call:ended', handleCallEnded);
+
+      /**
        * A safety net, not the delivery mechanism.
        *
        * This polled every 30 seconds — two requests per handset per half-minute, running
@@ -348,6 +359,9 @@ function AppMain() {
         socket?.off('notification:new', onNotification);
         socket?.off('billing:created', onBilling);
         socket?.off('expense:decided', onBilling);
+        socket?.off('call:incoming', handleIncomingCall);
+        socket?.off('call:answered', handleCallAnswered);
+        socket?.off('call:ended', handleCallEnded);
       };
     }
   }, [isAuthenticated, loadNotifications, loadAssayerProfile, loadAssignments, loadExpenseSummary]);
@@ -714,6 +728,10 @@ function AppMain() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
 
+      {/* The same ambient neon wash as the sign-in screen, behind every tab — one violet
+          bloom, one cyan — so the app's ground reads as atmosphere rather than flat black. */}
+      <AmbientGlow />
+
       {/* Header */}
       <TopBar
         name={assayerName}
@@ -1018,6 +1036,10 @@ function AppMain() {
         />
       )}
 
+      {/* Voice-call UI, mounted once at root like the navigation modal. Renders nothing
+          while no call exists; the calls service's store drives it entirely. */}
+      <CallModal />
+
       {navAssignment && (
         <InAppNavigationModal
           visible={Boolean(navAssignment)}
@@ -1132,7 +1154,10 @@ function AppMain() {
       {negotiateModalVisible && negotiateAssignment && (
         <NegotiateModal
           visible={negotiateModalVisible}
-          currentFee={negotiateAssignment.proposedFee || 1800}
+          // Pass the real fee (0 when unresolved), not `|| 1800`. The modal seeds an empty
+          // counter-offer box for a non-positive fee on purpose; injecting 1800 here defeated
+          // that guard and re-fabricated the phantom asking price it exists to prevent.
+          currentFee={negotiateAssignment.proposedFee || 0}
           onCancel={() => {
             setNegotiateModalVisible(false);
             setNegotiateAssignment(null);
@@ -1181,11 +1206,11 @@ class AppErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#131017', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#0E1016', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <StatusBar barStyle="light-content" />
           <View style={{ gap: 12, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color="#F0873C" />
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>Karat</Text>
+            <ActivityIndicator size="large" color="#8B7CFF" />
+            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>Orbit</Text>
             <Text style={{ color: '#ef4444', textAlign: 'center', marginVertical: 10 }}>
               {String(this.state.error?.message || this.state.error || 'App encountered an error')}
             </Text>
@@ -1220,8 +1245,8 @@ export default function App() {
   if (!apiReady) {
     return (
       <ThemeProvider>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#131017' }}>
-          <ActivityIndicator color="#FF8534" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0E1016' }}>
+          <ActivityIndicator color="#8B7CFF" />
         </View>
       </ThemeProvider>
     );

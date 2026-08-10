@@ -4,6 +4,7 @@ import { DataSource, Repository, In, Not, EntityManager } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
+import { OperationsInboxService } from './operations-inbox.service';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
@@ -94,6 +95,7 @@ export class AssignmentService {
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly constraintEvaluator: ConstraintEvaluator,
+    private readonly operationsInbox: OperationsInboxService,
     private readonly routingService: RoutingService,
     private readonly validationService: ValidationService,
     private readonly feePolicyService: FeePolicyService,
@@ -1398,8 +1400,17 @@ export class AssignmentService {
       },
     });
 
+    // Channel-aware: PHONE-channel assayers may never see an in-app offer, so "no in-app answer
+    // in 24h" is not a decline — it is the desk's call task still in progress. Auto-declining
+    // them killed offers mid-negotiation. Their offers only leave PENDING by a human recording
+    // the call outcome in the Operations Inbox.
+    const channels = await this.operationsInbox.resolveChannels(
+      [...new Set(pendingOffers.map((a) => a.assayerId))],
+    );
+
     let declinedCount = 0;
     for (const assignment of pendingOffers) {
+      if (channels.get(assignment.assayerId) === 'PHONE') continue;
       if (assignment.slaDueDate && assignment.slaDueDate < now) {
         try {
           await this.rejectOffer(assignment.id, 'SYSTEM', 'AUTO_DECLINED_SLA_EXPIRED');
@@ -1495,13 +1506,17 @@ export class AssignmentService {
      * `updatedBy` preserves who actually performed it.
      */
     const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
+    // Staff status is decided once and reused: it gates both "whose assignment is this" and
+    // the schedule/geofence guards below — ops correcting a record must not be blocked by
+    // rules that exist to keep the assayer's own attendance honest.
+    let staffOverride = false;
     if (!actorIsAssignedAssayer) {
       const actor = await this.dataSource
         .getRepository(UserEntity)
         .findOne({ where: { id: userId }, relations: ['roles'] })
         .catch(() => null);
       const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-      const staffOverride = actorRoles.some((r) =>
+      staffOverride = actorRoles.some((r) =>
         [
           SystemRole.SUPER_ADMINISTRATOR,
           SystemRole.ADMINISTRATOR,
@@ -1537,6 +1552,72 @@ export class AssignmentService {
       };
     }
 
+    // Distance from the branch, computed before anything is mutated so the geofence guard and
+    // the stored evidence are one figure, not two computations that could disagree.
+    const branchLat = Number(assignment.projectBranch?.branch?.latitude);
+    const branchLng = Number(assignment.projectBranch?.branch?.longitude);
+    const distanceMeters =
+      Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
+        ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
+        : null;
+
+    /**
+     * Check-in is only honest on the scheduled day, from the branch's vicinity — enforced,
+     * not merely recorded.
+     *
+     * Both facts were already captured (`checkInDistanceMeters`, `scheduledDate`) but nothing
+     * acted on them, and production data shows the result: an assignment CHECKED_IN nine days
+     * before its scheduled date, 677 km from the branch. In a bank-audit system the check-in
+     * *is* the attendance evidence, so a record like that is not noise — it is a false
+     * attestation the desk then relies on.
+     *
+     * Staff (`staffOverride`) bypass both rules: correcting a record on someone's behalf is
+     * exactly the case where the guard must yield. The assayer themselves cannot.
+     *
+     * The date is compared as an IST calendar day. Branches and assayers are Indian; the
+     * server's own timezone (UTC in the containers) must not decide which day it is in Sangli.
+     */
+    if (!staffOverride) {
+      const scheduledIso = assignment.scheduledDate ?? assignment.projectBranch?.scheduledDate ?? null;
+      if (scheduledIso) {
+        const istDay = (d: Date | string) =>
+          new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const today = istDay(new Date());
+        const scheduled = istDay(scheduledIso);
+        if (today !== scheduled) {
+          const early = today < scheduled;
+          return {
+            success: false,
+            assignment,
+            error: 'NOT_SCHEDULED_TODAY',
+            message: early
+              ? `This audit is scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })}. Check-in opens on the day itself — if the visit has genuinely moved, ask operations to reschedule it first.`
+              : `This audit was scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })} and that day has passed. Ask operations to reschedule it before checking in.`,
+          };
+        }
+      }
+
+      /**
+       * Geofence: 2 km around the branch, widened by the device's own reported accuracy so a
+       * poor rural GPS fix is not punished. 2 km is far beyond geocoding noise for a branch
+       * address while still making "677 km away" impossible. Skipped when the branch has no
+       * coordinates — a guard that fires on missing master data would block legitimate work.
+       */
+      const GEOFENCE_METERS = 2000;
+      if (distanceMeters != null) {
+        const allowance = GEOFENCE_METERS + Math.max(0, accuracyMeters ?? 0);
+        if (distanceMeters > allowance) {
+          const km = (distanceMeters / 1000).toFixed(1);
+          return {
+            success: false,
+            assignment,
+            error: 'TOO_FAR_FROM_BRANCH',
+            message: `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
+          };
+        }
+      }
+    }
+
     /**
      * Check-in position is stored in real columns, not concatenated into `remarks`.
      *
@@ -1551,13 +1632,7 @@ export class AssignmentService {
     assignment.checkInLongitude = lng;
     assignment.checkInAccuracyMeters = accuracyMeters ?? null;
     assignment.checkedInAt = now;
-
-    const branchLat = Number(assignment.projectBranch?.branch?.latitude);
-    const branchLng = Number(assignment.projectBranch?.branch?.longitude);
-    assignment.checkInDistanceMeters =
-      Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
-        ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
-        : null;
+    assignment.checkInDistanceMeters = distanceMeters;
 
     assignment.status = AssignmentStatus.CHECKED_IN;
     assignment.updatedBy = userId || assignment.assayerId || id;
