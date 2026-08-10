@@ -6,6 +6,9 @@ import * as path from 'path';
 dotenv.config({ path: path.join(process.cwd(), '.env') });
 dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 
+/** True when this file is the compiled build (dist) rather than the ts-node source. */
+const IS_COMPILED = __filename.endsWith('.js');
+
 export const AppDataSource = new DataSource({
   type: 'postgres',
   host: process.env.DB_HOST || 'localhost',
@@ -15,15 +18,29 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_DATABASE || 'fapoms',
   synchronize: process.env.DB_SYNCHRONIZE === 'true',
   logging: process.env.DB_LOGGING === 'true',
-  entities: [
-    path.join(process.cwd(), 'dist/**/*.entity.js'),
-    path.join(process.cwd(), 'dist/modules/**/*.entities.js'),
-    path.join(process.cwd(), 'src/**/*.entity.ts'),
-    path.join(process.cwd(), 'src/modules/**/*.entities.ts')
-  ],
-  migrations: [
-    path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js'),
-    path.join(process.cwd(), 'src/infrastructure/database/migrations/*.ts')
-  ],
+  /**
+   * Load EITHER the compiled output or the TypeScript sources — never both.
+   *
+   * These globs used to list `dist/**` and `src/**` together. Once the project has been built
+   * (which every production deploy does before running migrations), both matched the same 46
+   * migrations, and TypeORM aborted with "Duplicate migrations: …" before executing a single
+   * one. `migration:run` was therefore guaranteed to fail on a real deployment while appearing
+   * to work in a fresh dev checkout that had no `dist/` yet.
+   *
+   * Which set to use is decided by how this very file is being executed: `.js` means we are
+   * running the compiled build, `.ts` means ts-node.
+   */
+  entities: IS_COMPILED
+    ? [
+        path.join(process.cwd(), 'dist/**/*.entity.js'),
+        path.join(process.cwd(), 'dist/modules/**/*.entities.js'),
+      ]
+    : [
+        path.join(process.cwd(), 'src/**/*.entity.ts'),
+        path.join(process.cwd(), 'src/modules/**/*.entities.ts'),
+      ],
+  migrations: IS_COMPILED
+    ? [path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js')]
+    : [path.join(process.cwd(), 'src/infrastructure/database/migrations/*.ts')],
   subscribers: [],
 });

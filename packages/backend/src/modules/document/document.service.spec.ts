@@ -9,6 +9,7 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { DocumentType, DocumentStatus } from '@fapoms/shared';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
@@ -68,6 +69,7 @@ describe('DocumentService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockEventPublisher },
         { provide: NotificationService, useValue: mockNotificationService },
+        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn(), emit: jest.fn() } },
         { provide: PushNotificationService, useValue: mockPushNotificationService },
         { provide: LocalStorageService, useValue: { saveFile: jest.fn(), getFilePath: jest.fn() } },
         { provide: ValidationService, useValue: { getOrAdvanceForHandBack: jest.fn() } },

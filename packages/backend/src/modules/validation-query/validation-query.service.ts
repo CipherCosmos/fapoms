@@ -97,26 +97,38 @@ export class ValidationQueryService {
       metadata: { assayerId: resolvedAssayerId, validationCaseId: dto.validationCaseId, targetField: dto.targetField ?? null },
     });
 
-    // Create persistent text & push notification for the Assayer
-    try {
-      // `resolvedAssayerId` is an assayer id. It used to be passed as `userId` into
-      // notificationService.create(), which foreign-keys to `users` — so this threw a FK
-      // violation that the catch below swallowed, and the assayer was never actually told a
-      // clarification had been raised (spec Phase 11). notifyAssayer() handles the id
-      // translation and resolves the email itself.
-      await this.notificationService.notifyAssayer(
-        resolvedAssayerId,
-        undefined,
-        {
-          title: '❓ New Clarification Query Raised',
-          message: `Data Entry Team: "${dto.queryText.slice(0, 100)}${dto.queryText.length > 100 ? '...' : ''}"`,
-          data: { queryId: saved.id, validationCaseId: saved.validationCaseId },
-        },
-        userId,
-      );
-    } catch (err) {
-      console.error('Failed to create/send notification for raised query:', err);
-    }
+    /**
+     * One notification for one question.
+     *
+     * This used to hand-roll `notificationService.notifyAssayer(...)` here while `reopenQuery`
+     * — the same `VALIDATION_QUERY_RAISED` event, one status later — went through the catalog.
+     * Two code paths for one thing, and only one of them had role fan-out, push preferences,
+     * dedupe and a working deep link. The catalog emit is the one kept; the hand-rolled call
+     * carried nothing it does not, since the query text is already on the thread the link opens.
+     */
+    // Same resolution the worklist uses: case → project branch → branch/assignment.
+    const assignment = await this.assignmentRepository
+      .findOne({
+        where: { projectBranchId: valCase.projectBranchId, isActive: true },
+        relations: ['projectBranch', 'projectBranch.branch'],
+        order: { createdAt: 'DESC' },
+      })
+      .catch(() => null);
+
+    this.notificationDispatch.emitSafe({
+      type: 'VALIDATION_QUERY_RAISED',
+      entityType: 'VALIDATION_QUERY',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: resolvedAssayerId,
+      dedupeKey: `VALIDATION_QUERY_RAISED:${saved.id}`,
+      payload: {
+        queryId: saved.id,
+        validationCaseId: saved.validationCaseId,
+        branchName: assignment?.projectBranch?.branch?.name ?? 'a branch',
+        assignmentId: assignment?.id ?? '',
+      },
+    });
 
     try {
       this.eventPublisher.publish('query:raised', {
@@ -301,6 +313,19 @@ export class ValidationQueryService {
     });
 
     // The assayer is on the hook again — notify them, and refresh any live thread.
+    const reopenCase = await this.validationCaseRepository
+      .findOne({ where: { id: saved.validationCaseId } })
+      .catch(() => null);
+    const reopenAssignment = reopenCase?.projectBranchId
+      ? await this.assignmentRepository
+          .findOne({
+            where: { projectBranchId: reopenCase.projectBranchId, isActive: true },
+            relations: ['projectBranch', 'projectBranch.branch'],
+            order: { createdAt: 'DESC' },
+          })
+          .catch(() => null)
+      : null;
+
     this.notificationDispatch.emitSafe({
       type: 'VALIDATION_QUERY_RAISED',
       entityType: 'VALIDATION_QUERY',
@@ -308,7 +333,14 @@ export class ValidationQueryService {
       actorUserId: userId,
       assayerId: query.assayerId ?? null,
       dedupeKey: `VALIDATION_QUERY_REOPENED:${saved.id}:${Date.now()}`,
-      payload: { queryId: saved.id, validationCaseId: saved.validationCaseId },
+      // The template names the branch and links by assignment; without these two the assayer
+      // reads "A question was raised on your report for ." and the link goes nowhere.
+      payload: {
+        queryId: saved.id,
+        validationCaseId: saved.validationCaseId,
+        branchName: reopenAssignment?.projectBranch?.branch?.name ?? 'a branch',
+        assignmentId: reopenAssignment?.id ?? '',
+      },
     });
     try {
       this.eventPublisher.publish('query:reopened', {

@@ -122,10 +122,21 @@ export class NotificationDispatchService {
     const message = renderTemplate(def.body, opts.payload);
     const link = def.link ? renderTemplate(def.link, opts.payload) : null;
 
-    // In-app is delivered the moment the row exists; a push-only notification
-    // is genuinely still pending until the queue sends it.
-    const inApp = def.channels.includes(NotificationChannel.IN_APP);
-    const initialStatus = inApp ? NotificationStatus.DELIVERED : NotificationStatus.PENDING;
+    /**
+     * A row is only born DELIVERED when in-app is the ONLY channel it has — then the row
+     * genuinely is the delivery.
+     *
+     * When it also carries PUSH, it stays PENDING until the queue has sent that push.
+     * Marking it DELIVERED up front (because in-app was instant) collided with the delivery
+     * worker's terminal-state guard, which refuses to send for a row already DELIVERED — so
+     * every notification carrying BOTH channels was silently never pushed. That is almost
+     * every assayer-facing type, i.e. exactly the ones whose whole purpose is to reach a
+     * phone that is not currently open. Reads are unaffected: `findByUser` filters on
+     * isActive/isRead and never on status.
+     */
+    const inAppOnly = def.channels.includes(NotificationChannel.IN_APP)
+      && !def.channels.includes(NotificationChannel.PUSH);
+    const initialStatus = inAppOnly ? NotificationStatus.DELIVERED : NotificationStatus.PENDING;
 
     const base = {
       type: opts.type,
@@ -141,7 +152,9 @@ export class NotificationDispatchService {
       payload: opts.payload ?? null,
       actorUserId: opts.actorUserId ?? null,
       groupKey,
-      deliveredAt: inApp ? new Date() : null,
+      // Stamped now only when nothing further has to happen for this to count as delivered;
+      // otherwise the delivery worker sets it once the push actually goes out.
+      deliveredAt: inAppOnly ? new Date() : null,
       isRead: false,
       attempts: 0,
     };

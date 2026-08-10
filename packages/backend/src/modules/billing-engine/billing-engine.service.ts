@@ -20,6 +20,10 @@ import { ProjectEntity } from '../project/project.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import {
+  NotificationDispatchService,
+  EmitOptions,
+} from '../notifications/notification-dispatch.service';
+import {
   BillingLevel,
   BillingState,
   PaymentState,
@@ -109,7 +113,43 @@ export class BillingEngineService implements OnModuleInit {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
     private readonly uow: UnitOfWork,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
+
+  /**
+   * Branch label for a billing row, resolved the same way `resolveNames` does it —
+   * assignments carry the project-branch link, billing rows only carry the assignment.
+   */
+  private async billingBranchName(assignmentId?: string | null): Promise<string> {
+    if (!assignmentId) return 'a branch';
+    const rows = await this.entryRepository.manager.query(
+      `SELECT b.name AS branch_name
+         FROM assignments a
+         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+         LEFT JOIN branches b ON b.id = pb.branch_id
+        WHERE a.id = $1`,
+      [assignmentId],
+    );
+    return rows?.[0]?.branch_name ?? 'a branch';
+  }
+
+  /**
+   * Fire-and-forget a notification whose body needs a branch label.
+   *
+   * Detached on purpose: the label costs a join, and neither that query nor the dispatch
+   * may be allowed to fail a payment or an approval that has already committed. Call sites
+   * invoke this only after `inTx` has returned, so nothing here can roll money back.
+   */
+  private notifyWithBranch(
+    assignmentId: string | null | undefined,
+    build: (branchName: string) => EmitOptions,
+  ): void {
+    void this.billingBranchName(assignmentId)
+      .then((branchName) => this.notificationDispatch.emitSafe(build(branchName)))
+      .catch((err) =>
+        this.logger.error(`Billing notification skipped: ${(err as Error).message}`),
+      );
+  }
 
   // -----------------------------------------------------------------------
   // Transaction + row-locking primitives
@@ -1119,7 +1159,7 @@ export class BillingEngineService implements OnModuleInit {
     userId: string,
   ): Promise<BillingConflictEntity> {
     if (!dto.entryIds?.length) throw new BadRequestException('At least one entryId is required.');
-    return this.inTx(async (m) => {
+    const { conflict: raised, assignmentId } = await this.inTx(async (m) => {
     const conflict = this.conflictRepository.create({
       conflictNumber: `BC-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
       severity: dto.severity,
@@ -1142,8 +1182,32 @@ export class BillingEngineService implements OnModuleInit {
       newValue: { entryIds: dto.entryIds, severity: dto.severity },
       reason: dto.description,
     }, m);
-    return saved;
+    // Read on the transaction's own connection: the conflict names entries, and the branch
+    // label the notification needs hangs off whichever of them is assignment-level.
+    const conflicted = await m.find(BillingEntryEntity, { where: { id: In(dto.entryIds) } });
+    return {
+      conflict: saved,
+      assignmentId: conflicted.find((e) => e.assignmentId)?.assignmentId ?? null,
+    };
     });
+
+    // A blocking conflict stops billing silently; finance and ops found out by noticing.
+    this.notifyWithBranch(assignmentId, (branchName) => ({
+      type: 'BILLING_CONFLICT_RAISED',
+      entityType: 'BILLING_CONFLICT',
+      entityId: raised.id,
+      actorUserId: userId,
+      dedupeKey: `BILLING_CONFLICT_RAISED:${raised.id}`,
+      payload: {
+        conflictId: raised.id,
+        conflictNumber: raised.conflictNumber,
+        severity: dto.severity,
+        branchName,
+        description: dto.description,
+      },
+    }));
+
+    return raised;
   }
 
   async resolveConflict(
@@ -1805,7 +1869,7 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   async transitionPayable(payableId: string, target: AssayerPayableStatus, userId: string, reason?: string): Promise<AssayerPayableEntity> {
-    return this.inTx(async (m, emit) => {
+    const saved = await this.inTx(async (m, emit) => {
     // Locked against `recordDisbursement`, which also writes `status` and `paidAmount` on
     // this row. Approval is the control that gates money leaving the business, so the two
     // must not interleave.
@@ -1835,6 +1899,25 @@ export class BillingEngineService implements OnModuleInit {
     emit('billing:payable-status-changed', { payableId: saved.id, fromState, toState: target });
     return saved;
     });
+
+    // The assayer only learned their fee had been approved by checking the earnings screen.
+    if (saved.status === AssayerPayableStatus.APPROVED) {
+      this.notifyWithBranch(saved.assignmentId, (branchName) => ({
+        type: 'PAYABLE_APPROVED',
+        entityType: 'PAYABLE',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        dedupeKey: `PAYABLE_APPROVED:${saved.id}`,
+        payload: {
+          payableId: saved.id,
+          amount: Number(saved.totalAmount),
+          branchName,
+        },
+      }));
+    }
+
+    return saved;
   }
 
   /**
@@ -1855,7 +1938,11 @@ export class BillingEngineService implements OnModuleInit {
     paidDate?: string;
     notes?: string;
   }, userId: string): Promise<BillingPaymentEntity> {
-    return this.inTx(async (m, emit) => {
+    // Set only on the path that genuinely moves money; the idempotent early-return leaves it
+    // null, so a retried disbursement cannot tell the assayer they were paid a second time.
+    let notify: { assignmentId: string | null; assayerId: string; amount: number } | null = null;
+
+    const result = await this.inTx(async (m, emit) => {
     // Write-locked before the outstanding-balance guard. Unlocked, two operators
     // disbursing the same approved payable both read the same `paidAmount`, both computed
     // the same outstanding, both passed the "does not exceed what is owed" check, and both
@@ -1953,8 +2040,40 @@ export class BillingEngineService implements OnModuleInit {
     emit('billing:disbursement-paid', {
       paymentId: saved.id, payableId: payable.id, assayerId: payable.assayerId, amount,
     });
+    // Only the settling disbursement is "you have been paid" — a partial one still leaves a
+    // balance owed, and announcing it as paid would be wrong.
+    if (fullyPaid) {
+      notify = {
+        assignmentId: payable.assignmentId,
+        assayerId: payable.assayerId,
+        amount: Number(payable.paidAmount),
+      };
+    }
     return saved;
     });
+
+    if (notify) {
+      const { assignmentId, assayerId, amount } = notify;
+      this.notifyWithBranch(assignmentId, (branchName) => ({
+        type: 'PAYABLE_PAID',
+        entityType: 'PAYMENT',
+        entityId: result.id,
+        actorUserId: userId,
+        assayerId,
+        // Keyed on the reference rather than the payment row, so any retry that slipped past
+        // the early-return still collapses onto the one notification.
+        dedupeKey: `PAYABLE_PAID:${dto.payableId}:${dto.paymentReference}`,
+        payload: {
+          paymentId: result.id,
+          payableId: dto.payableId,
+          amount,
+          branchName,
+          paymentReference: dto.paymentReference,
+        },
+      }));
+    }
+
+    return result;
   }
 
   /** Total still owed to an assayer across every payable not yet fully paid. */

@@ -1,10 +1,11 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { AccessToken } from 'livekit-server-sdk';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { QueryMessageAuthor, ValidationQueryMessageEntity } from '../validation-query/validation-query-message.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 /**
  * Voice calls between the assayer on a clarification and the data-entry desk.
@@ -28,6 +29,7 @@ export interface ActiveCall {
   queryId: string;
   callerUserId: string;
   callerName: string;
+  callerIsAssayer: boolean;
   /** User ids that were rung and may answer. */
   calleeUserIds: string[];
   startedAt: number;
@@ -51,6 +53,7 @@ export class CallsService {
     @InjectRepository(ValidationQueryMessageEntity)
     private readonly messageRepository: Repository<ValidationQueryMessageEntity>,
     private readonly events: DomainEventPublisher,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   /**
@@ -82,7 +85,7 @@ export class CallsService {
     }
 
     const calleeUserIds = user.isAssayer
-      ? (query.raisedByUserId ? [query.raisedByUserId] : [])
+      ? await this.resolveDeskCallee(query)
       : [query.assayerId];
 
     // One live call per query. A second initiate while one rings is almost always a
@@ -103,6 +106,7 @@ export class CallsService {
       queryId,
       callerUserId: user.id,
       callerName: user.name || (user.isAssayer ? 'Field assayer' : 'Data entry desk'),
+      callerIsAssayer: user.isAssayer,
       calleeUserIds,
       startedAt: Date.now(),
       answeredAt: null,
@@ -130,6 +134,29 @@ export class CallsService {
       token: await this.mintToken(roomName, user.id, user.name),
       rejoined: false,
     };
+  }
+
+  /**
+   * Which ONE desk person an assayer's call should ring.
+   *
+   * Order of preference: the user who raised the query; else the staff member who last
+   * wrote in this thread (they own the conversation — call records are excluded because
+   * assayer-initiated calls also log into the thread). Only when the thread has never
+   * been touched by any identifiable staff member does the desk-wide ring remain — an
+   * unanswerable call is worse than a broad one, but it is now the true last resort.
+   */
+  private async resolveDeskCallee(query: ValidationQueryEntity): Promise<string[]> {
+    if (query.raisedByUserId) return [query.raisedByUserId];
+    const lastStaffMessage = await this.messageRepository.findOne({
+      where: {
+        validationQueryId: query.id,
+        authorType: QueryMessageAuthor.STAFF,
+        // The assayer's own call records are logged with their id; never ring the assayer.
+        authorId: Not(query.assayerId),
+      },
+      order: { createdAt: 'DESC' },
+    });
+    return lastStaffMessage?.authorId ? [lastStaffMessage.authorId] : [];
   }
 
   /** Callee accepts: cancel the missed-call clock, tell both sides, hand back a token. */
@@ -201,7 +228,7 @@ export class CallsService {
     try {
       const message = this.messageRepository.create({
         validationQueryId: call.queryId,
-        authorType: QueryMessageAuthor.STAFF,
+        authorType: call.callerIsAssayer ? QueryMessageAuthor.ASSAYER : QueryMessageAuthor.STAFF,
         authorId: call.callerUserId,
         authorName: call.callerName,
         body: `📞 ${logLine}`,
@@ -214,6 +241,33 @@ export class CallsService {
       // The call itself succeeded or failed on its own terms; a logging failure must not
       // surface as a call error. It is still a real loss — say so loudly in the log.
       this.logger.error(`Failed to record call outcome for query ${call.queryId}: ${(err as Error).message}`);
+    }
+
+    /**
+     * A missed call is the one outcome the callee has no way to discover: the ring
+     * disappeared from a screen they weren't looking at, and the thread line lands in a
+     * conversation they'd have to open to see. Only the *callee* is told — the caller
+     * watched it go unanswered. A desk-wide ring with no resolvable callee
+     * (`calleeUserIds` empty) has nobody specific to tell, so it stays a thread entry.
+     */
+    if (reason === 'missed' && call.calleeUserIds.length > 0) {
+      const calleeId = call.calleeUserIds[0];
+      this.notificationDispatch.emitSafe({
+        type: 'CALL_MISSED',
+        entityType: 'VALIDATION_QUERY',
+        entityId: call.queryId,
+        actorUserId: call.callerUserId,
+        // The callee sits on whichever side the caller isn't: an assayer's call rings the
+        // desk user, and the desk's call rings the assayer.
+        assayerId: call.callerIsAssayer ? null : calleeId,
+        ownerUserId: call.callerIsAssayer ? calleeId : null,
+        dedupeKey: `CALL_MISSED:${call.roomName}`,
+        payload: {
+          queryId: call.queryId,
+          roomName: call.roomName,
+          callerName: call.callerName,
+        },
+      });
     }
   }
 

@@ -1,8 +1,15 @@
+import { NotificationPriority } from '@fapoms/shared';
+
 export interface PushPayload {
   token: string;
   title: string;
   body: string;
   data?: Record<string, string>;
+  /**
+   * Drives which Android notification channel the push lands in. Optional because not every
+   * call site knows a priority; the provider falls back to NORMAL rather than assuming urgency.
+   */
+  priority?: NotificationPriority;
 }
 
 export interface PushResult {

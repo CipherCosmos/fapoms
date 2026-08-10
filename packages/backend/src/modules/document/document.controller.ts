@@ -1149,8 +1149,14 @@ export class DocumentController {
     SystemRole.OPERATIONS_MANAGER, SystemRole.READ_ONLY_AUDITOR,
   )
   @ApiOperation({ summary: "Returned packets at the data entry desk and who owns each" })
-  async dataEntryQueue(@Query('assignedTo') assignedTo?: string) {
-    return { success: true, data: await this.documentService.dataEntryQueue(assignedTo) };
+  async dataEntryQueue(
+    @Query('assignedTo') assignedTo?: string,
+    @Query('lane') lane?: 'unassigned' | 'working' | 'rework' | 'done',
+    @Query('search') search?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return { success: true, data: await this.documentService.dataEntryQueue({ assignedTo, lane, search, page, limit }) };
   }
 
   @Get('data-entry/mine')
@@ -1159,8 +1165,14 @@ export class DocumentController {
     SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATOR,
   )
   @ApiOperation({ summary: 'Packets delegated to the signed-in team member' })
-  async myDataEntryQueue(@Req() req: any) {
-    return { success: true, data: await this.documentService.dataEntryQueue(req.user.id) };
+  async myDataEntryQueue(
+    @Req() req: any,
+    @Query('lane') lane?: 'unassigned' | 'working' | 'rework' | 'done',
+    @Query('search') search?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return { success: true, data: await this.documentService.dataEntryQueue({ assignedTo: req.user.id, lane, search, page, limit }) };
   }
 
   @Get('data-entry/team')

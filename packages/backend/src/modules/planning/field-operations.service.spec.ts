@@ -5,6 +5,9 @@ import { FieldIncidentEntity, IncidentStatus, IncidentSeverity } from './field-i
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { AuditService } from '../../core/audit/audit.service';
+import { BranchEntity } from '../branch/branch.entity';
+import { AssignmentEntity } from '../assignment/assignment.entity';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 describe('FieldOperationsService', () => {
   let service: FieldOperationsService;
@@ -30,6 +33,9 @@ describe('FieldOperationsService', () => {
         FieldOperationsService,
         { provide: getRepositoryToken(FieldVisitEntity), useValue: mockVisitRepository },
         { provide: getRepositoryToken(FieldIncidentEntity), useValue: mockIncidentRepository },
+        { provide: getRepositoryToken(BranchEntity), useValue: { findOne: jest.fn().mockResolvedValue({ name: 'Branch One' }) } },
+        { provide: getRepositoryToken(AssignmentEntity), useValue: { findOne: jest.fn().mockResolvedValue({ id: 'a-1' }) } },
+        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
       ],
     }).compile();
 

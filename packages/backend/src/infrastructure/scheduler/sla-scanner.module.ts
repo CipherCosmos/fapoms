@@ -3,11 +3,19 @@ import { BullModule, InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { SlaScannerWorker } from './sla-scanner.worker';
 import { AssignmentModule } from '../../modules/assignment/assignment.module';
+import { AssayerModule } from '../../modules/assayer/assayer.module';
+import { NotificationsModule } from '../../modules/notifications/notifications.module';
+import { ValidationModule } from '../../modules/validation/validation.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: 'sla-scanner' }),
     AssignmentModule,
+    // The scan also warns HR about credentials falling due — see SlaScannerWorker.
+    AssayerModule,
+    NotificationsModule,
+    // And chases the data-entry desk's stalled stages — see DeskEscalationService.
+    ValidationModule,
   ],
   providers: [SlaScannerWorker],
   exports: [SlaScannerWorker],

@@ -110,7 +110,7 @@ export const ClarificationsPage: React.FC = () => {
           {shown.map((r) => {
             const sla = slaLabel(r);
             return (
-              <button key={r.id} onClick={() => navigate(r.projectBranchId ? `/data-entry?branch=${r.projectBranchId}` : '/data-entry')}
+              <button key={r.id} onClick={() => navigate(r.projectBranchId ? `/data-entry/case/${r.projectBranchId}` : '/data-entry')}
                 style={{ ...card, textAlign: 'left', cursor: 'pointer', display: 'flex', gap: 12, alignItems: 'flex-start', borderLeft: `3px solid ${r.slaOverdue ? 'var(--danger)' : r.awaiting === 'US' ? 'var(--warning)' : 'var(--border-color)'}` }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>

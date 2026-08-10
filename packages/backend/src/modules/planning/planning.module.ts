@@ -43,6 +43,7 @@ import { AssayerModule } from '../assayer/assayer.module';
 import { HolidayModule } from '../holiday/holiday.module';
 import { ProjectModule } from '../project/project.module';
 import { AssignmentModule } from '../assignment/assignment.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -103,6 +104,8 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
     AssayerModule,
     HolidayModule,
     ProjectModule,
+    // Field incidents have to reach the operations desk — see FieldOperationsService.
+    NotificationsModule,
     forwardRef(() => AssignmentModule),
   ],
   controllers: [PlanningController],

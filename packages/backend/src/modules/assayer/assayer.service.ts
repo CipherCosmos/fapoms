@@ -15,6 +15,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 
@@ -280,6 +281,7 @@ export class AssayerService implements OnModuleInit {
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly workflowEngine: WorkflowEngine,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   onModuleInit() {
@@ -805,6 +807,22 @@ export class AssayerService implements OnModuleInit {
           userId,
           remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
         });
+
+        // Only on the crossing into ACTIVE, never on a re-save at ACTIVE. The dedupe key is the
+        // assayer alone, so a later ON_LEAVE → ACTIVE return does not re-announce someone who
+        // was onboarded months ago — "newly onboarded" is true exactly once per person.
+        if (targetStatus === AssayerLifecycleStatus.ACTIVE && currentStatus !== AssayerLifecycleStatus.ACTIVE) {
+          this.notificationDispatch.emitSafe({
+            type: 'ASSAYER_ONBOARDED',
+            entityType: 'ASSAYER',
+            entityId: saved.id,
+            actorUserId: userId,
+            assayerId: saved.id,
+            dedupeKey: `ASSAYER_ONBOARDED:${saved.id}`,
+            payload: { assayerName: saved.displayName },
+          });
+        }
+
         return { saved, event };
       }
     );

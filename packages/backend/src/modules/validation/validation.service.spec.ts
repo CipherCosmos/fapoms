@@ -12,6 +12,7 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { AssessmentEntity } from '../project/assessment.entity';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 describe('ValidationService', () => {
   let service: ValidationService;
@@ -23,6 +24,7 @@ describe('ValidationService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     findAndCount: jest.fn(),
+    manager: { query: jest.fn().mockResolvedValue([]) },
   };
 
   const mockProjectBranchRepo = {
@@ -90,6 +92,10 @@ describe('ValidationService', () => {
         {
           provide: WorkflowEngine,
           useValue: mockWorkflowEngine,
+        },
+        {
+          provide: NotificationDispatchService,
+          useValue: { emitSafe: jest.fn(), emit: jest.fn() },
         },
       ],
     }).compile();

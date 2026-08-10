@@ -153,6 +153,9 @@ export class NotificationDeliveryWorker {
       {
         title: notification.title,
         body: notification.message,
+        // Selects the Android notification channel, so a LOW-priority notice no longer
+        // arrives with the same heads-up popup and vibration as a CRITICAL escalation.
+        priority: notification.priority,
         // Everything the app needs to deep-link straight to the record, so a
         // tap lands on the thing the notification is about.
         data: {
@@ -162,6 +165,9 @@ export class NotificationDeliveryWorker {
           entityType: notification.entityType ?? '',
           entityId: notification.entityId ?? '',
           link: notification.link ?? '',
+          // Carried in `data` as well as on the payload so the app can present a
+          // locally-raised copy of the same event on the same channel.
+          priority: notification.priority ?? '',
         },
       },
     );

@@ -51,7 +51,10 @@ const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({
 const HrDeploymentPage = React.lazy(() => import('./pages/hr/HrDeploymentPage').then((m) => ({ default: m.HrDeploymentPage })));
 const HrUtilisationPage = React.lazy(() => import('./pages/hr/HrUtilisationPage').then((m) => ({ default: m.HrUtilisationPage })));
 const HrActivityPage = React.lazy(() => import('./pages/hr/HrActivityPage').then((m) => ({ default: m.HrActivityPage })));
-const DataEntryDesk = React.lazy(() => import('./pages/dataentry/DataEntryDesk'));
+const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
+const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
+const ReviewsQueue = React.lazy(() => import('./pages/dataentry/ReviewsQueue'));
+const DataEntryCasePage = React.lazy(() => import('./pages/dataentry/CasePage'));
 const DataEntryLayout = React.lazy(() => import('./pages/dataentry/DataEntryLayout').then((m) => ({ default: m.DataEntryLayout })));
 const ClarificationsPage = React.lazy(() => import('./pages/dataentry/ClarificationsPage').then((m) => ({ default: m.ClarificationsPage })));
 
@@ -193,7 +196,10 @@ export const App: React.FC = () => {
         <Route path="/scheduling" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Scheduling /></ProtectedRoute>} />
         <Route path="/documents" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Documents /></ProtectedRoute>} />
         <Route path="/data-entry" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><DataEntryLayout /></ProtectedRoute>}>
-          <Route index element={<DataEntryDesk />} />
+          <Route index element={<DataEntryOverview />} />
+          <Route path="packets" element={<PacketsQueue />} />
+          <Route path="reviews" element={<ReviewsQueue />} />
+          <Route path="case/:branchId" element={<DataEntryCasePage />} />
           <Route path="clarifications" element={<ClarificationsPage />} />
         </Route>
         {/* Validation is now part of the merged data-entry board. */}

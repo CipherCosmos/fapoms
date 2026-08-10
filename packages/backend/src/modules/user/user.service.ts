@@ -16,9 +16,10 @@ import { Repository, In } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { UserEntity } from './user.entity';
 import { RoleEntity } from './role.entity';
+import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, UserStatus } from '@fapoms/shared';
+import { EventCategory, UserStatus, SystemRole } from '@fapoms/shared';
 
 export interface CreateUserDto {
   username: string;
@@ -46,6 +47,8 @@ export class UserService {
     private readonly userRepository: Repository<UserEntity>,
     @InjectRepository(RoleEntity)
     private readonly roleRepository: Repository<RoleEntity>,
+    @InjectRepository(PermissionEntity)
+    private readonly permissionRepository: Repository<PermissionEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
   ) {}
@@ -438,6 +441,190 @@ export class UserService {
     return this.roleRepository.find({
       relations: ['permissions'],
       order: { name: 'ASC' },
+    });
+  }
+
+  /** The whole permission catalogue, for the role editor's matrix. */
+  async findAllPermissions(): Promise<PermissionEntity[]> {
+    return this.permissionRepository.find({
+      order: { resource: 'ASC', action: 'ASC', scope: 'ASC' },
+    });
+  }
+
+  /**
+   * Whether a role name is one the code itself checks.
+   *
+   * `@Roles(SystemRole.X)` decorators compare against these names in 256 places, and the web
+   * app's route table lists them too. Renaming or deleting one would silently revoke access
+   * everywhere it is referenced, so built-in roles are edit-restricted: their permissions and
+   * description can change, their identity cannot.
+   */
+  private isSystemRole(name: string): boolean {
+    return (Object.values(SystemRole) as string[]).includes(name);
+  }
+
+  /**
+   * Invalidate the cached RBAC principal of everyone holding this role.
+   *
+   * Permission changes must take effect without waiting out `RBAC_CACHE_TTL_SECONDS` or asking
+   * people to sign out. `user:role-changed` is the event the auth service already listens for,
+   * and because the cache is shared Redis, publishing once clears it across every replica.
+   */
+  private async invalidateRoleHolders(roleId: string): Promise<void> {
+    const holders = await this.userRepository
+      .createQueryBuilder('u')
+      .select('u.id', 'id')
+      .innerJoin('user_roles', 'ur', 'ur.user_id = u.id')
+      .where('ur.role_id = :roleId', { roleId })
+      .getRawMany();
+
+    for (const h of holders) {
+      this.eventPublisher.publish('user:role-changed', { userId: h.id });
+    }
+  }
+
+  async createRole(
+    dto: { name: string; displayName: string; description?: string; permissionIds?: string[] },
+    actorId: string,
+  ): Promise<RoleEntity> {
+    const name = dto.name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    if (!name) throw new BadRequestException('A role name is required.');
+
+    const existing = await this.roleRepository.findOne({ where: { name } });
+    if (existing) throw new ConflictException(`A role named ${name} already exists.`);
+
+    const permissions = dto.permissionIds?.length
+      ? await this.permissionRepository.find({ where: { id: In(dto.permissionIds) } })
+      : [];
+
+    const role = await this.roleRepository.save(
+      this.roleRepository.create({
+        name,
+        displayName: dto.displayName?.trim() || name,
+        description: dto.description ?? null,
+        permissions,
+        createdBy: actorId,
+        updatedBy: actorId,
+      } as any),
+    );
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'ROLE_CREATED',
+      entityType: 'ROLE',
+      entityId: (role as any).id,
+      userId: actorId,
+      remarks: `Role ${name} created with ${permissions.length} permission(s).`,
+    });
+
+    return role as any;
+  }
+
+  async updateRole(
+    id: string,
+    dto: { displayName?: string; description?: string },
+    actorId: string,
+  ): Promise<RoleEntity> {
+    const role = await this.roleRepository.findOne({ where: { id }, relations: ['permissions'] });
+    if (!role) throw new NotFoundException('Role not found.');
+
+    // `name` is deliberately not updatable for anyone — it is the identifier the guards compare.
+    if (dto.displayName !== undefined) role.displayName = dto.displayName.trim() || role.displayName;
+    if (dto.description !== undefined) role.description = dto.description as any;
+    role.updatedBy = actorId;
+
+    const saved = await this.roleRepository.save(role);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'ROLE_UPDATED',
+      entityType: 'ROLE',
+      entityId: id,
+      userId: actorId,
+      remarks: `Role ${role.name} details updated.`,
+    });
+
+    return saved;
+  }
+
+  /**
+   * Replace a role's permission set. This is the control that actually changes what people can
+   * do — the PermissionsGuard builds its allow-set from these rows on every request.
+   */
+  async setRolePermissions(id: string, permissionIds: string[], actorId: string): Promise<RoleEntity> {
+    const role = await this.roleRepository.findOne({ where: { id }, relations: ['permissions'] });
+    if (!role) throw new NotFoundException('Role not found.');
+
+    const permissions = permissionIds.length
+      ? await this.permissionRepository.find({ where: { id: In(permissionIds) } })
+      : [];
+
+    if (permissions.length !== permissionIds.length) {
+      throw new BadRequestException('One or more permissions do not exist.');
+    }
+
+    /**
+     * A super administrator that can no longer administer is an unrecoverable lockout: nobody
+     * left in the system could grant the permission back. Refused rather than trusted to a
+     * confirmation dialog.
+     */
+    if (role.name === SystemRole.SUPER_ADMINISTRATOR && permissions.length === 0) {
+      throw new BadRequestException(
+        'The Super Administrator role cannot be stripped of every permission — no one would be able to restore access.',
+      );
+    }
+
+    const before = role.permissions?.length ?? 0;
+    role.permissions = permissions;
+    role.updatedBy = actorId;
+    const saved = await this.roleRepository.save(role);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'ROLE_PERMISSIONS_CHANGED',
+      entityType: 'ROLE',
+      entityId: id,
+      userId: actorId,
+      remarks: `Role ${role.name} permissions changed: ${before} → ${permissions.length}.`,
+      metadata: { roleName: role.name, permissionCount: permissions.length },
+    });
+
+    await this.invalidateRoleHolders(id);
+    return saved;
+  }
+
+  async deleteRole(id: string, actorId: string): Promise<void> {
+    const role = await this.roleRepository.findOne({ where: { id } });
+    if (!role) throw new NotFoundException('Role not found.');
+
+    if (this.isSystemRole(role.name)) {
+      throw new BadRequestException(
+        `${role.name} is a built-in role the application's access rules refer to by name. It cannot be deleted — edit its permissions instead.`,
+      );
+    }
+
+    // Deleting a role out from under its holders would silently strip their access.
+    const holders = await this.userRepository
+      .createQueryBuilder('u')
+      .innerJoin('user_roles', 'ur', 'ur.user_id = u.id')
+      .where('ur.role_id = :id', { id })
+      .getCount();
+
+    if (holders > 0) {
+      throw new ConflictException(
+        `${holders} user(s) still hold this role. Reassign them before deleting it.`,
+      );
+    }
+
+    await this.roleRepository.remove(role);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'ROLE_DELETED',
+      entityType: 'ROLE',
+      entityId: id,
+      userId: actorId,
+      remarks: `Role ${role.name} deleted.`,
     });
   }
 }

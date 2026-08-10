@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ValidationService, CreateValidationCaseDto } from './validation.service';
+import { DeskEscalationService } from './desk-escalation.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ValidationStatus } from '@fapoms/shared';
@@ -59,7 +60,10 @@ class BulkTransitionValidationCaseDto {
 @Roles(...STAFF_ROLES)
 @Controller('validation')
 export class ValidationController {
-  constructor(private readonly validationService: ValidationService) {}
+  constructor(
+    private readonly validationService: ValidationService,
+    private readonly deskEscalation: DeskEscalationService,
+  ) {}
 
   @Post()
   // The data entry head validates and submits, per how this team actually
@@ -77,9 +81,24 @@ export class ValidationController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List all validation queue cases' })
-  async findAll(@Query('page') page = 1, @Query('limit') limit = 50, @Query('projectBranchId') projectBranchId?: string) {
-    const { validationCases, total } = await this.validationService.findAll(Number(page), Number(limit), projectBranchId);
+  @ApiOperation({ summary: 'List validation cases, filterable by branch, status and reviewer' })
+  async findAll(
+    @Req() req: any,
+    @Query('page') page = 1,
+    @Query('limit') limit = 50,
+    @Query('projectBranchId') projectBranchId?: string,
+    @Query('status') status?: ValidationStatus,
+    // 'me' resolves to the caller — a validator's own queue without knowing their uuid.
+    @Query('reviewerId') reviewerId?: string,
+    @Query('search') search?: string,
+    // 'me': cases for branches whose packet was delegated to the caller (validator slice).
+    @Query('workedBy') workedBy?: string,
+  ) {
+    const resolvedReviewer = reviewerId === 'me' ? req.user.id : reviewerId;
+    const resolvedWorkedBy = workedBy === 'me' ? req.user.id : workedBy;
+    const { validationCases, total } = await this.validationService.findAll(
+      Number(page), Number(limit), projectBranchId, status, resolvedReviewer, search, resolvedWorkedBy,
+    );
     return {
       success: true,
       data: validationCases,
@@ -93,6 +112,41 @@ export class ValidationController {
     };
   }
 
+  // Static paths before ':id', or the router parses "team" as a uuid and 400s.
+  @Get('team')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'People a validation review can be routed to' })
+  async team() {
+    return { success: true, data: await this.validationService.validationTeam() };
+  }
+
+  @Get('workload')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'Per-member desk workload: open packets, reviews held, aging' })
+  async workload() {
+    return { success: true, data: await this.validationService.workload() };
+  }
+
+  @Get('activity')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: 'Recent desk activity: assignments, hand-backs, decisions — who did what' })
+  async activity(@Query('limit') limit?: number) {
+    return { success: true, data: await this.validationService.activity(limit) };
+  }
+
+  @Get('attention')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @ApiOperation({ summary: "The desk's SLA breaches, bucketed: what the head must unstick right now" })
+  async attention() {
+    return { success: true, data: await this.deskEscalation.attention() };
+  }
+
+  @Get(':id/trail')
+  @ApiOperation({ summary: 'Merged audit trail for a case and its branch packets' })
+  async trail(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.validationService.trail(id) };
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a validation case by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -104,7 +158,7 @@ export class ValidationController {
   }
 
   @Post(':id/assign')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Assign a validation case to a validator reviewer' })
   async assign(
     @Param('id', ParseUUIDPipe) id: string,
@@ -119,7 +173,7 @@ export class ValidationController {
   }
 
   @Post('bulk/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Transition a batch of validation cases to a target status' })
   async bulkTransition(
     @Body() dto: BulkTransitionValidationCaseDto,
@@ -130,7 +184,7 @@ export class ValidationController {
   }
 
   @Post(':id/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
   @ApiOperation({ summary: 'Transition validation case status' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

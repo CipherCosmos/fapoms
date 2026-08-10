@@ -13,6 +13,7 @@ import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 
 describe('AssayerService', () => {
@@ -98,6 +99,7 @@ describe('AssayerService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
+        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
       ],
     }).compile();
   }

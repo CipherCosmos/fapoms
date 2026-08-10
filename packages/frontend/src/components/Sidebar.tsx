@@ -112,7 +112,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
   };
 
   return (
-    <aside className="sidebar-area" style={{ display: 'flex', flexDirection: 'column', height: '100%', transition: 'all var(--transition-normal)' }}>
+    // No `sidebar-area` class on this aside: that's the Layout wrapper's class. When this aside
+    // also carried it, the ≤1024px drawer CSS (`transform: translateX(-100%)`) matched BOTH
+    // nodes — the wrapper slid in with `.mobile-open`, but this inner aside (all the content)
+    // stayed translated off-screen, so the open drawer showed as an empty panel.
+    <aside style={{ display: 'flex', flexDirection: 'column', height: '100%', transition: 'all var(--transition-normal)' }}>
       {/* Brand + Toggle */}
       <div style={{ 
         padding: collapsed ? '16px 14px' : '20px 24px', 

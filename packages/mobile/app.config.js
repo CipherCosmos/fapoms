@@ -27,6 +27,16 @@ module.exports = {
     androidNavigationBar: {
       barStyle: 'light-content',
     },
+    /**
+     * Status-bar/push icon. Android renders the small icon as a pure silhouette — a
+     * full-colour launcher icon there degrades to a grey blob, which is what field
+     * phones showed. This is a white orbit glyph on transparency; `color` tints it
+     * (and the app name row) with the brand violet.
+     */
+    notification: {
+      icon: './assets/notification-icon.png',
+      color: '#8B7CFF',
+    },
     extra: {
       googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
       apiUrl: process.env.EXPO_PUBLIC_API_URL || '',
@@ -51,7 +61,7 @@ module.exports = {
     },
     android: {
       package: 'com.fapoms.assayer',
-      versionCode: 1,
+      versionCode: 2,
       // Present in the repo but never wired in — without this, a native build has no way to
       // know which Firebase project to register push against, so `getDevicePushTokenAsync()`
       // would either fail or register against nothing at all.
@@ -79,7 +89,9 @@ module.exports = {
       },
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon.png',
-        backgroundColor: '#131017',
+        // Matches the flame artwork's own background, and `iconBackground` in colors.xml —
+        // the value this bare project actually builds against.
+        backgroundColor: '#0E1016',
       },
     },
     plugins: [

@@ -115,7 +115,7 @@ describe('NotificationDispatchService', () => {
     expect(res.recipients.userIds).toEqual(['ops-2']);
   });
 
-  it('renders the template with real values and marks in-app rows delivered', async () => {
+  it('renders the template with real values', async () => {
     mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
 
     await service.emit({
@@ -127,8 +127,36 @@ describe('NotificationDispatchService', () => {
     expect(insertedRows[0].message).toContain('R. Nair');
     expect(insertedRows[0].message).toContain('Thrissur');
     expect(insertedRows[0].message).toContain('Double booked');
-    expect(insertedRows[0].status).toBe(NotificationStatus.DELIVERED);
     expect(insertedRows[0].category).toBe(NotificationCategory.ASSIGNMENT);
+  });
+
+  it('leaves a row that still owes a push PENDING, so the delivery worker will send it', async () => {
+    // ASSIGNMENT_REJECTED carries IN_APP *and* PUSH. Being born DELIVERED because the in-app
+    // half was instant made the worker's terminal-state guard skip the push entirely — every
+    // both-channel notification silently never reached a phone.
+    mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+
+    await service.emit({
+      type: 'ASSIGNMENT_REJECTED',
+      entityId: 'asn-1',
+      payload: { assayerName: 'R. Nair', branchName: 'Thrissur', reason: 'Double booked' },
+    });
+
+    expect(insertedRows[0].status).toBe(NotificationStatus.PENDING);
+    expect(insertedRows[0].deliveredAt).toBeNull();
+  });
+
+  it('marks an in-app-only row delivered on creation, since the row is the delivery', async () => {
+    mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+
+    await service.emit({
+      type: 'ASSIGNMENT_ACCEPTED',
+      entityId: 'asn-1',
+      payload: { assayerName: 'R. Nair', branchName: 'Thrissur' },
+    });
+
+    expect(insertedRows[0].status).toBe(NotificationStatus.DELIVERED);
+    expect(insertedRows[0].deliveredAt).toBeInstanceOf(Date);
   });
 
   it('gives each recipient of one event a distinct dedupe key', async () => {

@@ -98,6 +98,48 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/planning',
     skipActor: true,
   },
+  /**
+   * Work taken away after it was accepted. The mobile app cannot discover this by
+   * polling — the assignment simply vanishes from a later fetch — so an assayer who
+   * is told nothing keeps it on their schedule and can drive to a branch that no
+   * longer expects them. Push, always.
+   */
+  ASSIGNMENT_CANCELLED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: OPS,
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Assignment cancelled',
+    body: 'Your audit at ${branchName} on ${scheduledDate} has been cancelled. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /** The assayer wants a different fee — ops has to answer before the branch stalls. */
+  ASSIGNMENT_COUNTER_OFFERED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: OPS,
+    channels: BOTH_CHANNELS,
+    title: 'Counter-offer received',
+    body: '${assayerName} proposed ₹${proposedFee} for ${branchName}. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The SLA clock ran out. This was written to the audit log and nowhere else, so the
+   * one event whose entire purpose is to provoke a human response provoked none.
+   */
+  ASSIGNMENT_SLA_BREACHED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: [...OPS, ...ADMINS],
+    channels: BOTH_CHANNELS,
+    title: 'SLA breached',
+    body: '${branchName} has breached its ${slaType} SLA and needs attention.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   ASSIGNMENT_ESCALATED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
@@ -145,6 +187,18 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
+  /** A cancelled visit is as time-critical as a moved one, and was the only transition that told the assayer nothing. */
+  SCHEDULE_CANCELLED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Audit cancelled',
+    body: 'Your audit at ${branchName} on ${scheduledDate} is no longer scheduled.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   ASSIGNMENT_AUTO_DECLINED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
@@ -178,6 +232,22 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/data-entry',
     skipActor: true,
   },
+  /**
+   * Validation sent the work back. The rework lands in the data-entry operator's queue,
+   * so the operator who submitted it — `RECORD_OWNER` — is the one who must hear, not
+   * just the desk at large.
+   */
+  VALIDATION_CORRECTION_REQUIRED: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.HIGH,
+    roles: ['DATA_ENTRY_HEAD'],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Correction required',
+    body: '${branchName} was sent back for correction. Reason: ${reason}',
+    link: '/data-entry',
+    skipActor: true,
+  },
   VALIDATION_COMPLETED: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,
@@ -186,6 +256,84 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     title: 'Validation complete',
     body: '${branchName} has passed validation.',
     link: '/data-entry',
+    skipActor: true,
+  },
+
+  // ── Desk SLA escalations ────────────────────────────────────────────────
+  // The data-entry mirror of the assignment flow's SLA alerts: every stage of
+  // packet → entry → review → submit that stalls past its threshold chases the
+  // head (and, where one exists, the responsible member) once a day until it
+  // moves. Emitted by DeskEscalationService from the 15-minute SLA scan.
+  DESK_PACKET_UNASSIGNED_SLA: {
+    category: NotificationCategory.DOCUMENT,
+    priority: NotificationPriority.HIGH,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    channels: IN_APP,
+    title: 'Packet waiting for assignment',
+    body: '${branchName} has been at the desk ${hours}h with nobody assigned.',
+    link: '/data-entry/packets?lane=unassigned',
+    skipActor: true,
+  },
+  DESK_ENTRY_OVERDUE: {
+    category: NotificationCategory.DOCUMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Data entry running late',
+    body: '${branchName} has been with ${who} for ${hours}h without a hand-back.',
+    link: '/data-entry/packets',
+    skipActor: true,
+  },
+  DESK_REWORK_STALE: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.HIGH,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Rework not picked up',
+    body: '${branchName} was sent back ${hours}h ago and has not been fixed.',
+    link: '/data-entry/packets?lane=rework',
+    skipActor: true,
+  },
+  DESK_REVIEW_OVERDUE: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.NORMAL,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    channels: IN_APP,
+    title: 'Review pending too long',
+    body: '${branchName} has been awaiting a review decision for ${hours}h.',
+    link: '/data-entry/reviews?status=HUMAN_REVIEW',
+    skipActor: true,
+  },
+  DESK_SUBMIT_OVERDUE: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.HIGH,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    channels: IN_APP,
+    title: 'Approved report not sent to client',
+    body: '${branchName} was approved ${hours}h ago and still has not been submitted.',
+    link: '/data-entry/reviews?status=APPROVED',
+    skipActor: true,
+  },
+  DESK_OCR_STUCK: {
+    category: NotificationCategory.DOCUMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    channels: IN_APP,
+    title: 'Packet stuck at external OCR',
+    body: '${branchName} went to the OCR application ${hours}h ago and has not come back.',
+    link: '/data-entry/packets',
+    skipActor: true,
+  },
+  DESK_CLARIFICATION_OVERDUE: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.NORMAL,
+    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    channels: IN_APP,
+    title: 'Clarification unresolved',
+    body: 'A clarification on ${branchName} is ${hours}h old with no resolution — the report cannot ship until it closes.',
+    link: '/data-entry/clarifications',
     skipActor: true,
   },
 
@@ -208,6 +356,58 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: BOTH_CHANNELS,
     title: 'Document needs re-upload',
     body: '${documentName} for ${branchName} was not accepted. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+
+  // ── Data entry hand-offs ────────────────────────────────────────────────
+  // Work moving between desks. Each hand-off previously relied on the receiving
+  // person noticing a new row in a queue they had to remember to look at — one
+  // failure branch literally asked the operator to go tell their supervisor by hand.
+  DATA_ENTRY_ASSIGNED: {
+    category: NotificationCategory.DOCUMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Data entry assigned to you',
+    body: '${documentName} for ${branchName} is ready for data entry.',
+    link: '/data-entry',
+    skipActor: true,
+  },
+  DATA_ENTRY_COMPLETED: {
+    category: NotificationCategory.DOCUMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: ['DATA_ENTRY_HEAD'],
+    channels: IN_APP,
+    title: 'Data entry ready for review',
+    body: '${userName} finished data entry on ${branchName}.',
+    link: '/data-entry',
+    skipActor: true,
+  },
+
+  // ── Field operations ────────────────────────────────────────────────────
+  // A second incident path parallel to ASSIGNMENT_ISSUE_REPORTED. Only one of the
+  // two notified, so whether ops heard about a field problem depended on which
+  // screen raised it.
+  FIELD_INCIDENT_REPORTED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: [...OPS, ...ADMINS],
+    channels: BOTH_CHANNELS,
+    title: 'Field incident reported',
+    body: '${severity} incident at ${branchName}: ${description}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  FIELD_INCIDENT_RESOLVED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: IN_APP,
+    title: 'Incident resolved',
+    body: 'The incident you reported at ${branchName} has been resolved. ${resolution}',
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
@@ -261,6 +461,59 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     skipActor: true,
   },
 
+  /**
+   * Money moving toward the assayer. The system notified them about a ₹200 expense
+   * decision but said nothing when their actual fee was approved or paid — the two
+   * events they most want to hear and cannot poll for.
+   */
+  PAYABLE_APPROVED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Payment approved',
+    body: 'Your ₹${amount} payment for ${branchName} has been approved.',
+    link: '/earnings',
+    skipActor: true,
+  },
+  PAYABLE_PAID: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Payment sent',
+    body: '₹${amount} for ${branchName} has been paid. Reference: ${paymentReference}',
+    link: '/earnings',
+    skipActor: true,
+  },
+  /** A CRITICAL conflict freezes billing — nobody was told the money had stopped. */
+  BILLING_CONFLICT_RAISED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: ['FINANCE_MANAGER', ...OPS, ...ADMINS],
+    channels: BOTH_CHANNELS,
+    title: 'Billing conflict raised',
+    body: '${severity} conflict on ${branchName}: ${description}',
+    link: '/billing',
+    skipActor: true,
+  },
+
+  // ── Calls ───────────────────────────────────────────────────────────────
+  /** An unanswered clarification call left no trace anywhere the callee would look. */
+  CALL_MISSED: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Missed call',
+    body: '${callerName} tried to call you about a clarification.',
+    link: '/data-entry',
+    skipActor: true,
+  },
+
   // ── Workforce (HR) ──────────────────────────────────────────────────────
   ASSAYER_DOCUMENT_EXPIRING: {
     category: NotificationCategory.WORKFORCE,
@@ -283,10 +536,31 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   },
 };
 
-/** Fills `${key}` placeholders, leaving unknown keys visibly blank rather than printing `undefined`. */
+/**
+ * Fills `${key}` placeholders. A missing value becomes `—`, and then a cleanup pass
+ * removes the sentence fragments that dash would sit inside — "Reason: —." or
+ * "…for —." read as broken on a phone's lock screen, which is exactly where these
+ * land. The result is a shorter sentence, not a visibly holed one.
+ */
 export function renderTemplate(tpl: string, payload: Record<string, any>): string {
-  return tpl.replace(/\$\{(\w+)\}/g, (_, k) => {
+  const filled = tpl.replace(/\$\{(\w+)\}/g, (_, k) => {
     const v = payload?.[k];
     return v === undefined || v === null || v === '' ? '—' : String(v);
   });
+  return filled
+    // "Reason: —." / "Reason: —" — drop the whole clause when there is no reason.
+    .replace(/\s*Reason:\s*—\.?/g, '')
+    // "(—)" from parenthesised values like "(${category})".
+    .replace(/\s*\(\s*—\s*\)/g, '')
+    // "₹— " from money placeholders.
+    .replace(/₹—\s*/g, '')
+    // Prepositional phrases pointing at nothing: "for —", "at —", "on —", "against —"…
+    .replace(/\s(?:for|at|on|from|to|against|of)\s+—(?=[\s.,;]|$)/g, '')
+    // Whatever dashes survive at a sentence edge.
+    .replace(/(^|\.\s+)—\s*/g, '$1')
+    // Tidy the seams the removals leave behind.
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.,;])/g, '$1')
+    .replace(/\.{2,}/g, '.')
+    .trim();
 }

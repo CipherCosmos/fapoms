@@ -3,7 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { FieldVisitEntity, FieldVisitStatus } from './field-visit.entity';
 import { FieldIncidentEntity, IncidentStatus, IncidentSeverity } from './field-incident.entity';
+import { BranchEntity } from '../branch/branch.entity';
+import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EventCategory } from '@fapoms/shared';
 
 export interface HandoverPackage {
@@ -35,8 +38,32 @@ export class FieldOperationsService {
     private readonly visitRepository: Repository<FieldVisitEntity>,
     @InjectRepository(FieldIncidentEntity)
     private readonly incidentRepository: Repository<FieldIncidentEntity>,
+    @InjectRepository(BranchEntity)
+    private readonly branchRepository: Repository<BranchEntity>,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly auditService: AuditService,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
+
+  /**
+   * A field visit carries only ids, but the people being notified work in branch names and
+   * assignments — the incident templates and their deep link are unreadable without both.
+   * Failures degrade to a generic name rather than sinking the incident write itself.
+   */
+  private async describeVisit(visit: FieldVisitEntity): Promise<{ branchName: string; assignmentId: string | null }> {
+    const [branch, assignment] = await Promise.all([
+      this.branchRepository.findOne({ where: { id: visit.branchId } }).catch(() => null),
+      this.assignmentRepository
+        .findOne({
+          where: { assayerId: visit.assayerId, projectBranch: { branchId: visit.branchId } },
+          relations: ['projectBranch'],
+          order: { createdAt: 'DESC' },
+        })
+        .catch(() => null),
+    ]);
+    return { branchName: branch?.name ?? 'a branch', assignmentId: assignment?.id ?? null };
+  }
 
   /**
    * Initializes a new FieldVisit following operational package deployment.
@@ -152,6 +179,20 @@ export class FieldOperationsService {
       metadata: { visitId, branchId: visit.branchId, assayerId: visit.assayerId, severity, title, description },
     });
 
+    // The desk hears about a field problem no matter which screen raised it. This path was
+    // silent while AssignmentService.reportIssue notified, so the same incident reached ops
+    // or vanished depending purely on where the assayer was standing.
+    const { branchName, assignmentId } = await this.describeVisit(visit);
+    this.notificationDispatch.emitSafe({
+      type: 'FIELD_INCIDENT_REPORTED',
+      entityType: 'FIELD_INCIDENT',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: visit.assayerId,
+      dedupeKey: `FIELD_INCIDENT_REPORTED:${saved.id}`,
+      payload: { severity, branchName, description, assignmentId },
+    });
+
     return saved;
   }
 
@@ -181,6 +222,22 @@ export class FieldOperationsService {
       remarks: `Resolved "${saved.title}": ${details}`,
       metadata: { visitId: saved.visitId, severity: saved.severity, resolutionDetails: details },
     });
+
+    // Closing the loop with whoever is stuck at the branch: they raised the blocker and would
+    // otherwise never learn it had been cleared.
+    const visit = await this.visitRepository.findOne({ where: { id: saved.visitId } }).catch(() => null);
+    if (visit) {
+      const { branchName, assignmentId } = await this.describeVisit(visit);
+      this.notificationDispatch.emitSafe({
+        type: 'FIELD_INCIDENT_RESOLVED',
+        entityType: 'FIELD_INCIDENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: visit.assayerId,
+        dedupeKey: `FIELD_INCIDENT_RESOLVED:${saved.id}`,
+        payload: { branchName, resolution: details, assignmentId },
+      });
+    }
 
     return saved;
   }

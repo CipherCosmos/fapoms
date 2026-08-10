@@ -15,13 +15,53 @@ import {
   Query,
   UseGuards,
   Req,
+  Delete,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum } from 'class-validator';
+import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum, IsUUID, MaxLength, Matches } from 'class-validator';
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
+
+/**
+ * Role names the application's own access rules compare against.
+ *
+ * `@Roles(SystemRole.X)` appears in 256 places across the controllers and the web app lists the
+ * same names in its route table, so these names are effectively code. They are flagged to the UI
+ * as built-in: their permissions and description stay editable, their identity does not.
+ */
+const SYSTEM_ROLE_NAMES: string[] = Object.values(SystemRole);
+
+class CreateRoleRequestDto {
+  // Normalised server-side to UPPER_SNAKE; this only rejects the obviously wrong.
+  @IsString() @IsNotEmpty() @MaxLength(50)
+  @Matches(/^[A-Za-z0-9_ -]+$/, { message: 'name may contain letters, numbers, spaces, _ and - only' })
+  name: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  displayName: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  description?: string;
+
+  @IsOptional() @IsArray() @IsUUID('4', { each: true })
+  permissionIds?: string[];
+}
+
+class UpdateRoleRequestDto {
+  @IsOptional() @IsString() @MaxLength(100)
+  displayName?: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  description?: string;
+}
+
+class SetRolePermissionsRequestDto {
+  // Present but empty is meaningful: it revokes everything the role grants.
+  @IsArray() @IsUUID('4', { each: true })
+  permissionIds: string[];
+}
 
 class CreateUserRequestDto implements CreateUserDto {
   @IsString() @IsNotEmpty()
@@ -200,8 +240,62 @@ export class UserController {
     const roles = await this.userService.findAllRoles();
     return {
       success: true,
-      data: roles,
+      data: roles.map((r) => ({ ...r, isSystem: SYSTEM_ROLE_NAMES.includes(r.name) })),
     };
+  }
+
+  /** The permission catalogue the role editor renders as a matrix. */
+  @Get('permissions')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @ApiOperation({ summary: 'List every permission that can be granted to a role' })
+  async findAllPermissions() {
+    const permissions = await this.userService.findAllPermissions();
+    return { success: true, data: permissions };
+  }
+
+  @Post('roles')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @ApiOperation({ summary: 'Create a custom role' })
+  async createRole(@Body() dto: CreateRoleRequestDto, @Req() req: any) {
+    const role = await this.userService.createRole(dto, req.user.id);
+    return { success: true, data: role };
+  }
+
+  @Put('roles/:id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @ApiOperation({ summary: 'Update a role display name or description' })
+  async updateRole(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateRoleRequestDto,
+    @Req() req: any,
+  ) {
+    const role = await this.userService.updateRole(id, dto, req.user.id);
+    return { success: true, data: role };
+  }
+
+  /**
+   * Replace a role's permissions. This is the one that changes what people can actually do —
+   * the PermissionsGuard reads these rows per request, and holders' cached principals are
+   * invalidated, so it takes effect within seconds rather than at next sign-in.
+   */
+  @Put('roles/:id/permissions')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @ApiOperation({ summary: "Replace a role's permission set" })
+  async setRolePermissions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetRolePermissionsRequestDto,
+    @Req() req: any,
+  ) {
+    const role = await this.userService.setRolePermissions(id, dto.permissionIds, req.user.id);
+    return { success: true, data: role };
+  }
+
+  @Delete('roles/:id')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @ApiOperation({ summary: 'Delete a custom (non-built-in) role that nobody holds' })
+  async deleteRole(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    await this.userService.deleteRole(id, req.user.id);
+    return { success: true };
   }
 
   @Get(':id')

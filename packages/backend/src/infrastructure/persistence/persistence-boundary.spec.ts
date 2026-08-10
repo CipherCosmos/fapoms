@@ -46,6 +46,8 @@ const IMPORTS_TYPEORM = [
   'modules/client/client.service.ts',
   'modules/communication/communication.service.ts',
   'modules/customer-master/customer-master.service.ts',
+  // Read-only SLA breach detector for the data-entry desk; aggregate queries only, no writes.
+  'modules/validation/desk-escalation.service.ts',
   'modules/document/document.service.ts',
   'modules/expense/expense.service.ts',
   'modules/geo/geo-seed.service.ts',

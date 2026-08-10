@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare, RotateCcw, Phone } from 'lucide-react';
 
 import { api } from '../../services/api';
+import { connectSocket, getSocket } from '../../services/socket';
 import { callManager } from '../../services/call.service';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { userMessage } from '../../services/errors';
@@ -72,6 +73,25 @@ export const ThreadPanel: React.FC<Props> = ({
   };
 
   useEffect(() => { setMessages(null); setSigned({}); load(); }, [queryId]);
+
+  // Live thread: join this query's socket room and reload on every posted message.
+  // Without this the desk only sees an assayer's reply after closing and reopening
+  // the panel — the message event was emitted, but nobody here was listening.
+  useEffect(() => {
+    const socket = connectSocket() ?? getSocket();
+    if (!socket) return;
+    socket.emit('subscribe:query', queryId);
+    const onThreadEvent = (p: { queryId?: string }) => {
+      if (p?.queryId === queryId) load();
+    };
+    socket.on('query:message', onThreadEvent);
+    socket.on('query:responded', onThreadEvent);
+    return () => {
+      socket.emit('unsubscribe:query', queryId);
+      socket.off('query:message', onThreadEvent);
+      socket.off('query:responded', onThreadEvent);
+    };
+  }, [queryId]);
 
   // Exchange every crop/attachment key for a signed URL so the browser can actually load it.
   useEffect(() => {

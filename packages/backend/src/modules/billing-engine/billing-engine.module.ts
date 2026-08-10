@@ -10,9 +10,11 @@ import { BillingEngineService } from './billing-engine.service';
 import { BillingEngineController } from './billing-engine.controller';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
+    NotificationsModule,
     TypeOrmModule.forFeature([
       BillingEntryEntity,
       BillingInvoiceEntity,

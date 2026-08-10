@@ -257,12 +257,16 @@ export class SchedulingService {
 
     // The assayer must hear that their audit moved — the reschedule was previously silent, so a
     // field worker could drive to a branch on the original date.
+    // A cancellation is every bit as time-critical and was the one transition that said
+    // nothing at all, so both share the same date formatting and branch lookup.
+    const fmt = (d: Date | string | null) => {
+      if (!d) return 'the original date';
+      const dd = typeof d === 'string' ? new Date(d) : d;
+      return Number.isNaN(dd.getTime()) ? String(d) : dd.toISOString().slice(0, 10);
+    };
+    const branchName = (schedule.assignment as any)?.projectBranch?.branch?.name ?? 'the branch';
+
     if (targetStatus === ScheduleStatus.RESCHEDULED && newScheduledDate) {
-      const fmt = (d: Date | string | null) => {
-        if (!d) return 'the original date';
-        const dd = typeof d === 'string' ? new Date(d) : d;
-        return Number.isNaN(dd.getTime()) ? String(d) : dd.toISOString().slice(0, 10);
-      };
       this.notificationDispatch.emitSafe({
         type: 'SCHEDULE_RESCHEDULED',
         entityType: 'SCHEDULE',
@@ -272,9 +276,29 @@ export class SchedulingService {
         dedupeKey: `SCHEDULE_RESCHEDULED:${saved.id}:${newScheduledDate}`,
         payload: {
           assignmentId: saved.assignmentId,
-          branchName: (schedule.assignment as any)?.projectBranch?.branch?.name ?? 'the branch',
+          branchName,
           previousDate: fmt(previousDate),
           newDate: newScheduledDate,
+        },
+      });
+    }
+
+    // Compared as a string on purpose: ScheduleStatus has no CANCELLED member yet and
+    // SCHEDULE_TRANSITIONS has no edge into it, so nothing can reach this today. Widening the
+    // shared enum needs a matching DB enum migration, which belongs with that change and not
+    // with wiring up the notification — this is here so the assayer is told the moment it can.
+    if (String(targetStatus) === 'CANCELLED') {
+      this.notificationDispatch.emitSafe({
+        type: 'SCHEDULE_CANCELLED',
+        entityType: 'SCHEDULE',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        dedupeKey: `SCHEDULE_CANCELLED:${saved.id}`,
+        payload: {
+          assignmentId: saved.assignmentId,
+          branchName,
+          scheduledDate: fmt(saved.scheduledDate),
         },
       });
     }

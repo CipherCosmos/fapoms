@@ -686,9 +686,15 @@ export class AssignmentService {
     // same-day replacement reached nobody. Routing through the catalog sends it
     // to whoever currently holds the operations roles instead, so cover follows
     // the org chart rather than a stale user id.
+    // Cancellation is wired here rather than in cancelAssignment(): every cancel path — the
+    // controller, and anything else reaching for the state machine — funnels through this
+    // transition, so one emit here fires exactly once per commit and cannot fire on a rolled
+    // back cancel. The assayer is a recipient (ASSIGNED_ASSAYER) because a cancelled job simply
+    // disappears from their next fetch, with no other signal that it is gone.
     const notifyType =
       targetStatus === AssignmentStatus.ACCEPTED ? 'ASSIGNMENT_ACCEPTED'
       : targetStatus === AssignmentStatus.REJECTED ? 'ASSIGNMENT_REJECTED'
+      : targetStatus === AssignmentStatus.CANCELLED ? 'ASSIGNMENT_CANCELLED'
       : null;
 
     if (notifyType) {
@@ -710,6 +716,9 @@ export class AssignmentService {
             : 'The assayer',
           branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
           reason: reason ?? 'No reason given',
+          scheduledDate: saved.scheduledDate
+            ? new Date(saved.scheduledDate).toISOString().slice(0, 10)
+            : 'the scheduled date',
         },
       });
     }
@@ -760,12 +769,36 @@ export class AssignmentService {
       if (assignment.projectBranch) {
         assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
       }
-      return this.dataSource.transaction(async (manager) => {
+      const autoDeclined = await this.dataSource.transaction(async (manager) => {
         if (assignment.projectBranch) {
           await manager.save(assignment.projectBranch);
         }
         return manager.save(assignment);
       });
+
+      // This path put the branch back into CANDIDATE_SEARCH and told nobody, so the desk only
+      // discovered the offer had died by noticing the branch was unstaffed. Same rejection
+      // notification a manual decline produces, since ops has to act identically on both.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_REJECTED',
+        entityType: 'ASSIGNMENT',
+        entityId: autoDeclined.id,
+        actorUserId: userId,
+        assayerId: autoDeclined.assayerId,
+        ownerUserId: autoDeclined.createdBy,
+        dedupeKey: `ASSIGNMENT_REJECTED:${autoDeclined.id}:NEGOTIATION_LIMIT`,
+        payload: {
+          assignmentId: autoDeclined.id,
+          assignmentNumber: autoDeclined.assignmentNumber,
+          assayerName: assignment.assayer
+            ? `${assignment.assayer.firstName} ${assignment.assayer.lastName}`.trim()
+            : 'The assayer',
+          branchName: assignment.projectBranch?.branch?.name ?? autoDeclined.assignmentNumber,
+          reason: autoDeclined.rejectReason ?? 'Negotiation limit reached',
+        },
+      });
+
+      return autoDeclined;
     }
     // Captured before the overwrite: a fee negotiation's audit value is the movement.
     const previousFee = assignment.proposedFee;
@@ -802,6 +835,28 @@ export class AssignmentService {
         counterFee,
         negotiationRound: saved.negotiationCount,
         assayerId: saved.assayerId,
+      },
+    });
+
+    // The round number is in the dedupe key: each counter-offer is a fresh price ops must
+    // answer, so round 2 must not be swallowed as a duplicate of round 1.
+    this.notificationDispatch.emitSafe({
+      type: 'ASSIGNMENT_COUNTER_OFFERED',
+      entityType: 'ASSIGNMENT',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: saved.assayerId,
+      ownerUserId: saved.createdBy,
+      dedupeKey: `ASSIGNMENT_COUNTER_OFFERED:${saved.id}:${saved.negotiationCount}`,
+      payload: {
+        assignmentId: saved.id,
+        assignmentNumber: saved.assignmentNumber,
+        assayerName: assignment.assayer
+          ? `${assignment.assayer.firstName} ${assignment.assayer.lastName}`.trim()
+          : 'The assayer',
+        proposedFee: counterFee,
+        branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
+        reason: remarks ?? 'No reason given',
       },
     });
 
@@ -1377,6 +1432,32 @@ export class AssignmentService {
           remarks: `SLA breach detected: Assignment ${assignment.assignmentNumber} exceeded response time deadline of ${assignment.slaDueDate}.`,
         });
 
+        // Only rows still COMPLIANT reach this branch (see the query above) and they are saved
+        // as BREACHED first, so a row is notified on the flip and never again on later scans;
+        // the per-assignment dedupe key is the second guard if a scan is retried mid-run.
+        // Branch is looked up here rather than joined into the scan query so the extra read is
+        // paid only for the handful of rows that actually breach.
+        const withBranch = await this.assignmentRepository
+          .findOne({ where: { id: assignment.id }, relations: ['projectBranch', 'projectBranch.branch'] })
+          .catch(() => null);
+
+        this.notificationDispatch.emitSafe({
+          type: 'ASSIGNMENT_SLA_BREACHED',
+          entityType: 'ASSIGNMENT',
+          entityId: assignment.id,
+          assayerId: assignment.assayerId,
+          ownerUserId: assignment.createdBy ?? null,
+          dedupeKey: `ASSIGNMENT_SLA_BREACHED:${assignment.id}`,
+          payload: {
+            assignmentId: assignment.id,
+            assignmentNumber: assignment.assignmentNumber,
+            branchName: withBranch?.projectBranch?.branch?.name ?? assignment.assignmentNumber,
+            // No slaType column exists; the status the clock ran out in is what distinguishes
+            // an unanswered offer from an accepted job that never got done.
+            slaType: assignment.status === AssignmentStatus.PENDING ? 'response' : 'completion',
+          },
+        });
+
         breachedCount++;
       }
     }
@@ -1683,7 +1764,12 @@ export class AssignmentService {
             userId: saved.createdBy,
             title: 'Assayer GPS Check-In',
             message: `Assayer ${saved.assayer?.displayName || 'Field Assayer'} checked in at ${saved.projectBranch?.branch?.name || 'Branch'} (${lat}, ${lng}).`,
-            link: `/assignments/${saved.id}`,
+            // Left as a direct create rather than migrated to a catalog emit: the catalog has no
+            // check-in type, and inventing one here would change who gets told (roles, not the
+            // raiser) — a routing decision that belongs with the catalog, not this call site.
+            // The link is corrected: `/assignments/:id` is not a frontend route, so every one of
+            // these landed on the dashboard catch-all instead of the record.
+            link: `/assignments?id=${saved.id}`,
           }, userId || saved.assayerId);
         }
       } catch (err) {

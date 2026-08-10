@@ -53,9 +53,13 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
       };
       socket?.on('query:raised', handleQueryUpdate);
       socket?.on('query:responded', handleQueryUpdate);
+      // Fired for EVERY message posted to a thread — raised/responded only mark
+      // lifecycle transitions, so without this a desk follow-up never appears live.
+      socket?.on('query:message', handleQueryUpdate);
       return () => {
         socket?.off('query:raised', handleQueryUpdate);
         socket?.off('query:responded', handleQueryUpdate);
+        socket?.off('query:message', handleQueryUpdate);
       };
     }
   }, [visible, assignment]);

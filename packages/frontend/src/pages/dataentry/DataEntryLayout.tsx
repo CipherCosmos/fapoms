@@ -1,19 +1,23 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutList, MessagesSquare } from 'lucide-react';
+import { LayoutDashboard, Inbox, ClipboardCheck, MessagesSquare } from 'lucide-react';
 
 /**
  * The shell the data-entry & validation pages sit in.
  *
- * Three roles — data-entry head, validation manager, validator — used to share one
- * undifferentiated board. Each concern is now a page with its own URL. The board itself remains
- * the intake/processing view; the clarifications worklist is the cross-case queue the board
- * never had. Authority within a case (who may approve vs submit to the client) is enforced in
- * the case workspace, so every role can reach these pages but sees the controls its role allows.
+ * One page used to hold the whole desk inline — every packet, every case, every
+ * control — which stops working the moment the desk holds more rows than a screen.
+ * The desk is now a small app: an Overview of aggregates (each number linking into
+ * the queue it summarises), server-paginated Packets and Reviews queues, and the
+ * cross-case Clarifications worklist. The case workspace lives on its own URL
+ * (/data-entry/case/:branchId) so any row anywhere can deep-link to it. Authority
+ * (who may assign, decide, submit) is enforced per page and in the workspace.
  */
 
 const PAGES = [
-  { to: '/data-entry', end: true, label: 'Board', icon: LayoutList },
+  { to: '/data-entry', end: true, label: 'Overview', icon: LayoutDashboard },
+  { to: '/data-entry/packets', label: 'Packets', icon: Inbox },
+  { to: '/data-entry/reviews', label: 'Reviews', icon: ClipboardCheck },
   { to: '/data-entry/clarifications', label: 'Clarifications', icon: MessagesSquare },
 ] as const;
 

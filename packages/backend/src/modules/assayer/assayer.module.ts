@@ -11,9 +11,12 @@ import { HrController } from './hr.controller';
 import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
 import { AssayerController } from './assayer.controller';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
+    // HR and ops learn when someone becomes assignable, and when credentials fall due.
+    NotificationsModule,
     TypeOrmModule.forFeature([
       AssayerEntity,
       AssayerCommercialProfileEntity,

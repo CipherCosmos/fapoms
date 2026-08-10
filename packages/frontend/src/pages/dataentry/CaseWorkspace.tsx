@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Check, RotateCcw, Send as SubmitIcon, MessageSquarePlus, MessageSquare,
-  Loader2, AlertTriangle, FileWarning,
+  Loader2, AlertTriangle, FileWarning, History as HistoryIcon,
 } from 'lucide-react';
 
 import { api } from '../../services/api';
@@ -41,6 +41,11 @@ interface QueryRow {
   lastMessageAt?: string | null; createdAt: string;
 }
 
+interface TrailRow {
+  at: string; eventType: string; actor: string | null;
+  previousState: string | null; newState: string | null; remarks: string | null;
+}
+
 const STATUS_TONE: Record<string, string> = {
   PENDING: 'var(--text-muted)', ASSIGNED: 'var(--accent)', OCR_PROCESSING: 'var(--accent)',
   HUMAN_REVIEW: 'var(--warning)', CORRECTION_REQUIRED: 'var(--danger)',
@@ -61,16 +66,15 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
 }) => {
   const roles = useCurrentRoles();
   /**
-   * Two levels of authority, matching what the backend already permits and the real division of
-   * labour: a VALIDATOR verifies the keyed output — approve, or send back for correction — while
-   * only a manager or head SUBMITS the finished report to the client. The validator used to be
-   * excluded from every control despite the backend allowing their transitions, so the role the
-   * board is built for was effectively read-only.
+   * The desk has two real roles. VALIDATORS are the working members: they key the packet,
+   * run assayer clarifications (the chat below, phone calls), and hand the report back.
+   * The review decision — approve, send back for correction, submit to the client — is the
+   * HEAD's alone, so only heads see the decision controls. A validator seeing an Approve
+   * button that 403s reads as a broken app, not a permissions boundary.
    */
   const canReview = roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR].includes(r));
-  const canSubmit = roles.some((r) =>
     [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.VALIDATION_MANAGER].includes(r));
+  const canSubmit = canReview;
 
   const [docs, setDocs] = useState<DocRow[] | null>(null);
   const [validationCase, setCase] = useState<CaseRow | null | undefined>(undefined);
@@ -91,6 +95,20 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   // built for; below ~900px the two panels overlap and the 360px-min right column
   // pushes the layout wider than the screen. Track viewport width and stack them
   // vertically when narrow. Guarded for SSR/non-browser just in case.
+  // The audit trail for this unit of work — every delegation, hand-back and decision,
+  // with who and when. Fetched lazily on first open; it's evidence, not a hot path.
+  const [showTrail, setShowTrail] = useState(false);
+  const [trail, setTrail] = useState<TrailRow[] | null>(null);
+  const toggleTrail = () => {
+    const next = !showTrail;
+    setShowTrail(next);
+    if (next && trail === null && validationCase?.id) {
+      api.request<TrailRow[]>(`/validation/${validationCase.id}/trail`)
+        .then((r) => setTrail(Array.isArray(r) ? r : []))
+        .catch(() => setTrail([]));
+    }
+  };
+
   const [narrow, setNarrow] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 900 : false,
   );
@@ -220,7 +238,34 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
             {status.replace(/_/g, ' ')}
           </span>
         )}
+        {validationCase?.id && (
+          <button onClick={toggleTrail} className="btn btn-secondary"
+            style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto' }}>
+            <HistoryIcon size={13} /> {showTrail ? 'Hide history' : 'History'}
+          </button>
+        )}
       </div>
+
+      {showTrail && (
+        <section style={{ ...panel, padding: '12px 14px', maxHeight: '260px', overflowY: 'auto' }}>
+          <div style={{ ...label, marginBottom: '8px' }}>Audit trail — every action on this packet and case</div>
+          {trail === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>}
+          {trail?.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No recorded events.</div>}
+          {trail?.map((t, i) => (
+            <div key={i} style={{ display: 'flex', gap: '10px', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--border-hair)' : 'none', fontSize: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                {new Date(t.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </span>
+              <span style={{ fontWeight: 700 }}>{t.eventType.replace(/_/g, ' ')}</span>
+              {t.previousState && t.newState && t.previousState !== t.newState && (
+                <span style={{ color: 'var(--text-secondary)' }}>{t.previousState} → {t.newState}</span>
+              )}
+              {t.actor && <span style={{ color: 'var(--accent)' }}>{t.actor}</span>}
+              {t.remarks && <span style={{ color: 'var(--text-muted)', flexBasis: '100%', paddingLeft: '2px' }}>{t.remarks}</span>}
+            </div>
+          ))}
+        </section>
+      )}
 
       <div style={{
         display: 'grid',

@@ -180,6 +180,8 @@ function AppMain() {
   const [savingProfile, setSavingProfile] = useState(false);
 
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
+  /** False until the opening poll has recorded the existing backlog. */
+  const hasPolledNotifsRef = useRef(false);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -187,16 +189,37 @@ function AppMain() {
       setNotifications(items);
       setUnreadNotifCount(items.filter((n) => !n.isRead).length);
 
-      // Trigger audio chime & push alert for newly received unread notifications
+      /**
+       * The first poll of a session only records what is already there.
+       *
+       * `seenNotifIdsRef` starts empty on every launch, so without this the opening poll
+       * treats the entire unread backlog as "just arrived" and fires an alert for each —
+       * open the app with twenty unread and twenty notifications land at once, for things
+       * already visible on screen. Only genuinely new arrivals, seen while the app is
+       * running, are worth interrupting for.
+       */
+      const isFirstLoad = !hasPolledNotifsRef.current;
+      hasPolledNotifsRef.current = true;
+
       items.forEach((n) => {
-        if (!n.isRead && !seenNotifIdsRef.current.has(n.id)) {
-          seenNotifIdsRef.current.add(n.id);
-          triggerAlertNotification(n.title, n.message || 'New audit alert received', {
+        if (n.isRead || seenNotifIdsRef.current.has(n.id)) return;
+        seenNotifIdsRef.current.add(n.id);
+        if (isFirstLoad) return;
+        triggerAlertNotification(
+          n.title,
+          n.message || 'New audit alert received',
+          {
             notificationId: n.id,
             assignmentId: n.assignmentId,
             link: n.link,
-          });
-        }
+          },
+          // Picks the Android channel, so a polled notification is presented exactly as
+          // loudly as the same notification would have been had it arrived as a push.
+          (n as any).priority,
+          // Chime only: polling runs only while the app is foregrounded, and the server has
+          // already put this same notification in the tray via push.
+          false,
+        );
       });
     } catch (e) {
       console.error('Error loading notifications:', e);
@@ -209,18 +232,32 @@ function AppMain() {
    * three carry the same shape, from `NotificationDeliveryWorker`'s FCM `data` field).
    *
    * The tab/modal shell here has no per-notification route to push onto, so "deep link" means
-   * the best a fixed shell can do: land on the Schedule tab for anything assignment-shaped,
-   * and additionally open the query chat directly when the notification was specifically about
-   * a raised clarification — since that is the one case where "just look at your schedule"
-   * would leave the person hunting for the actual question.
+   * the best a fixed shell can do: pick the tab that actually shows what the notification is
+   * about, and additionally open the query chat directly when the notification was specifically
+   * about a raised clarification — since that is the one case where "just look at your
+   * schedule" would leave the person hunting for the actual question.
+   *
+   * The catalog states each type's destination as a web route in `link`; the tab is derived
+   * from it rather than defaulting everything to Schedule. That default meant a "Payment sent"
+   * notification opened the schedule — the one screen that says nothing about money.
    */
   const handleNotificationTap = useCallback((data: any) => {
     if (!data) return;
     if (data.notificationId) {
       MobileApiService.markNotificationRead(data.notificationId).catch(() => {});
     }
+    const link: string = typeof data.link === 'string' ? data.link : '';
+
+    // Money lives on its own tab and carries no assignment to select, so it returns early —
+    // requiring an assignmentId below would drop these taps entirely.
+    if (link.startsWith('/earnings')) {
+      setPdfDocsAssignment(null);
+      setSelectedTab('EARNINGS');
+      return;
+    }
+
     const assignmentId: string | undefined =
-      data.entityId || (typeof data.link === 'string' ? data.link.replace('/assignments/', '') : undefined);
+      data.entityId || (link ? link.replace('/assignments/', '') : undefined);
     if (!assignmentId) return;
     // Dismiss any open detail view too, or the tab change lands behind it and the tapped
     // notification appears to do nothing.

@@ -9,6 +9,7 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod } from '@fapoms/shared';
 
@@ -30,15 +31,64 @@ export class DocumentService {
   // ── Data entry desk ───────────────────────────────────────────────────────
 
   /**
-   * The head's distribution board: every returned packet at the desk, with who
-   * owns it. Status alone said a packet had arrived but not who was working it,
-   * so allocation happened outside the system and nothing could be chased.
+   * The head's distribution queue: returned packets at the desk, with who owns each.
+   *
+   * Paginated and filtered in SQL, not in the page. The old shape returned every row
+   * and let the browser count and slice — fine at fifty packets, unusable at fifty
+   * thousand. The packet's LANE is also computed here, joined against the branch's
+   * validation case, so "rework" (case bounced back) and "with head" (left the desk)
+   * are queryable states rather than client-side inference:
+   *   unassigned → nobody owns it;  working → owner typing it up;
+   *   rework     → review bounced it back to the owner;
+   *   done       → handed back / in review / approved / submitted (left the desk).
    */
-  async dataEntryQueue(assignedTo?: string): Promise<any> {
-    const qb = this.documentRepository
-      .createQueryBuilder('d')
-      .leftJoin('project_branches', 'pb', 'pb.id = d.project_branch_id')
-      .leftJoin('branches', 'b', 'b.id = pb.branch_id')
+  async dataEntryQueue(opts: {
+    assignedTo?: string;
+    lane?: 'unassigned' | 'working' | 'rework' | 'done';
+    search?: string;
+    page?: number;
+    limit?: number;
+  } = {}): Promise<any> {
+    const page = Math.max(1, Number(opts.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(opts.limit) || 25));
+
+    const laneExpr = `CASE
+      WHEN vc.status = 'CORRECTION_REQUIRED' THEN 'rework'
+      WHEN vc.status IN ('HUMAN_REVIEW', 'APPROVED', 'SUBMITTED') THEN 'done'
+      WHEN d.assigned_to_user_id IS NULL THEN 'unassigned'
+      ELSE 'working'
+    END`;
+
+    const base = () => {
+      const qb = this.documentRepository
+        .createQueryBuilder('d')
+        .leftJoin('project_branches', 'pb', 'pb.id = d.project_branch_id')
+        .leftJoin('branches', 'b', 'b.id = pb.branch_id')
+        .leftJoin('validation_cases', 'vc', 'vc.project_branch_id = d.project_branch_id AND vc.is_active = true')
+        .where('d.is_active = true')
+        .andWhere('d.type = :type', { type: DocumentType.AUDITED_RETURN_PDF })
+        .andWhere('d.status IN (:...statuses)', {
+          statuses: [DocumentStatus.RECEIVED, DocumentStatus.SENT_TO_DATA_ENTRY, DocumentStatus.SENT_TO_EXTERNAL_OCR],
+        });
+      if (opts.assignedTo === 'unassigned') qb.andWhere('d.assigned_to_user_id IS NULL');
+      else if (opts.assignedTo) qb.andWhere('d.assigned_to_user_id = :uid', { uid: opts.assignedTo });
+      if (opts.search) {
+        qb.andWhere('(b.name ILIKE :q OR b.branch_code ILIKE :q OR d.file_name ILIKE :q)', { q: `%${opts.search}%` });
+      }
+      return qb;
+    };
+
+    // Counts per lane over the whole filtered set (minus the lane filter itself), so the
+    // lane chips stay truthful whichever lane is open.
+    const countRows: Array<{ lane: string; n: string }> = await base()
+      .select(`${laneExpr} AS lane`)
+      .addSelect('COUNT(*) AS n')
+      .groupBy('lane')
+      .getRawMany();
+    const counts = { unassigned: 0, working: 0, rework: 0, done: 0 };
+    for (const r of countRows) (counts as any)[r.lane] = Number(r.n);
+
+    const listQb = base()
       .leftJoin('users', 'u', 'u.id = d.assigned_to_user_id')
       .select([
         'd.id AS id', 'd.file_name AS "fileName"', 'd.status AS status',
@@ -47,26 +97,20 @@ export class DocumentService {
         'd.data_entry_completed_at AS "completedAt"',
         'd.project_branch_id AS "projectBranchId"',
         'b.name AS "branchName"', 'b.branch_code AS "branchCode"',
+        'vc.status AS "caseStatus"',
+        `${laneExpr} AS lane`,
         `COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS "assigneeName"`,
-      ])
-      .where('d.is_active = true')
-      .andWhere('d.type = :type', { type: DocumentType.AUDITED_RETURN_PDF })
-      .andWhere('d.status IN (:...statuses)', {
-        statuses: [DocumentStatus.RECEIVED, DocumentStatus.SENT_TO_DATA_ENTRY, DocumentStatus.SENT_TO_EXTERNAL_OCR],
-      });
+      ]);
+    if (opts.lane) listQb.andWhere(`${laneExpr} = :lane`, { lane: opts.lane });
 
-    if (assignedTo === 'unassigned') qb.andWhere('d.assigned_to_user_id IS NULL');
-    else if (assignedTo) qb.andWhere('d.assigned_to_user_id = :uid', { uid: assignedTo });
+    const total = await listQb.clone().getCount();
+    const items = await listQb
+      .orderBy('d.received_at', 'ASC', 'NULLS LAST')
+      .offset((page - 1) * limit)
+      .limit(limit)
+      .getRawMany();
 
-    const rows = await qb.orderBy('d.received_at', 'ASC', 'NULLS LAST').getRawMany();
-
-    return {
-      total: rows.length,
-      unassigned: rows.filter((r: any) => !r.assignedToUserId).length,
-      inProgress: rows.filter((r: any) => r.assignedToUserId && !r.completedAt).length,
-      completed: rows.filter((r: any) => r.completedAt).length,
-      items: rows,
-    };
+    return { counts, total, page, limit, items };
   }
 
   /**
@@ -82,7 +126,9 @@ export class DocumentService {
       JOIN user_roles ur ON ur.user_id = u.id
       JOIN roles r ON r.id = ur.role_id
       WHERE u.is_active = true
-        AND r.name IN ('DATA_ENTRY_HEAD', 'DOCUMENT_EXECUTIVE', 'VALIDATOR')
+        -- Heads also work packets themselves, so they are valid assignees alongside
+        -- validators — the desk's working members.
+        AND r.name IN ('DATA_ENTRY_HEAD', 'VALIDATION_MANAGER', 'VALIDATOR')
       ORDER BY name
     `);
   }
@@ -118,6 +164,12 @@ export class DocumentService {
      * latest. For a firm whose product is audit evidence, who held a packet and when is
      * exactly the question that has to be answerable years later.
      */
+    // The remark is read by people (activity feed, case trail) — a uuid answers nothing.
+    const [assignee] = await this.documentRepository.manager.query(
+      `SELECT COALESCE(NULLIF(TRIM(CONCAT_WS(' ', first_name, last_name)), ''), username) AS name FROM users WHERE id = $1`,
+      [assigneeId],
+    ).catch(() => [] as any[]);
+
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: 'DOCUMENT_DELEGATED_TO_DATA_ENTRY',
@@ -126,8 +178,24 @@ export class DocumentService {
       previousState: previousStatus,
       newState: saved.status,
       userId: actorId,
-      remarks: `Packet ${saved.fileName} delegated to user ${assigneeId}.`,
+      remarks: `Packet ${saved.fileName} delegated to ${assignee?.name ?? assigneeId}.`,
       metadata: { assigneeId, projectBranchId: doc.projectBranchId ?? null },
+    });
+
+    // The assignee learns of the delegation from the system rather than from the head
+    // walking over. Re-delegating the same packet to someone else is a genuinely new
+    // hand-off, so the assignee is part of the dedupe key.
+    this.notificationDispatch.emitSafe({
+      type: 'DATA_ENTRY_ASSIGNED',
+      entityType: 'DOCUMENT',
+      entityId: saved.id,
+      actorUserId: actorId,
+      ownerUserId: assigneeId,
+      dedupeKey: `DATA_ENTRY_ASSIGNED:${saved.id}:${assigneeId}`,
+      payload: {
+        documentName: saved.fileName,
+        branchName: doc.assessment?.branch?.name ?? 'a branch',
+      },
     });
 
     // Opens the case (at PENDING) as soon as work starts, not only at hand-back,
@@ -167,6 +235,21 @@ export class DocumentService {
       metadata: { assignedToUserId: doc.assignedToUserId, projectBranchId: doc.projectBranchId ?? null },
     });
 
+    // Emitted before the validation advance below, and independently of whether it succeeds:
+    // the hand-back itself is what the head needs to hear about, and tying the alert to the
+    // validation case would silence it in exactly the case where the case did not move.
+    this.notificationDispatch.emitSafe({
+      type: 'DATA_ENTRY_COMPLETED',
+      entityType: 'DOCUMENT',
+      entityId: saved.id,
+      actorUserId: actorId,
+      dedupeKey: `DATA_ENTRY_COMPLETED:${saved.id}:${saved.dataEntryCompletedAt!.toISOString()}`,
+      payload: {
+        userName: await this.resolveUserName(actorId),
+        branchName: doc.assessment?.branch?.name ?? 'a branch',
+      },
+    });
+
     if (doc.projectBranchId) {
       try {
         await this.validationService.getOrAdvanceForHandBack(doc.projectBranchId, doc.assessmentId ?? null, actorId);
@@ -179,21 +262,36 @@ export class DocumentService {
          * indistinguishable from one that did. The packet then sat in "being worked" forever
          * while the operator believed they had passed it on.
          *
-         * The flag travels back to the caller so the UI can say "saved, but the reviewer has
-         * not been notified — please tell your supervisor" instead of a plain success.
+         * The head is told either way — DATA_ENTRY_COMPLETED is emitted above, outside this
+         * block — so the operator is no longer the relay. The flag now only warns that the
+         * packet is missing from the *review queue* and needs re-queuing, which is a thing
+         * the head fixes, not the operator.
          */
         this.logger.error(
           `Hand-back saved for branch ${doc.projectBranchId} but its validation case did not advance to review: ${(e as Error).message}`,
         );
         (saved as any).validationAdvanced = false;
         (saved as any).validationWarning =
-          'Your work was saved, but the reviewer was not notified automatically. Please tell your supervisor so this packet is not missed.';
+          'Your work was saved and your head has been notified, but this packet did not reach the review queue — your head will need to re-queue it.';
       }
     }
     return saved;
   }
 
-
+  /**
+   * Notification bodies name the person, not their uuid — a "user 3f2a… finished data entry"
+   * line tells the head nothing they can act on. Same COALESCE shape the queue views above
+   * use, so a user with no first/last name still resolves to their username.
+   */
+  private async resolveUserName(userId: string | null | undefined): Promise<string> {
+    if (!userId) return 'A team member';
+    const [row] = await this.documentRepository.manager.query(
+      `SELECT COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS name
+         FROM users u WHERE u.id = $1`,
+      [userId],
+    );
+    return row?.name ?? 'A team member';
+  }
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -207,6 +305,7 @@ export class DocumentService {
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly notificationService: NotificationService,
+    private readonly notificationDispatch: NotificationDispatchService,
     private readonly pushNotificationService: PushNotificationService,
     private readonly validationService: ValidationService,
   ) {}
@@ -953,7 +1052,14 @@ export class DocumentService {
           {
             title: 'New Audit PDF',
             message: `Audit PDF "${doc.fileName}" has been dispatched to you. Open your schedule to view and download.`,
-            link: `/assignments/${assignment.id}`,
+            // Kept as a hand-rolled notifyAssayer rather than migrated to a catalog emit: no
+            // catalog entry covers "pre-field PDF dispatched to the assayer" (DOCUMENT_UPLOADED
+            // targets the office desk, DOCUMENT_REJECTED is the re-upload path), and inventing
+            // one is out of scope here. Only the link is corrected — the frontend declares
+            // `/assignments` and reads the record from `?id=`; there is no `/assignments/:id`
+            // route, so the old path fell through to the dashboard and the assayer never saw
+            // the PDF the notification was about.
+            link: `/assignments?id=${assignment.id}`,
             data: { documentId: doc.id, assignmentId: assignment.id, type: 'document_dispatched' },
           },
           userId,
@@ -1010,6 +1116,33 @@ export class DocumentService {
     } catch (err) {
       console.error('Failed to publish document:received event:', err);
     }
+
+    /**
+     * Fired here rather than in `create()` on purpose. `create()` also stores pre-field PDFs
+     * and generated audit packets, which are outbound — the desk has nothing to do with them
+     * yet, and alerting on upload would page the document executives for paperwork on its way
+     * *out*. RECEIVED is the single point at which a document has actually landed on the desk,
+     * whichever route it took, so the alert fires once and only for work that exists.
+     */
+    const receivedFrom = doc.assessmentId
+      ? await this.assignmentRepository.findOne({
+          where: { assessmentId: doc.assessmentId, isActive: true },
+          relations: ['assayer'],
+        })
+      : null;
+
+    this.notificationDispatch.emitSafe({
+      type: 'DOCUMENT_UPLOADED',
+      entityType: 'DOCUMENT',
+      entityId: saved.id,
+      actorUserId: userId === 'SYSTEM' ? null : userId,
+      dedupeKey: `DOCUMENT_UPLOADED:${saved.id}`,
+      payload: {
+        assayerName: receivedFrom?.assayer?.displayName ?? 'An assayer',
+        documentName: saved.fileName,
+        branchName: doc.assessment?.branch?.name ?? 'a branch',
+      },
+    });
 
     return saved;
   }

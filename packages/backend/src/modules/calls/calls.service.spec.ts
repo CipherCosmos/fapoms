@@ -5,6 +5,7 @@ import { CallsService } from './calls.service';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ValidationQueryMessageEntity } from '../validation-query/validation-query-message.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 /**
  * The call lifecycle, which is the part of calling this server owns. Media is LiveKit's
@@ -24,10 +25,12 @@ describe('CallsService', () => {
     update: jest.fn().mockResolvedValue({}),
   };
   const messageRepo = {
+    findOne: jest.fn(),
     create: jest.fn((d: any) => d),
     save: jest.fn((d: any) => Promise.resolve({ ...d, createdAt: new Date() })),
   };
   const publisher = { publish: jest.fn() };
+  const notificationDispatch = { emitSafe: jest.fn() };
 
   const assayer = { id: 'assayer-1', name: 'Nilesh', isAssayer: true };
   const staff = { id: 'staff-1', name: 'Desk', isAssayer: false };
@@ -43,12 +46,14 @@ describe('CallsService', () => {
         { provide: getRepositoryToken(ValidationQueryEntity), useValue: queryRepo },
         { provide: getRepositoryToken(ValidationQueryMessageEntity), useValue: messageRepo },
         { provide: DomainEventPublisher, useValue: publisher },
+        { provide: NotificationDispatchService, useValue: notificationDispatch },
       ],
     }).compile();
 
     service = module.get(CallsService);
     jest.clearAllMocks();
     queryRepo.findOne.mockResolvedValue({ ...staffQuery });
+    messageRepo.findOne.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -72,7 +77,16 @@ describe('CallsService', () => {
     expect(ring.targetUserIds).toEqual(['assayer-1']);
   });
 
-  it('falls back to ringing the whole desk when the raiser is unrecorded', async () => {
+  it('when the raiser is unrecorded, rings the staff member who last wrote in the thread', async () => {
+    queryRepo.findOne.mockResolvedValue({ ...staffQuery, raisedByUserId: null });
+    messageRepo.findOne.mockResolvedValue({ authorId: 'staff-2' });
+    await service.initiate(assayer, 'query-1');
+    const ring = publisher.publish.mock.calls.find(([e]) => e === 'call:incoming')![1];
+    expect(ring.targetUserIds).toEqual(['staff-2']);
+    expect(ring.ringStaffRoom).toBe(false);
+  });
+
+  it('falls back to ringing the whole desk only when nobody specific can be resolved', async () => {
     // An unanswerable ring is worse than a broad one — but only in this direction, and
     // only when there is genuinely nobody specific to ring.
     queryRepo.findOne.mockResolvedValue({ ...staffQuery, raisedByUserId: null });
@@ -120,6 +134,45 @@ describe('CallsService', () => {
       validationQueryId: 'query-1',
       body: expect.stringContaining('Missed call'),
     }));
+  });
+
+  it('a missed call notifies the callee only, on the side the caller is not', async () => {
+    // Assayer rang the desk, so the desk user is the one who has to be told; the caller
+    // watched it go unanswered and needs nothing.
+    await service.initiate(assayer, 'query-1');
+    await jest.advanceTimersByTimeAsync(41_000);
+
+    const emit = notificationDispatch.emitSafe.mock.calls.at(-1)![0];
+    expect(emit.type).toBe('CALL_MISSED');
+    expect(emit.ownerUserId).toBe('staff-1');
+    expect(emit.assayerId).toBeNull();
+    expect(emit.payload.callerName).toBe('Nilesh');
+  });
+
+  it('a missed call from the desk notifies the assayer instead', async () => {
+    await service.initiate(staff, 'query-1');
+    await jest.advanceTimersByTimeAsync(41_000);
+
+    const emit = notificationDispatch.emitSafe.mock.calls.at(-1)![0];
+    expect(emit.type).toBe('CALL_MISSED');
+    expect(emit.assayerId).toBe('assayer-1');
+    expect(emit.ownerUserId).toBeNull();
+  });
+
+  it('an answered call that ends normally notifies nobody', async () => {
+    const { roomName } = await service.initiate(assayer, 'query-1');
+    await service.answer(staff, roomName);
+    await service.hangup(staff, roomName);
+
+    expect(notificationDispatch.emitSafe).not.toHaveBeenCalled();
+  });
+
+  it('a desk-wide ring with no resolvable callee has nobody to notify', async () => {
+    queryRepo.findOne.mockResolvedValue({ ...staffQuery, raisedByUserId: null });
+    await service.initiate(assayer, 'query-1');
+    await jest.advanceTimersByTimeAsync(41_000);
+
+    expect(notificationDispatch.emitSafe).not.toHaveBeenCalled();
   });
 
   it('declining logs the refusal rather than pretending nothing happened', async () => {

@@ -79,7 +79,11 @@ export class AddProjectOperationalFields1784691660986 implements MigrationInterf
         await queryRunner.query(`COMMENT ON COLUMN "client_configurations"."penalty_rate" IS 'Penalty rate for SLA breaches (%)'`);
         await queryRunner.query(`ALTER TABLE "client_configurations" ADD "service_hours" jsonb`);
         await queryRunner.query(`COMMENT ON COLUMN "client_configurations"."service_hours" IS 'Service hours configuration'`);
-        await queryRunner.query(`ALTER TABLE "assayer_activities" ADD "metadata" jsonb`);
+        // IF NOT EXISTS: an earlier migration (AddOrganizationsAndAssayerEnterprise) already
+        // adds this column, so a replay from an empty database hit "column already exists" here
+        // and the whole chain stopped. Guarding makes the step idempotent, which is what a
+        // migration replayed onto a fresh production database requires.
+        await queryRunner.query(`ALTER TABLE "assayer_activities" ADD COLUMN IF NOT EXISTS "metadata" jsonb`);
         await queryRunner.query(`ALTER TABLE "assayers" DROP COLUMN "employee_id"`);
         await queryRunner.query(`ALTER TABLE "assayers" ADD "employee_id" character varying(50)`);
         await queryRunner.query(`ALTER TABLE "assayers" ADD CONSTRAINT "UQ_40271cf4d07407f77527423f86f" UNIQUE ("employee_id")`);

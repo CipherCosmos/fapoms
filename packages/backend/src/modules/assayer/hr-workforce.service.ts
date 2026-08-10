@@ -290,6 +290,31 @@ export class HrWorkforceService {
 
   // ── Expiring credentials ─────────────────────────────────────────────────
 
+  /**
+   * The same credentials the dashboard paints, but as a list something can act on.
+   * Painting a panel only helps whoever opens it; renewals were being missed because
+   * nothing ever pushed this at HR. Already-expired rows are included — those are the
+   * ones that most need chasing.
+   */
+  async credentialsExpiringWithin(days: number): Promise<
+    { id: string; documentName: string; expiryDate: string; assayerId: string; assayerName: string }[]
+  > {
+    return this.dataSource.query(
+      `
+      SELECT g.id, g.document_type AS "documentName", g.expiry_date::date::text AS "expiryDate",
+             a.id AS "assayerId", a.display_name AS "assayerName"
+      FROM assayer_government_documents g
+      JOIN assayers a ON a.id = g.assayer_id
+      WHERE g.is_active = true AND g.expiry_date IS NOT NULL
+        AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND g.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
+      ORDER BY g.expiry_date ASC
+      LIMIT 200
+    `,
+      [days],
+    );
+  }
+
   /** Certifications and identity documents falling due, so renewals start early. */
   private async expiries() {
     const certifications = await this.dataSource.query(`

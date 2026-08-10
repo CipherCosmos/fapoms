@@ -15,6 +15,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { TypeOrmUnitOfWork } from '../../infrastructure/persistence/typeorm-unit-of-work';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import {
   BillingLevel, BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection,
   InvoiceStatus, InvoiceType, PaymentState,
@@ -243,6 +244,7 @@ describe('BillingEngineService', () => {
   };
 
   const publish = jest.fn();
+  const emitSafe = jest.fn();
 
   /** Marks outbox rows dispatched once the immediate publish has succeeded. */
   const outboxRepo: any = { update: jest.fn(async () => undefined) };
@@ -271,6 +273,7 @@ describe('BillingEngineService', () => {
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: DataSource, useValue: dataSource },
         { provide: DomainEventPublisher, useValue: { publish, subscribe: jest.fn() } },
+        { provide: NotificationDispatchService, useValue: { emit: jest.fn(), emitSafe } },
         // The real UnitOfWork over the same DataSource double, rather than a stub that just
         // calls the callback. The transaction-boundary and post-commit-event assertions below
         // are assertions about the boundary, so they have to run the code that implements it —
