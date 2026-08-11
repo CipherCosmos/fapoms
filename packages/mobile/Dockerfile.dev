@@ -43,5 +43,5 @@ RUN npm install --legacy-peer-deps
 
 EXPOSE 8081
 
-# Expo web: runs the Metro bundler in web mode on port 8081
-CMD ["npx", "expo", "start", "--web", "--port", "8081"]
+# Expo 52 LAN host mode: binds Metro bundler to 0.0.0.0 inside container
+CMD ["npx", "expo", "start", "--host", "lan", "--port", "8081"]

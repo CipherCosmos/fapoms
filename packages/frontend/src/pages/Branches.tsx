@@ -303,7 +303,7 @@ export const Branches: React.FC = () => {
         </AlertBanner>
       )}
 
-      <div className="responsive-grid-split" style={{ alignItems: 'start' }}>
+      <div className="responsive-grid-split" style={{ alignItems: 'start', gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 400px)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {/* Toolbar */}
           <div className="glass-card" style={{ padding: '14px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>

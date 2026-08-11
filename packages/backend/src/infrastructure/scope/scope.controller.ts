@@ -77,9 +77,10 @@ export class ScopeController {
         .groupBy('branch.zone_id')
         .getRawMany<{ zoneId: string }>(),
 
-      this.clients.find({ select: ['id', 'name', 'clientCode'], order: { name: 'ASC' } }),
+      this.clients.find({ where: { isActive: true }, select: ['id', 'name', 'clientCode'], order: { name: 'ASC' } }),
 
       this.projects.find({
+        where: { isActive: true },
         select: ['id', 'name', 'projectNumber', 'clientId'],
         order: { projectNumber: 'ASC' },
       }),

@@ -194,13 +194,8 @@ services:
       - "8081:8081"
     environment:
       - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
-      - REACT_NATIVE_PACKAGER_HOSTNAME=0.0.0.0
-      # Without this the app falls back to deriving `http://<bundler-host>:3000/api/v1`,
-      # but this stack publishes the backend on 3001 (see docker-compose.localports.yml)
-      # and :3000 belongs to another project — so login POSTs land on the wrong server.
-      # The browser reaches the backend via the published host port, not the Docker
-      # network, so this is localhost rather than the `backend` service name.
-      - EXPO_PUBLIC_API_URL=http://localhost:3001/api/v1
+      - REACT_NATIVE_PACKAGER_HOSTNAME=${REACT_NATIVE_PACKAGER_HOSTNAME:-10.23.68.233}
+      - EXPO_PUBLIC_API_URL=http://${REACT_NATIVE_PACKAGER_HOSTNAME:-10.23.68.233}:3000/api/v1
     env_file:
       - .env.docker
     volumes:

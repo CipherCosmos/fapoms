@@ -23,15 +23,32 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
-import { geocodeIndia } from '../geo/india-geocoder';
+import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 
-async function getRealCoordinates(address: string, name: string, district: string, state: string): Promise<{ lat: number; lng: number }> {
+/** Geocode a branch address with multi-tier fallback. Never throws — worst case
+ *  returns a state/country centroid with source='none'. Callers should check
+ *  `result.source` and `result.accuracyMeters` for quality. */
+async function getRealCoordinates(
+  address: string, name: string, district: string, state: string,
+): Promise<{ lat: number; lng: number; geoSource: string; geoAccuracyMeters: number }> {
   const pinMatch = address.match(/\b\d{6}\b/);
-  const coords = await geocodeIndia(address, name, district, state, pinMatch ? pinMatch[0] : null);
-  if (coords) return { lat: coords.lat, lng: coords.lng };
-  throw new NotFoundException(`Geocoding failed: could not locate coordinates for address: "${address}" (District: ${district}, State: ${state}).`);
+  const result: GeocodeResult = await geocodeIndiaRobust(
+    address, name, district, state, pinMatch ? pinMatch[0] : null,
+  );
+
+  if (result.source !== 'geocoder') {
+    const tag = result.source === 'pincode' ? 'pincode-level'
+      : result.source === 'locality' ? 'district-centroid'
+      : 'state/country-centroid';
+    console.warn(
+      `[Geocoding] Fallback (${tag}) used for "${name}" at "${address}" `
+      + `(District: ${district}, State: ${state}). Accuracy: ~${result.accuracyMeters}m`,
+    );
+  }
+
+  return { lat: result.lat, lng: result.lng, geoSource: result.source, geoAccuracyMeters: result.accuracyMeters };
 }
 
 function getStateZone(stateName: string): string {
