@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, LessThan } from 'typeorm';
+import { Repository, IsNull, LessThan, In } from 'typeorm';
 import { OutboxEntity } from './outbox.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../cache/cache.service';
@@ -59,11 +59,12 @@ export class OutboxRelay {
 
     let dispatched = 0;
     let failed = 0;
+    const dispatchedIds: string[] = [];
 
     for (const row of due) {
       try {
         this.eventPublisher.publish(row.eventName, row.payload);
-        await this.outbox.update(row.id, { dispatchedAt: new Date(), lastError: null });
+        dispatchedIds.push(row.id);
         dispatched++;
       } catch (err) {
         const message = (err as Error).message;
@@ -79,6 +80,14 @@ export class OutboxRelay {
             `Outbox event ${row.id} (${row.eventName}) abandoned after ${attempts} attempts: ${message}`,
           );
         }
+      }
+    }
+
+    if (dispatchedIds.length > 0) {
+      if (dispatchedIds.length === 1) {
+        await this.outbox.update(dispatchedIds[0], { dispatchedAt: new Date(), lastError: null });
+      } else {
+        await this.outbox.update({ id: In(dispatchedIds) }, { dispatchedAt: new Date(), lastError: null });
       }
     }
 

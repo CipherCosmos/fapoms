@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
+    "eslint": "^9.39.5",
     "react-native": "0.76.9"
   },
   "overrides": {

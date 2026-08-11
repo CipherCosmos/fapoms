@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { AssayerService } from './assayer.service';
@@ -100,6 +100,7 @@ describe('AssayerService', () => {
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
       ],
     }).compile();
   }

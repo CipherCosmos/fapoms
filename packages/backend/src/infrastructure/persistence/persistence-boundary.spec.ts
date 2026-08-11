@@ -97,6 +97,11 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'modules/customer-master/customer-master.service.ts',
   'modules/planning/command-center.service.ts',
   'modules/user/operations-snapshot.service.ts',
+  'modules/project/project.service.ts',
+  'modules/client/client.service.ts',
+  'modules/branch/branch.service.ts',
+  'modules/zone/zone.service.ts',
+  'modules/assayer/assayer.service.ts',
 ];
 
 const serviceFiles = (): string[] => {

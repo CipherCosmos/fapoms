@@ -3,9 +3,10 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  OnModuleInit,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, In } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, Like, In, DataSource } from 'typeorm';
 import { ClientEntity } from './client.entity';
 import { ClientConfigurationEntity } from './client-configuration.entity';
 import { ClientContactEntity } from './client-contact.entity';
@@ -15,6 +16,7 @@ import { ClientBillingHistoryEntity } from './client-billing-history.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, ClientLifecycleStatus, ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
 
 export interface CreateClientDto {
@@ -182,7 +184,7 @@ const VALID_BILLING_TRANSITIONS: Record<string, string[]> = {
 };
 
 @Injectable()
-export class ClientService {
+export class ClientService implements OnModuleInit {
   constructor(
     @InjectRepository(ClientEntity)
     private readonly clientRepository: Repository<ClientEntity>,
@@ -199,7 +201,31 @@ export class ClientService {
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
+    private readonly workflowEngine: WorkflowEngine,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
+
+  onModuleInit() {
+    this.workflowEngine.registerWorkflow('client', [
+      { from: [ClientLifecycleStatus.PROSPECT], to: ClientLifecycleStatus.ONBOARDING },
+      { from: [ClientLifecycleStatus.PROSPECT], to: ClientLifecycleStatus.ARCHIVED },
+      { from: [ClientLifecycleStatus.ONBOARDING], to: ClientLifecycleStatus.ACTIVE },
+      { from: [ClientLifecycleStatus.ONBOARDING], to: ClientLifecycleStatus.INACTIVE },
+      { from: [ClientLifecycleStatus.ACTIVE], to: ClientLifecycleStatus.SUSPENDED },
+      { from: [ClientLifecycleStatus.ACTIVE], to: ClientLifecycleStatus.UNDER_REVIEW },
+      { from: [ClientLifecycleStatus.ACTIVE], to: ClientLifecycleStatus.INACTIVE },
+      { from: [ClientLifecycleStatus.SUSPENDED], to: ClientLifecycleStatus.ACTIVE },
+      { from: [ClientLifecycleStatus.SUSPENDED], to: ClientLifecycleStatus.UNDER_REVIEW },
+      { from: [ClientLifecycleStatus.SUSPENDED], to: ClientLifecycleStatus.TERMINATED },
+      { from: [ClientLifecycleStatus.UNDER_REVIEW], to: ClientLifecycleStatus.ACTIVE },
+      { from: [ClientLifecycleStatus.UNDER_REVIEW], to: ClientLifecycleStatus.SUSPENDED },
+      { from: [ClientLifecycleStatus.UNDER_REVIEW], to: ClientLifecycleStatus.TERMINATED },
+      { from: [ClientLifecycleStatus.INACTIVE], to: ClientLifecycleStatus.ACTIVE },
+      { from: [ClientLifecycleStatus.INACTIVE], to: ClientLifecycleStatus.ARCHIVED },
+      { from: [ClientLifecycleStatus.TERMINATED], to: ClientLifecycleStatus.ARCHIVED },
+    ]);
+  }
 
   // -----------------------------------------------------------------------
   // Client Profile
@@ -413,13 +439,43 @@ export class ClientService {
     client.updatedBy = userId;
     await this.clientRepository.save(client);
 
+    // Deactivate associated configurations
+    await this.dataSource.query(
+      `UPDATE client_configurations SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate associated contacts
+    await this.dataSource.query(
+      `UPDATE client_contacts SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate associated contracts
+    await this.dataSource.query(
+      `UPDATE client_contracts SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate associated billing
+    await this.dataSource.query(
+      `UPDATE client_billing SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate associated branches
+    await this.dataSource.query(
+      `UPDATE branches SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'CLIENT_DELETED',
       entityType: 'CLIENT',
       entityId: id,
       userId,
-      remarks: `Soft deleted client ${client.name}`,
+      remarks: `Soft deleted client ${client.name} and cascaded deactivation to configurations, contacts, contracts, billings, and branches`,
     });
   }
 
@@ -437,6 +493,11 @@ export class ClientService {
         `Cannot transition from ${currentStatus} to ${newStatus}. Allowed: ${allowed.join(', ') || 'none'}`,
       );
     }
+
+    await this.workflowEngine.executeTransition('client', id, currentStatus, newStatus, {
+      userId,
+      payload: { reason },
+    });
 
     client.lifecycleStatus = newStatus;
     client.updatedBy = userId;
@@ -498,9 +559,21 @@ export class ClientService {
     const skipped: { id: string; current: string; reason: string }[] = [];
     const failed: { id: string; reason: string }[] = [];
 
+    if (!ids || ids.length === 0) return { succeeded, skipped, failed };
+
+    // Batch fetch all requested clients in a single query to eliminate N+1 select queries
+    const clientList = await this.clientRepository.find({
+      where: { id: In(ids), isActive: true },
+    });
+    const clientMap = new Map(clientList.map((c) => [c.id, c]));
+
     for (const id of ids) {
       try {
-        const client = await this.findOne(id);
+        const client = clientMap.get(id);
+        if (!client) {
+          failed.push({ id, reason: `Client ${id} not found.` });
+          continue;
+        }
         const from = client.lifecycleStatus;
         const path = findLifecyclePathTo(from, newStatus);
         if (path === null) {

@@ -9,6 +9,8 @@ import { ClientBillingHistoryEntity } from './client-billing-history.entity';
 import { ClientService } from './client.service';
 import { ClientController } from './client.controller';
 
+import { PlatformModule } from '../platform/platform.module';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -19,6 +21,7 @@ import { ClientController } from './client.controller';
       ClientBillingEntity,
       ClientBillingHistoryEntity,
     ]),
+    PlatformModule,
   ],
   controllers: [ClientController],
   providers: [ClientService],

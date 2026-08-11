@@ -5,8 +5,8 @@
  */
 
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In} from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, In, DataSource } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
@@ -105,6 +105,8 @@ export class ProjectService implements OnModuleInit {
       private readonly eventPublisher: DomainEventPublisher,
       private readonly projectQueryService: ProjectQueryService,
       private readonly notificationDispatch: NotificationDispatchService,
+      @InjectDataSource()
+      private readonly dataSource: DataSource,
    ) {}
 
   private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
@@ -349,13 +351,62 @@ export class ProjectService implements OnModuleInit {
     project.updatedBy = userId;
     await this.projectRepository.save(project);
 
+    // Deactivate associated project branches
+    await this.dataSource.query(
+      `UPDATE project_branches SET is_active = false, updated_by = $1 WHERE project_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate associated assessments
+    await this.dataSource.query(
+      `UPDATE assessments SET is_active = false, updated_by = $1 WHERE project_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate associated assignments
+    await this.dataSource.query(
+      `UPDATE assignments SET is_active = false, updated_by = $1 WHERE project_id = $2 AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate documents associated with the project's assessments
+    await this.dataSource.query(
+      `UPDATE documents SET is_active = false, updated_by = $1 
+       WHERE assessment_id IN (SELECT id FROM assessments WHERE project_id = $2) AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate validation cases associated with the project branches
+    await this.dataSource.query(
+      `UPDATE validation_cases SET is_active = false, updated_by = $1 
+       WHERE project_branch_id IN (SELECT id FROM project_branches WHERE project_id = $2) AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate validation queries associated with the validation cases
+    await this.dataSource.query(
+      `UPDATE validation_queries SET is_active = false, updated_by = $1 
+       WHERE validation_case_id IN (
+         SELECT id FROM validation_cases 
+         WHERE project_branch_id IN (SELECT id FROM project_branches WHERE project_id = $2)
+       ) AND is_active = true`,
+      [userId, id]
+    );
+
+    // Deactivate call logs associated with assessments
+    await this.dataSource.query(
+      `UPDATE call_logs SET is_active = false, updated_by = $1 
+       WHERE assessment_id IN (SELECT id FROM assessments WHERE project_id = $2) AND is_active = true`,
+      [userId, id]
+    );
+
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'PROJECT_DELETED',
       entityType: 'PROJECT',
       entityId: id,
       userId,
-      remarks: `Soft deleted project ${project.name}`,
+      remarks: `Soft deleted project ${project.name} (${project.projectNumber}) and all related records`,
     });
 
     this.eventPublisher.publish('project:deleted', {

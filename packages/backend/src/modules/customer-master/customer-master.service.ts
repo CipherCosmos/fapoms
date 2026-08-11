@@ -141,6 +141,14 @@ export class CustomerMasterService {
         updatedBy: userId,
       });
 
+      if (status === CustomerMasterStatus.RECONCILED) {
+        await manager.createQueryBuilder()
+          .update(CustomerMasterVersionEntity)
+          .set({ isActive: false, updatedBy: userId })
+          .where('projectId = :projectId AND isActive = true', { projectId })
+          .execute();
+      }
+
       const savedVersion = await manager.save(versionEntity);
 
       // CRIT-01 Remediation: Batch insert records using QueryBuilder in chunks of 1000 to prevent stack/parameter limits

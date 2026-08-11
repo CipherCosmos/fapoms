@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { BranchService } from './branch.service';
@@ -69,6 +69,7 @@ describe('BranchService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: BranchQueryService, useValue: mockBranchQueryService },
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
+        { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
       ],
     }).compile();
 

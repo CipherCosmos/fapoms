@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import * as XLSX from 'xlsx';
 import { BranchEntity } from './branch.entity';
 import { BranchContactEntity } from './branch-contact.entity';
@@ -129,6 +129,8 @@ export class BranchService {
     private readonly auditService: AuditService,
     private readonly branchQueryService: BranchQueryService,
     private readonly eventPublisher: DomainEventPublisher,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -353,13 +355,31 @@ export class BranchService {
     branch.updatedBy = userId;
     await this.branchRepository.save(branch);
 
+    // Deactivate associated contacts
+    await this.dataSource.query(
+      `UPDATE branch_contacts SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
+    // Deactivate associated documents
+    await this.dataSource.query(
+      `UPDATE branch_documents SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
+    // Deactivate associated project branches
+    await this.dataSource.query(
+      `UPDATE project_branches SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'BRANCH_DELETED',
       entityType: 'BRANCH',
       entityId: id,
       userId,
-      remarks: `Soft deleted branch ${branch.name}`,
+      remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, and project branches`,
     });
   }
 

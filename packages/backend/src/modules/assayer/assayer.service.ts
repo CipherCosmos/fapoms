@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual, In } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, LessThanOrEqual, In, DataSource } from 'typeorm';
 import * as xlsx from 'xlsx';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
@@ -283,6 +283,8 @@ export class AssayerService implements OnModuleInit {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly workflowEngine: WorkflowEngine,
     private readonly notificationDispatch: NotificationDispatchService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   onModuleInit() {
@@ -662,13 +664,38 @@ export class AssayerService implements OnModuleInit {
     assayer.isActive = false;
     assayer.updatedBy = userId;
     await this.assayerRepository.save(assayer);
+
+    // Deactivate assayer commercial profiles
+    await this.dataSource.query(
+      `UPDATE assayer_commercial_profiles SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
+    // Deactivate assayer documents
+    await this.dataSource.query(
+      `UPDATE assayer_documents SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
+    // Deactivate assayer government documents
+    await this.dataSource.query(
+      `UPDATE assayer_government_documents SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
+    // Deactivate active assignments for this assayer
+    await this.dataSource.query(
+      `UPDATE assignments SET is_active = false, cancel_reason = 'Assayer profile soft deleted', updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_DELETED',
       entityType: 'ASSAYER',
       entityId: id,
       userId,
-      remarks: `Soft deleted assayer profile ${assayer.displayName}`,
+      remarks: `Soft deleted assayer profile ${assayer.displayName} and cascaded deactivation to commercial profiles, documents, and active assignments`,
     });
     await this.eventPublisher.publish('assayer:deleted', {
       eventType: 'assayer:deleted',

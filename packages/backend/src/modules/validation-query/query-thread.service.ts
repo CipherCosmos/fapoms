@@ -16,6 +16,9 @@ export interface PostMessageDto {
   pageNumber?: number;
   region?: { x: number; y: number; w: number; h: number };
   snapshotPath?: string;
+  replyToMessageId?: string;
+  annotations?: { type: string; color: string; coords: any; text?: string }[];
+  voiceNote?: { url: string; durationSeconds: number; mimeType?: string };
 }
 
 /**
@@ -93,8 +96,19 @@ export class QueryThreadService {
     if (authorType === QueryMessageAuthor.ASSAYER && query.assayerId !== authorId) {
       throw new ForbiddenException('You may only reply to your own clarifications.');
     }
-    if (!dto.body?.trim() && !dto.snapshotPath && !(dto.attachments ?? []).length) {
-      throw new ForbiddenException('A message needs text, a snapshot, or an attachment.');
+    if (!dto.body?.trim() && !dto.snapshotPath && !(dto.attachments ?? []).length && !dto.voiceNote) {
+      throw new ForbiddenException('A message needs text, a snapshot, an attachment, or a voice note.');
+    }
+
+    let replyToSummary: { authorName: string; body: string } | null = null;
+    if (dto.replyToMessageId) {
+      const quoted = await this.messageRepository.findOne({ where: { id: dto.replyToMessageId, validationQueryId: queryId } });
+      if (quoted) {
+        replyToSummary = {
+          authorName: quoted.authorName || (quoted.authorType === QueryMessageAuthor.ASSAYER ? 'Assayer' : 'Validator'),
+          body: quoted.body || (quoted.snapshotPath ? '[Document Snippet]' : (quoted.voiceNote ? '[Voice Note]' : '[Attachment]')),
+        };
+      }
     }
 
     const message = this.messageRepository.create({
@@ -107,6 +121,10 @@ export class QueryThreadService {
       pageNumber: dto.pageNumber ?? null,
       region: dto.region ?? null,
       snapshotPath: dto.snapshotPath ?? null,
+      replyToMessageId: dto.replyToMessageId ?? null,
+      replyToSummary,
+      annotations: dto.annotations ?? null,
+      voiceNote: dto.voiceNote ?? null,
       createdBy: authorId,
       updatedBy: authorId,
     });
@@ -188,6 +206,50 @@ export class QueryThreadService {
     } catch { /* realtime is best-effort; the message is already saved */ }
 
     return saved;
+  }
+
+  async addReaction(messageId: string, emoji: string, userId: string, userName: string): Promise<ValidationQueryMessageEntity> {
+    const msg = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!msg) throw new NotFoundException(`Message ${messageId} not found`);
+
+    const existing = msg.reactions || [];
+    const filtered = existing.filter((r) => !(r.userId === userId && r.emoji === emoji));
+    filtered.push({ emoji, userId, userName, timestamp: new Date().toISOString() });
+    msg.reactions = filtered;
+    return this.messageRepository.save(msg);
+  }
+
+  async removeReaction(messageId: string, emoji: string, userId: string): Promise<ValidationQueryMessageEntity> {
+    const msg = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!msg) throw new NotFoundException(`Message ${messageId} not found`);
+
+    const existing = msg.reactions || [];
+    msg.reactions = existing.filter((r) => !(r.userId === userId && r.emoji === emoji));
+    return this.messageRepository.save(msg);
+  }
+
+  async markThreadAsRead(queryId: string, userId: string): Promise<{ updatedCount: number }> {
+    await this.mustExist(queryId);
+    const unread = await this.messageRepository.find({
+      where: { validationQueryId: queryId, isRead: false },
+    });
+    const target = unread.filter((m) => m.authorId !== userId);
+    if (!target.length) return { updatedCount: 0 };
+
+    const now = new Date();
+    for (const m of target) {
+      m.isRead = true;
+      m.readAt = now;
+    }
+    await this.messageRepository.save(target);
+    return { updatedCount: target.length };
+  }
+
+  async toggleStarMessage(messageId: string): Promise<ValidationQueryMessageEntity> {
+    const msg = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!msg) throw new NotFoundException(`Message ${messageId} not found`);
+    msg.isStarred = !msg.isStarred;
+    return this.messageRepository.save(msg);
   }
 
   private async mustExist(queryId: string): Promise<ValidationQueryEntity> {

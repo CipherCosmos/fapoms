@@ -229,6 +229,7 @@ export const Projects: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'branches' | 'settings'>('overview');
   const [form, setForm] = useState<FormData>(getInitialProjectForm());
   const [isSaving, setIsSaving] = useState(false);
@@ -1149,7 +1150,7 @@ export const Projects: React.FC = () => {
                         </button>
                       )}
                       {canDelete && (
-                        <button onClick={() => setShowDeleteConfirm(true)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                        <button onClick={() => { setConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                           <Trash2 size={13} /> Delete
                         </button>
                       )}
@@ -1184,14 +1185,41 @@ export const Projects: React.FC = () => {
         footer={
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
-            <button onClick={handleDelete} className="btn btn-primary" style={{ background: 'var(--danger)', border: 'none' }}>Delete</button>
+            <button 
+              onClick={handleDelete} 
+              className="btn btn-primary" 
+              style={{ background: 'var(--danger)', border: 'none' }}
+              disabled={confirmText !== detail?.projectNumber}
+            >
+              Delete
+            </button>
           </div>
         }
       >
         {detail && (
-          <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-            Are you sure you want to delete <b>{detail.name}</b> ({detail.projectNumber})? This action cannot be undone.
-          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              Are you sure you want to delete <b>{detail.name}</b> ({detail.projectNumber})? This action cannot be undone and will soft-delete all associated branches, assignments, assessments, documents, and query threads.
+            </p>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              Please type the project number <b>{detail.projectNumber}</b> to confirm:
+            </p>
+            <input
+              type="text"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={detail.projectNumber}
+              className="form-control"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid var(--border-hair)',
+                borderRadius: '4px',
+                background: 'var(--bg-card)',
+                color: 'var(--text)',
+              }}
+            />
+          </div>
         )}
       </Modal>
 

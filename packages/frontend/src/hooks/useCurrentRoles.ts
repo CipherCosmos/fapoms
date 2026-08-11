@@ -96,6 +96,10 @@ export function canManageRules(roles: SystemRole[]): boolean {
   );
 }
 
+export function canDeleteClients(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
 /** The signed-in user's own id, from the same cache App.tsx populates on login. */
 export function useCurrentUserId(): string | null {
   return useMemo(() => {

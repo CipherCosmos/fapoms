@@ -6,8 +6,8 @@
  */
 
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 
 import { ZoneEntity } from './zone.entity';
 import { AuditService } from '../../core/audit/audit.service';
@@ -36,6 +36,8 @@ export class ZoneService {
     private readonly zoneRepository: Repository<ZoneEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(dto: CreateZoneDto, userId: string): Promise<ZoneEntity> {
@@ -133,13 +135,23 @@ export class ZoneService {
     zone.updatedBy = userId;
     await this.zoneRepository.save(zone);
 
+    // Unassign deactivated zone from branches and project_branches
+    await this.dataSource.query(
+      `UPDATE branches SET zone_id = NULL, updated_by = $1 WHERE zone_id = $2`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE project_branches SET zone_id = NULL, updated_by = $1 WHERE zone_id = $2`,
+      [userId, id],
+    );
+
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ZONE_DELETED',
       entityType: 'ZONE',
       entityId: id,
       userId,
-      remarks: `Soft deleted operational zone ${zone.name}`,
+      remarks: `Soft deleted operational zone ${zone.name} and unassigned it from branches`,
     });
 
     this.eventPublisher.publish('zone:deleted', {

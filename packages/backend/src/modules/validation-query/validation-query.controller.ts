@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Param, Body, UseGuards, ParseUUIDPipe, Req, Res,
+  Controller, Get, Post, Delete, Param, Body, UseGuards, ParseUUIDPipe, Req, Res,
   UseInterceptors, UploadedFile, UploadedFiles, Query, Inject, BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
@@ -72,6 +72,9 @@ class PostQueryMessageDto {
   @IsOptional() @IsNumber() pageNumber?: number;
   @IsOptional() @ValidateNested() @Type(() => QueryRegionDto) region?: QueryRegionDto;
   @IsOptional() @IsString() snapshotPath?: string;
+  @IsOptional() @IsString() replyToMessageId?: string;
+  @IsOptional() @IsArray() annotations?: any[];
+  @IsOptional() @IsObject() voiceNote?: { url: string; durationSeconds: number; mimeType?: string };
 }
 
 @ApiTags('Validation Queries')
@@ -394,6 +397,51 @@ export class ValidationQueryController {
       req.user.displayName ?? req.user.username ?? null,
       dto,
     );
+    return { success: true, data: message };
+  }
+
+  @Post(':id/messages/read')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Mark all messages in a thread as read (read receipts)' })
+  async markRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    const result = await this.threadService.markThreadAsRead(id, req.user.id);
+    return { success: true, data: result };
+  }
+
+  @Post('messages/:messageId/reactions')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Add an emoji reaction to a message' })
+  async addReaction(
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+    @Body() dto: { emoji: string },
+    @Req() req: any,
+  ) {
+    const message = await this.threadService.addReaction(
+      messageId,
+      dto.emoji,
+      req.user.id,
+      req.user.displayName ?? req.user.username ?? 'User',
+    );
+    return { success: true, data: message };
+  }
+
+  @Delete('messages/:messageId/reactions')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Remove an emoji reaction from a message' })
+  async removeReaction(
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+    @Body() dto: { emoji: string },
+    @Req() req: any,
+  ) {
+    const message = await this.threadService.removeReaction(messageId, dto.emoji, req.user.id);
+    return { success: true, data: message };
+  }
+
+  @Post('messages/:messageId/star')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Toggle starred status on a clarification message' })
+  async toggleStar(@Param('messageId', ParseUUIDPipe) messageId: string) {
+    const message = await this.threadService.toggleStarMessage(messageId);
     return { success: true, data: message };
   }
 }

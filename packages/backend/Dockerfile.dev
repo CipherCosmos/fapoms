@@ -22,7 +22,7 @@ COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/mobile/package.json ./packages/mobile/
 
 # ---- 3. Install ALL workspace dependencies ----
-RUN npm ci --ignore-scripts && \
+RUN npm install --legacy-peer-deps && \
     npm rebuild bcrypt --build-from-source
 
 # ---- 4. Copy and build the shared package ----

@@ -56,4 +56,36 @@ export class ValidationQueryMessageEntity extends BaseEntity {
   /** Cropped image of `region`, captured in the browser and uploaded. */
   @Column({ name: 'snapshot_path', type: 'varchar', length: 500, nullable: true })
   snapshotPath: string | null;
+
+  /** Quoted message ID for WhatsApp-style reply threads. */
+  @Column({ name: 'reply_to_message_id', type: 'uuid', nullable: true })
+  replyToMessageId: string | null;
+
+  /** Preview of quoted message: { authorName, body }. */
+  @Column({ name: 'reply_to_summary', type: 'jsonb', nullable: true })
+  replyToSummary: { authorName: string; body: string } | null;
+
+  /** Emoji reactions: [{ emoji, userId, userName, timestamp }]. */
+  @Column({ name: 'reactions', type: 'jsonb', nullable: true })
+  reactions: { emoji: string; userId: string; userName: string; timestamp: string }[] | null;
+
+  /** Image annotation overlays (drawing paths, highlight boxes, callout text). */
+  @Column({ name: 'annotations', type: 'jsonb', nullable: true })
+  annotations: { type: string; color: string; coords: any; text?: string }[] | null;
+
+  /** Voice note recording metadata: { url, durationSeconds, mimeType }. */
+  @Column({ name: 'voice_note', type: 'jsonb', nullable: true })
+  voiceNote: { url: string; durationSeconds: number; mimeType?: string } | null;
+
+  /** Read receipt flag. */
+  @Column({ name: 'is_read', type: 'boolean', default: false })
+  isRead: boolean;
+
+  /** Timestamp when message was marked read. */
+  @Column({ name: 'read_at', type: 'timestamptz', nullable: true })
+  readAt: Date | null;
+
+  /** Starred/pinned message flag for key evidence snippets. */
+  @Column({ name: 'is_starred', type: 'boolean', default: false })
+  isStarred: boolean;
 }

@@ -8,6 +8,12 @@ import { userMessage } from '../../services/errors';
 const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
 
+const Label: React.FC<{ text: string; required?: boolean }> = ({ text, required }) => (
+  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
+    {text} {required && <span style={{ color: 'var(--danger)' }}>*</span>}
+  </label>
+);
+
 export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [form, setForm] = useState({
     clientCode: '',
@@ -44,17 +50,27 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
         priority: form.priority,
         budget: form.budget ? parseFloat(form.budget) : undefined,
       });
-      toast('success', 'Client created');
+      toast('success', 'Client created successfully');
       onClose();
     } catch (err: any) {
       toast({ type: 'error', title: 'Failed to create client', message: userMessage(err) });
     }
   };
 
-  const inputProps = { style: { width: '100%' } };
+  const selectStyle: React.CSSProperties = {
+    padding: '8px 12px',
+    background: 'var(--bg-input)',
+    border: '1px solid var(--border-color)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--text-primary)',
+    outline: 'none',
+    width: '100%',
+    height: '37px',
+    fontSize: '13px',
+  };
 
   return (
-    <Modal open onClose={onClose} title={<><Building2 size={18} /> Add New Client</>} width="520px" asForm onSubmit={handleSubmit} footer={
+    <Modal open onClose={onClose} title={<><Building2 size={18} style={{ marginRight: 6 }} /> Add New Client</>} width="560px" asForm onSubmit={handleSubmit} footer={
       <>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
         <button type="submit" disabled={create.isPending || !form.clientCode || !form.name || !form.displayName} className="btn btn-primary">
@@ -62,22 +78,75 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
         </button>
       </>
     }>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-        <StyledInput {...inputProps} placeholder="Client Code *" value={form.clientCode} onChange={(e) => set('clientCode', e.target.value)} required />
-        <StyledInput {...inputProps} placeholder="Name *" value={form.name} onChange={(e) => set('name', e.target.value)} required />
-        <StyledInput {...inputProps} placeholder="Display Name *" value={form.displayName} onChange={(e) => set('displayName', e.target.value)} required style={{ gridColumn: '1 / -1', width: '100%' }} />
-        <StyledInput {...inputProps} placeholder="Contact Person" value={form.contactPerson} onChange={(e) => set('contactPerson', e.target.value)} />
-        <StyledInput {...inputProps} placeholder="Contact Email" type="email" value={form.contactEmail} onChange={(e) => set('contactEmail', e.target.value)} />
-        <StyledInput {...inputProps} placeholder="Contact Phone" value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)} />
-        <StyledInput {...inputProps} placeholder="Website" value={form.website} onChange={(e) => set('website', e.target.value)} />
-        <StyledInput {...inputProps} placeholder="Industry" value={form.industry} onChange={(e) => set('industry', e.target.value)} />
-        <select value={form.clientType} onChange={(e) => set('clientType', e.target.value)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' }}>
-          {CLIENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select value={form.priority} onChange={(e) => set('priority', e.target.value)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' }}>
-          {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <StyledInput {...inputProps} placeholder="Budget" type="number" value={form.budget} onChange={(e) => set('budget', e.target.value)} style={{ gridColumn: '1 / -1', width: '100%' }} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/* Section 1: General Identity */}
+        <div>
+          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>General Identity</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Client Code" required />
+              <StyledInput placeholder="e.g., SBI" value={form.clientCode} onChange={(e) => set('clientCode', e.target.value)} required />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Legal Name" required />
+              <StyledInput placeholder="e.g., State Bank of India" value={form.name} onChange={(e) => set('name', e.target.value)} required />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gridColumn: '1 / -1' }}>
+              <Label text="Display Name" required />
+              <StyledInput placeholder="e.g., SBI Corporate Office" value={form.displayName} onChange={(e) => set('displayName', e.target.value)} required />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Industry" />
+              <StyledInput placeholder="e.g., Banking & Finance" value={form.industry} onChange={(e) => set('industry', e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Client Type" />
+              <select value={form.clientType} onChange={(e) => set('clientType', e.target.value)} style={selectStyle}>
+                {CLIENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 2: Contact Details */}
+        <div>
+          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Contact Information</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Contact Person" />
+              <StyledInput placeholder="John Doe" value={form.contactPerson} onChange={(e) => set('contactPerson', e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Contact Email" />
+              <StyledInput placeholder="john.doe@example.com" type="email" value={form.contactEmail} onChange={(e) => set('contactEmail', e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Contact Phone" />
+              <StyledInput placeholder="+91 99999 99999" value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Website" />
+              <StyledInput placeholder="https://example.com" value={form.website} onChange={(e) => set('website', e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        {/* Section 3: Financials & Preferences */}
+        <div>
+          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Financials & Preferences</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Priority" />
+              <select value={form.priority} onChange={(e) => set('priority', e.target.value)} style={selectStyle}>
+                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Budget (₹)" />
+              <StyledInput placeholder="e.g., 5000000" type="number" value={form.budget} onChange={(e) => set('budget', e.target.value)} />
+            </div>
+          </div>
+        </div>
       </div>
     </Modal>
   );

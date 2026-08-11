@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ProjectService } from './project.service';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
@@ -136,6 +136,12 @@ describe('ProjectService', () => {
         {
           provide: ProjectQueryService,
           useValue: mockProjectQueryService,
+        },
+        {
+          provide: DataSource,
+          useValue: {
+            query: jest.fn().mockResolvedValue([]),
+          },
         },
       ],
     }).compile();

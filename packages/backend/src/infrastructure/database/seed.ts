@@ -74,11 +74,14 @@ async function seed() {
       { resource: PermissionResource.PROJECT, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit projects within organization' },
       { resource: PermissionResource.PROJECT, action: PermissionAction.ARCHIVE, scope: AuthorizationScope.ORGANIZATION, description: 'Archive projects within organization' },
       { resource: PermissionResource.PROJECT, action: PermissionAction.CLOSE, scope: AuthorizationScope.ORGANIZATION, description: 'Close projects within organization' },
+      { resource: PermissionResource.PROJECT, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete projects within organization' },
 
       // Branches
       { resource: PermissionResource.BRANCH, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all branches' },
       { resource: PermissionResource.BRANCH, action: PermissionAction.IMPORT, scope: AuthorizationScope.ORGANIZATION, description: 'Import branches' },
+      { resource: PermissionResource.BRANCH, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create branches' },
       { resource: PermissionResource.BRANCH, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit branches' },
+      { resource: PermissionResource.BRANCH, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete branches' },
 
       // Assignments
       { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all assignments' },
@@ -94,11 +97,15 @@ async function seed() {
       { resource: PermissionResource.SCHEDULING, action: PermissionAction.MODIFY, scope: AuthorizationScope.ORGANIZATION, description: 'Modify schedules' },
 
       // Documents
+      { resource: PermissionResource.DOCUMENT, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all documents' },
       { resource: PermissionResource.DOCUMENT, action: PermissionAction.UPLOAD, scope: AuthorizationScope.ORGANIZATION, description: 'Upload documents' },
       { resource: PermissionResource.DOCUMENT, action: PermissionAction.GENERATE, scope: AuthorizationScope.ORGANIZATION, description: 'Generate documents' },
       { resource: PermissionResource.DOCUMENT, action: PermissionAction.DOWNLOAD, scope: AuthorizationScope.PLATFORM, description: 'Download all documents' },
+      { resource: PermissionResource.DOCUMENT, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit documents' },
+      { resource: PermissionResource.DOCUMENT, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create documents' },
 
       // Validation
+      { resource: PermissionResource.VALIDATION, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View validation cases' },
       { resource: PermissionResource.VALIDATION, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create validation cases' },
       { resource: PermissionResource.VALIDATION, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit validation cases' },
       { resource: PermissionResource.VALIDATION, action: PermissionAction.ASSIGN, scope: AuthorizationScope.ORGANIZATION, description: 'Assign validation cases' },
@@ -110,6 +117,30 @@ async function seed() {
       { resource: PermissionResource.CLIENT, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create clients within organization' },
       { resource: PermissionResource.CLIENT, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit clients within organization' },
       { resource: PermissionResource.CLIENT, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete clients within organization' },
+
+      // Planning
+      { resource: PermissionResource.PLANNING, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all planning data' },
+      { resource: PermissionResource.PLANNING, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create planning scenarios' },
+      { resource: PermissionResource.PLANNING, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit planning scenarios' },
+      { resource: PermissionResource.PLANNING, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete planning scenarios' },
+
+      // Billing
+      { resource: PermissionResource.BILLING, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all billing data' },
+      { resource: PermissionResource.BILLING, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create bills' },
+      { resource: PermissionResource.BILLING, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit bills' },
+      { resource: PermissionResource.BILLING, action: PermissionAction.APPROVE, scope: AuthorizationScope.ORGANIZATION, description: 'Approve bills' },
+
+      // Assayers
+      { resource: PermissionResource.ASSAYER, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all assayers' },
+      { resource: PermissionResource.ASSAYER, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create assayers' },
+      { resource: PermissionResource.ASSAYER, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit assayers' },
+      { resource: PermissionResource.ASSAYER, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete assayers' },
+
+      // Reference Data (Zones, Geographies, Communications)
+      { resource: PermissionResource.REFERENCE_DATA, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View reference data' },
+      { resource: PermissionResource.REFERENCE_DATA, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create reference data' },
+      { resource: PermissionResource.REFERENCE_DATA, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit reference data' },
+      { resource: PermissionResource.REFERENCE_DATA, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete reference data' },
 
       // Administration
       { resource: PermissionResource.USER, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View users' },
@@ -265,15 +296,20 @@ async function seed() {
         displayName: 'Administrator',
         description: 'Full platform access excluding system configuration.',
         permissionKeys: [
-          'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION',
-          'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION',
+          'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION', 'PROJECT:DELETE:ORGANIZATION',
+          'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION', 'BRANCH:CREATE:ORGANIZATION', 'BRANCH:DELETE:ORGANIZATION',
           'CLIENT:VIEW:PLATFORM', 'CLIENT:CREATE:ORGANIZATION', 'CLIENT:EDIT:ORGANIZATION', 'CLIENT:DELETE:ORGANIZATION',
           'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
           'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
-          'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM',
+          'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM', 'DOCUMENT:VIEW:PLATFORM', 'DOCUMENT:EDIT:ORGANIZATION', 'DOCUMENT:CREATE:ORGANIZATION',
+          'VALIDATION:VIEW:PLATFORM', 'VALIDATION:CREATE:ORGANIZATION', 'VALIDATION:EDIT:ORGANIZATION', 'VALIDATION:ASSIGN:ORGANIZATION', 'VALIDATION:APPROVE:ORGANIZATION',
+          'PLANNING:VIEW:PLATFORM', 'PLANNING:CREATE:ORGANIZATION', 'PLANNING:EDIT:ORGANIZATION', 'PLANNING:DELETE:ORGANIZATION',
+          'BILLING:VIEW:PLATFORM', 'BILLING:CREATE:ORGANIZATION', 'BILLING:EDIT:ORGANIZATION', 'BILLING:APPROVE:ORGANIZATION',
           'USER:VIEW:PLATFORM', 'USER:CREATE:PLATFORM', 'USER:EDIT:PLATFORM',
           'CONFIGURATION:VIEW:PLATFORM',
           'AUDIT_LOG:VIEW:PLATFORM',
+          'ASSAYER:VIEW:PLATFORM', 'ASSAYER:CREATE:ORGANIZATION', 'ASSAYER:EDIT:ORGANIZATION', 'ASSAYER:DELETE:ORGANIZATION',
+          'REFERENCE_DATA:VIEW:PLATFORM', 'REFERENCE_DATA:CREATE:ORGANIZATION', 'REFERENCE_DATA:EDIT:ORGANIZATION', 'REFERENCE_DATA:DELETE:ORGANIZATION',
         ],
         responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT', 'USER_ADMINISTRATION', 'AUDIT_ACCESS'],
       },

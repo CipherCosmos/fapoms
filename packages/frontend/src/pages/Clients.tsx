@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil } from 'lucide-react';
-import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge } from '../components/ui';
+import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil, Trash2 } from 'lucide-react';
+import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal } from '../components/ui';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
@@ -18,6 +18,7 @@ import { ContactsPanel } from './clients/ContactsPanel';
 import { ContractsPanel } from './clients/ContractsPanel';
 import { BillingPanel } from './clients/BillingPanel';
 import { ConfigurationPanel } from './clients/ConfigurationPanel';
+import { useCurrentRoles, canDeleteClients } from '../hooks/useCurrentRoles';
 
 const LIFECYCLE_COLORS: Record<string, { color: string; bg: string }> = {
   PROSPECT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -86,12 +87,17 @@ const Clients: React.FC = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [showLifecycle, setShowLifecycle] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [tab, setTab] = useState<'contacts' | 'contracts' | 'billing' | 'config'>('contacts');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkTarget, setBulkTarget] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
   const { toast } = useToast();
+  
+  const roles = useCurrentRoles();
+  const canDelete = canDeleteClients(roles);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 350);
@@ -164,6 +170,19 @@ const Clients: React.FC = () => {
       setBulkTarget('');
       setSelectedIds(new Set());
       refetch();
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedClient) return;
+    try {
+      await api.request(`/clients/${selectedClient.id}`, { method: 'DELETE' });
+      toast('success', `Client "${selectedClient.displayName}" successfully deleted.`);
+      setShowDeleteConfirm(false);
+      setSelectedId(null);
+      refetch();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'Failed to delete client', message: userMessage(err) });
     }
   };
 
@@ -375,6 +394,11 @@ const Clients: React.FC = () => {
                 <button onClick={() => setShowLifecycle(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <ArrowLeftRight size={14} /> Transition
                 </button>
+                {canDelete && (
+                  <button onClick={() => { setDeleteConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                    <Trash2 size={14} /> Delete
+                  </button>
+                )}
               </div>
             </div>
           )
@@ -427,6 +451,47 @@ const Clients: React.FC = () => {
           currentStatus={selectedClient.lifecycleStatus}
           clientId={selectedClient.id}
         />
+      )}
+      {showDeleteConfirm && selectedClient && (
+        <Modal open={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} title="Delete Client" width="400px"
+          footer={
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
+              <button 
+                onClick={handleDelete} 
+                className="btn btn-primary" 
+                style={{ background: 'var(--danger)', border: 'none' }}
+                disabled={deleteConfirmText !== selectedClient.clientCode}
+              >
+                Delete
+              </button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              Are you sure you want to delete <b>{selectedClient.displayName}</b> ({selectedClient.clientCode})? This action cannot be undone and will soft-delete all associated configurations, contacts, contracts, billing parameters, and branches.
+            </p>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              Please type the client code <b>{selectedClient.clientCode}</b> to confirm:
+            </p>
+            <input
+              type="text"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder={selectedClient.clientCode}
+              className="form-control"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid var(--border-hair)',
+                borderRadius: '4px',
+                background: 'var(--bg-card)',
+                color: 'var(--text)',
+              }}
+            />
+          </div>
+        </Modal>
       )}
     </div>
   );

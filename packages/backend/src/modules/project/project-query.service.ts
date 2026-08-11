@@ -134,10 +134,19 @@ export class ProjectQueryService {
     scope?: Partial<GlobalScope>,
   ): Promise<ProjectBranchEntity[]> {
     const branchWhere = branchScopeWhere(scope);
-    return this.projectBranchRepository.find({
+    const branches = await this.projectBranchRepository.find({
       where: { projectId, isActive: true, ...(branchWhere ? { branch: branchWhere } : {}) },
       relations: ['branch', 'assignments', 'assignments.assayer'],
     });
+
+    // Filter out soft-deleted / inactive assignments from returned branches
+    for (const b of branches) {
+      if (b.assignments) {
+        b.assignments = b.assignments.filter((a) => a.isActive !== false);
+      }
+    }
+
+    return branches;
   }
 
   async findProjectBranchById(id: string): Promise<ProjectBranchEntity | null> {
