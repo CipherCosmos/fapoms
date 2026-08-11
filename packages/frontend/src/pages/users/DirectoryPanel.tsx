@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
+import { REGION_ORDER, REGION_LABELS, Region } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer } from '../../components/ui';
@@ -21,6 +22,8 @@ interface UserProfile {
   phone: string | null;
   departmentId: string | null;
   status: 'INVITED' | 'ACTIVE' | 'SUSPENDED' | 'LOCKED' | 'DISABLED' | 'ARCHIVED';
+  /** Operational region assignment; null/empty = national (sees every region). */
+  regions: string[] | null;
   roles: UserRole[];
   lastLoginAt: string | null;
   failedLoginAttempts: number;
@@ -87,6 +90,7 @@ export const DirectoryPanel: React.FC = () => {
   const [editFirstName, setEditFirstName] = useState('');
   const [editLastName, setEditLastName] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [editRegions, setEditRegions] = useState<string[]>([]);
   const [editRoleIds, setEditRoleIds] = useState<string[]>([]);
   const [newPassword, setNewPassword] = useState('');
   const [resetting, setResetting] = useState(false);
@@ -150,6 +154,7 @@ export const DirectoryPanel: React.FC = () => {
     setEditFirstName(user.firstName);
     setEditLastName(user.lastName);
     setEditPhone(user.phone || '');
+    setEditRegions(user.regions ?? []);
     setEditRoleIds(user.roles.map((r) => r.id));
     setNewPassword('');
   };
@@ -162,7 +167,14 @@ export const DirectoryPanel: React.FC = () => {
     try {
       await api.request(`/users/${editingUser.id}`, {
         method: 'PUT',
-        body: JSON.stringify({ firstName: editFirstName, lastName: editLastName, phone: editPhone || undefined }),
+        body: JSON.stringify({
+          firstName: editFirstName,
+          lastName: editLastName,
+          phone: editPhone || undefined,
+          // [] is sent as null: "no assignment" and "assigned to nothing" must be the same
+          // state, or an account could be accidentally locked out of every region.
+          regions: editRegions.length > 0 ? editRegions : null,
+        }),
       });
     } catch (err: any) {
       setError(`Failed to update the profile — roles were not touched. ${userMessage(err)}`);
@@ -498,6 +510,33 @@ export const DirectoryPanel: React.FC = () => {
                       );
                     })}
                   </div>
+                </div>
+
+                <div>
+                  <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>Operational Regions</label>
+                  <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Confines this account to its territory on the operations desks (planning, assignments,
+                    scheduling, branches, map). Leave all unticked for national desks — HR, data entry,
+                    validation, finance — which see every region.
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', background: 'var(--bg-secondary)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                    {REGION_ORDER.map((r) => {
+                      const isChecked = editRegions.includes(r);
+                      return (
+                        <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={isChecked}
+                            onChange={() => setEditRegions(isChecked ? editRegions.filter((v) => v !== r) : [...editRegions, r])} />
+                          <span>{REGION_LABELS[r]}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {editRegions.length > 0 && (
+                    <p style={{ fontSize: '11.5px', color: 'var(--warning)', marginTop: '6px' }}>
+                      Restricted account: the server will refuse this user data outside{' '}
+                      {editRegions.map((r) => REGION_LABELS[r as Region] ?? r).join(', ')}.
+                    </p>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>

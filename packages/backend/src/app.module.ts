@@ -50,6 +50,7 @@ import { CacheModule } from './infrastructure/cache/cache.module';
 import { ObservabilityModule } from './infrastructure/observability/observability.module';
 import { SecurityModule } from './infrastructure/security/security.module';
 import { TenancyModule } from './infrastructure/tenancy/tenancy.module';
+import { ScopeModule } from './infrastructure/scope/scope.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
@@ -137,6 +138,7 @@ import { APP_GUARD } from '@nestjs/core';
     // can inject it without a module import. Replaces the singleton TenantContextResolver,
     // which held per-request state in a process-wide field.
     TenancyModule,
+    ScopeModule,
     PersistenceModule,
 
     // Core modules

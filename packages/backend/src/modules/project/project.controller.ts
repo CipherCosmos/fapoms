@@ -33,6 +33,7 @@ import { ProjectService, CreateProjectDto } from './project.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { UserEntity } from '../user/user.entity';
 
 export class CreateProjectRequestDto implements CreateProjectDto {
@@ -125,8 +126,9 @@ export class ProjectController {
   async findAll(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const result = await this.projectService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50);
+    const result = await this.projectService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, scope);
     return {
       success: true,
       data: result.projects,
@@ -239,8 +241,11 @@ export class ProjectController {
   @Get(':id/branches')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get unassigned and planning branches queue for project' })
-  async getProjectBranches(@Param('id', ParseUUIDPipe) id: string) {
-    const branches = await this.projectService.findProjectBranches(id);
+  async getProjectBranches(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const branches = await this.projectService.findProjectBranches(id, scope);
 
     // Sorted-descending most-recently-touched assignment per branch, computed once and reused
     // below rather than recomputed per field.

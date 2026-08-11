@@ -44,6 +44,17 @@ export class UserEntity extends BaseEntity {
   @Column({ name: 'department_id', type: 'uuid', nullable: true })
   departmentId: string | null;
 
+  /**
+   * Operational regions this account may read.
+   *
+   * `null` or `[]` means every region — the pre-existing behaviour, so accounts that predate
+   * region scoping keep full visibility until someone deliberately narrows them. A non-empty
+   * array is a hard ceiling enforced in `resolveGlobalScope`, not a UI default: an operator
+   * assigned `['WEST']` cannot widen back to all regions by editing the query string.
+   */
+  @Column({ type: 'text', array: true, nullable: true })
+  regions: string[] | null;
+
   @Column({ type: 'varchar', length: 20, nullable: true })
   phone: string | null;
 

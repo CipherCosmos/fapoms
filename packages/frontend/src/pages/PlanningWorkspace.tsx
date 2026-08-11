@@ -5,6 +5,7 @@ import { ProjectBranchStatus, formatDateOnly } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import * as xlsx from 'xlsx';
 import { api } from '../services/api';
+import { useScope, withScope } from '../context/ScopeContext';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { useSocket } from '../hooks/useSocket';
 import { connectSocket } from '../services/socket';
@@ -292,6 +293,12 @@ const STATUS_OPTIONS = [
 
 
 export const PlanningWorkspace: React.FC = () => {
+  // The header's global scope narrows the coverage queue. This page keeps its own project
+  // selector — planning is inherently one project at a time — so only the geographic
+  // dimensions are taken from the header here.
+  const { scopeParams, scopeKey } = useScope();
+  const scopeQuery = withScope(scopeParams);
+
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -557,11 +564,16 @@ export const PlanningWorkspace: React.FC = () => {
     } catch { console.error('Failed to load zones'); }
   };
 
+  useEffect(() => {
+    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+
   const loadProjectBranches = async (projectId: string) => {
     setIsLoadingQueue(true);
     setMessage(null);
     try {
-      const data = await getProjectBranches<ProjectBranch>(projectId);
+      const data = await getProjectBranches<ProjectBranch>(projectId, scopeQuery);
       setBranches(data);
       setSelectedBranchId(data.length > 0 ? data[0].id : null);
     } catch { console.error('Failed to fetch project branches queue'); }

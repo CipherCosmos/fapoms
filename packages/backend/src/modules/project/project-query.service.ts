@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
+import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 
@@ -24,9 +26,44 @@ export class ProjectQueryService {
     return project;
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ projects: ProjectEntity[]; total: number }> {
+  async findAll(
+    page = 1,
+    limit = 50,
+    scope?: Partial<GlobalScope>,
+  ): Promise<{ projects: ProjectEntity[]; total: number }> {
+    const where: Record<string, unknown> = { isActive: true };
+    if (scope?.clientId) where.clientId = scope.clientId;
+    if (scope?.projectId) where.id = scope.projectId;
+
+    // A project has no region of its own — it *has branches* that do. "Projects in the West"
+    // therefore means "projects with at least one branch in the West", resolved here as a
+    // separate id lookup rather than a join: joining project_branches would multiply each
+    // project row by its branch count and corrupt both the page size and the total.
+    if (needsBranchJoin(scope)) {
+      const idQuery = this.projectBranchRepository
+        .createQueryBuilder('pb2')
+        .select('DISTINCT pb2.project_id', 'projectId')
+        .innerJoin('pb2.branch', 'b2')
+        .where('pb2.is_active = true');
+      applyBranchScope(idQuery, scope, { branch: 'b2' });
+
+      const matching = (await idQuery.getRawMany<{ projectId: string }>()).map((r) => r.projectId);
+      // No branches in scope means no projects in scope. Returning early avoids `In([])`,
+      // which TypeORM renders as invalid SQL rather than as "match nothing".
+      if (matching.length === 0) return { projects: [], total: 0 };
+
+      // An explicit project selection has to survive the region narrowing, not be replaced by
+      // it: if the chosen project has no branches in the chosen region, the honest answer is
+      // an empty list, not that project's full branch set.
+      if (scope?.projectId) {
+        if (!matching.includes(scope.projectId)) return { projects: [], total: 0 };
+      } else {
+        where.id = In(matching);
+      }
+    }
+
     const [projects, total] = await this.projectRepository.findAndCount({
-      where: { isActive: true },
+      where,
       relations: ['client'],
       order: { createdAt: 'DESC' },
       take: limit,
@@ -85,9 +122,20 @@ export class ProjectQueryService {
     return { projects, total };
   }
 
-  async findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]> {
+  /**
+   * The coverage list a planner works from.
+   *
+   * `scope` is optional and deliberately not applied by the write paths that call this to
+   * return their result — a planner who has just acted on a branch must see the outcome, even
+   * if the row sits outside the region they are currently browsing.
+   */
+  async findProjectBranches(
+    projectId: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<ProjectBranchEntity[]> {
+    const branchWhere = branchScopeWhere(scope);
     return this.projectBranchRepository.find({
-      where: { projectId, isActive: true },
+      where: { projectId, isActive: true, ...(branchWhere ? { branch: branchWhere } : {}) },
       relations: ['branch', 'assignments', 'assignments.assayer'],
     });
   }

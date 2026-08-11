@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { branchStatusLabel, ProjectBranchStatus } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 /**
  * The operational home view: what is stuck, what is due, and what it is worth.
@@ -68,7 +69,20 @@ export class OperationsSnapshotService {
     CLIENT_USER:          'Your audit programme',
   };
 
-  async snapshot(roles: string[] = [], userId?: string): Promise<any> {
+  /**
+   * The desk model, applied to the dashboard.
+   *
+   * The sections split the same way the application's desks do. `funnel`, `due`, `capacity`
+   * and `projects` describe the audit book on the ground — branches, dates, people in a
+   * territory — so they follow the caller's global scope, and an operator running the West
+   * opens a dashboard about the West. `documents`, `validation`, `money` and `activity` are
+   * national desk queues (data entry, validation, finance, audit trail): those desks take
+   * whatever work arrives regardless of territory, so scoping them would only make their
+   * numbers disagree with the queues they describe.
+   */
+  private static readonly TERRITORIAL_SECTIONS = ['funnel', 'due', 'capacity', 'projects'];
+
+  async snapshot(roles: string[] = [], userId?: string, scope?: Partial<GlobalScope>): Promise<any> {
     // Union of every section the viewer's roles allow. Unknown roles fall back to
     // the read-only set rather than being shown nothing at all.
     const sections = new Set<string>();
@@ -107,43 +121,39 @@ export class OperationsSnapshotService {
     ];
     const STAGES = STAGE_ORDER.map((key) => ({ key, label: branchStatusLabel(key) }));
 
-    // These seven are org-wide operational aggregates — identical for every viewer — but were run
-    // fresh on every dashboard load by every user (7 heavy queries × hundreds of staff × their poll
-    // rate). Cache the whole bundle cluster-wide for a short TTL so it runs at most once per interval
-    // across all replicas; the per-user validation counts below stay fresh. Fault-tolerant: a Redis
-    // outage degrades to running the queries (a cache miss), never an error.
+    // ── Scope predicates for the te    // One params array shared by the four territorial queries; each query includes only the
+    // fragments whose aliases it actually has. Placeholder indexes are allocated once, so a
+    // fragment means the same thing in every query that uses it.
+    const sp: any[] = [];
+    const frag = { region: '', state: '', zone: '', client: '', project: '' };
+    if (scope?.regions?.length) {
+      sp.push(scope.regions);
+      frag.region = ` AND b.region = ANY($${sp.length})`;
+    }
+    if (scope?.state) { sp.push(scope.state); frag.state = ` AND b.state = $${sp.length}`; }
+    if (scope?.zoneId) { sp.push(scope.zoneId); frag.zone = ` AND b.zone_id = $${sp.length}`; }
+    if (scope?.clientId) { sp.push(scope.clientId); frag.client = ` AND p.client_id = $${sp.length}`; }
+    if (scope?.projectId) { sp.push(scope.projectId); frag.project = ` AND p.id = $${sp.length}`; }
+    const branchFrag = frag.region + frag.state + frag.zone;
+    const isScoped = sp.length > 0;
+
+    // Capacity query needs a separate parameter binding array because assayers only have home region,
+    // and passing unmatched parameter arrays will throw error in node-postgres.
+    const capacityParams: any[] = [];
+    let capacityAssayerRegionFrag = '';
+    if (scope?.regions?.length) {
+      capacityParams.push(scope.regions);
+      capacityAssayerRegionFrag = ` AND a.region = ANY($1)`;
+    }
+
     const DASH_TTL = Number(process.env.DASHBOARD_CACHE_TTL_S) || 15;
-    const [funnelRows, dueRows, docRows, moneyRows, capacityRows, projectRows, activityRows] =
-      await this.cache.wrap('dash:snapshot:orgwide:v1', DASH_TTL, () => Promise.all([
-      this.dataSource.query(`
-        SELECT pb.status, COUNT(*)::int AS c, COALESCE(SUM(pb.packet_count),0)::int AS packets
-          FROM project_branches pb
-          JOIN projects p ON p.id = pb.project_id AND p.is_active = true
-         WHERE pb.is_active = true
-         GROUP BY pb.status`),
 
-      // Audits landing in the next week, and whether each is actually ready:
-      // an assayer confirmed and the paperwork released. A date in the diary with
-      // neither of those is the thing that fails on the morning.
-      this.dataSource.query(`
-        SELECT pb.id, pb.scheduled_date, pb.status,
-               b.name AS branch_name, b.district, b.state,
-               (pb.scheduled_date - CURRENT_DATE)::int AS days_away,
-               EXISTS (SELECT 1 FROM assignments a
-                        WHERE a.project_branch_id = pb.id AND a.is_active = true
-                          AND a.status IN ('ACCEPTED','CHECKED_IN','IN_PROGRESS','COMPLETED')) AS has_assayer,
-               EXISTS (SELECT 1 FROM documents d
-                        JOIN assessments asm ON asm.id = d.assessment_id
-                       WHERE asm.project_id = pb.project_id AND asm.branch_id = pb.branch_id
-                         AND d.is_active = true AND d.type = 'PRE_FIELD_AUDIT_PDF'
-                         AND d.status <> 'UPLOADED') AS packet_sent
-          FROM project_branches pb
-          JOIN branches b ON b.id = pb.branch_id
-         WHERE pb.is_active = true
-           AND pb.scheduled_date IS NOT NULL
-           AND pb.scheduled_date BETWEEN CURRENT_DATE - 3 AND CURRENT_DATE + 7
-         ORDER BY pb.scheduled_date`),
-
+    // ── National bundle: documents, money, activity ────────────────────────
+    // These describe the data-entry, finance and audit-trail desks, which take work from the
+    // whole country regardless of any operator's territory — deliberately NOT scoped, and
+    // therefore cacheable under one org-wide key shared by every viewer.
+    const [docRows, moneyRows, activityRows] =
+      await this.cache.wrap('dash:snapshot:orgwide:v2', DASH_TTL, () => Promise.all([
       this.dataSource.query(`
         SELECT
           COUNT(*) FILTER (WHERE type='PRE_FIELD_AUDIT_PDF' AND status='UPLOADED')::int      AS packets_unsent,
@@ -160,7 +170,55 @@ export class OperationsSnapshotService {
           COALESCE(SUM(paid_amount),0)        AS collected
           FROM billing_entries WHERE is_active = true`),
 
-      // Idle vs loaded people, against the work waiting to be placed.
+      this.dataSource.query(`
+        SELECT id, event_type AS action, remarks AS detail, occurred_at AS "occurredAt"
+          FROM audit_events ORDER BY occurred_at DESC LIMIT 12`),
+    ]));
+
+    // ── Territorial bundle: funnel, due, capacity, projects ────────────────
+    // Keyed by the scope, never by the org-wide key: a shared key here would serve one
+    // operator's region to the next viewer within the TTL — the same cache-poisoning trap the
+    // command-center map had. Unscoped viewers all share the ':all' key, so the org-wide
+    // caching benefit is kept for the common case.
+    const scopeCacheKey = isScoped
+      ? `dash:snapshot:scoped:v2:${sp.map((v) => (Array.isArray(v) ? v.join('+') : v)).join(':')}`
+      : 'dash:snapshot:scoped:v2:all';
+    const [funnelRows, dueRows, capacityRows, projectRows] =
+      await this.cache.wrap(scopeCacheKey, DASH_TTL, () => Promise.all([
+      this.dataSource.query(`
+        SELECT pb.status, COUNT(*)::int AS c, COALESCE(SUM(pb.packet_count),0)::int AS packets
+          FROM project_branches pb
+          JOIN projects p ON p.id = pb.project_id AND p.is_active = true
+          JOIN branches b ON b.id = pb.branch_id
+         WHERE pb.is_active = true${branchFrag}${frag.client}${frag.project}
+         GROUP BY pb.status`, sp),
+
+      // Audits landing in the next week, and whether each is actually ready:
+      // an assayer confirmed and the paperwork released. A date in the diary with
+      // neither of those is the thing that fails on the morning.
+      this.dataSource.query(`
+        SELECT pb.id, pb.scheduled_date, pb.status,
+               b.name AS branch_name, b.district, b.state,
+               (pb.scheduled_date - CURRENT_DATE)::int AS days_away,
+               EXISTS (SELECT 1 FROM assignments a
+                        WHERE a.project_branch_id = pb.id AND a.is_active = true
+                          AND a.status IN ('ACCEPTED','CHECKED_IN','IN_PROGRESS','COMPLETED')) AS has_assayer,
+               EXISTS (SELECT 1 FROM documents d
+                        JOIN assessments asm ON asm.id = d.assessment_id
+                       WHERE asm.project_id = pb.project_id AND asm.branch_id = pb.branch_id
+                          AND d.is_active = true AND d.type = 'PRE_FIELD_AUDIT_PDF'
+                          AND d.status <> 'UPLOADED') AS packet_sent
+          FROM project_branches pb
+          JOIN branches b ON b.id = pb.branch_id
+          JOIN projects p ON p.id = pb.project_id
+         WHERE pb.is_active = true
+           AND pb.scheduled_date IS NOT NULL
+           AND pb.scheduled_date BETWEEN CURRENT_DATE - 3 AND CURRENT_DATE + 7${branchFrag}${frag.client}${frag.project}
+         ORDER BY pb.scheduled_date`, sp),
+
+      // Idle vs loaded people, against the work waiting to be placed. Scoped by the assayer's
+      // own home region only — an assayer has no client or zone — so the capacity figure
+      // describes the same workforce the scoped map and roster show.
       this.dataSource.query(`
         SELECT
           COUNT(*)::int AS total,
@@ -172,11 +230,12 @@ export class OperationsSnapshotService {
                      WHERE asg.assayer_id = a.id AND asg.is_active = true
                        AND asg.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')) AS open_count
               FROM assayers a
-             WHERE a.is_active = true AND a.status = 'ACTIVE'
-          ) s`),
+             WHERE a.is_active = true AND a.status = 'ACTIVE'${capacityAssayerRegionFrag}
+          ) s`, capacityParams),
 
-      // Real per-project progress, counted in the database rather than from a
-      // field the projects endpoint never returned.
+      // Real per-project progress. Under a geographic scope the branch counts cover only the
+      // in-scope branches, and projects with none of them drop out (the HAVING) — a project
+      // row claiming 0-of-0 progress in a region it does not touch is noise, not information.
       this.dataSource.query(`
         SELECT p.id, p.name, p.project_number, p.status, c.name AS client_name,
                COUNT(pb.id)::int AS total_branches,
@@ -186,13 +245,12 @@ export class OperationsSnapshotService {
           FROM projects p
           JOIN clients c ON c.id = p.client_id
           LEFT JOIN project_branches pb ON pb.project_id = p.id AND pb.is_active = true
-         WHERE p.is_active = true
+          LEFT JOIN branches b ON b.id = pb.branch_id
+         WHERE p.is_active = true${frag.client}${frag.project}
+           ${isScoped ? `AND (pb.id IS NULL OR (b.id IS NOT NULL${branchFrag}))` : ''}
          GROUP BY p.id, p.name, p.project_number, p.status, c.name
-         ORDER BY total_branches DESC`),
-
-      this.dataSource.query(`
-        SELECT id, event_type AS action, remarks AS detail, occurred_at AS "occurredAt"
-          FROM audit_events ORDER BY occurred_at DESC LIMIT 12`),
+         ${isScoped ? 'HAVING COUNT(pb.id) > 0' : ''}
+         ORDER BY total_branches DESC`, sp),
     ]));
 
     // Validation is only queried for roles that can act on it — a validator's

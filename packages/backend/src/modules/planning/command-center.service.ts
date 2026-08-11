@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 /**
  * Branch and assayer state names come from different sources — client branch
@@ -36,9 +37,19 @@ export class CommandCenterService {
    * it is expensive; the coverage picture changes slowly, so a short cluster-wide cache keyed by the
    * filters keeps repeated Command Room loads off the database. Fault-tolerant via CacheService.
    */
-  async overview(filters: { clientId?: string; state?: string } = {}): Promise<any> {
+  async overview(filters: Partial<GlobalScope> = {}): Promise<any> {
     const TTL = Number(process.env.COMMAND_CENTER_CACHE_TTL_S) || 20;
-    const key = `planning:command-center:${filters.clientId ?? 'all'}:${filters.state ?? 'all'}`;
+    // Every dimension must be in the key. It previously keyed on clientId and state only; once
+    // the global scope feeds this, a key that ignores region would serve one operator's region
+    // to the next operator who loaded the map within the TTL.
+    const key = [
+      'planning:command-center',
+      filters.clientId ?? 'all',
+      filters.state ?? 'all',
+      filters.zoneId ?? 'all',
+      filters.projectId ?? 'all',
+      filters.regions?.join('+') ?? 'all',
+    ].join(':');
     return this.cache.wrap(key, TTL, () => this.computeOverview(filters));
   }
 
@@ -51,10 +62,39 @@ export class CommandCenterService {
    * matching state names, because the names disagree across sources and distance
    * is what actually determines whether an assayer can service a branch.
    */
-  private async computeOverview(filters: { clientId?: string; state?: string } = {}): Promise<any> {
+  private async computeOverview(filters: Partial<GlobalScope> = {}): Promise<any> {
     const params: any[] = [];
     const where: string[] = ['b.is_active = true'];
     if (filters.clientId) { params.push(filters.clientId); where.push(`p.client_id = $${params.length}`); }
+    // `state` was accepted by the controller and folded into the cache key, but never actually
+    // applied to the query — the filter silently did nothing. It does now.
+    if (filters.state) { params.push(filters.state); where.push(`b.state = $${params.length}`); }
+    if (filters.zoneId) { params.push(filters.zoneId); where.push(`b.zone_id = $${params.length}`); }
+    if (filters.projectId) { params.push(filters.projectId); where.push(`p.id = $${params.length}`); }
+    // Held so the assayer sub-selects inside this same query can reuse the placeholder.
+    let regionParam = '';
+    if (filters.regions?.length) {
+      params.push(filters.regions);
+      regionParam = `$${params.length}`;
+      where.push(`b.region = ANY(${regionParam})`);
+    }
+    // Applied to the nearest-assayer lateral join and the in-range count below. Without it the
+    // map would report a branch as covered by an assayer the scoped operator cannot see or
+    // dispatch — a coverage figure that looks reassuring and is not actionable.
+    const nearbyAssayerScope = regionParam ? ` AND a.region = ANY(${regionParam})` : '';
+    const inRangeAssayerScope = regionParam ? ` AND a2.region = ANY(${regionParam})` : '';
+
+    // The assayer layer is scoped too, and only by region: an assayer has a home region but no
+    // client or zone of their own. Scoping the *pins* without scoping the *people* would draw
+    // one region's branches against the whole country's workforce, and every coverage number
+    // derived from that pairing — nearest-assayer distance, capacity, the gap list — would be
+    // quietly wrong rather than merely unfiltered.
+    const assayerParams: any[] = [];
+    const assayerWhere: string[] = ['a.is_active = true', `a.status = 'ACTIVE'`];
+    if (filters.regions?.length) {
+      assayerParams.push(filters.regions);
+      assayerWhere.push(`a.region = ANY($${assayerParams.length})`);
+    }
 
     // Per branch: its workload, its money, and how far the nearest assayer is.
     // The lateral join computes true nearest-assayer distance per branch — the
@@ -72,7 +112,7 @@ export class CommandCenterService {
               near.display_name AS nearest_assayer_name,
               near.km          AS nearest_assayer_km,
               (SELECT COUNT(*) FROM assayers a2
-                WHERE a2.is_active = true AND a2.status = 'ACTIVE'
+                WHERE a2.is_active = true AND a2.status = 'ACTIVE'${inRangeAssayerScope}
                   AND a2.latitude IS NOT NULL
                   AND ST_DistanceSphere(
                         ST_SetSRID(ST_MakePoint(b.longitude, b.latitude), 4326),
@@ -97,7 +137,7 @@ export class CommandCenterService {
                     ST_SetSRID(ST_MakePoint(a.longitude, a.latitude), 4326)
                   ) / 1000 AS km
              FROM assayers a
-            WHERE a.is_active = true AND a.status = 'ACTIVE' AND a.latitude IS NOT NULL
+            WHERE a.is_active = true AND a.status = 'ACTIVE' AND a.latitude IS NOT NULL${nearbyAssayerScope}
             ORDER BY km ASC
             LIMIT 1
          ) near ON b.latitude IS NOT NULL
@@ -118,7 +158,8 @@ export class CommandCenterService {
             WHERE assayer_id = a.id AND is_active = true
             ORDER BY effective_start_date DESC LIMIT 1
          ) cp ON true
-        WHERE a.is_active = true AND a.status = 'ACTIVE'`,
+        WHERE ${assayerWhere.join(' AND ')}`,
+      assayerParams,
     );
 
     const n = (v: any) => Number(v ?? 0);

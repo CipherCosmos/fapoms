@@ -21,6 +21,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 import { geocodeIndia } from '../geo/india-geocoder';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -221,8 +222,12 @@ export class ProjectService implements OnModuleInit {
     return saved;
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ projects: ProjectEntity[]; total: number }> {
-    return this.projectQueryService.findAll(page, limit);
+  async findAll(
+    page = 1,
+    limit = 50,
+    scope?: Partial<GlobalScope>,
+  ): Promise<{ projects: ProjectEntity[]; total: number }> {
+    return this.projectQueryService.findAll(page, limit, scope);
   }
 
   async findOne(id: string): Promise<ProjectEntity> {
@@ -362,8 +367,11 @@ export class ProjectService implements OnModuleInit {
     });
   }
 
-  async findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]> {
-    return this.projectQueryService.findProjectBranches(projectId);
+  async findProjectBranches(
+    projectId: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<ProjectBranchEntity[]> {
+    return this.projectQueryService.findProjectBranches(projectId, scope);
   }
 
   async associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]> {

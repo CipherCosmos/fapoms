@@ -38,6 +38,7 @@ import { IncidentSeverity } from './field-incident.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 export class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
   @IsString() @IsNotEmpty()
@@ -584,8 +585,10 @@ export class PlanningController {
   @Get('command-center')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
-  async commandCenter(@Query('clientId') clientId?: string, @Query('state') state?: string) {
-    return { success: true, data: await this.commandCenterService.overview({ clientId, state }) };
+  async commandCenter(@GlobalScopeFilter() scope: GlobalScope) {
+    // Takes the whole global scope now — the map is the surface where an operator most expects
+    // "show me my region" to mean it, both for the branch pins and for the assayer pins.
+    return { success: true, data: await this.commandCenterService.overview(scope) };
   }
 
   @Get('suggest-date')

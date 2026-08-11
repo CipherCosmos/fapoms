@@ -3,7 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } from '../components/ui';
 import { api } from '../services/api';
-import { INDIAN_STATES } from '@fapoms/shared';
+import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel } from '@fapoms/shared';
+import { useScope, withScope } from '../context/ScopeContext';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
 import { userMessage } from '../services/errors';
@@ -113,6 +114,9 @@ const BRANCH_TYPES = ['MAIN', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
 
 export const Branches: React.FC = () => {
   const { toast } = useToast();
+  // The header's global scope. `scopeKey` changes whenever any dimension does, and is what the
+  // reload effect below watches.
+  const { scopeParams, scopeKey } = useScope();
   const [branches, setBranches] = useState<Branch[]>([]);
   // The true server-side total, so the UI can tell the operator when the loaded list is truncated
   // rather than silently showing a partial list as if it were everything.
@@ -120,8 +124,9 @@ export const Branches: React.FC = () => {
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [stateFilter, setStateFilter] = useState('ALL');
-  const [regionFilter, setRegionFilter] = useState('ALL');
+  // State and region used to be filtered here. They moved to the header's global scope so the
+  // choice follows the operator across every page, and so the server can apply them to the
+  // whole result set rather than to the one page this component happens to have loaded.
   const [riskFilter, setRiskFilter] = useState('ALL');
   const [showFilters, setShowFilters] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -164,8 +169,8 @@ export const Branches: React.FC = () => {
   }, []);
   useEffect(() => {
     selectedClientIdRef.current = selectedClientId;
-    if (selectedClientId) loadBranches(selectedClientId);
-  }, [selectedClientId]);
+    if (selectedClientId || scopeParams.clientId) loadBranches(selectedClientId);
+  }, [selectedClientId, scopeKey]);
 
   useEffect(() => {
     if (branchIdParam && branches.length > 0) {
@@ -186,8 +191,14 @@ export const Branches: React.FC = () => {
   const loadBranches = async (clientId?: string) => {
     setIsLoading(true);
     try {
-      const base = clientId ? `/branches?clientId=${clientId}` : '/branches?';
-      const url = `${base}${clientId ? '&' : ''}limit=${BRANCH_PAGE_LIMIT}`;
+      // Region, zone and state come from the header's global scope and are applied by the
+      // server. They cannot be applied here: the list is capped at BRANCH_PAGE_LIMIT rows, so
+      // filtering what already arrived would show "12 of 4000" and quietly hide the remainder.
+      const url = `/branches?${withScope(scopeParams, {
+        // The global client scope wins when set; otherwise the page's own picker decides.
+        clientId: scopeParams.clientId ?? clientId,
+        limit: BRANCH_PAGE_LIMIT,
+      })}`;
       // withMeta so we learn the true total and can warn when the list is capped, instead of
       // silently dropping branches past the limit (a bank client can exceed it).
       const response = await api.request<{ data: Branch[]; meta?: { pagination?: { total?: number } } }>(url, { withMeta: true });
@@ -248,14 +259,9 @@ export const Branches: React.FC = () => {
   const filteredBranches = branches.filter(b => {
     const matchesSearch = !searchTerm || b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       b.branchCode.toLowerCase().includes(searchTerm.toLowerCase()) || (b.solId && b.solId.includes(searchTerm));
-    const matchesState = stateFilter === 'ALL' || b.state === stateFilter;
-    const matchesRegion = regionFilter === 'ALL' || b.region === regionFilter;
     const matchesRisk = riskFilter === 'ALL' || b.riskCategory === riskFilter;
-    return matchesSearch && matchesState && matchesRegion && matchesRisk;
+    return matchesSearch && matchesRisk;
   });
-
-  const states = [...new Set(branches.map(b => b.state).filter(Boolean))].sort();
-  const regions = [...new Set(branches.map(b => b.region).filter((r): r is string => r !== null))].sort();
 
   const totalCount = branchesTotal || branches.length;
   const isTruncated = branchesTotal > branches.length;
@@ -329,14 +335,15 @@ export const Branches: React.FC = () => {
           {/* Advanced Filters */}
           {showFilters && (
             <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>State:</span>} value={stateFilter} onChange={setStateFilter} options={[{ value: 'ALL', label: 'All' }, ...states.map(s => ({ value: s, label: s }))]} compact />
-              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Region:</span>} value={regionFilter} onChange={setRegionFilter} options={[{ value: 'ALL', label: 'All' }, ...regions.map(r => ({ value: r, label: r }))]} compact />
               <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: r }))]} compact />
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Region, zone and state are set in the header's scope filter.
+              </span>
               {(() => {
-                const activeCount = [stateFilter !== 'ALL', regionFilter !== 'ALL', riskFilter !== 'ALL'].filter(Boolean).length;
+                const activeCount = [riskFilter !== 'ALL'].filter(Boolean).length;
                 if (activeCount === 0) return null;
                 return (
-                  <button type="button" onClick={() => { setStateFilter('ALL'); setRegionFilter('ALL'); setRiskFilter('ALL'); }}
+                  <button type="button" onClick={() => { setRiskFilter('ALL'); }}
                     title="Clear all filters"
                     style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: '11px', fontWeight: 600, color: 'var(--accent)', background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                     <X size={12} /> Clear {activeCount}
@@ -368,7 +375,7 @@ export const Branches: React.FC = () => {
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>
                       <td style={{ fontWeight: 600, fontSize: '14px' }}>{b.name}</td>
                       <td style={{ fontSize: '13px' }}>{b.city}, {b.state}</td>
-                      <td style={{ fontSize: '13px' }}>{b.region || '-'}</td>
+                      <td style={{ fontSize: '13px' }}>{regionLabel(b.region)}</td>
                       <td>
                         <StatusBadge label={b.riskCategory || '-'} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
                       </td>
@@ -412,7 +419,7 @@ export const Branches: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', padding: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                 <InfoRow label="SOL ID" value={branchDetail.solId || '-'} />
                 <InfoRow label="Branch Type" value={branchDetail.branchType || '-'} />
-                <InfoRow label="Region" value={branchDetail.region || '-'} />
+                <InfoRow label="Region" value={regionLabel(branchDetail.region)} />
                 <InfoRow label="Territory" value={branchDetail.territory || '-'} />
                 <InfoRow label="Manager" value={branchDetail.managerName || '-'} />
                 <InfoRow label="Risk Category" value={branchDetail.riskCategory || '-'} />
@@ -632,7 +639,12 @@ const BranchFormModal: React.FC<{
         {field('District *', 'district', { required: true })}
         {field('State *', 'state', { required: true, options: INDIAN_STATES })}
         {field('Pincode', 'pincode', { placeholder: 'e.g. 400001' })}
-        {field('Region', 'region')}
+        {/* A closed list, not free text. Leaving it blank is fine and usually best — the
+            server derives the region from the state, which is what keeps the column filterable. */}
+        {field('Region', 'region', {
+          options: REGION_ORDER.map(r => ({ value: r, label: REGION_LABELS[r] })),
+          placeholder: 'Derived from state',
+        })}
         {field('Territory', 'territory')}
         {field('Zone ID', 'zoneId')}
 

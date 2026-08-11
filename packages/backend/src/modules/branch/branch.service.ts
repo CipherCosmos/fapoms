@@ -11,7 +11,8 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory } from '@fapoms/shared';
+import { EventCategory, resolveRegion } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia } from '../geo/india-autocomplete.helper';
 import { geocodeIndia } from '../geo/india-geocoder';
 
@@ -164,7 +165,10 @@ export class BranchService {
       district: dto.district,
       city: dto.city,
       pincode: dto.pincode ?? null,
-      region: dto.region ?? null,
+      // Canonicalised on write, state first. Letting a caller store an arbitrary string here
+      // is what made the column unfilterable in the first place; the migration that cleaned it
+      // up would be undone by the next import otherwise.
+      region: resolveRegion(dto.region) ?? resolveRegion(dto.state) ?? null,
       territory: dto.territory ?? null,
       zoneId: dto.zoneId ?? null,
       branchType: dto.branchType ?? null,
@@ -224,11 +228,13 @@ export class BranchService {
   async findAll(
     page = 1,
     limit = 20,
-    clientId?: string,
-    region?: string,
-    zoneId?: string,
+    scope: Partial<GlobalScope> = {},
   ): Promise<{ branches: BranchEntity[]; total: number }> {
-    return this.branchQueryService.findAll(page, limit, clientId, region, zoneId);
+    return this.branchQueryService.findAll(page, limit, scope);
+  }
+
+  async scopeFacets(scope: Partial<GlobalScope> = {}) {
+    return this.branchQueryService.scopeFacets(scope);
   }
 
   async update(id: string, dto: UpdateBranchDto, userId: string): Promise<BranchEntity> {
@@ -286,7 +292,13 @@ export class BranchService {
     if (dto.district !== undefined) branch.district = dto.district;
     if (dto.city !== undefined) branch.city = dto.city;
     if (dto.pincode !== undefined) branch.pincode = dto.pincode;
-    if (dto.region !== undefined) branch.region = dto.region;
+    // Region follows the state unless the caller names one explicitly, and is canonicalised
+    // either way — see the matching note on create().
+    if (dto.region !== undefined) {
+      branch.region = resolveRegion(dto.region) ?? resolveRegion(branch.state) ?? null;
+    } else if (dto.state !== undefined) {
+      branch.region = resolveRegion(dto.state) ?? branch.region;
+    }
     if (dto.territory !== undefined) branch.territory = dto.territory;
     if (dto.zoneId !== undefined) branch.zoneId = dto.zoneId;
     if (dto.branchType !== undefined) branch.branchType = dto.branchType;

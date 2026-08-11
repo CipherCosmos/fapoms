@@ -123,6 +123,15 @@ class UpdateUserRequestDto implements UpdateUserDto {
 
   @IsOptional() @IsEnum(UserStatus)
   status?: UserStatus;
+
+  /**
+   * Operational region assignment. Send `[]` or `null` to make the account national
+   * (HR, data entry, validation, finance); a non-empty list confines an operations
+   * account to its territory. Values are validated against the canonical enum in
+   * `UserService.updateUser`.
+   */
+  @IsOptional() @IsArray() @IsString({ each: true })
+  regions?: string[] | null;
 }
 
 class ResetPasswordRequestDto {
@@ -253,8 +262,18 @@ export class UserController {
     return { success: true, data: permissions };
   }
 
+  /**
+   * Administrators included deliberately.
+   *
+   * Restricting role editing to the super administrator looked safer but bought nothing: an
+   * ADMINISTRATOR can already call `PUT /users/:id/roles` and grant themselves
+   * SUPER_ADMINISTRATOR outright. The only thing the narrower gate achieved was an
+   * administration screen where every control was inert for the person administering it.
+   * The genuine safeguards are the ones in the service — built-in roles cannot be renamed or
+   * deleted, a held role cannot be deleted, and SUPER_ADMINISTRATOR cannot be stripped bare.
+   */
   @Post('roles')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
   @ApiOperation({ summary: 'Create a custom role' })
   async createRole(@Body() dto: CreateRoleRequestDto, @Req() req: any) {
     const role = await this.userService.createRole(dto, req.user.id);
@@ -262,7 +281,7 @@ export class UserController {
   }
 
   @Put('roles/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
   @ApiOperation({ summary: 'Update a role display name or description' })
   async updateRole(
     @Param('id', ParseUUIDPipe) id: string,
@@ -279,7 +298,7 @@ export class UserController {
    * invalidated, so it takes effect within seconds rather than at next sign-in.
    */
   @Put('roles/:id/permissions')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
   @ApiOperation({ summary: "Replace a role's permission set" })
   async setRolePermissions(
     @Param('id', ParseUUIDPipe) id: string,
@@ -291,7 +310,7 @@ export class UserController {
   }
 
   @Delete('roles/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
   @ApiOperation({ summary: 'Delete a custom (non-built-in) role that nobody holds' })
   async deleteRole(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.userService.deleteRole(id, req.user.id);

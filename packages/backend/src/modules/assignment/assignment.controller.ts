@@ -19,6 +19,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
@@ -209,6 +210,7 @@ export class AssignmentController {
     @Query('assessmentStatus') assessmentStatus?: string,
     @Query('unscheduledOnly') unscheduledOnly?: string,
     @Query('priority') priority?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const result = await this.assignmentService.findAll(
       page ? Number(page) : 1,
@@ -218,6 +220,7 @@ export class AssignmentController {
       assessmentStatus,
       unscheduledOnly === 'true' || unscheduledOnly === '1',
       priority,
+      scope,
     );
     return {
       success: true,
@@ -235,8 +238,8 @@ export class AssignmentController {
   @Get('dashboard/summary')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get assignment status and SLA statistics summary' })
-  async getDashboardSummary() {
-    const summary = await this.assignmentService.getDashboardSummary();
+  async getDashboardSummary(@GlobalScopeFilter() scope?: GlobalScope) {
+    const summary = await this.assignmentService.getDashboardSummary(scope);
     return {
       success: true,
       data: summary,
@@ -250,8 +253,8 @@ export class AssignmentController {
   @Get('field-issues')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Field issues assayers have reported, newest first' })
-  async fieldIssues() {
-    const issues = await this.assignmentService.listFieldIssues();
+  async fieldIssues(@GlobalScopeFilter() scope?: GlobalScope) {
+    const issues = await this.assignmentService.listFieldIssues(scope);
     return { success: true, data: issues };
   }
 
@@ -264,10 +267,10 @@ export class AssignmentController {
   @Get('inbox')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Operations inbox: all assignments awaiting a desk decision' })
-  async operationsInboxQueue() {
+  async operationsInboxQueue(@GlobalScopeFilter() scope?: GlobalScope) {
     const [inbox, fieldIssues] = await Promise.all([
-      this.operationsInbox.getInbox(),
-      this.assignmentService.listFieldIssues(),
+      this.operationsInbox.getInbox(scope),
+      this.assignmentService.listFieldIssues(scope),
     ]);
     return {
       success: true,

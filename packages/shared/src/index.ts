@@ -8,6 +8,9 @@
 // Canonical business enumerations
 export * from './enums';
 
+// Canonical geographic regions and the state → region map
+export * from './regions';
+
 // Domain entity interfaces
 export * from './interfaces';
 

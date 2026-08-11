@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useScope, withScope } from '../context/ScopeContext';
 import { useNavigate } from 'react-router-dom';
 import {
   Phone, PhoneOff, CheckCircle, XCircle, RefreshCw, AlertTriangle, IndianRupee,
@@ -71,9 +72,12 @@ const age = (h: number) => (h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.
 
 export const OperationsInbox: React.FC = () => {
   const navigate = useNavigate();
+  const { scopeParams, scopeKey } = useScope();
+  const scopeQuery = withScope(scopeParams);
+
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['operations-inbox'],
-    queryFn: () => api.request<InboxData>('/assignments/inbox'),
+    queryKey: ['operations-inbox', scopeKey],
+    queryFn: () => api.request<InboxData>(`/assignments/inbox?${scopeQuery}`),
     staleTime: 20_000,
     refetchInterval: 60_000,
   });

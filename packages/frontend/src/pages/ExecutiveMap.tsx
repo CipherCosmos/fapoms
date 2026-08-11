@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
+import { useScope, withScope } from '../context/ScopeContext';
 import { formatRupees as money } from '@fapoms/shared';
 
 interface BranchPoint {
@@ -58,6 +59,7 @@ export const ExecutiveMap: React.FC = () => {
   const [clientId, setClientId] = useState('');
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedState, setSelectedState] = useState<string | null>(null);
+  const { scopeParams, scopeKey } = useScope();
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [lens, setLens] = useState<'ALL' | 'GAPS' | 'UNASSIGNED'>('ALL');
 
@@ -65,14 +67,16 @@ export const ExecutiveMap: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const q = clientId ? `?clientId=${clientId}` : '';
-      setData(await api.request<CommandCenter>(`/planning/command-center${q}`));
+      // The page's own client picker still wins when set; everything else comes from the
+      // header's global scope, so the map draws the same slice the rest of the app is showing.
+      const q = withScope(scopeParams, { clientId: clientId || undefined });
+      setData(await api.request<CommandCenter>(`/planning/command-center${q ? `?${q}` : ''}`));
     } catch (e: any) {
       setError(`Failed to load command centre. ${userMessage(e)}`);
     } finally {
       setLoading(false);
     }
-  }, [clientId]);
+  }, [clientId, scopeKey]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {

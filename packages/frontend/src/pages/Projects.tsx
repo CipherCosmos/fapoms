@@ -18,6 +18,7 @@ const useIsNarrow = (max = 900): boolean => {
 import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
 import { ProjectStatus, Priority, projectStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
+import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
 import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
@@ -236,6 +237,13 @@ export const Projects: React.FC = () => {
   const [allClientBranches, setAllClientBranches] = useState<any[]>([]);
   const [branchSearch, setBranchSearch] = useState('');
 
+  const { scopeParams, scopeKey } = useScope();
+  const scopeQuery = withScope(scopeParams);
+
+  // Reloads whenever the header's scope changes. A project is in scope when it has at least one
+  // branch there — see ProjectQueryService.findAll.
+  useEffect(() => { loadProjects(); }, [scopeKey]);
+
   useEffect(() => {
     loadProjects();
     loadClients();
@@ -276,7 +284,7 @@ export const Projects: React.FC = () => {
     setIsLoading(true);
     setProjectsError(null);
     try {
-      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>('/projects?page=1&limit=' + PAGE_SIZE, { method: 'GET', withMeta: true });
+      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>(`/projects?page=1&limit=${PAGE_SIZE}&${scopeQuery}`, { method: 'GET', withMeta: true });
       setProjects(response.data);
       setTotalProjects(response.meta?.pagination?.total ?? response.data.length);
       setLoadedPage(1);
@@ -292,7 +300,7 @@ export const Projects: React.FC = () => {
     setIsLoadingMore(true);
     try {
       const next = loadedPage + 1;
-      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>('/projects?page=' + next + '&limit=' + PAGE_SIZE, { method: 'GET', withMeta: true });
+      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>(`/projects?page=${next}&limit=${PAGE_SIZE}&${scopeQuery}`, { method: 'GET', withMeta: true });
       const incoming = response.data || [];
       setProjects(prev => {
         const seen = new Set(prev.map(p => p.id));
@@ -318,7 +326,7 @@ export const Projects: React.FC = () => {
 
   const loadClientBranches = async (clientId: string) => {
     try {
-      const response = await api.request<any>(`/branches?clientId=${clientId}&limit=1000`);
+      const response = await api.request<any>(`/branches?${withScope(scopeParams, { clientId, limit: 1000 })}`);
       if (response && Array.isArray(response)) {
         setAllClientBranches(response);
       } else if (response && response.data && Array.isArray(response.data)) {

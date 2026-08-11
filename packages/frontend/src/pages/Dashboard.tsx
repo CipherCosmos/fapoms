@@ -8,6 +8,7 @@ import {
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
+import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { formatRupees as money } from '@fapoms/shared';
 
@@ -74,9 +75,13 @@ export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   useSocketInvalidation();
 
+  // The territorial sections (funnel, due, capacity, projects) follow the header's global
+  // scope; documents/validation/money stay national — see OperationsSnapshotService.
+  const { scopeParams, scopeKey } = useScope();
+
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: [...queryKeys.dashboard.all, 'operations'],
-    queryFn: () => api.request<Snapshot>('/system-dashboard/operations'),
+    queryKey: [...queryKeys.dashboard.all, 'operations', scopeKey],
+    queryFn: () => api.request<Snapshot>(`/system-dashboard/operations?${withScope(scopeParams)}`),
     staleTime: 30_000,
   });
 

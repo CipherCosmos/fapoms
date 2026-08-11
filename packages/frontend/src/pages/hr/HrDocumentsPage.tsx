@@ -67,6 +67,7 @@ function useNarrow(breakpoint = 760): boolean {
 }
 
 export const HrDocumentsPage: React.FC = () => {
+
   const roles = useCurrentRoles();
   const canManage = canManageAssayers(roles);
   const narrow = useNarrow();

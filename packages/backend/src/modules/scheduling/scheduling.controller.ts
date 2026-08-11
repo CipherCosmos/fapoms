@@ -5,6 +5,7 @@ import { SchedulingService, CreateScheduleDto, UpdateScheduleDto } from './sched
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 class CreateScheduleRequestDto implements CreateScheduleDto {
   @IsUUID()
@@ -62,6 +63,7 @@ export class SchedulingController {
     @Query('status') status?: ScheduleStatus,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const result = await this.schedulingService.findAll(
       Number(page),
@@ -69,6 +71,7 @@ export class SchedulingController {
       status,
       dateFrom,
       dateTo,
+      scope,
     );
     return {
       success: true,

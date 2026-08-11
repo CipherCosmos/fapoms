@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
@@ -161,9 +162,22 @@ export const Modal: React.FC<{
     </div>
   );
 
-  return asForm ? (
-    <form onSubmit={onSubmit}>{container}</form>
-  ) : (
-    <>{container}</>
-  );
+  const tree = asForm ? <form onSubmit={onSubmit}>{container}</form> : container;
+
+  /**
+   * Rendered into <body>, not in place.
+   *
+   * `position: fixed` is only relative to the viewport while no ancestor establishes a
+   * containing block — and `transform`, `filter`, `will-change` and `backdrop-filter` all do.
+   * This app's global stylesheet puts `backdrop-filter: blur(...) saturate(165%)` on
+   * `.glass-card`, `.table-container`, `[class*="modal"]`, `[class*="drawer"]` and more, so any
+   * modal opened from inside one of those surfaces was being positioned and clipped against
+   * that card instead of the window: the panel could sit partly outside its own scroll area,
+   * which reads as "the dialog opens but I cannot scroll or click it".
+   *
+   * A portal takes the dialog out of that subtree entirely, so it behaves the same no matter
+   * where it is opened from. React still propagates events through the React tree, so handlers
+   * in the owning component keep working.
+   */
+  return createPortal(tree, document.body);
 };

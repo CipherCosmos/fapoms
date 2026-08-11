@@ -34,9 +34,14 @@ export const getProjects = () => api.request<ProjectOption[]>('/projects', { met
 
 export const getZones = () => api.request<ZoneOption[]>('/zones?limit=100');
 
-/** Branches for a project. Caller supplies its own ProjectBranch type. */
-export const getProjectBranches = <T = unknown>(projectId: string) =>
-  api.request<T[]>(`/projects/${projectId}/branches`);
+/**
+ * Branches for a project. Caller supplies its own ProjectBranch type.
+ *
+ * `scopeQuery` comes from `useScope().scopeParams` via `withScope` — the coverage queue is
+ * narrowed by the header's region/zone/state the same way every other operations list is.
+ */
+export const getProjectBranches = <T = unknown>(projectId: string, scopeQuery = '') =>
+  api.request<T[]>(`/projects/${projectId}/branches${scopeQuery ? `?${scopeQuery}` : ''}`);
 
 export const getPricingRates = (projectId: string) =>
   api.request<TravelRates>(`/pricing/rates?projectId=${encodeURIComponent(projectId)}`);

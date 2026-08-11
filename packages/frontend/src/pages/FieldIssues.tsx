@@ -5,6 +5,7 @@ import { Flag, AlertTriangle, Lock, CalendarClock, HelpCircle, MoreHorizontal, C
 import { assignmentStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
 import { queryKeys } from '../hooks/queryKeys';
+import { useScope, withScope } from '../context/ScopeContext';
 import { StatusBadge } from '../components/ui';
 
 interface FieldIssue {
@@ -54,9 +55,11 @@ const timeAgo = (iso: string): string => {
 export const FieldIssues: React.FC = () => {
   const navigate = useNavigate();
 
+  const { scopeParams, scopeKey } = useScope();
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.assignments.fieldIssues,
-    queryFn: () => api.request<FieldIssue[]>('/assignments/field-issues'),
+    queryKey: [...queryKeys.assignments.fieldIssues, scopeKey],
+    queryFn: () => api.request<FieldIssue[]>(`/assignments/field-issues?${withScope(scopeParams)}`),
     // Cheap safety net on top of the socket invalidation, since this is a queue people watch.
     refetchInterval: 60_000,
   });

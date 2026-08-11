@@ -37,6 +37,7 @@ interface RosterPayRow {
 type Filter = 'all' | 'priced' | 'unpriced';
 
 export const HrPayPage: React.FC = () => {
+
   const { canManage } = useHr();
   const [roster, setRoster] = useState<AssayerLite[]>([]);
   const [pay, setPay] = useState<Record<string, RosterPayRow>>({});

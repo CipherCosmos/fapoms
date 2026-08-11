@@ -34,6 +34,8 @@ import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal } from '@fapoms/shared';
+import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
@@ -1041,15 +1043,23 @@ export class AssignmentService {
    * assignment's own state the source of truth for "handled", with no separate resolve step to
    * forget.
    */
-  async listFieldIssues(limit = 100): Promise<any[]> {
+  async listFieldIssues(scope?: Partial<GlobalScope>, limit = 100): Promise<any[]> {
     const { events } = await this.auditService.getByEventType('ASSIGNMENT_ISSUE_REPORTED', limit);
     if (events.length === 0) return [];
 
     // Batch-load the referenced assignments so the current status/branch/assayer is fresh,
     // rather than trusting the point-in-time metadata — and without a query per event.
     const ids = Array.from(new Set(events.map((e) => e.entityId).filter(Boolean)));
+    // Scoped here rather than after the fact: an issue whose assignment falls outside the
+    // operator's region simply drops out of `byId`, and the mapping below already skips events
+    // with no matching assignment.
+    const issueWhere: Record<string, unknown> = { id: In(ids) };
+    const issueBranchWhere = branchScopeWhere(scope);
+    if (issueBranchWhere) issueWhere.projectBranch = { branch: issueBranchWhere };
+    if (scope?.projectId) issueWhere.projectId = scope.projectId;
+
     const assignments = await this.assignmentRepository.find({
-      where: { id: In(ids) },
+      where: issueWhere,
       relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
     });
     const byId = new Map(assignments.map((a) => [a.id, a]));
@@ -1168,6 +1178,7 @@ export class AssignmentService {
     assessmentStatus?: string,
     unscheduledOnly?: boolean,
     priority?: string,
+    scope?: Partial<GlobalScope>,
   ): Promise<{ assignments: AssignmentEntity[]; total: number }> {
     const where: any = {};
     if (status) {
@@ -1208,6 +1219,15 @@ export class AssignmentService {
         where.id = Not(In(scheduledAsnIds));
       }
     }
+
+    // The global scope reaches an assignment through its branch: assignment → project_branch →
+    // branch, where region/state/zone live. Merged into the existing `projectBranch` clause
+    // rather than assigned over it, so a `projectBranchStatus` filter set above survives.
+    const branchWhere = branchScopeWhere(scope);
+    if (branchWhere) {
+      where.projectBranch = { ...(where.projectBranch ?? {}), branch: branchWhere };
+    }
+    if (scope?.projectId) where.projectId = scope.projectId;
 
     const [assignments, total] = await this.assignmentRepository.findAndCount({
       where,
@@ -1528,22 +1548,31 @@ export class AssignmentService {
     return declinedCount;
   }
 
-  async getDashboardSummary(): Promise<any> {
-    const counts = await this.assignmentRepository
-      .createQueryBuilder('assignment')
-      .select('assignment.status', 'status')
-      .addSelect('COUNT(assignment.id)', 'count')
-      .where('assignment.isActive = :isActive', { isActive: true })
-      .groupBy('assignment.status')
-      .getRawMany();
+  async getDashboardSummary(scope?: Partial<GlobalScope>): Promise<any> {
+    // These KPI tiles sit above the assignment list. Leaving them unscoped while the list below
+    // is scoped is worse than not scoping either: the operator reads "42 in progress", counts 6
+    // rows, and has no way to tell which number is lying.
+    const countBy = (column: string, label: string) => {
+      const qb = this.assignmentRepository
+        .createQueryBuilder('assignment')
+        .select(column, label)
+        .addSelect('COUNT(assignment.id)', 'count')
+        .where('assignment.isActive = :isActive', { isActive: true })
+        .groupBy(column);
 
-    const slaCounts = await this.assignmentRepository
-      .createQueryBuilder('assignment')
-      .select('assignment.slaStatus', 'slaStatus')
-      .addSelect('COUNT(assignment.id)', 'count')
-      .where('assignment.isActive = :isActive', { isActive: true })
-      .groupBy('assignment.slaStatus')
-      .getRawMany();
+      if (needsBranchJoin(scope)) {
+        // innerJoin, not innerJoinAndSelect: the branch is only here to be filtered on.
+        qb.innerJoin('assignment.projectBranch', 'spb').innerJoin('spb.branch', 'sbranch');
+        applyBranchScope(qb, scope, { branch: 'sbranch', project: 'spb' });
+      }
+      if (scope?.projectId) {
+        qb.andWhere('assignment.project_id = :scopeProjectId', { scopeProjectId: scope.projectId });
+      }
+      return qb.getRawMany();
+    };
+
+    const counts = await countBy('assignment.status', 'status');
+    const slaCounts = await countBy('assignment.slaStatus', 'slaStatus');
 
     const summary: Record<string, number> = {};
     for (const c of counts) {

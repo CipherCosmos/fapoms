@@ -9,6 +9,7 @@ import { anyStatusLabel, branchStatusLabel, branchStatusTone } from '../utils/st
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
+import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 
 interface Assignment {
@@ -277,10 +278,15 @@ export const Assignments: React.FC = () => {
     ? ''
     : `projectBranchStatus=${statusFilter}`;
 
+  const { scopeParams, scopeKey } = useScope();
+  const scopeQuery = withScope(scopeParams);
+
   const { data: mainData, isLoading, isError, refetch: refetchList } = useQuery({
-    queryKey: queryKeys.assignments.list(page, statusFilter),
+    // scopeKey is part of the key: a scope change is a different result set, not a re-slice
+    // of the page already in cache.
+    queryKey: [...queryKeys.assignments.list(page, statusFilter), scopeKey],
     queryFn: () => api.request<{ data: Assignment[]; meta: { pagination: { total: number } } }>(
-      `/assignments?page=${page}&limit=${PAGE_SIZE}&${queryString}`,
+      `/assignments?page=${page}&limit=${PAGE_SIZE}&${queryString}&${scopeQuery}`,
       { withMeta: true },
     ),
     staleTime: 15_000,
@@ -293,9 +299,11 @@ export const Assignments: React.FC = () => {
   // paginated endpoint purely for its `meta.pagination.total`, rather than
   // recomputing counts by filtering whatever single page happens to be loaded.
   const useCount = (params: string) => useQuery({
-    queryKey: queryKeys.assignments.count(params),
+    // The KPI tiles must move with the list beneath them, or the operator sees a count that
+    // contradicts the rows on screen.
+    queryKey: [...queryKeys.assignments.count(params), scopeKey],
     queryFn: () => api.request<{ meta: { pagination: { total: number } } }>(
-      `/assignments?page=1&limit=1&${params}`,
+      `/assignments?page=1&limit=1&${params}&${scopeQuery}`,
       { withMeta: true },
     ),
     staleTime: 15_000,
@@ -325,8 +333,8 @@ export const Assignments: React.FC = () => {
   // This endpoint existed with no UI at all — an assayer could report an issue from the field and
   // nobody at the desk would ever see it without calling the API by hand.
   const { data: fieldIssues = [] } = useQuery({
-    queryKey: ['assignment-field-issues'],
-    queryFn: () => api.request<FieldIssue[]>('/assignments/field-issues'),
+    queryKey: ['assignment-field-issues', scopeKey],
+    queryFn: () => api.request<FieldIssue[]>(`/assignments/field-issues?${scopeQuery}`),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

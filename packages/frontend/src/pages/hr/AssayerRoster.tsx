@@ -88,6 +88,7 @@ const head: React.CSSProperties = {
 };
 
 export const AssayerRoster: React.FC = () => {
+
   const navigate = useNavigate();
   const canManage = canManageAssayers(useCurrentRoles());
 

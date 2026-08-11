@@ -55,6 +55,7 @@ class WorkingHoursDto {
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
@@ -678,8 +679,9 @@ export class AssayerController {
     @Req() req: any,
     @Query('page') page = 1,
     @Query('limit') limit = 20,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const { assayers, total } = await this.assayerService.findAll(page, limit);
+    const { assayers, total } = await this.assayerService.findAll(page, limit, scope);
     return {
       success: true,
       data: scopeAssayerListForRoles(assayers as any[], rolesOf(req.user), req.user?.id),

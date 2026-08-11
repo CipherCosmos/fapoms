@@ -63,6 +63,7 @@ function useNarrow(breakpoint = 760): boolean {
 }
 
 export const HrCapabilityPage: React.FC = () => {
+
   const { canManage } = useHr();
   const narrow = useNarrow();
   const [roster, setRoster] = useState<AssayerLite[]>([]);

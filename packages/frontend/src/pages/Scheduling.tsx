@@ -13,7 +13,7 @@ import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
-import { useProject } from '../context/ProjectContext';
+import { useScope, withScope } from '../context/ScopeContext';
 import { Modal, FilterSelect, AlertBanner } from '../components/ui';
 
 interface Schedule {
@@ -108,7 +108,8 @@ export const Scheduling: React.FC = () => {
 
   useSocketInvalidation();
 
-  const { selectedProjectId } = useProject();
+  const { scopeParams, scopeKey } = useScope();
+  const scopeQuery = withScope(scopeParams);
 
   // Scoped to the visible month (± one month so navigation feels seamless). The old bare
   // '/schedules' call hit the backend's default limit=50 ordered oldest-first — so once the org
@@ -119,8 +120,8 @@ export const Scheduling: React.FC = () => {
   const dateFrom = localDateKey(monthStart);
   const dateTo = localDateKey(monthEnd);
   const { data: rawSchedules = [], isLoading: isLoadingSchedules, isError: schedulesError, refetch: refetchSchedules } = useQuery({
-    queryKey: [...queryKeys.schedules.list, dateFrom, dateTo],
-    queryFn: () => api.request<Schedule[]>(`/schedules?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=500`),
+    queryKey: [...queryKeys.schedules.list, dateFrom, dateTo, scopeKey],
+    queryFn: () => api.request<Schedule[]>(`/schedules?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=500&${scopeQuery}`),
     staleTime: 5_000,
     retry: 1,
     refetchOnWindowFocus: true,
@@ -129,8 +130,8 @@ export const Scheduling: React.FC = () => {
   const schedules = Array.isArray(rawSchedules) ? rawSchedules : [];
 
   const { data: rawAssignments = [], isLoading: isLoadingAssignments, isError: assignmentsError, refetch: refetchAssignments } = useQuery({
-    queryKey: [...queryKeys.assignments.all, 'available'],
-    queryFn: () => api.request<AssignmentOption[]>('/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100'),
+    queryKey: [...queryKeys.assignments.all, 'available', scopeKey],
+    queryFn: () => api.request<AssignmentOption[]>(`/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100&${scopeQuery}`),
     staleTime: 5_000,
     retry: 1,
     refetchOnWindowFocus: true,
@@ -138,14 +139,11 @@ export const Scheduling: React.FC = () => {
   });
   const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
 
-  // Global project filter from the header — every panel below only shows the
-  // selected project (or everything when 'ALL').
-  const scopedSchedules = selectedProjectId === 'ALL'
-    ? schedules
-    : schedules.filter((s) => s.projectId === selectedProjectId);
-  const scopedAssignments = selectedProjectId === 'ALL'
-    ? assignments
-    : assignments.filter((a) => a.projectId === selectedProjectId);
+  // The header's global scope is applied by the server (both queries send it, and both keys
+  // include it). Re-filtering here would only duplicate the project dimension and still miss
+  // region, which a schedule row does not carry — it reaches one through its branch.
+  const scopedSchedules = schedules;
+  const scopedAssignments = assignments;
 
   const { data: holidaysRes } = useQuery({
     queryKey: ['holidays', currentYear],

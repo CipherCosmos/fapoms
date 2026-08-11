@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import { branchScopeWhere } from '../../infrastructure/scope/apply-scope';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ScheduleEntity } from './schedule.entity';
 import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
@@ -162,6 +164,7 @@ export class SchedulingService {
     status?: ScheduleStatus,
     dateFrom?: string,
     dateTo?: string,
+    scope?: Partial<GlobalScope>,
   ): Promise<{ schedules: ScheduleEntity[]; total: number }> {
     const where: any = { isActive: true };
     if (status) where.status = status;
@@ -176,6 +179,12 @@ export class SchedulingService {
     } else if (dateTo) {
       where.scheduledDate = LessThanOrEqual(dateTo);
     }
+    // schedule → assignment → project_branch → branch is where region/state/zone live. The
+    // relation is already loaded below, so scoping costs nothing extra here.
+    const branchWhere = branchScopeWhere(scope);
+    if (branchWhere) where.assignment = { projectBranch: { branch: branchWhere } };
+    if (scope?.projectId) where.projectId = scope.projectId;
+
     const [schedules, total] = await this.scheduleRepository.findAndCount({
       where,
       relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'assayer', 'project'],

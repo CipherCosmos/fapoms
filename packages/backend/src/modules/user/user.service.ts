@@ -19,7 +19,7 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, UserStatus, SystemRole } from '@fapoms/shared';
+import { EventCategory, UserStatus, SystemRole, Region, isRegion } from '@fapoms/shared';
 
 export interface CreateUserDto {
   username: string;
@@ -38,6 +38,12 @@ export interface UpdateUserDto {
   phone?: string;
   departmentId?: string;
   status?: UserStatus;
+  /**
+   * Assigned operational regions. `null`/`[]` = unrestricted (national desks — HR, data
+   * entry, validation, finance). A non-empty array confines an operations account to its
+   * territory; enforced server-side by `resolveRegionScope` on every scoped endpoint.
+   */
+  regions?: string[] | null;
 }
 
 @Injectable()
@@ -173,10 +179,31 @@ export class UserService {
       user.status = dto.status;
       user.isActive = dto.status === UserStatus.ACTIVE;
     }
+    let regionsChanged = false;
+    if (dto.regions !== undefined) {
+      // Canonicalise and reject junk here, not in the DB: a typo'd region stored on a user
+      // would silently widen or narrow what they can see.
+      const cleaned = (dto.regions ?? []).filter(isRegion);
+      if ((dto.regions ?? []).length !== cleaned.length) {
+        throw new BadRequestException(
+          `Regions must be canonical values: ${Object.values(Region).join(', ')}.`,
+        );
+      }
+      const next = cleaned.length > 0 ? [...new Set(cleaned)] : null;
+      regionsChanged = JSON.stringify(next) !== JSON.stringify(user.regions ?? null);
+      user.regions = next;
+    }
 
     user.updatedBy = updatedById;
 
     const saved = await this.userRepository.save(user);
+
+    // The principal (roles + regions) is cached in Redis for the JWT hot path. A region
+    // change must take effect on the next request, not when the TTL happens to expire —
+    // `user:role-changed` is the invalidation the auth service already listens for.
+    if (regionsChanged) {
+      this.eventPublisher.publish('user:role-changed', { userId: saved.id });
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.USER,

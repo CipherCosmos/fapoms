@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, In } from 'typeorm';
+import { branchScopeWhere } from '../../infrastructure/scope/apply-scope';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentStatus, ProjectBranchStatus, businessTodayDateKey } from '@fapoms/shared';
 import { FEE_FLAG_MULTIPLIER } from '../pricing/fee-policy.service';
@@ -98,7 +100,16 @@ export class OperationsInboxService {
     return out;
   }
 
-  async getInbox(): Promise<OperationsInbox> {
+  async getInbox(scope?: Partial<GlobalScope>): Promise<OperationsInbox> {
+    // The inbox is the assignment desk's queue, so it follows the same scope the assignment
+    // list does — an operator working the West should not be handed the South's call tasks.
+    const branchWhere = branchScopeWhere(scope);
+    const scoped = (where: Record<string, unknown>) => {
+      const next = { ...where };
+      if (branchWhere) next.projectBranch = { branch: branchWhere };
+      if (scope?.projectId) next.projectId = scope.projectId;
+      return next;
+    };
     const assignmentRepo = this.dataSource.getRepository(AssignmentEntity);
     const now = Date.now();
     const todayKey = businessTodayDateKey();
@@ -107,13 +118,13 @@ export class OperationsInboxService {
     // waiting-on-app, plus ACCEPTED work for the unscheduled and overdue lanes.
     const [pending, accepted] = await Promise.all([
       assignmentRepo.find({
-        where: { status: AssignmentStatus.PENDING, isActive: true },
+        where: scoped({ status: AssignmentStatus.PENDING, isActive: true }),
         relations: ['assayer', 'projectBranch', 'projectBranch.branch', 'project'],
         order: { createdAt: 'ASC' },
         take: 200,
       }),
       assignmentRepo.find({
-        where: { status: AssignmentStatus.ACCEPTED, isActive: true },
+        where: scoped({ status: AssignmentStatus.ACCEPTED, isActive: true }),
         relations: ['assayer', 'projectBranch', 'projectBranch.branch', 'project'],
         order: { scheduledDate: 'ASC' },
         take: 200,

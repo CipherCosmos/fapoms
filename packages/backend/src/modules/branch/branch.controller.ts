@@ -14,7 +14,9 @@ import {
   UploadedFile,
   BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { Region } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
@@ -133,15 +135,17 @@ export class BranchController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List branches with filters' })
+  @ApiOperation({ summary: 'List branches under the global scope filter' })
+  @ApiQuery({ name: 'clientId', required: false })
+  @ApiQuery({ name: 'region', required: false, enum: Region })
+  @ApiQuery({ name: 'zoneId', required: false })
+  @ApiQuery({ name: 'state', required: false })
   async findAll(
     @Query('page') page = 1,
     @Query('limit') limit = 20,
-    @Query('clientId') clientId?: string,
-    @Query('region') region?: string,
-    @Query('zoneId') zoneId?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const { branches, total } = await this.branchService.findAll(page, limit, clientId, region, zoneId);
+    const { branches, total } = await this.branchService.findAll(page, limit, scope);
     return {
       success: true,
       data: branches,

@@ -5,7 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './queryClient';
 import App from './App';
 import { ToastProvider } from './components/ui';
-import { ProjectProvider } from './context/ProjectContext';
+import { ScopeProvider } from './context/ScopeContext';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -13,9 +13,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <ToastProvider>
-          <ProjectProvider>
+          <ScopeProvider>
             <App />
-          </ProjectProvider>
+          </ScopeProvider>
         </ToastProvider>
       </BrowserRouter>
     </QueryClientProvider>

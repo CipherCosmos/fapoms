@@ -1,47 +1,42 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Shield, Users as UsersIcon, Plus, Trash2, Save, Lock, Info, X } from 'lucide-react';
+import { Shield, Users as UsersIcon, Plus, Trash2, Lock, Info, X, ChevronRight, Search } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { Modal, AlertBanner } from '../../components/ui';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import {
+  PERMISSION_AREAS, resourceLabel, actionLabel, scopeQualifier, areaForResource,
+} from '../../config/permission-labels';
 
 /**
- * The RBAC model, editable.
+ * What each role can do, and the place to change it.
  *
- * This panel used to be read-only, on the stated grounds that permissions "are enforced by
- * `@RequirePermissions` decorators in the backend code, not by a row a UI could toggle". That
- * conflated two different gates. `PermissionsGuard` builds its allow-set *from these very rows*
- * on every request — so toggling one genuinely changes what a role can do, and the cached
- * principal of everyone holding that role is invalidated server-side, so it applies in seconds
- * rather than at next sign-in.
+ * The first version of this screen was confusing for reasons worth recording, because they were
+ * all self-inflicted:
  *
- * What a UI still cannot change is the *other* gate: `@Roles(SystemRole.X)` compares role
- * **names**, in 256 places, and the web app's route table lists the same names. Those names are
- * effectively code. Hence the split enforced by the API and surfaced here:
+ *   - A role row had eight competing controls, and *two* ways into the same information —
+ *     expand-in-place (read-only) and an Edit button (the same data, as checkboxes). Now a role
+ *     is one click that opens one panel, which reads or edits according to what you may do.
+ *   - Permissions were listed under 22 raw resource headings in enum case. They are grouped into
+ *     six areas matching the sidebar, in plain language.
+ *   - Every row printed its scope, which is ORGANIZATION for ~50 of the 67 — noise against
+ *     which the two genuinely restrictive scopes disappeared. Only those are shown now.
+ *   - The help text referred to `PermissionsGuard`. Nobody administering staff accounts knows
+ *     or should need to know what that is.
  *
- *   - Built-in roles  → permissions and description editable; name and existence are not.
- *   - Custom roles    → fully editable and deletable, but they satisfy permission-gated
- *                       endpoints only, which is stated plainly rather than left to be discovered.
+ * The substance is unchanged: these rows are what the API checks on every request, so an edit
+ * here changes what people can do within seconds, without anyone signing out.
  */
 
 interface Permission { id: string; resource: string; action: string; scope: string; description: string | null }
 interface RoleRow { id: string; name: string; displayName: string; description: string | null; permissions: Permission[]; isSystem?: boolean }
 interface UserRow { id: string; roles: { id: string }[] }
 
-const SCOPE_TONE: Record<string, string> = {
-  PLATFORM: 'var(--danger)', ORGANIZATION: 'var(--accent)', CLIENT: 'var(--accent)',
-  SELF: 'var(--success)', ASSIGNED_RECORDS: 'var(--warning)', DEPARTMENT: 'var(--accent)', TEAM: 'var(--accent)', STATE: 'var(--accent)', REGION: 'var(--accent)',
-};
-
 const label: React.CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
-};
-const card: React.CSSProperties = {
-  background: 'var(--bg-card)', border: '1px solid var(--border-color)',
-  borderRadius: '10px', overflow: 'hidden',
 };
 const input: React.CSSProperties = {
   width: '100%', padding: '9px', background: 'var(--bg-secondary)',
@@ -50,9 +45,12 @@ const input: React.CSSProperties = {
 };
 
 export const RolesPermissionsPanel: React.FC = () => {
-  // Role editing is a super-administrator action, matching the API's own @Roles on these routes,
-  // so an administrator never sees a control that would 403.
-  const canEdit = useCurrentRoles().includes(SystemRole.SUPER_ADMINISTRATOR);
+  // Mirrors the API's gate on these routes, so nobody is shown a control that would 403.
+  // Administrators are included: they can already grant themselves any role from the Directory
+  // tab, so locking this screen to the super administrator only made it inert, not safer.
+  const roles_ = useCurrentRoles();
+  const canEdit =
+    roles_.includes(SystemRole.SUPER_ADMINISTRATOR) || roles_.includes(SystemRole.ADMINISTRATOR);
 
   const { data: rolesRes, isLoading, refetch } = useQuery({
     queryKey: ['users', 'roles', 'full'],
@@ -61,7 +59,6 @@ export const RolesPermissionsPanel: React.FC = () => {
   const { data: permsRes } = useQuery({
     queryKey: ['users', 'permissions', 'catalogue'],
     queryFn: () => api.request<Permission[]>('/users/permissions'),
-    enabled: canEdit,
   });
   const { data: usersRes } = useQuery({
     queryKey: ['users', 'all', 'for-role-counts'],
@@ -79,53 +76,70 @@ export const RolesPermissionsPanel: React.FC = () => {
     return m;
   }, [users]);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggle = (id: string) => setExpanded((prev) => {
-    const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
-
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // ── Permission editing ────────────────────────────────────────────────────
-  const [editingRole, setEditingRole] = useState<RoleRow | null>(null);
+  // ── One panel per role: reads when you may not edit, edits when you may ───
+  const [openRole, setOpenRole] = useState<RoleRow | null>(null);
   const [draft, setDraft] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    if (editingRole) setDraft(new Set((editingRole.permissions ?? []).map((p) => p.id)));
-  }, [editingRole]);
+    if (openRole) {
+      setDraft(new Set((openRole.permissions ?? []).map((p) => p.id)));
+      setFilter('');
+    }
+  }, [openRole]);
 
   const dirty = useMemo(() => {
-    if (!editingRole) return false;
-    const original = new Set((editingRole.permissions ?? []).map((p) => p.id));
+    if (!openRole) return false;
+    const original = new Set((openRole.permissions ?? []).map((p) => p.id));
     if (original.size !== draft.size) return true;
     for (const id of draft) if (!original.has(id)) return true;
     return false;
-  }, [editingRole, draft]);
+  }, [openRole, draft]);
 
-  const grouped = useMemo(() => {
-    const m = new Map<string, Permission[]>();
-    for (const p of catalogue) {
-      if (!m.has(p.resource)) m.set(p.resource, []);
-      m.get(p.resource)!.push(p);
-    }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [catalogue]);
+  /** Catalogue arranged as area → resource → permissions, honouring the search box. */
+  const byArea = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const match = (p: Permission) =>
+      !q ||
+      resourceLabel(p.resource).toLowerCase().includes(q) ||
+      actionLabel(p.action).toLowerCase().includes(q);
+
+    return PERMISSION_AREAS.map((area) => {
+      const resources = new Map<string, Permission[]>();
+      for (const p of catalogue) {
+        if (areaForResource(p.resource) !== area.key || !match(p)) continue;
+        if (!resources.has(p.resource)) resources.set(p.resource, []);
+        resources.get(p.resource)!.push(p);
+      }
+      const all = [...resources.values()].flat();
+      return {
+        ...area,
+        resources: [...resources.entries()].sort((a, b) => resourceLabel(a[0]).localeCompare(resourceLabel(b[0]))),
+        total: all.length,
+        granted: all.filter((p) => draft.has(p.id)).length,
+      };
+    }).filter((a) => a.total > 0);
+  }, [catalogue, draft, filter]);
 
   const savePermissions = async () => {
-    if (!editingRole) return;
+    if (!openRole) return;
     setSaving(true);
     setError(null);
     try {
-      await api.request(`/users/roles/${editingRole.id}/permissions`, {
+      await api.request(`/users/roles/${openRole.id}/permissions`, {
         method: 'PUT',
         body: JSON.stringify({ permissionIds: [...draft] }),
       });
-      setSuccess(`${editingRole.displayName || editingRole.name} now grants ${draft.size} permission(s). Holders pick this up within seconds.`);
-      setEditingRole(null);
+      const holders = holderCount.get(openRole.id) ?? 0;
+      setSuccess(
+        `Saved. ${openRole.displayName || openRole.name} now has ${draft.size} of ${catalogue.length} permissions` +
+        (holders ? ` — this applies to ${holders} ${holders === 1 ? 'person' : 'people'} within seconds.` : '.'),
+      );
+      setOpenRole(null);
       refetch();
     } catch (err: any) {
       setError(`Could not save permissions ${userMessage(err)}`);
@@ -149,7 +163,7 @@ export const RolesPermissionsPanel: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({ name: newName, displayName: newDisplay || newName, description: newDesc || undefined }),
       });
-      setSuccess('Role created. Open it to grant permissions.');
+      setSuccess('Role created. Open it to choose what it can do.');
       setShowCreate(false);
       setNewName(''); setNewDisplay(''); setNewDesc('');
       refetch();
@@ -160,7 +174,8 @@ export const RolesPermissionsPanel: React.FC = () => {
     }
   };
 
-  const deleteRole = async (role: RoleRow) => {
+  const deleteRole = async (role: RoleRow, e: React.MouseEvent) => {
+    e.stopPropagation(); // the row itself opens the role
     if (!window.confirm(`Delete the "${role.displayName || role.name}" role?`)) return;
     setError(null);
     try {
@@ -172,15 +187,21 @@ export const RolesPermissionsPanel: React.FC = () => {
     }
   };
 
+  const toggleMany = (perms: Permission[], on: boolean) =>
+    setDraft((prev) => {
+      const next = new Set(prev);
+      for (const p of perms) (on ? next.add(p.id) : next.delete(p.id));
+      return next;
+    });
+
   if (isLoading) return <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading roles…</div>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
-        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, maxWidth: '70ch' }}>
-          Every role and exactly what it grants. These are the same permission rows
-          <code style={{ margin: '0 4px' }}>PermissionsGuard</code> checks on every request, so changing them
-          takes effect for existing users within seconds — no re-login.
+        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, maxWidth: '68ch' }}>
+          A role is a bundle of things a person is allowed to do. Open one to see or change it —
+          changes reach everyone holding that role within seconds, without them signing out.
         </p>
         {canEdit && (
           <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', whiteSpace: 'nowrap' }}>
@@ -193,185 +214,212 @@ export const RolesPermissionsPanel: React.FC = () => {
       {success && <AlertBanner type="success">{success}</AlertBanner>}
 
       {!canEdit && (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-          <Lock size={13} style={{ marginTop: 1, flexShrink: 0 }} />
-          <span>Read-only — editing roles and permissions requires the Super Administrator role.</span>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
+          <Lock size={13} style={{ flexShrink: 0 }} />
+          <span>You can review roles here. Changing them requires an Administrator role.</span>
         </div>
       )}
 
-      {roles.map((role) => {
-        const isOpen = expanded.has(role.id);
-        const g = new Map<string, Permission[]>();
-        for (const p of role.permissions ?? []) {
-          if (!g.has(p.resource)) g.set(p.resource, []);
-          g.get(p.resource)!.push(p);
-        }
-        const resources = [...g.keys()].sort();
-        const holders = holderCount.get(role.id) ?? 0;
+      {/* One row per role. The whole row is the target — no competing controls. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {roles.map((role) => {
+          const holders = holderCount.get(role.id) ?? 0;
+          const grants = (role.permissions ?? []).length;
+          return (
+            <div
+              key={role.id}
+              onClick={() => setOpenRole(role)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenRole(role); } }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px',
+                background: 'var(--bg-card)', border: '1px solid var(--border-color)',
+                borderRadius: '10px', cursor: 'pointer',
+              }}
+            >
+              <Shield size={17} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
 
-        return (
-          <div key={role.id} style={card}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '13px 16px' }}>
-              <button
-                onClick={() => toggle(role.id)}
-                style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'inherit', padding: 0 }}
-              >
-                {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                <Shield size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                    {role.displayName || role.name.replace(/_/g, ' ')}
-                    {role.isSystem && (
-                      <span title="Built-in role — the application's access rules refer to it by name" style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--text-muted)' }}>
-                        <Lock size={10} /> BUILT-IN
-                      </span>
-                    )}
-                  </div>
-                  {role.description && <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '1px' }}>{role.description}</div>}
-                </div>
-              </button>
-
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                <UsersIcon size={12} /> {holders}
-              </span>
-              <span style={{ ...label, whiteSpace: 'nowrap' }}>{(role.permissions ?? []).length} grants</span>
-
-              {canEdit && (
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <button
-                    onClick={() => setEditingRole(role)}
-                    title="Edit permissions"
-                    style={{ padding: '4px 8px', background: 'rgba(216,174,71,0.1)', border: '1px solid rgba(216,174,71,0.3)', borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer', fontSize: '11.5px', whiteSpace: 'nowrap' }}
-                  >
-                    Edit permissions
-                  </button>
-                  {!role.isSystem && (
-                    <button
-                      onClick={() => deleteRole(role)}
-                      title={holders > 0 ? `${holders} user(s) hold this role` : 'Delete role'}
-                      style={{ padding: '4px 8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: '4px', color: 'var(--danger)', cursor: 'pointer' }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '13.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                  {role.displayName || role.name.replace(/_/g, ' ')}
+                  {role.isSystem && (
+                    <span title="Built-in role — its name is used by the system, so it cannot be renamed or removed" style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                      <Lock size={10} /> BUILT-IN
+                    </span>
                   )}
                 </div>
-              )}
-            </div>
-
-            {isOpen && (
-              <div style={{ padding: '4px 16px 14px', borderTop: '1px solid var(--border-color)' }}>
-                {resources.length === 0 ? (
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>No permissions granted.</div>
-                ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px', marginTop: '8px' }}>
-                    {resources.map((res) => (
-                      <div key={res} style={{ padding: '9px 10px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-                        <div style={{ ...label, marginBottom: '6px' }}>{res.replace(/_/g, ' ')}</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          {g.get(res)!.map((p) => (
-                            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11.5px' }}>
-                              <span>{p.action}</span>
-                              <span style={{ color: SCOPE_TONE[p.scope] ?? 'var(--text-muted)', fontWeight: 600 }}>{p.scope}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {role.description
+                    ? role.description
+                    : `${grants} ${grants === 1 ? 'permission' : 'permissions'}`}
+                </div>
               </div>
-            )}
-          </div>
-        );
-      })}
 
-      {/* ── Permission editor ─────────────────────────────────────────────── */}
-      {editingRole && (
+              {/* Two numbers only: who holds it, and how much it grants. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
+                <span title={`${holders} staff hold this role`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  <UsersIcon size={13} /> {holders}
+                </span>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', minWidth: '54px', textAlign: 'right' }}>
+                  {grants}/{catalogue.length || '—'}
+                </span>
+                {canEdit && !role.isSystem && (
+                  <button
+                    aria-label={`Delete ${role.displayName || role.name}`}
+                    onClick={(e) => deleteRole(role, e)}
+                    style={{ padding: '4px 7px', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: '5px', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+                <ChevronRight size={15} style={{ color: 'var(--text-muted)' }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── The one panel: read or edit ───────────────────────────────────── */}
+      {openRole && (
         <Modal
           open
-          onClose={() => setEditingRole(null)}
-          title={`Permissions — ${editingRole.displayName || editingRole.name}`}
-          width="720px"
+          onClose={() => setOpenRole(null)}
+          title={openRole.displayName || openRole.name.replace(/_/g, ' ')}
+          width="760px"
           closeIcon={<X size={18} />}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                {draft.size} of {catalogue.length} granted
-                {holderCount.get(editingRole.id) ? ` · affects ${holderCount.get(editingRole.id)} user(s)` : ''}
+                {draft.size} of {catalogue.length} permissions
+                {holderCount.get(openRole.id) ? ` · ${holderCount.get(openRole.id)} staff affected` : ''}
               </span>
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button type="button" onClick={() => setEditingRole(null)} className="btn btn-secondary" disabled={saving}>Cancel</button>
-                <button
-                  type="button"
-                  onClick={savePermissions}
-                  className="btn btn-primary"
-                  disabled={saving || !dirty}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                >
-                  <Save size={14} /> {saving ? 'Saving…' : 'Save permissions'}
+                <button type="button" onClick={() => setOpenRole(null)} className="btn btn-secondary" disabled={saving}>
+                  {canEdit ? 'Cancel' : 'Close'}
                 </button>
+                {canEdit && (
+                  <button type="button" onClick={savePermissions} className="btn btn-primary" disabled={saving || !dirty}>
+                    {saving ? 'Saving…' : dirty ? 'Save changes' : 'No changes'}
+                  </button>
+                )}
               </div>
             </div>
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-              <Info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
-              <span>
-                Changes apply to everyone holding this role within seconds.
-                {editingRole.isSystem
-                  ? ' This is a built-in role: its permissions are editable, but its name is referenced by the application’s access rules and cannot change.'
-                  : ' Custom roles satisfy permission-gated endpoints; pages gated by built-in role type will not open for them.'}
-              </span>
-            </div>
+            {openRole.description && (
+              <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>{openRole.description}</div>
+            )}
 
-            {grouped.length === 0 ? (
-              <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>No permissions available.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '52vh', overflowY: 'auto' }}>
-                {grouped.map(([resource, perms]) => {
-                  const allOn = perms.every((p) => draft.has(p.id));
-                  return (
-                    <div key={resource} style={{ padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                        <span style={label}>{resource.replace(/_/g, ' ')}</span>
-                        <button
-                          type="button"
-                          onClick={() => setDraft((prev) => {
-                            const next = new Set(prev);
-                            for (const p of perms) allOn ? next.delete(p.id) : next.add(p.id);
-                            return next;
-                          })}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: '11px', fontWeight: 600 }}
-                        >
-                          {allOn ? 'Clear all' : 'Select all'}
-                        </button>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '6px' }}>
-                        {perms.map((p) => {
-                          const on = draft.has(p.id);
-                          return (
-                            <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '11.5px', cursor: 'pointer' }}>
-                              <input
-                                type="checkbox"
-                                checked={on}
-                                onChange={() => setDraft((prev) => {
-                                  const next = new Set(prev);
-                                  next.has(p.id) ? next.delete(p.id) : next.add(p.id);
-                                  return next;
-                                })}
-                              />
-                              <span style={{ flex: 1 }}>{p.action}</span>
-                              <span style={{ color: SCOPE_TONE[p.scope] ?? 'var(--text-muted)', fontWeight: 600 }}>{p.scope}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+            {!canEdit && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
+                <Lock size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+                <span>
+                  Viewing only — changing what a role can do requires an Administrator role.
+                </span>
               </div>
             )}
+
+            {/* Only said when it changes what the admin should expect. */}
+            {canEdit && !openRole.isSystem && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
+                <Info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+                <span>
+                  This is a custom role. It grants the permissions ticked below, but the main
+                  operational screens also check for a built-in role — so give people one of those
+                  as well if they need those pages.
+                </span>
+              </div>
+            )}
+
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Find a permission…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                style={{ ...input, paddingLeft: '30px' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {byArea.length === 0 ? (
+                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>
+                  Nothing matches “{filter}”.
+                </div>
+              ) : byArea.map((area) => {
+                const areaPerms = area.resources.flatMap(([, ps]) => ps);
+                const allOn = areaPerms.every((p) => draft.has(p.id));
+                return (
+                  <div key={area.key} style={{ border: '1px solid var(--border-color)', borderRadius: '9px', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: 'var(--bg-surface-2)' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '12.5px', fontWeight: 700 }}>{area.label}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{area.hint}</div>
+                      </div>
+                      <span style={{ fontSize: '11.5px', color: area.granted ? 'var(--accent)' : 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {area.granted}/{area.total}
+                      </span>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => toggleMany(areaPerms, !allOn)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap' }}
+                        >
+                          {allOn ? 'Clear' : 'Select all'}
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ padding: '4px 12px 10px' }}>
+                      {area.resources.map(([resource, perms]) => (
+                        <div key={resource} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '9px 0', borderBottom: '1px solid var(--border-hair)' }}>
+                          <div style={{ width: '150px', flexShrink: 0, fontSize: '12.5px', paddingTop: '3px' }}>
+                            {resourceLabel(resource)}
+                          </div>
+                          <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {perms.map((p) => {
+                              const on = draft.has(p.id);
+                              const qualifier = scopeQualifier(p.scope);
+                              return (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  disabled={!canEdit}
+                                  title={p.description || undefined}
+                                  onClick={() => setDraft((prev) => {
+                                    const next = new Set(prev);
+                                    next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+                                    return next;
+                                  })}
+                                  style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '5px',
+                                    padding: '4px 10px', borderRadius: '999px', fontSize: '11.5px',
+                                    cursor: canEdit ? 'pointer' : 'default',
+                                    border: `1px solid ${on ? 'var(--accent)' : 'var(--border-color)'}`,
+                                    background: on ? 'rgba(216,174,71,0.14)' : 'transparent',
+                                    color: on ? 'var(--accent)' : 'var(--text-muted)',
+                                    fontWeight: on ? 600 : 500,
+                                    opacity: canEdit ? 1 : 0.85,
+                                  }}
+                                >
+                                  {actionLabel(p.action)}
+                                  {qualifier && (
+                                    <span style={{ fontSize: '10px', opacity: 0.85, fontWeight: 500 }}>({qualifier})</span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </Modal>
       )}
@@ -394,31 +442,26 @@ export const RolesPermissionsPanel: React.FC = () => {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-              <Info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
-              <span>
-                A custom role grants access to everything gated by <strong>permissions</strong>. Screens gated by
-                built-in role type (most operational pages) will not open for it — those need one of the
-                built-in roles as well.
-              </span>
+            <div>
+              <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Name</label>
+              <input type="text" required placeholder="Regional Auditor" value={newDisplay}
+                onChange={(e) => { setNewDisplay(e.target.value); if (!newName) setNewName(e.target.value); }} style={input} />
             </div>
             <div>
-              <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Role Name</label>
-              <input type="text" required placeholder="e.g. REGIONAL_AUDITOR" value={newName}
+              <label style={{ ...label, display: 'block', marginBottom: '4px' }}>System reference</label>
+              <input type="text" required placeholder="REGIONAL_AUDITOR" value={newName}
                 onChange={(e) => setNewName(e.target.value)} style={input} />
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Stored as UPPER_SNAKE_CASE. Cannot be changed later — the access rules refer to it by name.
+                Saved in capitals. This cannot be changed afterwards.
               </div>
             </div>
             <div>
-              <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Display Name</label>
-              <input type="text" placeholder="e.g. Regional Auditor" value={newDisplay}
-                onChange={(e) => setNewDisplay(e.target.value)} style={input} />
-            </div>
-            <div>
-              <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Description (Optional)</label>
+              <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Description <span style={{ fontWeight: 400, textTransform: 'none' }}>(optional)</span></label>
               <input type="text" placeholder="What this role is for" value={newDesc}
                 onChange={(e) => setNewDesc(e.target.value)} style={input} />
+            </div>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+              You'll choose what it can do next.
             </div>
           </div>
         </Modal>

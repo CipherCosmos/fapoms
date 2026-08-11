@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
 import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemRole } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 @ApiTags('System Dashboard')
 @ApiBearerAuth()
@@ -30,11 +31,12 @@ export class SystemDashboardController {
     SystemRole.READ_ONLY_AUDITOR, SystemRole.CLIENT_USER,
   )
   @ApiOperation({ summary: "Role-scoped operational snapshot: only the sections the caller's roles include" })
-  async getOperations(@Req() req: any) {
+  async getOperations(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // Sections follow the caller's own roles rather than a query parameter, so the
-    // view cannot be widened by editing the request.
+    // view cannot be widened by editing the request. The global scope narrows only the
+    // territorial sections — see OperationsSnapshotService.TERRITORIAL_SECTIONS.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    return { success: true, data: await this.operationsSnapshot.snapshot(roles, req.user?.id) };
+    return { success: true, data: await this.operationsSnapshot.snapshot(roles, req.user?.id, scope) };
   }
 
   @Get('metrics')

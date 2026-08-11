@@ -21,6 +21,16 @@ export const queryKeys = {
     all: ['projects'] as const,
     list: ['projects', 'list'] as const,
   },
+  scope: {
+    all: ['scope'] as const,
+    options: ['scope', 'options'] as const,
+  },
+  branches: {
+    all: ['branches'] as const,
+    // `scopeKey` comes from `useScope()`. It must be part of the key: the branch list is
+    // paginated server-side, so a scope change is a different query, not a re-slice.
+    list: (scopeKey: string, page: number) => ['branches', 'list', scopeKey, page] as const,
+  },
   plans: {
     all: ['plans'] as const,
   },

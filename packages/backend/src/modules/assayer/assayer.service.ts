@@ -17,6 +17,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 
 /**
@@ -429,9 +430,19 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ assayers: AssayerEntity[]; total: number }> {
+  async findAll(
+    page = 1,
+    limit = 50,
+    scope?: Partial<GlobalScope>,
+  ): Promise<{ assayers: AssayerEntity[]; total: number }> {
+    // Only region applies. An assayer has a home region but no client, zone or state of their
+    // own in the sense the scope means, and inferring one from their assignment history would
+    // hide anyone who has not yet worked for the client the operator happens to be scoped to.
+    const where: Record<string, unknown> = { isActive: true };
+    if (scope?.regions?.length) where.region = In(scope.regions);
+
     const [assayers, total] = await this.assayerRepository.findAndCount({
-      where: { isActive: true },
+      where,
       skip: (page - 1) * limit,
       take: limit,
       order: { createdAt: 'DESC' },
