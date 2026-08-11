@@ -44,6 +44,17 @@ export class UserEntity extends BaseEntity {
   @Column({ name: 'department_id', type: 'uuid', nullable: true })
   departmentId: string | null;
 
+  /**
+   * Operational regions this account may read.
+   *
+   * `null` or `[]` means every region — the pre-existing behaviour, so accounts that predate
+   * region scoping keep full visibility until someone deliberately narrows them. A non-empty
+   * array is a hard ceiling enforced in `resolveGlobalScope`, not a UI default: an operator
+   * assigned `['WEST']` cannot widen back to all regions by editing the query string.
+   */
+  @Column({ type: 'text', array: true, nullable: true })
+  regions: string[] | null;
+
   @Column({ type: 'varchar', length: 20, nullable: true })
   phone: string | null;
 
@@ -55,6 +66,18 @@ export class UserEntity extends BaseEntity {
 
   @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
   lockedUntil: Date | null;
+
+  /**
+   * Forces a password change at next sign-in.
+   *
+   * Set on any account whose password was issued by someone else — seeded accounts and
+   * staff-initiated resets — so a credential the account holder did not choose cannot remain
+   * in use indefinitely. This deployment needs it: every seeded account currently shares one
+   * of two well-known passwords.
+   */
+  @Column({ name: 'must_change_password', type: 'boolean', default: false })
+  mustChangePassword: boolean;
+
 
   @ManyToMany(() => RoleEntity, { eager: true })
   @JoinTable({

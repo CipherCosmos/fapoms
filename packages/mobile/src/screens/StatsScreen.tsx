@@ -1,69 +1,92 @@
 import React from 'react';
-import { View, Text } from 'react-native';
-import { styles } from '../theme/styles';
+import { View } from 'react-native';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Card, ProgressBar, Section, StatStrip, StatTile } from '../components/ui/primitives';
 
-interface StatsScreenProps {
-  qualityScore: number;
-  totalCompleted: number;
-  queryResolutionRate: number;
-  avgAuditHours: string;
-  totalAssignments?: number;
+export interface StatsScreenProps {
+  totalAssignments: number;
+  completedAssignments: number;
   averageRating?: number;
-  onTimePercentage?: number;
+  openQueries: number;
+  resolvedQueries: number;
 }
 
+/**
+ * How this assayer is performing.
+ *
+ * Every figure here is one the backend genuinely returns. The previous version was written
+ * against `qualityScore`, `queryResolutionRate`, `avgAuditHours` and `onTimePercentage` —
+ * none of which exist on the assayer record or anywhere in the API. That is why the screen
+ * was never wired into the app: there was nothing to feed it. Completion and query rates are
+ * derived here from counts the server does return, rather than invented.
+ */
 export const StatsScreen: React.FC<StatsScreenProps> = ({
-  qualityScore,
-  totalCompleted,
-  queryResolutionRate,
-  avgAuditHours,
   totalAssignments,
+  completedAssignments,
   averageRating,
-  onTimePercentage,
+  openQueries,
+  resolvedQueries,
 }) => {
+  const t = useTheme();
+
+  const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
+  const completionRate = pct(completedAssignments, totalAssignments);
+  const totalQueries = openQueries + resolvedQueries;
+  const queryRate = pct(resolvedQueries, totalQueries);
+
+  const bars: { label: string; value: number; tone: 'primary' | 'success'; caption: string }[] = [
+    {
+      label: 'Assignments completed',
+      value: completionRate,
+      tone: 'success',
+      caption: `${completedAssignments} of ${totalAssignments}`,
+    },
+    ...(totalQueries > 0
+      ? [
+          {
+            label: 'Queries resolved',
+            value: queryRate,
+            tone: 'primary' as const,
+            caption: `${resolvedQueries} of ${totalQueries}`,
+          },
+        ]
+      : []),
+  ];
+
   return (
-    <View>
-      <Text style={styles.sectionHeading}>Performance</Text>
+    <View style={{ gap: t.space.xl }}>
+      <StatStrip>
+        <StatTile label="Completed" value={completedAssignments} icon="checkmark-done" tone="success" />
+        <StatTile label="Assigned" value={totalAssignments} icon="clipboard-outline" />
+        {openQueries > 0 && (
+          <StatTile label="Open queries" value={openQueries} icon="help-circle-outline" tone="warning" />
+        )}
+        {averageRating != null && averageRating > 0 && (
+          <StatTile label="Rating" value={averageRating.toFixed(1)} icon="star" tone="accent" hint="out of 5" />
+        )}
+      </StatStrip>
 
-      <View style={styles.perfGrid}>
-        <View style={styles.perfBox}>
-          <Text style={styles.perfVal}>{qualityScore}%</Text>
-          <Text style={styles.perfLabel}>Quality</Text>
-        </View>
-        <View style={styles.perfBox}>
-          <Text style={[styles.perfVal, { color: '#34d399' }]}>{totalCompleted}</Text>
-          <Text style={styles.perfLabel}>Completed</Text>
-        </View>
-        <View style={styles.perfBox}>
-          <Text style={[styles.perfVal, { color: '#fbbf24' }]}>{queryResolutionRate}%</Text>
-          <Text style={styles.perfLabel}>Resolved</Text>
-        </View>
-        <View style={styles.perfBox}>
-          <Text style={[styles.perfVal, { color: '#38bdf8' }]}>{avgAuditHours}</Text>
-          <Text style={styles.perfLabel}>Avg Hours</Text>
-        </View>
-      </View>
-
-      {averageRating != null && averageRating > 0 && (
-        <View style={[styles.card, { marginTop: 16 }]}>
-          <Text style={styles.cardTitle}>Summary</Text>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 12 }}>
-            <View style={{ alignItems: 'center', flex: 1 }}>
-              <Text style={{ fontSize: 24, fontWeight: '800', color: '#fbbf24' }}>{averageRating}</Text>
-              <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Rating</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
-            <View style={{ alignItems: 'center', flex: 1 }}>
-              <Text style={{ fontSize: 24, fontWeight: '800', color: '#ffffff' }}>{totalAssignments || 0}</Text>
-              <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Total</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
-            <View style={{ alignItems: 'center', flex: 1 }}>
-              <Text style={{ fontSize: 24, fontWeight: '800', color: '#34d399' }}>{onTimePercentage || 0}%</Text>
-              <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>On-Time</Text>
-            </View>
-          </View>
-        </View>
+      {bars.length > 0 && (
+        <Section title="Performance">
+          <Card level={1} style={{ gap: t.space.lg }}>
+            {bars.map((b) => (
+              <View key={b.label} style={{ gap: t.space.sm }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <AppText variant="small" tone="muted">
+                    {b.label}
+                  </AppText>
+                  <AppText variant="bodyStrong" tone={b.tone}>
+                    {b.value}%
+                  </AppText>
+                </View>
+                <ProgressBar value={b.value / 100} tone={b.tone} />
+                <AppText variant="caption" tone="faint">
+                  {b.caption}
+                </AppText>
+              </View>
+            ))}
+          </Card>
+        </Section>
       )}
     </View>
   );

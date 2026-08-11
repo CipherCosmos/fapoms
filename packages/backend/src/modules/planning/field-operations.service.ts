@@ -1,8 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { FieldVisitEntity, FieldVisitStatus } from './field-visit.entity';
 import { FieldIncidentEntity, IncidentStatus, IncidentSeverity } from './field-incident.entity';
+import { BranchEntity } from '../branch/branch.entity';
+import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AuditService } from '../../core/audit/audit.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { EventCategory } from '@fapoms/shared';
 
 export interface HandoverPackage {
   visitId: string;
@@ -33,7 +38,32 @@ export class FieldOperationsService {
     private readonly visitRepository: Repository<FieldVisitEntity>,
     @InjectRepository(FieldIncidentEntity)
     private readonly incidentRepository: Repository<FieldIncidentEntity>,
+    @InjectRepository(BranchEntity)
+    private readonly branchRepository: Repository<BranchEntity>,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly auditService: AuditService,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
+
+  /**
+   * A field visit carries only ids, but the people being notified work in branch names and
+   * assignments — the incident templates and their deep link are unreadable without both.
+   * Failures degrade to a generic name rather than sinking the incident write itself.
+   */
+  private async describeVisit(visit: FieldVisitEntity): Promise<{ branchName: string; assignmentId: string | null }> {
+    const [branch, assignment] = await Promise.all([
+      this.branchRepository.findOne({ where: { id: visit.branchId } }).catch(() => null),
+      this.assignmentRepository
+        .findOne({
+          where: { assayerId: visit.assayerId, projectBranch: { branchId: visit.branchId } },
+          relations: ['projectBranch'],
+          order: { createdAt: 'DESC' },
+        })
+        .catch(() => null),
+    ]);
+    return { branchName: branch?.name ?? 'a branch', assignmentId: assignment?.id ?? null };
+  }
 
   /**
    * Initializes a new FieldVisit following operational package deployment.
@@ -43,7 +73,8 @@ export class FieldOperationsService {
     executionGroupId: string,
     branchId: string,
     assayerId: string,
-    plannedDate: string
+    plannedDate: string,
+    userId?: string,
   ): Promise<FieldVisitEntity> {
     const visit = this.visitRepository.create({
       coveragePlanId,
@@ -58,14 +89,29 @@ export class FieldOperationsService {
         formsCompleted: false,
         missingEvidenceList: ['Mandatory Form 1A', 'Store Front Photo'],
       },
+      createdBy: userId,
+      updatedBy: userId,
     });
-    return this.visitRepository.save(visit);
+    const saved = await this.visitRepository.save(visit);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_VISIT_CREATED',
+      entityType: 'FIELD_VISIT',
+      entityId: saved.id,
+      newState: FieldVisitStatus.READY,
+      userId,
+      remarks: `Field visit planned for ${plannedDate}.`,
+      metadata: { coveragePlanId, executionGroupId, branchId, assayerId, plannedDate },
+    });
+
+    return saved;
   }
 
   /**
    * Transitions field visit execution states.
    */
-  async transitionVisitStatus(visitId: string, targetStatus: FieldVisitStatus): Promise<FieldVisitEntity> {
+  async transitionVisitStatus(visitId: string, targetStatus: FieldVisitStatus, userId?: string): Promise<FieldVisitEntity> {
     const visit = await this.visitRepository.findOne({ where: { id: visitId } });
     if (!visit) {
       throw new NotFoundException(`Field visit ${visitId} not found.`);
@@ -77,14 +123,35 @@ export class FieldOperationsService {
       visit.actualEndTime = new Date();
     }
 
+    const previousStatus = visit.status;
     visit.status = targetStatus;
-    return this.visitRepository.save(visit);
+    visit.updatedBy = userId ?? visit.updatedBy;
+    const saved = await this.visitRepository.save(visit);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_VISIT_STATUS_CHANGED',
+      entityType: 'FIELD_VISIT',
+      entityId: saved.id,
+      previousState: previousStatus,
+      newState: targetStatus,
+      userId,
+      remarks: `Field visit moved ${previousStatus} → ${targetStatus}.`,
+      metadata: {
+        branchId: saved.branchId,
+        assayerId: saved.assayerId,
+        actualStartTime: saved.actualStartTime ?? null,
+        actualEndTime: saved.actualEndTime ?? null,
+      },
+    });
+
+    return saved;
   }
 
   /**
    * Logs a blocker or operational incident in the field.
    */
-  async reportIncident(visitId: string, title: string, description: string, severity: IncidentSeverity): Promise<FieldIncidentEntity> {
+  async reportIncident(visitId: string, title: string, description: string, severity: IncidentSeverity, userId?: string): Promise<FieldIncidentEntity> {
     const visit = await this.visitRepository.findOne({ where: { id: visitId } });
     if (!visit) {
       throw new NotFoundException(`Field visit ${visitId} not found.`);
@@ -96,22 +163,83 @@ export class FieldOperationsService {
       description,
       severity,
       status: IncidentStatus.REPORTED,
+      createdBy: userId,
+      updatedBy: userId,
     });
-    return this.incidentRepository.save(incident);
+    const saved = await this.incidentRepository.save(incident);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_INCIDENT_REPORTED',
+      entityType: 'FIELD_INCIDENT',
+      entityId: saved.id,
+      newState: IncidentStatus.REPORTED,
+      userId,
+      remarks: `${severity} incident on visit ${visitId}: ${title}`,
+      metadata: { visitId, branchId: visit.branchId, assayerId: visit.assayerId, severity, title, description },
+    });
+
+    // The desk hears about a field problem no matter which screen raised it. This path was
+    // silent while AssignmentService.reportIssue notified, so the same incident reached ops
+    // or vanished depending purely on where the assayer was standing.
+    const { branchName, assignmentId } = await this.describeVisit(visit);
+    this.notificationDispatch.emitSafe({
+      type: 'FIELD_INCIDENT_REPORTED',
+      entityType: 'FIELD_INCIDENT',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: visit.assayerId,
+      dedupeKey: `FIELD_INCIDENT_REPORTED:${saved.id}`,
+      payload: { severity, branchName, description, assignmentId },
+    });
+
+    return saved;
   }
 
   /**
    * Resolves a logged field incident.
    */
-  async resolveIncident(incidentId: string, details: string): Promise<FieldIncidentEntity> {
+  async resolveIncident(incidentId: string, details: string, userId?: string): Promise<FieldIncidentEntity> {
     const incident = await this.incidentRepository.findOne({ where: { id: incidentId } });
     if (!incident) {
       throw new NotFoundException(`Incident ${incidentId} not found.`);
     }
 
+    const previousStatus = incident.status;
     incident.status = IncidentStatus.RESOLVED;
     incident.resolutionDetails = details;
-    return this.incidentRepository.save(incident);
+    incident.updatedBy = userId ?? incident.updatedBy;
+    const saved = await this.incidentRepository.save(incident);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'FIELD_INCIDENT_RESOLVED',
+      entityType: 'FIELD_INCIDENT',
+      entityId: saved.id,
+      previousState: previousStatus,
+      newState: IncidentStatus.RESOLVED,
+      userId,
+      remarks: `Resolved "${saved.title}": ${details}`,
+      metadata: { visitId: saved.visitId, severity: saved.severity, resolutionDetails: details },
+    });
+
+    // Closing the loop with whoever is stuck at the branch: they raised the blocker and would
+    // otherwise never learn it had been cleared.
+    const visit = await this.visitRepository.findOne({ where: { id: saved.visitId } }).catch(() => null);
+    if (visit) {
+      const { branchName, assignmentId } = await this.describeVisit(visit);
+      this.notificationDispatch.emitSafe({
+        type: 'FIELD_INCIDENT_RESOLVED',
+        entityType: 'FIELD_INCIDENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: visit.assayerId,
+        dedupeKey: `FIELD_INCIDENT_RESOLVED:${saved.id}`,
+        payload: { branchName, resolution: details, assignmentId },
+      });
+    }
+
+    return saved;
   }
 
   /**
@@ -145,7 +273,19 @@ export class FieldOperationsService {
    */
   async getFieldOperationsDashboard(coveragePlanId: string): Promise<FieldDashboardSummary> {
     const visits = await this.visitRepository.find({ where: { coveragePlanId } });
-    const incidents = await this.incidentRepository.find();
+
+    // Incidents belong to this coverage plan through its visits. Scope to those
+    // visit ids instead of scanning every incident ever recorded, order newest
+    // first, and cap the result so this ever-growing, never-pruned table can't
+    // turn the dashboard into an unbounded full-table load.
+    const visitIds = visits.map((v) => v.id);
+    const incidents = visitIds.length
+      ? await this.incidentRepository.find({
+          where: { visitId: In(visitIds) },
+          order: { createdAt: 'DESC' },
+          take: 200,
+        })
+      : [];
 
     const inProgress = visits.filter((v) => v.status === FieldVisitStatus.AUDIT_STARTED || v.status === FieldVisitStatus.EVIDENCE_COLLECTION).length;
     const completed = visits.filter((v) => v.status === FieldVisitStatus.AUDIT_COMPLETED || v.status === FieldVisitStatus.SUBMITTED || v.status === FieldVisitStatus.HANDOVER_READY).length;
@@ -158,7 +298,20 @@ export class FieldOperationsService {
 
     return {
       visitsInProgress: inProgress,
-      visitsDelayed: 0, // Mock delayed visits calculations
+      // A visit whose planned date has passed without reaching a completed state. This was
+      // hardcoded to 0, so the operations dashboard reported "no delays" no matter how many
+      // visits had slipped — the one number on this panel that should prompt action never
+      // could. `plannedDate` is a date column, so the comparison is date-only: a visit planned
+      // for today is not late until today is over.
+      visitsDelayed: visits.filter((v) => {
+        const terminal = [
+          FieldVisitStatus.AUDIT_COMPLETED,
+          FieldVisitStatus.SUBMITTED,
+          FieldVisitStatus.HANDOVER_READY,
+        ].includes(v.status);
+        if (terminal || !v.plannedDate) return false;
+        return String(v.plannedDate).slice(0, 10) < new Date().toISOString().slice(0, 10);
+      }).length,
       awaitingSubmission: visits.filter((v) => v.status === FieldVisitStatus.AUDIT_COMPLETED).length,
       awaitingEvidence: visits.filter((v) => !v.evidenceReadiness.documentsCollected).length,
       activeIncidentsCount: activeIncidents.length,

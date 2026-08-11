@@ -6,8 +6,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { autocompleteIndia } from './india-autocomplete.helper';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+
+/** Geo reference data is effectively static (seeded once), so a long TTL is safe. */
+const GEO_CACHE_TTL_SECONDS = 3600;
 
 export class CoordinateDto {
   @IsNumber()
@@ -59,26 +64,44 @@ export class GeoController {
     private readonly districtRepo: Repository<GeoDistrictEntity>,
     @InjectRepository(GeoCityEntity)
     private readonly cityRepo: Repository<GeoCityEntity>,
+    private readonly cache: CacheService,
   ) {}
 
+  @Get('autocomplete')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Live whole-India place search (state/district/city/town/pincode) for type-ahead' })
+  async autocomplete(@Query('q') q?: string) {
+    const results = await autocompleteIndia((q || '').trim());
+    return { success: true, data: results };
+  }
+
   @Get('states')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'List all states in geographic reference data' })
   async getStates() {
-    const states = await this.stateRepo.find({ order: { name: 'ASC' } });
+    const states = await this.cache.wrap('ref:geo:states', GEO_CACHE_TTL_SECONDS, () =>
+      this.stateRepo.find({ order: { name: 'ASC' } }),
+    );
     return { success: true, data: states };
   }
 
   @Get('states/:stateId/districts')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'List districts for a state' })
   async getDistricts(@Param('stateId') stateId: string) {
-    const districts = await this.districtRepo.find({ where: { stateId }, order: { name: 'ASC' } });
+    const districts = await this.cache.wrap(`ref:geo:districts:${stateId}`, GEO_CACHE_TTL_SECONDS, () =>
+      this.districtRepo.find({ where: { stateId }, order: { name: 'ASC' } }),
+    );
     return { success: true, data: districts };
   }
 
   @Get('districts/:districtId/cities')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'List cities for a district' })
   async getCities(@Param('districtId') districtId: string) {
-    const cities = await this.cityRepo.find({ where: { districtId }, order: { name: 'ASC' } });
+    const cities = await this.cache.wrap(`ref:geo:cities:${districtId}`, GEO_CACHE_TTL_SECONDS, () =>
+      this.cityRepo.find({ where: { districtId }, order: { name: 'ASC' } }),
+    );
     return { success: true, data: cities };
   }
 

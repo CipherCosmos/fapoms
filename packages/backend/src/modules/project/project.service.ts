@@ -6,11 +6,13 @@
 
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In} from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
+import { ZoneEntity } from '../zone/zone.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
 import { BranchService } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
@@ -18,80 +20,17 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
-import * as fs from 'fs';
-import * as path from 'path';
-
-const CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
-
-let cache: Record<string, { lat: number; lng: number }> = {};
-if (fs.existsSync(CACHE_FILE)) {
-  try {
-    cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-  } catch (e) {
-    console.error('Failed to read cache file, starting fresh', e);
-  }
-}
-
-function saveCache() {
-  try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to save geocoding cache', e);
-  }
-}
+import { geocodeIndia } from '../geo/india-geocoder';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { AssignmentEntity } from '../assignment/assignment.entity';
 
 async function getRealCoordinates(address: string, name: string, district: string, state: string): Promise<{ lat: number; lng: number }> {
   const pinMatch = address.match(/\b\d{6}\b/);
-  const pincode = pinMatch ? pinMatch[0] : null;
-
-  const queries: string[] = [];
-  if (pincode) {
-    queries.push(`${pincode}, India`);
-  }
-  queries.push(`${name}, ${district}, ${state}, India`);
-  queries.push(`${district}, ${state}, India`);
-  queries.push(`${state}, India`);
-
-  for (const q of queries) {
-    const cleanQ = q.trim();
-    if (cache[cleanQ]) {
-      return cache[cleanQ];
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-        }
-      });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json() as any[];
-        if (data && data[0]) {
-          const coords = {
-            lat: parseFloat(data[0].lat),
-            lng: parseFloat(data[0].lon)
-          };
-          cache[cleanQ] = coords;
-          saveCache();
-          return coords;
-        }
-      }
-    } catch (err) {
-      console.error(`Error geocoding: ${cleanQ}`, err);
-    }
-  }
-
+  const coords = await geocodeIndia(address, name, district, state, pinMatch ? pinMatch[0] : null);
+  if (coords) return { lat: coords.lat, lng: coords.lng };
   throw new NotFoundException(`Geocoding failed: could not locate coordinates for address: "${address}" (District: ${district}, State: ${state}).`);
 }
 
@@ -109,7 +48,8 @@ function getStateZone(stateName: string): string {
   return 'East Zone';
 }
 
-const INDIAN_NAMES = ['Aravind Swamy', 'Karthik Raja', 'Siddharth Rao', 'Vijay Shankar', 'Rohan Mehta', 'Vikram Sen', 'Pranav Nair', 'Anand Krishnan', 'Rahul Sharma', 'Manish Patil'];
+/** Partial edit of a project. Lifecycle moves go through transition(). */
+export type UpdateProjectDto = Partial<CreateProjectDto>;
 
 export interface CreateProjectDto {
   name: string;
@@ -130,22 +70,62 @@ export interface CreateProjectDto {
   status?: string;
 }
 
+
+/**
+ * A 0-10 risk rating derived from the client's stated risk category, used when the import sheet
+ * carries no explicit score. Ten is the top of the scale the planning map reads (>= 7 = high).
+ */
+function riskScoreFromCategory(category: string): number {
+  switch (category) {
+    case 'CRITICAL': return 9;
+    case 'HIGH': return 7;
+    case 'MEDIUM': return 4;
+    case 'LOW': return 2;
+    default: return 2;
+  }
+}
+
 @Injectable()
 export class ProjectService implements OnModuleInit {
   constructor(
      @InjectRepository(ProjectEntity)
      private readonly projectRepository: Repository<ProjectEntity>,
-     @InjectRepository(ProjectBranchEntity)
-     private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
-     @InjectRepository(ClientEntity)
-     private readonly clientRepository: Repository<ClientEntity>,
-     private readonly branchQueryService: BranchQueryService,
-     private readonly branchService: BranchService,
-     private readonly auditService: AuditService,
-     private readonly workflowEngine: WorkflowEngine,
-     private readonly eventPublisher: DomainEventPublisher,
-     private readonly projectQueryService: ProjectQueryService,
+      @InjectRepository(ProjectBranchEntity)
+      private readonly projectBranchRepository: Repository<ProjectBranchEntity>,
+      @InjectRepository(AssessmentEntity)
+      private readonly assessmentRepository: Repository<AssessmentEntity>,
+      @InjectRepository(ClientEntity)
+      private readonly clientRepository: Repository<ClientEntity>,
+      @InjectRepository(ZoneEntity)
+      private readonly zoneRepository: Repository<ZoneEntity>,
+      private readonly branchQueryService: BranchQueryService,
+      private readonly branchService: BranchService,
+      private readonly auditService: AuditService,
+      private readonly workflowEngine: WorkflowEngine,
+      private readonly eventPublisher: DomainEventPublisher,
+      private readonly projectQueryService: ProjectQueryService,
+      private readonly notificationDispatch: NotificationDispatchService,
    ) {}
+
+  private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
+    if (stateName) {
+      const stateUpper = stateName.toUpperCase();
+      const query = this.zoneRepository.createQueryBuilder('zone')
+        .where('zone.isActive = true');
+      if (clientId) {
+        query.andWhere('(zone.clientId = :clientId OR zone.clientId IS NULL)', { clientId });
+      }
+      const zones = await query.getMany();
+      for (const z of zones) {
+        if (z.states && Array.isArray(z.states)) {
+          if (z.states.some((s) => s.toUpperCase() === stateUpper)) {
+            return z.name;
+          }
+        }
+      }
+    }
+    return getStateZone(stateName);
+  }
 
   onModuleInit() {
     this.workflowEngine.registerWorkflow('project', [
@@ -170,8 +150,29 @@ export class ProjectService implements OnModuleInit {
         to: ProjectStatus.COMPLETED,
       },
       {
-        from: [ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION, ProjectStatus.VALIDATION],
+        // ON_HOLD was missing, so a parked project had no abandon path — it had to
+        // be resumed into SCHEDULING or EXECUTION first just to be cancelled.
+        from: [
+          ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING,
+          ProjectStatus.EXECUTION, ProjectStatus.VALIDATION, ProjectStatus.ON_HOLD,
+        ],
         to: ProjectStatus.CANCELLED,
+      },
+      {
+        from: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION],
+        to: ProjectStatus.ON_HOLD,
+      },
+      {
+        from: [ProjectStatus.ON_HOLD],
+        to: ProjectStatus.SCHEDULING,
+      },
+      {
+        from: [ProjectStatus.ON_HOLD],
+        to: ProjectStatus.EXECUTION,
+      },
+      {
+        from: [ProjectStatus.COMPLETED],
+        to: ProjectStatus.ARCHIVED,
       },
     ]);
   }
@@ -210,25 +211,81 @@ export class ProjectService implements OnModuleInit {
       remarks: `Created project: ${saved.name} (${saved.projectNumber})`,
     });
 
+    this.eventPublisher.publish('project:created', {
+      eventType: 'project:created',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, name: saved.name, projectNumber: saved.projectNumber, clientId: saved.clientId },
+    });
+
     return saved;
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ projects: ProjectEntity[]; total: number }> {
-    return this.projectQueryService.findAll(page, limit);
+  async findAll(
+    page = 1,
+    limit = 50,
+    scope?: Partial<GlobalScope>,
+  ): Promise<{ projects: ProjectEntity[]; total: number }> {
+    return this.projectQueryService.findAll(page, limit, scope);
   }
 
   async findOne(id: string): Promise<ProjectEntity> {
     return this.projectQueryService.findOne(id);
   }
 
-  async update(id: string, dto: CreateProjectDto, userId: string): Promise<ProjectEntity> {
+  /**
+   * Moves a project to `targetStatus`, or explains why it cannot go there.
+   *
+   * Each branch delegates to the existing per-status method, so the state machine
+   * remains the only place transition legality is decided.
+   */
+  async transition(id: string, targetStatus: string, userId: string, reason?: string): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    if (project.status === targetStatus) {
+      throw new BadRequestException(`Project is already ${targetStatus}.`);
+    }
+
+    const moves: Record<string, () => Promise<any>> = {
+      [ProjectStatus.PLANNING]: () => this.startProjectPlanning(id, userId),
+      [ProjectStatus.SCHEDULING]: () => this.readyProjectForScheduling(id, userId),
+      [ProjectStatus.EXECUTION]: () => this.startProjectExecution(id, userId),
+      [ProjectStatus.VALIDATION]: () => this.startProjectValidation(id, userId),
+      [ProjectStatus.COMPLETED]: () => this.completeProject(id, userId),
+      [ProjectStatus.CANCELLED]: () => this.cancelProject(id, userId),
+      [ProjectStatus.ON_HOLD]: () => this.holdProject(id, userId),
+      [ProjectStatus.ARCHIVED]: () => this.archiveProject(id, userId),
+    };
+
+    const move = moves[targetStatus];
+    if (!move) throw new BadRequestException(`Unknown project status: ${targetStatus}`);
+    await move();
+
+    const updated = await this.findOne(id);
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'PROJECT_STATUS_CHANGED',
+      entityType: 'PROJECT',
+      entityId: id,
+      userId,
+      remarks: reason
+        ? `${project.status} → ${targetStatus}: ${reason}`
+        : `${project.status} → ${targetStatus}`,
+    });
+    return updated;
+  }
+
+  async update(id: string, dto: UpdateProjectDto, userId: string): Promise<ProjectEntity> {
     const project = await this.findOne(id);
 
-    project.name = dto.name;
-    project.projectNumber = dto.projectNumber;
-    project.description = dto.description ?? null;
-    project.clientId = dto.clientId;
-    project.priority = dto.priority as any;
+    // Only touch what the caller actually sent. These were unconditional, so any
+    // omitted field was silently wiped — `description` in particular went null on
+    // every edit that did not resend it.
+    if (dto.name !== undefined) project.name = dto.name;
+    if (dto.projectNumber !== undefined) project.projectNumber = dto.projectNumber;
+    if (dto.description !== undefined) project.description = dto.description ?? null;
+    if (dto.clientId !== undefined) project.clientId = dto.clientId;
+    if (dto.priority !== undefined) project.priority = dto.priority as any;
     if (dto.startDate) project.startDate = new Date(dto.startDate);
     if (dto.endDate) project.endDate = new Date(dto.endDate);
     if (dto.budget !== undefined) project.budget = dto.budget;
@@ -252,6 +309,10 @@ export class ProjectService implements OnModuleInit {
         await this.completeProject(project.id, userId);
       } else if (dto.status === ProjectStatus.CANCELLED) {
         await this.cancelProject(project.id, userId);
+      } else if (dto.status === ProjectStatus.ON_HOLD) {
+        await this.holdProject(project.id, userId);
+      } else if (dto.status === ProjectStatus.ARCHIVED) {
+        await this.archiveProject(project.id, userId);
       } else {
         throw new BadRequestException(`Invalid project status transition to ${dto.status}`);
       }
@@ -271,6 +332,14 @@ export class ProjectService implements OnModuleInit {
       remarks: `Updated project: ${saved.name} (${saved.projectNumber})`,
     });
 
+    this.eventPublisher.publish('project:updated', {
+      eventType: 'project:updated',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, name: saved.name, status: saved.status },
+    });
+
     return saved;
   }
 
@@ -288,10 +357,21 @@ export class ProjectService implements OnModuleInit {
       userId,
       remarks: `Soft deleted project ${project.name}`,
     });
+
+    this.eventPublisher.publish('project:deleted', {
+      eventType: 'project:deleted',
+      aggregateId: id,
+      userId,
+      organizationId: project.organizationId,
+      payload: { id, name: project.name, projectNumber: project.projectNumber },
+    });
   }
 
-  async findProjectBranches(projectId: string): Promise<ProjectBranchEntity[]> {
-    return this.projectQueryService.findProjectBranches(projectId);
+  async findProjectBranches(
+    projectId: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<ProjectBranchEntity[]> {
+    return this.projectQueryService.findProjectBranches(projectId, scope);
   }
 
   async associateBranches(projectId: string, branchIds: string[], userId: string): Promise<ProjectBranchEntity[]> {
@@ -316,6 +396,21 @@ export class ProjectService implements OnModuleInit {
           });
           const savedPb = await this.projectBranchRepository.save(pb);
           addedBranches.push(savedPb);
+
+          const existingAsmt = await this.assessmentRepository.findOne({
+            where: { projectId: project.id, branchId: branch.id, isActive: true },
+          });
+          if (!existingAsmt) {
+            const asmt = this.assessmentRepository.create({
+              projectId: project.id,
+              branchId: branch.id,
+              zoneId: branch.zoneId,
+              status: AssessmentStatus.PENDING_PLANNING,
+              createdBy: userId,
+              updatedBy: userId,
+            });
+            await this.assessmentRepository.save(asmt);
+          }
         }
       }
     }
@@ -340,15 +435,17 @@ export class ProjectService implements OnModuleInit {
       ? await this.clientRepository.findOne({ where: { id: project.clientId } })
       : null;
 
+    // Headers match the column names on the branch lists actually received from
+    // clients (BRANCH / BRANCH_NAME / DISTRICT / STATE / Branch Address) so a
+    // client's own export can be filled in and returned without restructuring.
+    // The importer accepts both these and the friendlier equivalents.
     const headers = [
-      'Branch Code',
-      'Branch Name',
-      'Address',
-      'State',
-      'District',
-      'City',
-      'Pincode',
-      'Packets',
+      // Identity + location (required)
+      'BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets',
+      // Optional, but each one removes guesswork the system otherwise has to do
+      'Pincode', 'Latitude', 'Longitude',
+      'Branch Manager', 'Branch Phone', 'Branch Email',
+      'Risk Category', 'Risk Score', 'Complexity', 'Estimated Hours',
     ];
 
     // Prefill existing branches if any
@@ -357,34 +454,55 @@ export class ProjectService implements OnModuleInit {
       relations: ['branch'],
     });
 
-    const rows = projectBranches.map((pb) => ({
-      'Branch Code': pb.branch.branchCode,
-      'Branch Name': pb.branch.name,
-      Address: pb.branch.address || '',
-      State: pb.branch.state,
-      District: pb.branch.district,
-      City: pb.branch.city,
-      Pincode: pb.branch.pincode || '',
+    const rows: Record<string, any>[] = projectBranches.map((pb) => ({
+      BRANCH: pb.branch.branchCode,
+      BRANCH_NAME: pb.branch.name,
+      DISTRICT: pb.branch.district,
+      STATE: pb.branch.state,
+      'Branch Address': pb.branch.address || '',
       Packets: pb.packetCount ?? '',
+      Pincode: pb.branch.pincode || '',
+      Latitude: pb.branch.latitude ?? '',
+      Longitude: pb.branch.longitude ?? '',
+      'Branch Manager': pb.branch.managerName || '',
+      'Branch Phone': pb.branch.phone || '',
+      'Branch Email': pb.branch.email || '',
+      'Risk Category': pb.branch.riskCategory || '',
+      Complexity: pb.branch.complexity || '',
+      'Estimated Hours': pb.branch.estimatedDurationHours ?? '',
     }));
 
     if (rows.length === 0) {
-      rows.push({
-        'Branch Code': '',
-        'Branch Name': '',
-        Address: '',
-        State: '',
-        District: '',
-        City: '',
-        Pincode: '',
-        Packets: '',
-      });
+      rows.push(Object.fromEntries(headers.map((h) => [h, ''])));
     }
 
     const ws = xlsx.utils.json_to_sheet(rows, { header: headers });
-    ws['!cols'] = headers.map(() => ({ wch: 20 }));
+    ws['!cols'] = headers.map((h) => ({ wch: h === 'Branch Address' ? 55 : Math.max(14, h.length + 4) }));
     const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Branches');
+    xlsx.utils.book_append_sheet(wb, ws, 'Branch');
+
+    const instructions = [
+      { Field: 'BRANCH', Required: 'Yes', Description: 'Branch code from the client, e.g. 8 or BR-0010. Re-importing the same code updates that branch rather than creating a duplicate.' },
+      { Field: 'BRANCH_NAME', Required: 'Yes', Description: 'Branch name, e.g. THENKURISSI.' },
+      { Field: 'DISTRICT', Required: 'Yes', Description: 'District name — used to cluster nearby branches into one assayer-day and to compute travel.' },
+      { Field: 'STATE', Required: 'Yes', Description: 'State name — used to apply state-specific public holidays when scheduling.' },
+      { Field: 'Branch Address', Required: 'Yes', Description: 'Full address. Used to geocode the branch; a 6-digit pincode inside this text is detected automatically.' },
+      { Field: 'Packets', Required: 'Yes', Description: 'Estimated packets to audit at this branch this cycle. Drives how long the audit takes, how many branches one assayer can cover in a day, and the coverage figure quoted to the client. Left blank, the system assumes a flat 6 hours and the plan will be wrong.' },
+      { Field: 'Pincode', Required: 'No', Description: '6-digit pincode. Leave blank if it already appears in the address.' },
+      { Field: 'Latitude', Required: 'No', Description: 'Decimal degrees, e.g. 10.7867. Supply with Longitude to skip geocoding entirely — faster on import and exact, instead of relying on an address lookup that can place the branch imprecisely or fail.' },
+      { Field: 'Longitude', Required: 'No', Description: 'Decimal degrees, e.g. 76.6548. Must be supplied together with Latitude.' },
+      { Field: 'Branch Manager', Required: 'No', Description: 'Contact name at the branch, shown to the assayer before the visit.' },
+      { Field: 'Branch Phone', Required: 'No', Description: 'Branch contact number, shown to the assayer before the visit.' },
+      { Field: 'Branch Email', Required: 'No', Description: 'Branch email for correspondence.' },
+      { Field: 'Risk Category', Required: 'No', Description: 'LOW / MEDIUM / HIGH / CRITICAL. Higher-risk branches are preferentially matched to more experienced assayers.' },
+      { Field: 'Risk Score', Required: 'No', Description: '0-10 rating. Leave blank to derive it from Risk Category. Branches scoring 7 or above are highlighted for attention on the planning map.' },
+      { Field: 'Complexity', Required: 'No', Description: 'SIMPLE / STANDARD / COMPLEX. Feeds the same matching, and the time allowance per branch.' },
+      { Field: 'Estimated Hours', Required: 'No', Description: 'Override the audit duration for this branch. Normally leave blank — it is calculated from Packets, which stays accurate as packet counts change each cycle.' },
+    ];
+    const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
+    instrWs['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 110 }];
+    xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
+
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
@@ -423,17 +541,29 @@ export class ProjectService implements OnModuleInit {
         ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
         : null;
 
+      // Client-supplied coordinates win over geocoding: they are exact, and they
+      // avoid a network lookup per branch that is rate-limited to ~1/second and
+      // throws when it cannot resolve an address.
+      const latRaw = parseFloat(String(row.Latitude ?? row.latitude ?? ''));
+      const lngRaw = parseFloat(String(row.Longitude ?? row.longitude ?? ''));
+      const suppliedCoords = Number.isFinite(latRaw) && Number.isFinite(lngRaw)
+        ? { lat: latRaw, lng: lngRaw }
+        : null;
+
       let branch = await this.branchQueryService.findOneByCode(branchCode);
       if (!branch) {
-        const coords = await getRealCoordinates(address, branchName, district, state);
-        const zoneName = getStateZone(state);
+        const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
+        const zoneName = await this.resolveZoneName(state, project.clientId);
         
         const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
 
         const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
         const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
-        const managerName = INDIAN_NAMES[Math.floor(Math.random() * INDIAN_NAMES.length)];
-        const phone = `+9144${Math.floor(10000000 + Math.random() * 90000000)}`;
+        // Was a random name from a hardcoded list and a random phone number, which
+        // put fabricated contact details in front of an assayer about to visit the
+        // branch. Use what the client supplied; leave blank when they supplied nothing.
+        const managerName = (row['Branch Manager'] || '').toString().trim() || null;
+        const phone = (row['Branch Phone'] || '').toString().trim() || null;
 
         branch = await this.branchService.registerImportedBranch({
           branchCode,
@@ -455,11 +585,21 @@ export class ProjectService implements OnModuleInit {
           territory: `${district} Area`,
           managerName,
           phone,
-          email: `${branchName.toLowerCase().replace(/\s+/g, '')}@rblbank.com`,
-          riskScore: 2.0,
-          riskCategory: 'LOW',
-          complexity: 'STANDARD',
-          estimatedDurationHours: calculatedHours ?? 6.0,
+          email: (row['Branch Email'] || '').toString().trim() || null,
+          // Taken from the sheet when the client supplies it, otherwise derived from the risk
+          // category they did supply. This was the literal 2.0 for every branch ever imported,
+          // which is why all 72 branches in the database score identically and the map's
+          // "high risk" highlight (>= 7) could never fire for anybody.
+          riskScore: parseFloat(String(row['Risk Score'] ?? '')) || riskScoreFromCategory(
+            (row['Risk Category'] || '').toString().trim().toUpperCase(),
+          ),
+          // Optional operational attributes: taken from the sheet when the client
+          // supplies them, otherwise sensible defaults. These feed assayer matching,
+          // so a real value here produces a better-matched assayer than the default.
+          riskCategory: (row['Risk Category'] || '').toString().trim().toUpperCase() || 'LOW',
+          complexity: (row.Complexity || '').toString().trim().toUpperCase() || 'STANDARD',
+          estimatedDurationHours:
+            parseFloat(String(row['Estimated Hours'] ?? '')) || calculatedHours || 6.0,
           createdBy: userId,
           updatedBy: userId,
         }, userId);
@@ -484,6 +624,22 @@ export class ProjectService implements OnModuleInit {
         });
         const savedPb = await this.projectBranchRepository.save(pb);
         addedBranches.push(savedPb);
+
+        const existingAsmt = await this.assessmentRepository.findOne({
+          where: { projectId: project.id, branchId: branch.id, isActive: true },
+        });
+        if (!existingAsmt) {
+          const asmt = this.assessmentRepository.create({
+            projectId: project.id,
+            branchId: branch.id,
+            zoneId: branch.zoneId,
+            status: AssessmentStatus.PENDING_PLANNING,
+            packetSize: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
+            createdBy: userId,
+            updatedBy: userId,
+          });
+          await this.assessmentRepository.save(asmt);
+        }
       } else if (!isNaN(packetCount) && packetCount > 0) {
         // Update packet count on existing project-branch
         pb.packetCount = packetCount;
@@ -499,20 +655,63 @@ export class ProjectService implements OnModuleInit {
     const pb = await this.projectBranchRepository.findOne({
       where: { id: projectBranchId, projectId, isActive: true },
     });
-    if (pb) {
-      pb.isActive = false;
-      pb.updatedBy = userId;
-      await this.projectBranchRepository.save(pb);
 
-      await this.auditService.recordEvent({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'PROJECT_BRANCH_REMOVED',
-        entityType: 'PROJECT',
-        entityId: projectId,
-        userId,
-        remarks: `Removed branch association link ${projectBranchId}`,
-      });
+    // Previously wrapped in `if (pb) { ... }` with no else, so a branch that did not exist —
+    // or that existed but belonged to a *different* project — returned HTTP 200 and a branch
+    // list, reporting a removal that never happened. Silence on a delete is the worst possible
+    // answer: the operator believes the branch is gone and stops looking at it.
+    if (!pb) {
+      throw new NotFoundException(
+        `Branch link ${projectBranchId} was not found on project ${projectId}, so nothing was removed.`,
+      );
     }
+
+    /**
+     * A branch cannot be pulled out from under work already committed to it.
+     *
+     * There was no check here at all. Removing a branch deactivates the link that assignments,
+     * schedules, documents and validation cases all hang off — so doing it while an assayer
+     * held a live offer, or had already travelled and checked in, silently stranded their job:
+     * the assignment row survives pointing at an inactive branch, the assayer keeps seeing it
+     * in the app, and it disappears from every operations view. Completed and cancelled work is
+     * historical and safe to unlink.
+     */
+    const liveAssignment = await this.projectBranchRepository.manager
+      .getRepository(AssignmentEntity)
+      .findOne({
+        where: {
+          projectBranchId,
+          isActive: true,
+          status: In([
+            AssignmentStatus.PENDING,
+            AssignmentStatus.ACCEPTED,
+            AssignmentStatus.CHECKED_IN,
+            AssignmentStatus.IN_PROGRESS,
+          ]),
+        },
+      })
+      .catch(() => null);
+
+    if (liveAssignment) {
+      throw new BadRequestException(
+        `This branch has an active assignment (${liveAssignment.assignmentNumber}, ${liveAssignment.status}). ` +
+        `Cancel or complete it before removing the branch from the project.`,
+      );
+    }
+
+    pb.isActive = false;
+    pb.updatedBy = userId;
+    await this.projectBranchRepository.save(pb);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'PROJECT_BRANCH_REMOVED',
+      entityType: 'PROJECT',
+      entityId: projectId,
+      userId,
+      remarks: `Removed branch association link ${projectBranchId}`,
+    });
+
     return this.findProjectBranches(projectId);
   }
 
@@ -648,6 +847,158 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
+  async holdProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.ON_HOLD;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'HoldProjectCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.holdProject(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  async archiveProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+    const project = await this.findOne(id);
+    const prev = project.status;
+    const next = ProjectStatus.ARCHIVED;
+    return this.workflowEngine.executeCommand(
+      'project',
+      project.id,
+      'ArchiveProjectCommand',
+      prev,
+      next,
+      userId,
+      role,
+      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      async () => {
+        const event = ProjectStateMachine.archiveProject(project, userId);
+        const saved = await this.projectRepository.save(project);
+        this.eventPublisher.publish(event.constructor.name, event);
+        return saved;
+      }
+    );
+  }
+
+  /**
+   * Writes a per-branch status change to the audit trail.
+   *
+   * A branch moves IMPORTED → PLANNING → … → CLOSED through six methods and a
+   * dozen call sites, and none of them recorded anything: `audit_events` held
+   * zero rows for PROJECT_BRANCH, so a branch could show as CLOSED in planning
+   * with no way to find out when, by whom, or through which steps it got there.
+   * Recorded here rather than in each method so a future transition cannot
+   * silently skip it.
+   */
+  /**
+   * Everything that has happened to one branch, newest first.
+   *
+   * Stitches together the four places a branch's story is actually written —
+   * its own status transitions, the assignments offered on it, the documents
+   * that moved, and its validation case — because none of them individually
+   * answers "what happened to this branch", which is the question planning
+   * actually asks when a branch shows up CLOSED.
+   */
+  async getBranchHistory(projectBranchId: string): Promise<any> {
+    const pb = await this.projectBranchRepository.findOne({
+      where: { id: projectBranchId },
+      relations: ['branch', 'project'],
+    });
+    if (!pb) throw new NotFoundException(`Project branch ${projectBranchId} not found.`);
+
+    const rows = await this.projectBranchRepository.manager.query(
+      `
+      -- Branch status transitions
+      SELECT 'STATUS' AS kind, ae.occurred_at AS at, ae.event_type AS title,
+             ae.previous_state AS "from", ae.new_state AS "to", ae.remarks AS detail,
+             COALESCE(ae.user_display_name,
+                      NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+                      u.username) AS actor
+      FROM audit_events ae
+      LEFT JOIN users u ON u.id = ae.user_id
+      WHERE ae.entity_type = 'PROJECT_BRANCH' AND ae.entity_id = $1
+
+      UNION ALL
+      -- Assignments offered / accepted / completed on this branch
+      SELECT 'ASSIGNMENT', a.updated_at, 'Assignment ' || a.status::text,
+             NULL, a.status::text, a.assignment_number,
+             COALESCE(asr.display_name, 'unassigned')
+      FROM assignments a
+      LEFT JOIN assayers asr ON asr.id = a.assayer_id
+      WHERE a.project_branch_id = $1 AND a.is_active = true
+
+      UNION ALL
+      -- Paperwork in and out
+      SELECT 'DOCUMENT', d.updated_at, d.type::text || ' ' || d.status::text,
+             NULL, d.status::text, d.file_name,
+             COALESCE(NULLIF(TRIM(CONCAT_WS(' ', du.first_name, du.last_name)), ''), du.username)
+      FROM documents d
+      LEFT JOIN users du ON du.id = d.assigned_to_user_id
+      WHERE d.project_branch_id = $1 AND d.is_active = true
+
+      UNION ALL
+      -- Validation / review outcome
+      SELECT 'VALIDATION', ae2.occurred_at, ae2.event_type,
+             ae2.previous_state, ae2.new_state, ae2.remarks,
+             COALESCE(ae2.user_display_name,
+                      NULLIF(TRIM(CONCAT_WS(' ', vu.first_name, vu.last_name)), ''),
+                      vu.username)
+      FROM audit_events ae2
+      LEFT JOIN users vu ON vu.id = ae2.user_id
+      WHERE ae2.entity_type = 'VALIDATION'
+        AND ae2.entity_id IN (SELECT id FROM validation_cases WHERE project_branch_id = $1)
+
+      ORDER BY at DESC
+      `,
+      [projectBranchId],
+    );
+
+    return {
+      projectBranchId,
+      branchName: pb.branch?.name ?? null,
+      branchCode: pb.branch?.branchCode ?? null,
+      projectName: pb.project?.name ?? null,
+      currentStatus: pb.status,
+      scheduledDate: pb.scheduledDate ?? null,
+      packetCount: pb.packetCount ?? null,
+      timeline: rows,
+    };
+  }
+
+  private async recordBranchTransition(
+    pb: ProjectBranchEntity,
+    previousStatus: string,
+    userId: string,
+  ): Promise<void> {
+    if (previousStatus === pb.status) return;
+    try {
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: `PROJECT_BRANCH_${pb.status}`,
+        entityType: 'PROJECT_BRANCH',
+        entityId: pb.id,
+        previousState: previousStatus,
+        newState: pb.status,
+        userId,
+        remarks: `Branch moved ${previousStatus} → ${pb.status}`,
+      });
+    } catch (err: any) {
+      // History is valuable but must never block the transition itself.
+      console.warn(`Could not record branch transition for ${pb.id}: ${err?.message}`);
+    }
+  }
+
   async initiateBranchPlanning(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
     const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
     const pb = await repo.findOne({
@@ -656,9 +1007,75 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.initiatePlanning(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
+    this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  /**
+   * Record that a branch cannot be staffed, with the reason on the branch record.
+   *
+   * This is the write side of a status that has been declared everywhere and set nowhere —
+   * the reason no branch has ever left `IMPORTED` for a coverage failure, and why an
+   * unstaffable branch is currently indistinguishable from an untouched one.
+   */
+  async markBranchUnableToCover(
+    projectBranchId: string,
+    userId: string,
+    reason: string,
+    manager?: any,
+  ): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({ where: { id: projectBranchId, isActive: true } });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const previousStatus = pb.status;
+    const event = ProjectBranchStateMachine.markUnableToCover(pb, userId, reason);
+    // Kept on the branch so the cause travels with the record into client SLA reporting,
+    // rather than living only in the audit log.
+    pb.remarks = reason.trim();
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
+    this.eventPublisher.publish(event.constructor.name, event);
+
+    // `BRANCH_UNABLE_TO_COVER` has sat in the notification catalogue — CRITICAL priority,
+    // addressed to ops and admins — with no code path that could ever emit it. This is that
+    // path. A branch nobody can staff is exactly the event ops needs pushed at them.
+    const withBranch = await repo.findOne({ where: { id: saved.id }, relations: ['branch'] }).catch(() => null);
+    this.notificationDispatch.emitSafe({
+      type: 'BRANCH_UNABLE_TO_COVER',
+      entityType: 'PROJECT_BRANCH',
+      entityId: saved.id,
+      actorUserId: userId,
+      dedupeKey: `BRANCH_UNABLE_TO_COVER:${saved.id}`,
+      payload: {
+        projectBranchId: saved.id,
+        branchName: withBranch?.branch?.name ?? 'A branch',
+        reason: reason.trim(),
+      },
+    });
+
+    return saved;
+  }
+
+  /** Return an uncoverable branch to the planning pool. */
+  async reopenBranchCoverage(projectBranchId: string, userId: string, manager?: any): Promise<ProjectBranchEntity> {
+    const repo = manager ? manager.getRepository(ProjectBranchEntity) : this.projectBranchRepository;
+    const pb = await repo.findOne({ where: { id: projectBranchId, isActive: true } });
+    if (!pb) {
+      throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    const previousStatus = pb.status;
+    const event = ProjectBranchStateMachine.reopenCoverage(pb, userId);
+    pb.updatedBy = userId;
+    const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -671,9 +1088,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.confirmAssignment(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -686,9 +1105,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.scheduleAudit(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -701,9 +1122,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.completeAudit(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -716,9 +1139,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.completeValidation(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }
@@ -731,9 +1156,11 @@ export class ProjectService implements OnModuleInit {
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
     }
+    const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.close(pb, userId);
     pb.updatedBy = userId;
     const saved = await repo.save(pb);
+    await this.recordBranchTransition(saved, previousStatus, userId);
     this.eventPublisher.publish(event.constructor.name, event);
     return saved;
   }

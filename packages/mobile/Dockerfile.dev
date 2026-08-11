@@ -19,18 +19,29 @@ COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/mobile/package.json ./packages/mobile/
 
 # ---- 3. Install ALL workspace dependencies ----
-RUN npm install --ignore-scripts
+RUN npm install --legacy-peer-deps
 
-# ---- 4. Copy and build the shared package ----
+# ---- 4. Fix React version conflict ----
+# The workspace root hoists React 19 (from frontend) to /app/node_modules/.
+# Mobile needs React 18 (in /app/packages/mobile/node_modules/).
+# If both exist, Metro bundles BOTH, causing "Objects are not valid as a
+# React child" crashes. Remove the hoisted React 19 so only React 18 remains.
+RUN rm -rf /app/node_modules/react /app/node_modules/react-dom \
+           /app/node_modules/scheduler
+
+# ---- 5. Copy and build the shared package ----
 COPY packages/shared/ ./packages/shared/
 RUN npm run build:shared
 
-# ---- 5. Copy mobile source (will be overridden by bind mount in dev) ----
+# ---- 6. Copy mobile source ----
 COPY packages/mobile/ ./packages/mobile/
 
 WORKDIR /app/packages/mobile
 
+# Ensure all mobile-specific packages are installed
+RUN npm install --legacy-peer-deps
+
 EXPOSE 8081
 
-# Expo web: runs the Metro bundler in web mode
-CMD ["npx", "expo", "start", "--web", "--host", "lan"]
+# Expo web: runs the Metro bundler in web mode on port 8081
+CMD ["npx", "expo", "start", "--web", "--port", "8081"]

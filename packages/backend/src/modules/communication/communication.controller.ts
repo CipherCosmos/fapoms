@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, IsString, IsOptional, IsEnum } from 'class-validator';
 import { CommunicationService, CreateCommunicationDto } from './communication.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, CommunicationType } from '@fapoms/shared';
 
 class CreateCommunicationRequestDto implements CreateCommunicationDto {
@@ -36,6 +37,7 @@ export class CommunicationController {
   }
 
   @Get('assignment/:assignmentId')
+  @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get communication history for an assignment' })
   async findByAssignment(@Param('assignmentId', ParseUUIDPipe) assignmentId: string) {
     const history = await this.communicationService.findByAssignment(assignmentId);

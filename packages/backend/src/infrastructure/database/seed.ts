@@ -18,7 +18,8 @@ import { BranchContactEntity } from '../../modules/branch/branch-contact.entity'
 import { ProjectEntity } from '../../modules/project/project.entity';
 import { ProjectBranchEntity } from '../../modules/project/project-branch.entity';
 import { HolidayEntity } from '../../modules/holiday/holiday.entity';
-import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerLifecycleStatus } from '@fapoms/shared';
+import { ValidationCaseEntity } from '../../modules/validation/validation-case.entity';
+import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
 async function seed() {
@@ -98,9 +99,17 @@ async function seed() {
       { resource: PermissionResource.DOCUMENT, action: PermissionAction.DOWNLOAD, scope: AuthorizationScope.PLATFORM, description: 'Download all documents' },
 
       // Validation
+      { resource: PermissionResource.VALIDATION, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create validation cases' },
+      { resource: PermissionResource.VALIDATION, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit validation cases' },
       { resource: PermissionResource.VALIDATION, action: PermissionAction.ASSIGN, scope: AuthorizationScope.ORGANIZATION, description: 'Assign validation cases' },
       { resource: PermissionResource.VALIDATION, action: PermissionAction.REVIEW, scope: AuthorizationScope.ASSIGNED_RECORDS, description: 'Review assigned validation cases' },
       { resource: PermissionResource.VALIDATION, action: PermissionAction.APPROVE, scope: AuthorizationScope.ORGANIZATION, description: 'Approve validations' },
+
+      // Client management
+      { resource: PermissionResource.CLIENT, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all clients' },
+      { resource: PermissionResource.CLIENT, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create clients within organization' },
+      { resource: PermissionResource.CLIENT, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit clients within organization' },
+      { resource: PermissionResource.CLIENT, action: PermissionAction.DELETE, scope: AuthorizationScope.ORGANIZATION, description: 'Delete clients within organization' },
 
       // Administration
       { resource: PermissionResource.USER, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View users' },
@@ -112,7 +121,7 @@ async function seed() {
     ];
 
     for (const dp of defaultPermissions) {
-      let existing = existingPermissions.find(p => p.resource === dp.resource && p.action === dp.action && p.scope === dp.scope);
+      const existing = existingPermissions.find(p => p.resource === dp.resource && p.action === dp.action && p.scope === dp.scope);
       if (!existing) {
         const perm = permissionRepository.create({
           resource: dp.resource,
@@ -258,6 +267,7 @@ async function seed() {
         permissionKeys: [
           'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION',
           'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION',
+          'CLIENT:VIEW:PLATFORM', 'CLIENT:CREATE:ORGANIZATION', 'CLIENT:EDIT:ORGANIZATION', 'CLIENT:DELETE:ORGANIZATION',
           'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
           'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
           'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM',
@@ -274,6 +284,7 @@ async function seed() {
         permissionKeys: [
           'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION',
           'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION',
+          'CLIENT:VIEW:PLATFORM', 'CLIENT:CREATE:ORGANIZATION', 'CLIENT:EDIT:ORGANIZATION',
           'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
           'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
           'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM',
@@ -876,12 +887,8 @@ async function seed() {
           latitude: ad.latitude,
           longitude: ad.longitude,
           location: { type: 'Point', coordinates: [ad.longitude, ad.latitude] },
-          status: 'ACTIVE',
+          status: AssayerStatus.ACTIVE,
           lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
-          skills: assayerSkillsMap[ad.code]?.skills || ['Gold', 'Gold Valuation'],
-          certifications: assayerSkillsMap[ad.code]?.certifications || [
-            { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
-          ],
           experienceYears: assayerSkillsMap[ad.code]?.experienceYears || 3,
           performanceRating: assayerSkillsMap[ad.code]?.performanceRating || 4.0,
           organizationId: defaultOrg.id,
@@ -1284,8 +1291,8 @@ async function seed() {
           name: 'SBI Corporate Audit 2026',
           description: 'Annual corporate reference audit for State Bank of India branches.',
           clientId: sbiClient.id,
-          status: 'PLANNING' as any,
-          priority: 'HIGH' as any,
+          status: ProjectStatus.PLANNING,
+          priority: Priority.HIGH,
           startDate: new Date('2026-07-01'),
           endDate: new Date('2026-07-31'),
           createdBy: 'system',
@@ -1304,8 +1311,8 @@ async function seed() {
           pb = projectBranchRepository.create({
             projectId: project.id,
             branchId: sb.id,
-            status: 'PLANNING' as any,
-            priority: 'HIGH' as any,
+            status: ProjectBranchStatus.PLANNING,
+            priority: Priority.HIGH,
             createdBy: 'system',
             updatedBy: 'system',
           });
@@ -1319,8 +1326,19 @@ async function seed() {
     console.log('Seeding holiday calendar...');
     const holidayRepository = AppDataSource.getRepository(HolidayEntity);
     const holidaysData = [
-      { name: 'Independence Day', date: new Date('2026-08-15'), type: 'NATIONAL', states: null },
+      { name: 'Republic Day', date: new Date('2026-01-26'), type: 'NATIONAL', states: null },
+      { name: 'Holi', date: new Date('2026-03-04'), type: 'BANK', states: null },
+      { name: 'Good Friday', date: new Date('2026-04-03'), type: 'BANK', states: null },
+      { name: 'Dr. Ambedkar Jayanti', date: new Date('2026-04-14'), type: 'NATIONAL', states: null },
       { name: 'Maharashtra Day', date: new Date('2026-05-01'), type: 'STATE', states: ['Maharashtra'] },
+      { name: 'Id-ul-Fitr', date: new Date('2026-03-20'), type: 'BANK', states: null },
+      { name: 'Bakrid / Eid al-Adha', date: new Date('2026-05-27'), type: 'BANK', states: null },
+      { name: 'Independence Day', date: new Date('2026-08-15'), type: 'NATIONAL', states: null },
+      { name: 'Ganesh Chaturthi', date: new Date('2026-09-14'), type: 'STATE', states: ['Maharashtra', 'Gujarat', 'Karnataka'] },
+      { name: 'Mahatma Gandhi Jayanti', date: new Date('2026-10-02'), type: 'NATIONAL', states: null },
+      { name: 'Dussehra / Vijayadashami', date: new Date('2026-10-20'), type: 'BANK', states: null },
+      { name: 'Diwali (Laxmi Pujan)', date: new Date('2026-11-08'), type: 'NATIONAL', states: null },
+      { name: 'Guru Nanak Jayanti', date: new Date('2026-11-24'), type: 'BANK', states: null },
       { name: 'Christmas Day', date: new Date('2026-12-25'), type: 'NATIONAL', states: null },
     ];
 
@@ -1341,6 +1359,27 @@ async function seed() {
       }
     }
 
+    // 15. Seed Validation Queue Cases
+    console.log('Seeding validation cases...');
+    const validationRepo = AppDataSource.getRepository(ValidationCaseEntity);
+    const pbRepo = AppDataSource.getRepository(ProjectBranchEntity);
+    const branches = await pbRepo.find();
+    for (const b of branches) {
+      const existing = await validationRepo.findOne({ where: { projectBranchId: b.id } });
+      if (!existing) {
+        await validationRepo.save(
+          validationRepo.create({
+            projectBranchId: b.id,
+            status: ValidationStatus.PENDING,
+            remarks: 'Auto-seeded for Data Entry Review',
+            createdBy: 'system',
+            updatedBy: 'system',
+          })
+        );
+        console.log(`Seeded validation case for project branch ${b.id}`);
+      }
+    }
+
     console.log('Seeding completed successfully!');
   } catch (error) {
     console.error('Seeding failed:', error);
@@ -1349,4 +1388,7 @@ async function seed() {
   }
 }
 
-seed();
+seed().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

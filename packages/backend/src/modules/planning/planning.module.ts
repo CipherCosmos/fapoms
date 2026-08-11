@@ -3,8 +3,10 @@
  */
 
 import { Module, forwardRef } from '@nestjs/common';
+import { PricingModule } from '../pricing/pricing.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { CommandCenterService } from './command-center.service';
 import { PlanningService } from './planning.service';
 import { PlanningController } from './planning.controller';
 import { PlanningOrchestratorService } from './planning-orchestrator.service';
@@ -41,20 +43,26 @@ import { AssayerModule } from '../assayer/assayer.module';
 import { HolidayModule } from '../holiday/holiday.module';
 import { ProjectModule } from '../project/project.module';
 import { AssignmentModule } from '../assignment/assignment.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import {
   AvailabilityFilter,
+  ConsecutiveBranchAuditFilter,
   ClientRestrictionFilter,
   ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
   RequiredSkillsFilter,
+  DistancePolicyFilter,
   DistanceScoreCalculator,
   TravelTimeScoreCalculator,
   WorkloadScoreCalculator,
   PerformanceScoreCalculator,
+  RejectionAcceptanceScoreCalculator,
+  DeliverySpeedScoreCalculator,
+  QueryVolumeScoreCalculator,
   ExperienceScoreCalculator,
   CostScoreCalculator,
   ClientPreferenceScoreCalculator,
@@ -66,12 +74,16 @@ import {
   RecommendationEngine,
 } from './recommendation.engine';
 
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
+
 @Module({
   imports: [
+    PricingModule,
     TypeOrmModule.forFeature([
       BranchEntity,
       AssayerEntity,
       AssignmentEntity,
+      ValidationQueryEntity,
       ScheduleEntity,
       ProjectBranchEntity,
       ProjectEntity,
@@ -92,11 +104,14 @@ import {
     AssayerModule,
     HolidayModule,
     ProjectModule,
+    // Field incidents have to reach the operations desk — see FieldOperationsService.
+    NotificationsModule,
     forwardRef(() => AssignmentModule),
   ],
   controllers: [PlanningController],
   providers: [
     PlanningService,
+    CommandCenterService,
     PlanningOrchestratorService,
     ProjectPlanningService,
     OptimizationEngine,
@@ -118,14 +133,19 @@ import {
     { provide: 'WorkloadProvider', useClass: PlanningAntiCorruptionLayer },
     { provide: 'OperationsControlServiceInterface', useClass: OperationsPlanningService },
     AvailabilityFilter,
+    ConsecutiveBranchAuditFilter,
     ClientRestrictionFilter,
     ClientEligibilityFilter,
     RuleEngineEligibilityFilter,
     RequiredSkillsFilter,
+    DistancePolicyFilter,
     DistanceScoreCalculator,
     TravelTimeScoreCalculator,
     WorkloadScoreCalculator,
     PerformanceScoreCalculator,
+    RejectionAcceptanceScoreCalculator,
+    DeliverySpeedScoreCalculator,
+    QueryVolumeScoreCalculator,
     ExperienceScoreCalculator,
     CostScoreCalculator,
     ClientPreferenceScoreCalculator,

@@ -4,7 +4,7 @@
  * Implements candidate recommendations using PostGIS proximity search (Part 3 Module 5, Part 7 §6).
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -13,8 +13,12 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 
 import { RecommendationEngine } from './recommendation.engine';
+import { ConstraintEvaluator } from './constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { generateExplanation, ExplanationReason } from './explainability.mapper';
+import { AuditService } from '../../core/audit/audit.service';
+import { EventCategory } from '@fapoms/shared';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 export interface AssayerRecommendation {
   id: string;
@@ -32,6 +36,19 @@ export interface AssayerRecommendation {
   longitude?: number | null;
   baseFee?: number;
   readableReasons?: ExplanationReason[];
+  /** Per-dimension scores (distance, acceptanceRate, queryVolume, …) behind the total. */
+  scoreBreakdown?: Record<string, number>;
+  pendingOnThisBranch?: boolean;
+  /** The assayer's own weekly cap, so downstream planners need not assume a platform default. */
+  maxWeeklyWorkload?: number;
+}
+
+/** A candidate the filters removed, and why — surfaced so ops isn't left guessing. */
+export interface ExcludedCandidate {
+  assayerId: string;
+  displayName: string;
+  reason: string;
+  detail?: string;
 }
 
 export interface CreateBusinessRuleDto {
@@ -61,30 +78,99 @@ export class PlanningService {
     private readonly assayerService: AssayerService,
     private readonly recommendationEngine: RecommendationEngine,
     private readonly routingService: RoutingService,
+    private readonly auditService: AuditService,
+    private readonly feePolicyService: FeePolicyService,
+    private readonly constraintEvaluator: ConstraintEvaluator,
   ) {}
 
-  async getRecommendedCandidates(branchId: string): Promise<AssayerRecommendation[]> {
+  /**
+   * The smart default audit date for a branch: the first day the audit could actually be
+   * worked, starting tomorrow (field audits are scheduled ahead, not same-day).
+   *
+   * Skips Sundays, state public holidays and non-working Saturdays via the same
+   * ConstraintEvaluator rule that assignment creation enforces — so the date the planner
+   * seeds is never one the platform would later reject with "Holiday Conflict". Ops can
+   * always override it in the date picker; this only answers "if I don't choose, when?".
+   */
+  async suggestAuditDate(branchId: string): Promise<{ date: string; skipped: Array<{ date: string; reason: string }> }> {
+    const branch = await this.branchQueryService.findOne(branchId);
+    if (!branch) {
+      throw new NotFoundException(`Branch ${branchId} not found.`);
+    }
+
+    const skipped: Array<{ date: string; reason: string }> = [];
+    const candidate = new Date();
+    candidate.setDate(candidate.getDate() + 1);
+    const key = (d: Date) => {
+      // Local calendar date, not UTC — an IST evening must not roll the date back a day.
+      const y = d.getFullYear(); const m = String(d.getMonth() + 1).padStart(2, '0'); const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (candidate.getDay() === 0) {
+        skipped.push({ date: key(candidate), reason: 'Sunday' });
+      } else {
+        const holiday = await this.constraintEvaluator.checkHoliday(branch.state || '', candidate, branch.clientId ?? undefined);
+        if (holiday.passed) {
+          return { date: key(candidate), skipped };
+        }
+        skipped.push({ date: key(candidate), reason: holiday.reason || 'Holiday' });
+      }
+      candidate.setDate(candidate.getDate() + 1);
+    }
+
+    // Nothing workable within a month — hand back tomorrow rather than inventing a date,
+    // and let the skipped list tell ops the calendar itself is the problem.
+    const fallback = new Date();
+    fallback.setDate(fallback.getDate() + 1);
+    return { date: key(fallback), skipped };
+  }
+
+  async getRecommendedCandidates(
+    branchId: string,
+    weights: Record<string, number> = {},
+    forDate?: string,
+  ): Promise<AssayerRecommendation[]> {
     const branch = await this.branchQueryService.findOne(branchId);
 
     if (!branch) {
       throw new NotFoundException(`Branch ${branchId} not found.`);
     }
 
-    const results = await this.recommendationEngine.recommend(branch, new Date());
+    // One date for the whole call: the same instant the engine scores against is the instant
+    // the fee is quoted for, so the score and the price can never describe different days.
+    //
+    // The date is the CALLER'S choice, not an assumption. This used to hardcode "now", so the
+    // availability filter answered "who is free TODAY?" while ops was planning an audit for
+    // some other day entirely — people free tomorrow showed as unavailable, and people busy
+    // tomorrow showed as free. The UI passes its date picker; absent, today is kept for
+    // backward-compatible callers.
+    const scheduledDate = forDate ? new Date(`${forDate.slice(0, 10)}T00:00:00`) : new Date();
+    if (Number.isNaN(scheduledDate.getTime())) {
+      throw new BadRequestException(`Invalid date '${forDate}'. Use YYYY-MM-DD.`);
+    }
+    // `weights` lets the scenario sandbox pass its overrides all the way into scoring; empty by
+    // default, in which case `recommend` resolves the client's own configured weights as before.
+    const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights);
+    const rates = await this.feePolicyService.getRates(branch.clientId ?? null);
 
     const recommendations: AssayerRecommendation[] = [];
     for (const r of results) {
       let distanceKm: number | null = null;
-      if (branch.latitude && branch.longitude && r.assayer.latitude && r.assayer.longitude) {
+      if (branch.latitude && branch.longitude && r.assayer.effectiveLatitude && r.assayer.effectiveLongitude) {
         const route = await this.routingService.calculateRoute(
           { latitude: branch.latitude, longitude: branch.longitude },
-          { latitude: r.assayer.latitude, longitude: r.assayer.longitude },
+          { latitude: r.assayer.effectiveLatitude, longitude: r.assayer.effectiveLongitude },
         );
         distanceKm = route.distanceKm;
       }
 
-      const profile = await this.assayerService.getActiveCommercialProfile(r.assayer.id);
-      const baseFee = profile ? Number(profile.baseFee) : 1500;
+      // Quoted through the one calculator that prices the assignment itself. This used to read
+      // the profile active *today* and fall back to a literal 1500, while assignment creation
+      // fell back to 1200 and FeePolicyService falls back to the client's contracted rate — so
+      // ops saw a figure on the candidate list that no part of the system would ever charge.
+      const { baseFee } = await this.feePolicyService.resolveBaseFee(r.assayer.id, rates, scheduledDate);
 
       const readableReasons = generateExplanation(r.breakdown, {
         displayName: r.assayer.displayName,
@@ -106,24 +192,54 @@ export class PlanningService {
         city: r.assayer.city,
         distanceKm,
         score: r.score,
-        latitude: r.assayer.latitude,
-        longitude: r.assayer.longitude,
+        latitude: r.assayer.effectiveLatitude,
+        longitude: r.assayer.effectiveLongitude,
         baseFee,
         readableReasons,
+        // Per-dimension scores so ops can see *why* this candidate ranked where they did,
+        // rather than being handed an unexplained number.
+        scoreBreakdown: r.breakdown,
+        pendingOnThisBranch: r.pendingOnThisBranch,
+        maxWeeklyWorkload: r.assayer.maxWeeklyWorkload ?? undefined,
       });
     }
 
+    // Carried through so the UI can answer "why isn't <assayer> on this list?" — previously
+    // excluded candidates just vanished, which hid real data problems (expired certification,
+    // full diary) behind an apparently-normal shorter list.
+    (recommendations as any).excluded = (results as any).excluded || [];
     return recommendations;
   }
 
   // Rule management methods
+  /**
+   * Business rules decide who is allowed to audit what — required certifications, capacity
+   * ceilings, client restrictions, no-repeat-auditor rotation. Changing one silently changes
+   * the independence controls the whole engagement rests on, so every change is recorded with
+   * the rule's before and after state.
+   *
+   * None of these three recorded anything. A rule could be relaxed, an assignment made under
+   * it, and the rule put back, leaving no evidence the control had ever been lifted.
+   */
   async createRule(dto: CreateBusinessRuleDto, userId: string): Promise<BusinessRuleEntity> {
     const rule = this.ruleRepository.create({
       ...dto,
       createdBy: userId,
       updatedBy: userId,
     });
-    return this.ruleRepository.save(rule);
+    const saved = await this.ruleRepository.save(rule);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BUSINESS_RULE_CREATED',
+      entityType: 'BUSINESS_RULE',
+      entityId: saved.id,
+      userId,
+      remarks: `Created rule "${saved.name ?? saved.id}".`,
+      metadata: { rule: saved },
+    });
+
+    return saved;
   }
 
   async updateRule(id: string, dto: UpdateBusinessRuleDto, userId: string): Promise<BusinessRuleEntity> {
@@ -131,9 +247,24 @@ export class PlanningService {
     if (!rule) {
       throw new NotFoundException(`Business rule ${id} not found.`);
     }
+    // Captured before the merge so the audit row shows what the rule actually was.
+    const before = { ...rule };
+
     Object.assign(rule, dto);
     rule.updatedBy = userId;
-    return this.ruleRepository.save(rule);
+    const saved = await this.ruleRepository.save(rule);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BUSINESS_RULE_UPDATED',
+      entityType: 'BUSINESS_RULE',
+      entityId: saved.id,
+      userId,
+      remarks: `Updated rule "${saved.name ?? saved.id}".`,
+      metadata: { before, after: saved, changedFields: Object.keys(dto ?? {}) },
+    });
+
+    return saved;
   }
 
   async deleteRule(id: string, userId: string): Promise<void> {
@@ -144,6 +275,16 @@ export class PlanningService {
     rule.isActive = false;
     rule.updatedBy = userId;
     await this.ruleRepository.save(rule);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BUSINESS_RULE_DELETED',
+      entityType: 'BUSINESS_RULE',
+      entityId: rule.id,
+      userId,
+      remarks: `Deactivated rule "${rule.name ?? rule.id}". It no longer constrains assignment.`,
+      metadata: { rule },
+    });
   }
 
   async getRules(scope?: string): Promise<BusinessRuleEntity[]> {

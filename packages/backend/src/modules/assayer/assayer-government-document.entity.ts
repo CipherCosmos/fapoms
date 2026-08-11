@@ -1,6 +1,7 @@
 import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { AssayerEntity } from './assayer.entity';
+import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
 @Entity('assayer_government_documents')
 @Index(['assayerId'])
@@ -17,7 +18,8 @@ export class AssayerGovernmentDocumentEntity extends BaseEntity {
   @Column({ name: 'document_type', length: 50 })
   documentType: string;
 
-  @Column({ name: 'document_number', length: 100 })
+  // Government-ID number (Aadhaar/PAN/passport) — encrypted at rest, so stored as ciphertext `text`.
+  @Column({ name: 'document_number', type: 'text', transformer: encryptedColumn })
   documentNumber: string;
 
   @Column({ name: 'expiry_date', type: 'date', nullable: true })

@@ -7,6 +7,7 @@ import { ProjectEntity } from '../project/project.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
+import { AuditService } from '../../core/audit/audit.service';
 
 describe('OperationsControlCenterService', () => {
   let service: OperationsControlCenterService;
@@ -26,6 +27,14 @@ describe('OperationsControlCenterService', () => {
 
   const mockAssignmentRepo = {
     find: jest.fn().mockResolvedValue([]),
+    count: jest.fn().mockResolvedValue(0),
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    })),
   };
 
   const mockProjectMetricsProvider = {
@@ -38,6 +47,7 @@ describe('OperationsControlCenterService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }) } },
         OperationsControlCenterService,
         { provide: getRepositoryToken(OperationsTaskEntity), useValue: mockTaskRepository },
         { provide: getRepositoryToken(OperationsExceptionEntity), useValue: mockExceptionRepository },

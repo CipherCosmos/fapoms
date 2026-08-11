@@ -34,6 +34,9 @@ export class HolidayEntity extends BaseEntity {
   })
   applicableStates: string[] | null;
 
+  @Column({ name: 'client_id', type: 'uuid', nullable: true })
+  clientId: string | null;
+
   @Column({ type: 'int' })
   year: number;
 }

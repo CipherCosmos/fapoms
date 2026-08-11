@@ -1,0 +1,158 @@
+import React, { useState } from 'react';
+import { useSearchParams, Link } from 'react-router-dom';
+import { Banknote, Search } from 'lucide-react';
+import { formatRupees as money } from '@fapoms/shared';
+import { useAssayerStatement } from '../../hooks/useBilling';
+import { api } from '../../services/api';
+import type { AssayerStatement } from '../../services/billing';
+
+/**
+ * Assayer statement — what an assayer has earned, been paid, and is still owed.
+ *
+ * Assayers are the party the business pays, yet the finance app had no per-assayer view: the
+ * payables tab is a flat cross-assayer list, so "what have we paid this assayer, what do we
+ * still owe, show the payment history" could not be answered from the UI. The endpoint existed
+ * and only the mobile app (the assayer's own view) consumed it. The finance manager who signs
+ * disbursements now has a statement to sign against.
+ */
+
+interface AssayerLite {
+  id: string;
+  assayerCode: string;
+  displayName: string;
+  district: string | null;
+}
+
+export const AssayerStatementPage: React.FC = () => {
+  const [params, setParams] = useSearchParams();
+  const assayerId = params.get('assayer') ?? '';
+
+  const [roster, setRoster] = useState<AssayerLite[]>([]);
+  const [search, setSearch] = useState('');
+  const statement = useAssayerStatement(assayerId || null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api.request<AssayerLite[]>('/assayers?limit=1000')
+      .then((r) => { if (!cancelled) setRoster(r); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const setAssayer = (id: string) => setParams(id ? { assayer: id } : {}, { replace: true });
+
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? roster.filter((a) => a.displayName.toLowerCase().includes(q) || a.assayerCode.toLowerCase().includes(q))
+    : roster;
+
+  return (
+    <div style={{ padding: '20px 24px', maxWidth: 1200, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Assayer statement</h1>
+        <Link to="/billing" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none' }}>← Back to Finance</Link>
+      </div>
+
+      <div style={{ ...card, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Banknote size={16} style={{ color: 'var(--accent)' }} />
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"
+            style={{ padding: '7px 10px 7px 28px', fontSize: 12.5, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', minWidth: 220 }} />
+        </div>
+        <select value={assayerId} onChange={(e) => setAssayer(e.target.value)}
+          style={{ padding: '7px 11px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, minWidth: 240 }}>
+          <option value="">Choose an assayer…</option>
+          {filtered.map((a) => <option key={a.id} value={a.id}>{a.displayName} · {a.assayerCode}</option>)}
+        </select>
+      </div>
+
+      {!assayerId && <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>Pick an assayer to see their statement.</div>}
+      {assayerId && statement.isLoading && <div style={{ ...card, color: 'var(--text-muted)' }}>Loading statement…</div>}
+      {assayerId && statement.error && <div style={{ ...card, color: 'var(--danger)' }}>{(statement.error as Error).message}</div>}
+      {statement.data && <StatementBody data={statement.data} />}
+    </div>
+  );
+};
+
+const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
+  const t = data.totals;
+  return (
+    <>
+      <div style={card}>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>{data.assayerName ?? data.assayerId}</div>
+        {data.assayerCode && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{data.assayerCode}</div>}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <Stat label="Earned" value={money(t.earned)} tone="var(--accent)" />
+        <Stat label="Paid" value={money(t.paid)} tone="var(--success)" />
+        <Stat label="Outstanding" value={money(t.outstanding)} tone={t.outstanding > 0 ? 'var(--warning)' : 'var(--text-muted)'} />
+        <Stat label="Awaiting approval" value={money(t.awaitingApproval)} tone="var(--text-secondary)" />
+        <Stat label="On hold / disputed" value={money(t.onHoldOrDisputed)} tone={t.onHoldOrDisputed > 0 ? 'var(--danger)' : 'var(--text-muted)'} />
+      </div>
+
+      {data.payables.length > 0 && (
+        <div style={card}>
+          <div style={{ ...label, marginBottom: 10 }}>Payables ({data.payables.length})</div>
+          <SimpleTable
+            head={['Payable', 'Status', 'Base', 'Travel', 'TDS', 'Total', 'Paid', 'Outstanding']}
+            rows={data.payables.map((p) => [
+              p.payableNumber, p.status, money(p.baseAmount), money(p.travelAmount),
+              `−${money(p.tdsAmount)}`, money(p.totalAmount), money(p.paidAmount), money(p.outstanding),
+            ])}
+          />
+        </div>
+      )}
+
+      {data.payments.length > 0 && (
+        <div style={card}>
+          <div style={{ ...label, marginBottom: 10 }}>Disbursements ({data.payments.length})</div>
+          <SimpleTable
+            head={['Reference', 'Method', 'Amount', 'Paid on', 'Balance after', 'Note']}
+            rows={data.payments.map((p) => [
+              p.paymentReference, p.method, money(p.amount),
+              p.paidDate ? new Date(p.paidDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—',
+              p.balanceAfter != null ? money(p.balanceAfter) : '—', p.notes ?? '',
+            ])}
+          />
+        </div>
+      )}
+
+      {data.payables.length === 0 && data.payments.length === 0 && (
+        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>No payables or disbursements recorded for this assayer.</div>
+      )}
+    </>
+  );
+};
+
+const Stat: React.FC<{ label: string; value: string; tone?: string }> = ({ label, value, tone }) => (
+  <div style={{ ...card, flex: '1 1 150px', minWidth: 0 }}>
+    <div style={{ fontSize: 22, fontWeight: 700, color: tone ?? 'var(--text-primary)', lineHeight: 1.1 }}>{value}</div>
+    <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700, marginTop: 6 }}>{label}</div>
+  </div>
+);
+
+const SimpleTable: React.FC<{ head: string[]; rows: React.ReactNode[][] }> = ({ head, rows }) => (
+  <div style={{ overflowX: 'auto' }}>
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+      <thead>
+        <tr>{head.map((h, i) => <th key={h} style={{ ...label, textAlign: i === 0 ? 'left' : 'right', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>)}</tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i} style={{ borderBottom: '1px solid var(--border-hair)' }}>
+            {r.map((c, j) => <td key={j} style={{ padding: '8px 10px', textAlign: j === 0 ? 'left' : 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{c}</td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const card: React.CSSProperties = {
+  background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md, 10px)', padding: 16,
+};
+const label: React.CSSProperties = {
+  fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700,
+};

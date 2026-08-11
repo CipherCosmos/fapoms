@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BranchEntity } from './branch.entity';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 @Injectable()
 export class BranchQueryService {
@@ -21,20 +22,31 @@ export class BranchQueryService {
     return branch;
   }
 
+  /**
+   * List branches under the request's global scope.
+   *
+   * `scope.regions` is the enforced region ceiling from `resolveGlobalScope` — `null` means
+   * unrestricted, an array means restrict. It is applied here rather than left to callers so
+   * that a caller which forgets about regions cannot accidentally serve an operator branches
+   * outside their assignment.
+   */
   async findAll(
     page = 1,
     limit = 50,
-    clientId?: string,
-    region?: string,
-    zoneId?: string,
+    scope: Partial<GlobalScope> = {},
   ): Promise<{ branches: BranchEntity[]; total: number }> {
+    const { clientId, zoneId, state, regions } = scope;
+
     const query = this.branchRepository.createQueryBuilder('branch')
       .leftJoinAndSelect('branch.contacts', 'contacts')
       .where('branch.is_active = :isActive', { isActive: true });
 
     if (clientId) query.andWhere('branch.client_id = :clientId', { clientId });
-    if (region) query.andWhere('branch.region = :region', { region });
     if (zoneId) query.andWhere('branch.zone_id = :zoneId', { zoneId });
+    if (state) query.andWhere('branch.state = :state', { state });
+    if (regions && regions.length > 0) {
+      query.andWhere('branch.region IN (:...regions)', { regions });
+    }
 
     const [branches, total] = await query
       .orderBy('branch.name', 'ASC')
@@ -43,6 +55,50 @@ export class BranchQueryService {
       .getManyAndCount();
 
     return { branches, total };
+  }
+
+  /**
+   * The distinct regions and states that actually have branches, with counts.
+   *
+   * Drives the header's scope dropdowns. Built from live data rather than from the `Region`
+   * enum so the list never offers an operator a region that would return an empty screen,
+   * and narrowed to `scope.regions` so a restricted account is not shown the existence of
+   * regions it cannot open.
+   */
+  async scopeFacets(scope: Partial<GlobalScope> = {}): Promise<{
+    regions: Array<{ value: string; count: number }>;
+    states: Array<{ value: string; region: string | null; count: number }>;
+  }> {
+    const base = () => {
+      const q = this.branchRepository.createQueryBuilder('branch')
+        .where('branch.is_active = :isActive', { isActive: true });
+      if (scope.clientId) q.andWhere('branch.client_id = :clientId', { clientId: scope.clientId });
+      if (scope.regions && scope.regions.length > 0) {
+        q.andWhere('branch.region IN (:...regions)', { regions: scope.regions });
+      }
+      return q;
+    };
+
+    const regionRows = await base()
+      .select('branch.region', 'value')
+      .addSelect('COUNT(*)', 'count')
+      .andWhere('branch.region IS NOT NULL')
+      .groupBy('branch.region')
+      .getRawMany<{ value: string; count: string }>();
+
+    const stateRows = await base()
+      .select('branch.state', 'value')
+      .addSelect('MIN(branch.region)', 'region')
+      .addSelect('COUNT(*)', 'count')
+      .andWhere('branch.state IS NOT NULL')
+      .groupBy('branch.state')
+      .orderBy('branch.state', 'ASC')
+      .getRawMany<{ value: string; region: string | null; count: string }>();
+
+    return {
+      regions: regionRows.map((r) => ({ value: r.value, count: Number(r.count) })),
+      states: stateRows.map((r) => ({ value: r.value, region: r.region, count: Number(r.count) })),
+    };
   }
 
   async findOneByCode(branchCode: string): Promise<BranchEntity | null> {

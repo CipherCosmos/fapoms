@@ -1,3 +1,5 @@
+import { ValidationQueryStatus } from '@fapoms/shared';
+
 export interface CustomerRecord {
   id: string;
   customerName: string;
@@ -24,7 +26,10 @@ export interface ValidationQuery {
   validatorName: string;
   queryText: string;
   assayerResponse?: string;
-  status: 'OPEN' | 'RESOLVED';
+  // RESPONDED = assayer has submitted a response but a validator hasn't closed it yet.
+  // Derived from the shared enum (as a string union, so `=== 'RESOLVED'` comparisons still typecheck)
+  // rather than a hand-copied literal set that could drift from @fapoms/shared.
+  status: `${ValidationQueryStatus}`;
   createdAt: string;
 }
 
@@ -37,12 +42,67 @@ export interface AssayerExpense {
   description: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   receiptUrl?: string;
+  /** Set when the claim is read back from `/expenses/mine`; absent on locally-built rows. */
+  createdAt?: string;
+}
+
+/**
+ * The assayer's financial statement from the billing engine.
+ *
+ * These are the figures finance works from. The earnings screen previously derived its own
+ * totals by summing agreed fees off the loaded assignments, which could not see TDS, part
+ * payments, or anything on hold — so the app and the desk disagreed about what was owed.
+ */
+export interface AssayerPayable {
+  id: string;
+  payableNumber: string;
+  status: string;
+  assignmentId?: string;
+  baseAmount: number;
+  travelAmount: number;
+  tdsAmount: number;
+  totalAmount: number;
+  paidAmount: number;
+  outstanding: number;
+  createdAt: string;
+}
+
+export interface AssayerPayment {
+  id: string;
+  paymentReference: string;
+  method: string;
+  amount: number;
+  paidDate: string;
+  balanceAfter: number | null;
+  notes?: string;
+}
+
+export interface AssayerStatement {
+  totals: {
+    earned: number;
+    paid: number;
+    outstanding: number;
+    awaitingApproval: number;
+    onHoldOrDisputed: number;
+    payableCount: number;
+  };
+  payables: AssayerPayable[];
+  payments: AssayerPayment[];
+}
+
+/** Claim totals from `/expenses/mine/summary`, in rupees. */
+export interface ExpenseSummary {
+  pending: number;
+  approved: number;
+  rejected: number;
+  totalClaimed: number;
 }
 
 export interface AssayerAssignment {
   id: string;
   assignmentCode: string;
   projectBranchId: string;
+  assayerId?: string;
   branchName: string;
   branchCode: string;
   bankName: string;
@@ -53,16 +113,31 @@ export interface AssayerAssignment {
   sequenceOrder: number;
   estimatedCustomerCount: number;
   estimatedAuditHours: number;
-  status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED';
+  // Mirrors AssignmentStatus in @fapoms/shared. CANCELLED was missing here even though the
+  // API layer already passed it through, so a cancelled job fell through every status map and
+  // rendered as a raw uppercase string — or worse, was offered as the assayer's next job.
+  status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
   proposedFee: number;
+  standardBaseFee?: number;
   agreedBaseFee: number;
   agreedTravelFee: number;
+  distanceKm?: number;
   checkedInAt?: string;
   checkInGeoLat?: number;
   checkInGeoLng?: number;
   customerPdfUrl?: string;
   completedPdfUrl?: string;
   instructions?: string;
+  negotiationCount?: number;
+  remarks?: string;
+  /**
+   * Whether this branch's audit packet has actually been dispatched, from the server.
+   *
+   * The app used to offer a "Packet PDF" button on every checked-in assignment and only find
+   * out whether anything existed after the assayer tapped it — so the ordinary case (ops has
+   * not sent the paperwork yet) presented as a failed download.
+   */
+  documentReadiness?: { state: 'READY' | 'PREPARING' | 'NONE'; dispatchedCount: number; message: string };
   customers: CustomerRecord[];
   queries: ValidationQuery[];
   expenses: AssayerExpense[];
@@ -92,4 +167,18 @@ export interface AssayerProfile {
   queryResolutionRatePercent: number;
   totalEarnings: number;
   pendingEarnings: number;
+}
+
+/** One message in a clarification thread (`/validation-queries/:id/messages`). */
+export interface QueryMessage {
+  id: string;
+  authorType: 'STAFF' | 'ASSAYER';
+  authorId: string;
+  authorName: string | null;
+  body: string | null;
+  attachments: { url: string; fileName: string; fileType: string; s3Key?: string }[];
+  /** Set when the desk anchored the question to a region of the audit PDF. */
+  pageNumber: number | null;
+  region: { x: number; y: number; w: number; h: number } | null;
+  createdAt: string;
 }

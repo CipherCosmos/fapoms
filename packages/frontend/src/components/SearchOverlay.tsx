@@ -1,26 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Search, ArrowRight, Command } from 'lucide-react';
-import { api } from '../services/api';
-
-interface SearchResult {
-  branches: { id: string; name: string; code: string; city: string; state: string }[];
-  assayers: { id: string; name: string; code: string; phone: string }[];
-  projects: { id: string; name: string; projectNumber: string }[];
-  clients: { id: string; name: string; code: string }[];
-  assignments: { id: string; assignmentNumber: string; branchName: string; assayerName: string }[];
-}
+import { useGlobalSearch } from '../hooks/useGlobalSearch';
 
 export const SearchOverlay: React.FC = () => {
-  const navigate = useNavigate();
+  const { query, setQuery, results, loading, navigateTo, totalCount } = useGlobalSearch();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const flatItems = useCallback(() => {
     if (!results) return [];
@@ -33,42 +20,23 @@ export const SearchOverlay: React.FC = () => {
     return items;
   }, [results]);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q || q.length < 1) { setResults(null); return; }
-    setLoading(true);
-    try {
-      const data = await api.request<any>(`/search?q=${encodeURIComponent(q)}`);
-      setResults(data);
-    } catch {}
-    setLoading(false);
-  }, []);
-
   const openSearch = useCallback(() => {
     setOpen(true);
     setQuery('');
-    setResults(null);
     setSelectedIdx(-1);
     setTimeout(() => inputRef.current?.focus(), 50);
-  }, []);
+  }, [setQuery]);
 
   const closeSearch = useCallback(() => {
     setOpen(false);
     setQuery('');
-    setResults(null);
     setSelectedIdx(-1);
-  }, []);
+  }, [setQuery]);
 
-  const navigateTo = useCallback((type: string, id: string) => {
+  const handleSelect = useCallback((type: string, id: string) => {
     closeSearch();
-    const paths: Record<string, string> = {
-      branches: `/branches?id=${id}`,
-      assayers: `/assayers/${id}`,
-      projects: `/projects?id=${id}`,
-      clients: `/clients?id=${id}`,
-      assignments: `/assignments?id=${id}`,
-    };
-    navigate(paths[type] || '/');
-  }, [navigate, closeSearch]);
+    navigateTo(type, id);
+  }, [closeSearch, navigateTo]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -84,15 +52,8 @@ export const SearchOverlay: React.FC = () => {
   }, [open, openSearch, closeSearch]);
 
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query) {
-      debounceRef.current = setTimeout(() => doSearch(query), 200);
-      setSelectedIdx(-1);
-    } else {
-      setResults(null);
-    }
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query, doSearch]);
+    if (query) setSelectedIdx(-1);
+  }, [query]);
 
   useEffect(() => {
     if (!open) return;
@@ -101,12 +62,12 @@ export const SearchOverlay: React.FC = () => {
       if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIdx(i => Math.max(i - 1, 0)); }
       if (e.key === 'Enter' && selectedIdx >= 0) {
         const items = flatItems();
-        if (items[selectedIdx]) navigateTo(items[selectedIdx].type, items[selectedIdx].id);
+        if (items[selectedIdx]) handleSelect(items[selectedIdx].type, items[selectedIdx].id);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, selectedIdx, flatItems, navigateTo]);
+  }, [open, selectedIdx, flatItems, handleSelect]);
 
   useEffect(() => {
     if (selectedIdx >= 0 && listRef.current) {
@@ -114,11 +75,6 @@ export const SearchOverlay: React.FC = () => {
       if (el) el.scrollIntoView({ block: 'nearest' });
     }
   }, [selectedIdx]);
-
-  const totalCount = results
-    ? results.branches.length + results.assayers.length + results.projects.length +
-      results.clients.length + results.assignments.length
-    : 0;
 
   if (!open) return null;
 
@@ -132,14 +88,14 @@ export const SearchOverlay: React.FC = () => {
 
       <div style={{
         position: 'relative', width: '100%', maxWidth: '620px',
-        background: 'rgba(18, 20, 26, 0.96)', backdropFilter: 'blur(20px)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: '16px', boxShadow: '0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)',
+        background: 'var(--bg-surface)', backdropFilter: 'blur(20px)',
+        border: '1px solid var(--border-hair)',
+        borderRadius: '16px', boxShadow: '0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px var(--border-hair)',
         overflow: 'hidden',
         animation: 'none',
       }}>
         {/* Search Input */}
-        <div style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border-hair)' }}>
           <Search size={18} style={{ color: 'var(--text-muted)', flexShrink: 0, marginRight: '12px' }} />
           <input
             ref={inputRef}
@@ -148,15 +104,15 @@ export const SearchOverlay: React.FC = () => {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{
-              flex: 1, background: 'none', border: 'none', color: '#fff', fontSize: '16px',
+              flex: 1, background: 'none', border: 'none', color: 'var(--text-primary)', fontSize: '16px',
               outline: 'none', fontWeight: 400,
             }}
           />
           {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginRight: '8px' }}>searching...</span>}
           <kbd style={{
-            padding: '2px 8px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px',
+            padding: '2px 8px', background: 'var(--bg-surface-2)', borderRadius: '6px',
             color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, fontFamily: 'inherit',
-            display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid rgba(255,255,255,0.06)',
+            display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--border-hair)',
           }}>
             <Command size={12} />K
           </kbd>
@@ -173,20 +129,20 @@ export const SearchOverlay: React.FC = () => {
             ) : totalCount === 0 ? (
               <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
                 <div style={{ fontSize: '28px', marginBottom: '8px', opacity: 0.3 }}>📭</div>
-                No results for "<b style={{ color: '#fff' }}>{query}</b>"
+                No results for "<b style={{ color: 'var(--text-primary)' }}>{query}</b>"
               </div>
             ) : (
               <>
                 <div style={{ padding: '8px 20px 4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   {totalCount} result{totalCount !== 1 ? 's' : ''}
                 </div>
-                {renderGroup('Branches', 'branches', results.branches, (i) => i.name, (i) => `${i.city}, ${i.state}`, selectedIdx, flatItems, navigateTo)}
-                {renderGroup('Assayers', 'assayers', results.assayers, (i) => i.name, (i) => i.code, selectedIdx, flatItems, navigateTo)}
-                {renderGroup('Projects', 'projects', results.projects, (i) => i.name, (i) => i.projectNumber, selectedIdx, flatItems, navigateTo)}
-                {renderGroup('Clients', 'clients', results.clients, (i) => i.name, (i) => i.code, selectedIdx, flatItems, navigateTo)}
-                {renderAssignments(results.assignments, selectedIdx, flatItems, navigateTo)}
+                {renderGroup('Branches', 'branches', results.branches, (i) => i.name, (i) => `${i.city}, ${i.state}`, selectedIdx, flatItems, handleSelect)}
+                {renderGroup('Assayers', 'assayers', results.assayers, (i) => i.name, (i) => i.code, selectedIdx, flatItems, handleSelect)}
+                {renderGroup('Projects', 'projects', results.projects, (i) => i.name, (i) => i.projectNumber, selectedIdx, flatItems, handleSelect)}
+                {renderGroup('Clients', 'clients', results.clients, (i) => i.name, (i) => i.code, selectedIdx, flatItems, handleSelect)}
+                {renderAssignments(results.assignments, selectedIdx, flatItems, handleSelect)}
 
-                <div style={{ padding: '8px 20px', borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: '16px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                <div style={{ padding: '8px 20px', borderTop: '1px solid var(--border-hair)', display: 'flex', gap: '16px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   <span><kbd style={kbdStyle}>↑↓</kbd> navigate</span>
                   <span><kbd style={kbdStyle}>↵</kbd> open</span>
                   <span><kbd style={kbdStyle}>esc</kbd> close</span>
@@ -203,7 +159,7 @@ export const SearchOverlay: React.FC = () => {
             </div>
             <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {['Branches', 'Assayers', 'Projects', 'Clients', 'Assignments'].map(s => (
-                <span key={s} style={{ fontSize: '11px', padding: '3px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', color: 'var(--text-muted)' }}>{s}</span>
+                <span key={s} style={{ fontSize: '11px', padding: '3px 10px', background: 'var(--bg-surface-2)', borderRadius: '6px', color: 'var(--text-muted)' }}>{s}</span>
               ))}
             </div>
           </div>
@@ -214,9 +170,9 @@ export const SearchOverlay: React.FC = () => {
 };
 
 const kbdStyle: React.CSSProperties = {
-  padding: '1px 5px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px',
+  padding: '1px 5px', background: 'var(--bg-surface-2)', borderRadius: '4px',
   fontSize: '10px', fontWeight: 600, fontFamily: 'inherit', color: 'var(--text-muted)',
-  border: '1px solid rgba(255,255,255,0.06)',
+  border: '1px solid var(--border-hair)',
 };
 
 function renderGroup(
@@ -229,8 +185,8 @@ function renderGroup(
   const startIdx = flatItems().findIndex(i => i.type === type && i.id === items[0]?.id);
   return (
     <div key={type}>
-      <div style={{ padding: '6px 20px', fontSize: '10px', fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-        {title} <span style={{ color: 'rgba(99,102,241,0.4)', fontWeight: 400 }}>({items.length})</span>
+      <div style={{ padding: '6px 20px', fontSize: '10px', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+        {title} <span style={{ color: 'rgba(216,174,71,0.5)', fontWeight: 400 }}>({items.length})</span>
       </div>
       {items.map((item: any, i: number) => {
         const idx = startIdx + i;
@@ -240,16 +196,16 @@ function renderGroup(
             onMouseEnter={() => {}}
             style={{
               display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 20px', cursor: 'pointer',
-              background: isSelected ? 'rgba(99,102,241,0.12)' : 'transparent',
-              borderLeft: isSelected ? '3px solid #6366f1' : '3px solid transparent',
+              background: isSelected ? 'var(--status-pending-bg)' : 'transparent',
+              borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
               transition: 'all 0.1s',
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>{primary(item)}</div>
+              <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>{primary(item)}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{secondary(item)}</div>
             </div>
-            <ArrowRight size={14} style={{ color: isSelected ? '#6366f1' : 'transparent', flexShrink: 0 }} />
+            <ArrowRight size={14} style={{ color: isSelected ? 'var(--accent)' : 'transparent', flexShrink: 0 }} />
           </div>
         );
       })}
@@ -266,8 +222,8 @@ function renderAssignments(
   const startIdx = flatItems().findIndex(i => i.type === 'assignments' && i.id === items[0]?.id);
   return (
     <div key="assignments">
-      <div style={{ padding: '6px 20px', fontSize: '10px', fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-        Assignments <span style={{ color: 'rgba(99,102,241,0.4)', fontWeight: 400 }}>({items.length})</span>
+      <div style={{ padding: '6px 20px', fontSize: '10px', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+        Assignments <span style={{ color: 'rgba(216,174,71,0.5)', fontWeight: 400 }}>({items.length})</span>
       </div>
       {items.map((item: any, i: number) => {
         const idx = startIdx + i;
@@ -276,16 +232,16 @@ function renderAssignments(
           <div key={item.id} onClick={() => onSelect('assignments', item.id)}
             style={{
               display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 20px', cursor: 'pointer',
-              background: isSelected ? 'rgba(99,102,241,0.12)' : 'transparent',
-              borderLeft: isSelected ? '3px solid #6366f1' : '3px solid transparent',
+              background: isSelected ? 'var(--status-pending-bg)' : 'transparent',
+              borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
               transition: 'all 0.1s',
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>{item.assignmentNumber}</div>
+              <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>{item.assignmentNumber}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{item.branchName} → {item.assayerName}</div>
             </div>
-            <ArrowRight size={14} style={{ color: isSelected ? '#6366f1' : 'transparent', flexShrink: 0 }} />
+            <ArrowRight size={14} style={{ color: isSelected ? 'var(--accent)' : 'transparent', flexShrink: 0 }} />
           </div>
         );
       })}

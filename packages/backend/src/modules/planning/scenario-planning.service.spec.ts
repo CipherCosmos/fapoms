@@ -88,6 +88,8 @@ describe('ScenarioPlanningService', () => {
 
     expect(result.projectId).toBe('p-1');
     expect(mockConfigResolver.resolveRecommendationConfig).toHaveBeenCalled();
-    expect(mockOptimizationEngine.generateProjectDeploymentPlan).toHaveBeenCalledWith('p-1');
+    // The resolved weights must be threaded into scoring — previously the simulation ignored its
+    // only input. The engine is called with the project id AND the resolved weight overrides.
+    expect(mockOptimizationEngine.generateProjectDeploymentPlan).toHaveBeenCalledWith('p-1', { distance: 0.5 });
   });
 });

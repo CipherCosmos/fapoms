@@ -51,18 +51,70 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
 export const ROLES_KEY = 'roles';
 export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
 
+export const ANY_AUTHENTICATED_KEY = 'anyAuthenticated';
+/**
+ * Marks a route as deliberately available to every signed-in principal, whatever their role.
+ *
+ * Use this ONLY where that is genuinely correct — a user reading or changing their own
+ * profile, shared reference data such as the state/district list, a person's own notifications.
+ * It exists so that "open to all authenticated users" is an explicit, greppable, reviewable
+ * decision rather than the silent consequence of forgetting a decorator.
+ */
+export const AnyAuthenticated = () => SetMetadata(ANY_AUTHENTICATED_KEY, true);
+
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
+    /**
+     * `@Public()` is honoured here as well as in JwtAuthGuard.
+     *
+     * Only JwtAuthGuard checked it, so on any controller that also applies this guard a public
+     * route passed authentication and was then refused by the deny-by-default rule below —
+     * always 403, never reachable. That is why signed attachment links could not be opened:
+     * the download route is deliberately public and token-authenticated, and this guard
+     * rejected it before the handler ever ran.
+     *
+     * The deny-by-default posture is unchanged for every route that is not explicitly public.
+     */
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (isPublic) return true;
+
     const requiredRoles = this.reflector.getAllAndOverride<string[]>(
       ROLES_KEY,
       [context.getHandler(), context.getClass()],
     );
 
+    /**
+     * DENY BY DEFAULT.
+     *
+     * This previously did `return true` when a route carried no @Roles metadata, which meant a
+     * controller that put @UseGuards at the class level but annotated only *some* of its
+     * handlers silently left the rest open to every authenticated principal — including a field
+     * ASSAYER, whose token is issued from the `assayers` table. ~50 handlers were in that state,
+     * among them every billing read (exposing other assayers' payouts and the bank's invoices),
+     * `customer-master` borrower records, `GET /users/:id`, and `PUT /assayers/:id/live`.
+     *
+     * The failure mode is the dangerous direction: forgetting a decorator granted access rather
+     * than refusing it, and nothing in the code looked wrong. Routes must now state their
+     * audience — either @Roles(...), or @AnyAuthenticated() where open access is intended, or
+     * @Public() for genuinely unauthenticated endpoints.
+     */
     if (!requiredRoles || requiredRoles.length === 0) {
-      return true; // No role restriction on this route
+      const anyAuthenticated = this.reflector.getAllAndOverride<boolean>(
+        ANY_AUTHENTICATED_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+      if (anyAuthenticated) {
+        return true;
+      }
+      throw new ForbiddenException(
+        'This action is not available to your role. If you believe it should be, ask an administrator to review your access.',
+      );
     }
 
     const { user } = context.switchToHttp().getRequest();
@@ -99,6 +151,13 @@ export class PermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
+    // Same reasoning as RolesGuard: an explicitly public route must not be gated here.
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (isPublic) return true;
+
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],

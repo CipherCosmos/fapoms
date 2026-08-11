@@ -4,10 +4,10 @@ import { Repository, In } from 'typeorm';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { HolidayService } from '../holiday/holiday.service';
-import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
-import { AssignmentStatus } from '@fapoms/shared';
+import { AssignmentStatus, businessDateKey } from '@fapoms/shared';
 
 export interface ConstraintContext {
   assayer: AssayerEntity;
@@ -32,17 +32,78 @@ export class ConstraintEvaluator {
   ) {}
 
   /**
+   * Every rule that decides whether one assayer may work one date, in one place.
+   *
+   * These four checks existed individually and each caller picked its own subset, so the
+   * answer to "can this assayer work this date?" depended on which screen asked. Creating an
+   * assignment checked holidays and double-booking; SchedulingService.create checked leave,
+   * project timeline and holidays; rescheduling checked none of them; and the candidate list
+   * used a fourth combination. An operator could therefore reschedule an audit onto a
+   * registered bank holiday, or onto a date the assayer was already booked or on leave, and
+   * it would be written to schedules, assignments, project_branches and assessments without
+   * objection.
+   *
+   * Returns the first failure so the caller reports the most specific reason, not a generic
+   * "unavailable". `excludeAssignmentId` lets a reschedule ignore the assignment being moved,
+   * which would otherwise double-book against itself.
+   */
+  async checkDateAvailability(params: {
+    assayer?: AssayerEntity | null;
+    assayerId?: string | null;
+    project?: ProjectEntity | null;
+    branchState?: string | null;
+    /** The client whose configured working days apply to this date. */
+    clientId?: string | null;
+    scheduledDate: Date;
+    excludeAssignmentId?: string;
+  }): Promise<ConstraintResult> {
+    const { assayer, project, scheduledDate, excludeAssignmentId } = params;
+    const assayerId = params.assayerId ?? assayer?.id ?? null;
+
+    const holiday = await this.checkHoliday(params.branchState || '', scheduledDate, params.clientId ?? undefined);
+    if (!holiday.passed) return holiday;
+
+    if (assayer) {
+      const leave = this.checkLeaves(assayer, scheduledDate);
+      if (!leave.passed) return leave;
+    }
+
+    if (project) {
+      const timeline = this.checkProjectTimeline(project, scheduledDate);
+      if (!timeline.passed) return timeline;
+    }
+
+    if (assayerId) {
+      const booking = await this.checkDoubleBooking(assayerId, scheduledDate, excludeAssignmentId);
+      if (!booking.passed) return booking;
+    }
+
+    return { passed: true };
+  }
+
+  /**
    * Evaluates if the assayer has a double-booking conflict on the scheduled date.
    */
-  async checkDoubleBooking(assayerId: string, scheduledDate: Date): Promise<ConstraintResult> {
+  async checkDoubleBooking(
+    assayerId: string,
+    scheduledDate: Date,
+    excludeAssignmentId?: string,
+  ): Promise<ConstraintResult> {
     const doubleBooked = await this.assignmentRepository.findOne({
       where: {
         assayerId,
-        scheduledDate,
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+        // `scheduledDate` is a `date` column — match on the date-only key, not a Date-with-time,
+        // which never equals a midnight `date` value in Postgres and silenced this guard.
+        scheduledDate: businessDateKey(scheduledDate) as any,
+        status: In([AssignmentStatus.ACCEPTED]),
         isActive: true,
       },
     });
+
+    // Moving an assignment must not collide with the assignment being moved.
+    if (doubleBooked && excludeAssignmentId && doubleBooked.id === excludeAssignmentId) {
+      return { passed: true };
+    }
 
     if (doubleBooked) {
       return {
@@ -104,8 +165,10 @@ export class ConstraintEvaluator {
   /**
    * Evaluates if the scheduled date is a regional holiday for the branch.
    */
-  async checkHoliday(state: string, scheduledDate: Date): Promise<ConstraintResult> {
-    const isHoliday = await this.holidayService.isHoliday(scheduledDate, state);
+  async checkHoliday(state: string, scheduledDate: Date, clientId?: string): Promise<ConstraintResult> {
+    // clientId matters: the client's own configured working days decide whether the date is
+    // workable at all, before any holiday row is consulted.
+    const isHoliday = await this.holidayService.isHoliday(scheduledDate, state, clientId);
     if (isHoliday) {
       return {
         passed: false,
@@ -116,11 +179,58 @@ export class ConstraintEvaluator {
   }
 
   /**
+   * The client's territorial rules for who may audit a branch.
+   *
+   * `minDistanceKm` is a conflict-of-interest floor — an assayer must be far enough from the
+   * branch they audit, not close to it — and `maxDistanceKm` is a serviceability ceiling. The
+   * day planner enforced both as hard exclusions, while the single-branch path only subtracted
+   * 40 points from the score and the write path did not check at all, so an operator could
+   * assign an assayer living beside the branch simply by using the per-branch flow. A control
+   * that one screen enforces and another merely discourages is not a control.
+   *
+   * `relaxDistance` exists for the ceiling only: when nothing is serviceable, ops may knowingly
+   * reach further. The floor is never relaxed — that is the whole point of it.
+   */
+  checkDistancePolicy(
+    planningPreferences: Record<string, any> | null | undefined,
+    distanceKm: number | null | undefined,
+    options?: { relaxDistance?: boolean },
+  ): ConstraintResult {
+    if (distanceKm === null || distanceKm === undefined || !Number.isFinite(Number(distanceKm))) {
+      return { passed: true };
+    }
+    const distance = Number(distanceKm);
+
+    const minDistance = Number(planningPreferences?.minDistanceKm);
+    if (Number.isFinite(minDistance) && minDistance > 0 && distance < minDistance) {
+      return {
+        passed: false,
+        reason: `Conflict of interest: ${distance.toFixed(1)}km is within the client's ${minDistance}km minimum-distance rule.`,
+      };
+    }
+
+    const maxDistance = Number(planningPreferences?.maxDistanceKm);
+    if (!options?.relaxDistance && Number.isFinite(maxDistance) && maxDistance > 0 && distance > maxDistance) {
+      return {
+        passed: false,
+        reason: `Out of range: ${distance.toFixed(1)}km exceeds the client's ${maxDistance}km limit.`,
+      };
+    }
+
+    return { passed: true };
+  }
+
+  /**
    * Evaluates if the assayer possesses all required skills and certifications.
    */
-  checkSkillsAndCertifications(assayer: AssayerEntity, project: ProjectEntity): ConstraintResult {
+  checkSkillsAndCertifications(
+    assayerEntity: AssayerEntity,
+    project: ProjectEntity,
+    scheduledDate?: Date,
+  ): ConstraintResult {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
     if (project.requiredSkills && project.requiredSkills.length > 0) {
-      const assayerSkills = (assayer.skills || []).map(s => s.trim().toLowerCase());
+      const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
       const missingSkills = project.requiredSkills.filter(
         (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
       );
@@ -133,14 +243,27 @@ export class ConstraintEvaluator {
     }
 
     if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-      const assayerCerts = (assayer.certifications || []).map((c) => c.name.trim().toLowerCase());
+      /**
+       * A certification the assayer no longer holds does not qualify them.
+       *
+       * This gate matched on name alone while the CERTIFICATION business rule
+       * (platform/rules/rule.engine.ts) also required the certification to be unexpired on the
+       * audit date. Since this is the hard gate — it blocks assignment creation and filters the
+       * candidate list — an assayer with a lapsed certification passed the check that actually
+       * stops work while failing the rule that only advises. Expiry dates are real, maintained
+       * data: all 24 certifications on record carry one.
+       */
+      const asOf = scheduledDate ?? new Date();
+      const assayerCerts = (assayer.certifications || [])
+        .filter((c) => !c.expiryDate || new Date(c.expiryDate) > asOf)
+        .map((c) => c.name.trim().toLowerCase());
       const missingCerts = project.requiredCertifications.filter(
         (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
       );
       if (missingCerts.length > 0) {
         return {
           passed: false,
-          reason: `Assayer Qualification Conflict: Assayer lacks required certifications: ${missingCerts.join(', ')}`,
+          reason: `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
         };
       }
     }

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 320" width="400" height="320" fill="none">
+  <defs>
+    <linearGradient id="exactFlameGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F24E00"/>
+      <stop offset="35%" stop-color="#FF6B00"/>
+      <stop offset="70%" stop-color="#FF9E00"/>
+      <stop offset="100%" stop-color="#EAA627"/>
+    </linearGradient>
+    <filter id="subtleGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#FF5500" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  
+  <g filter="url(#subtleGlow)">
+    <!-- 1. Central Teardrop Flame -->
+    <path d="M200 120 C182 170 135 198 135 240 C135 274 165 295 200 295 C235 295 265 274 265 240 C265 198 218 170 200 120 Z" fill="url(#exactFlameGrad)"/>
+    
+    <!-- 2. Inner Left Flame Petal -->
+    <path d="M140 58 C144 125 112 185 84 235 C112 268 144 262 160 220 C175 175 166 102 140 58 Z" fill="url(#exactFlameGrad)"/>
+    
+    <!-- 3. Inner Right Flame Petal -->
+    <path d="M260 58 C256 125 288 185 316 235 C288 268 256 262 240 220 C225 175 234 102 260 58 Z" fill="url(#exactFlameGrad)"/>
+    
+    <!-- 4. Outer Left Wing Flame -->
+    <path d="M42 16 C48 95 18 165 22 278 C60 285 96 220 74 156 C61 118 52 58 42 16 Z" fill="url(#exactFlameGrad)"/>
+    
+    <!-- 5. Outer Right Wing Flame -->
+    <path d="M358 16 C352 95 382 165 378 278 C340 285 304 220 326 156 C339 118 348 58 358 16 Z" fill="url(#exactFlameGrad)"/>
+  </g>
+</svg>

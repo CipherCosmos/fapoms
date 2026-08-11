@@ -5,7 +5,8 @@ import { ClientEntity } from '../../modules/client/client.entity';
 import { ClientConfigurationEntity } from '../../modules/client/client-configuration.entity';
 import { OrganizationEntity } from '../../modules/organization/organization.entity';
 import { ZoneEntity } from '../../modules/zone/zone.entity';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus } from '@fapoms/shared';
+import { geocodeIndia } from '../../modules/geo/india-geocoder';
 import * as xlsx from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -76,56 +77,18 @@ function saveCache() {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
 }
 
-// Real geocoder with rate-limit and fallback logic
+// Real geocoder — delegates to the shared Google-only geocoder (no fallbacks),
+// so a seeded record that can't be verified is left unplaced rather than guessed.
 async function getRealCoordinates(address: string, name: string, district: string, state: string): Promise<{ lat: number; lng: number }> {
   const pinMatch = address.match(/\b\d{6}\b/);
   const pincode = pinMatch ? pinMatch[0] : null;
-
-  const queries: string[] = [];
-  if (pincode) {
-    queries.push(`${pincode}, India`);
-  }
-  queries.push(`${name}, ${district}, ${state}, India`);
-  queries.push(`${district}, ${state}, India`);
-
-  for (const q of queries) {
-    const cleanQ = q.trim();
-    if (cache[cleanQ]) {
-      return cache[cleanQ];
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-      console.log(`Geocoding query: ${cleanQ}`);
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-        }
-      });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json() as any[];
-        if (data && data[0]) {
-          const coords = {
-            lat: parseFloat(data[0].lat),
-            lng: parseFloat(data[0].lon)
-          };
-          cache[cleanQ] = coords;
-          saveCache();
-          return coords;
-        }
-      }
-    } catch (err) {
-      console.error(`Error geocoding: ${cleanQ}`, err);
-    }
+  const coords = await geocodeIndia(address, name, district, state, pincode);
+  if (coords) {
+    const cleanQ = `${name}, ${district}, ${state}, India`.trim();
+    cache[cleanQ] = { lat: coords.lat, lng: coords.lng };
+    saveCache();
+    console.log(`Geocoded: ${cleanQ} -> ${coords.lat}, ${coords.lng}`);
+    return { lat: coords.lat, lng: coords.lng };
   }
 
   const districtKey = district.trim().toUpperCase();
@@ -345,14 +308,9 @@ async function seed() {
         latitude: coords.lat,
         longitude: coords.lng,
         location: { type: 'Point', coordinates: [coords.lng, coords.lat] },
-        status: 'ACTIVE',
+        status: AssayerStatus.ACTIVE,
         lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
         eligibleClients: ['*'],
-        skills: ['Gold', 'Gold Valuation', 'Agricultural Audit', 'Financial Auditing'],
-        certifications: [
-          { name: 'Gold Valuation Specialist', expiryDate: '2028-12-31' },
-          { name: 'Certified Gold Assayer', expiryDate: '2028-12-31' }
-        ],
         organizationId: defaultOrg.id,
         createdBy: 'system',
         updatedBy: 'system',
@@ -370,4 +328,7 @@ async function seed() {
   }
 }
 
-seed();
+seed().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

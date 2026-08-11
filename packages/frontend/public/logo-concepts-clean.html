@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gold Audit Pro — Logo Concepts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --gold-1:#F3D98A;
+    --gold-2:#D8AE47;
+    --gold-3:#A8791F;
+    --gold-grad: linear-gradient(180deg, var(--gold-1) 0%, var(--gold-2) 55%, var(--gold-3) 100%);
+    --ink:#211A14;
+    --ink-soft:#5B4E3E;
+    --cream:#FAF6EE;
+    --cream-2:#F1E9D8;
+    --dark:#161210;
+    --dark-2:#221B15;
+    --hair: rgba(33,26,20,0.12);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--cream);
+    font-family:'Manrope',sans-serif;
+    color:var(--ink);
+    padding:56px 24px 100px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;}
+  header.page{margin-bottom:48px;}
+  .eyebrow{
+    font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--gold-3);font-weight:700;margin-bottom:10px;
+  }
+  h1.page-title{
+    font-family:'Cormorant Garamond',serif;
+    font-weight:600;
+    font-size:40px;
+    margin:0 0 8px;
+    letter-spacing:.01em;
+  }
+  p.page-sub{
+    margin:0;color:var(--ink-soft);font-size:15px;max-width:620px;line-height:1.55;
+  }
+
+  .card{
+    background:#fff;
+    border:1px solid var(--hair);
+    border-radius:18px;
+    padding:44px 40px 30px;
+    margin-bottom:28px;
+    position:relative;
+    overflow:hidden;
+  }
+  .card.dark{
+    background:var(--dark);
+    border-color:rgba(255,255,255,0.08);
+  }
+  .card.cream{
+    background:var(--cream-2);
+  }
+  .tag{
+    position:absolute; top:20px; right:22px;
+    font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--ink-soft); font-weight:600;
+  }
+  .card.dark .tag{ color:rgba(255,255,255,0.55); }
+
+  .stage{
+    display:flex; align-items:center; justify-content:center;
+    min-height:150px;
+  }
+
+  .icon{
+    display:block;
+  }
+
+  /* --- Wordmark type styles --- */
+  .brand-gold{
+    font-family:'Cormorant Garamond',serif;
+    font-weight:700;
+    background:var(--gold-grad);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    letter-spacing:.01em;
+  }
+  .sub-line{
+    font-family:'Manrope',sans-serif;
+    font-weight:600;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--ink-soft);
+  }
+  .card.dark .sub-line{ color:rgba(255,255,255,0.6); }
+
+  /* Concept 1: horizontal lockup */
+  .c1-row{ display:flex; align-items:center; gap:22px; }
+  .c1-icon{ width:78px; height:auto; flex:none; }
+  .c1-divider{ width:1px; height:58px; background:var(--hair); }
+  .card.dark .c1-divider{ background:rgba(255,255,255,0.15); }
+  .c1-text .brand-gold{ font-size:34px; line-height:1; display:block; }
+  .c1-text .sub-line{ font-size:11px; margin-top:8px; }
+
+  /* Concept 2: stacked centered */
+  .c2{ text-align:center; }
+  .c2-icon{ width:88px; height:auto; margin:0 auto 14px; display:block; }
+  .c2 .brand-gold{ font-size:32px; display:block; }
+  .c2 .sub-line{ font-size:10.5px; margin-top:8px; }
+
+  /* Concept 3: seal / badge */
+  .c3{ display:flex; flex-direction:column; align-items:center; }
+  .seal{
+    width:172px; height:172px; border-radius:50%;
+    border:1.5px solid var(--gold-2);
+    display:flex; align-items:center; justify-content:center;
+    position:relative;
+  }
+  .seal::before{
+    content:"";
+    position:absolute; inset:8px;
+    border-radius:50%;
+    border:1px solid var(--gold-1);
+  }
+  .seal-icon{ width:64px; height:auto; }
+  .seal-caption{ margin-top:16px; text-align:center; }
+  .seal-caption .brand-gold{ font-size:24px; display:block; }
+  .seal-caption .sub-line{ font-size:9.5px; margin-top:6px; }
+
+  /* Concept 4: wordmark-led, icon as accent */
+  .c4{ display:flex; align-items:center; gap:16px; }
+  .c4-icon{ width:52px; height:auto; }
+  .c4-text .brand-gold{ font-size:38px; display:block; }
+  .c4-text .sub-line{ font-size:10.5px; margin-top:6px; letter-spacing:.14em; }
+
+  /* Concept 5: minimal wordmark only, no icon (favicon-style icon swapped for initial) */
+  .c5{ text-align:center; }
+  .c5 .brand-gold{ font-size:40px; display:block; }
+  .c5 .sub-line{ font-size:11px; margin-top:10px; }
+  .c5-rule{
+    width:56px; height:1px; background:var(--gold-2); margin:14px auto 0;
+  }
+
+  .grid-two{
+    display:grid; grid-template-columns:1fr 1fr; gap:28px;
+  }
+  @media (max-width:720px){
+    .grid-two{ grid-template-columns:1fr; }
+  }
+
+  footer.note{
+    max-width:620px; margin:40px auto 0; color:var(--ink-soft); font-size:13px; line-height:1.6;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page">
+    <div class="eyebrow">Logo Concepts</div>
+    <h1 class="page-title">Gold Audit Pro <span style="color:var(--ink-soft); font-weight:500;">— by Sumeru Global</span></h1>
+    <p class="page-sub">Five lockup directions built around the existing flame‑lotus mark, unchanged. "Gold Audit Pro" is set in a warm gold gradient sampled from the mark itself; "Sumeru Global" sits as a quiet supporting line so the mark and the gold name stay the focal point.</p>
+  </header>
+
+  <!-- Concept 1 -->
+  <div class="card">
+    <div class="tag">01 · Horizontal Lockup</div>
+    <div class="stage">
+      <div class="c1-row">
+        <div class="c1-text">
+          <span class="brand-gold">Gold Audit Pro</span>
+          <span class="sub-line">by Sumeru Global</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Concept 2 -->
+  <div class="card dark">
+    <div class="tag">02 · Stacked Centered (Dark)</div>
+    <div class="stage">
+      <div class="c2">
+        <span class="brand-gold">Gold Audit Pro</span>
+        <span class="sub-line">by Sumeru Global</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-two">
+
+    <!-- Concept 3 -->
+    <div class="card cream">
+      <div class="tag">03 · Badge / Seal</div>
+      <div class="stage">
+        <div class="c3">
+          <div class="seal-caption">
+            <span class="brand-gold">Gold Audit Pro</span>
+            <span class="sub-line">by Sumeru Global</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Concept 4 -->
+    <div class="card">
+      <div class="tag">04 · Wordmark Lead</div>
+      <div class="stage">
+        <div class="c4">
+          <div class="c4-text">
+            <span class="brand-gold">Gold Audit Pro</span>
+            <span class="sub-line">by Sumeru Global</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Concept 5 -->
+  <div class="card dark">
+    <div class="tag">05 · Pure Typography</div>
+    <div class="stage">
+      <div class="c5">
+        <span class="brand-gold">Gold Audit Pro</span>
+        <div class="c5-rule"></div>
+        <span class="sub-line">by Sumeru Global</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

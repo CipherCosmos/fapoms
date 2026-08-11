@@ -1,271 +1,351 @@
-import React, { useState, useEffect } from 'react';
-import { Files, AlertCircle, RefreshCw, Upload, FileText, Download, Search, Clock, CheckCircle, XCircle } from 'lucide-react';
-import type { DocumentStatus } from '@fapoms/shared';
-import { api } from '../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { DocumentControlPanel } from './documents/DocumentControlPanel';
+import type { OverviewData } from './documents/DocumentControlPanel';
+import { BranchDocumentPanel } from './documents/BranchDocumentPanel';
+import { DocumentModelLegend } from './documents/DocumentModelLegend';
+import { DailyRunPanel } from './documents/DailyRunPanel';
+import { CustomerMasterVersions } from './CustomerMasterVersions';
+import { RefreshCw } from 'lucide-react';
+import { AlertBanner } from '../components/ui';
+import { connectSocket, getSocket } from '../services/socket';
 
-interface Document {
-  id: string;
-  fileName: string;
-  fileSize: number;
-  type: string;
-  status: DocumentStatus;
-  createdAt: string;
-  projectBranch?: { branch?: { name: string } };
+async function apiGet<T>(endpoint: string): Promise<T> {
+  const token = localStorage.getItem('fapoms_token');
+  const res = await fetch(`/api/v1${endpoint}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Request failed: ${endpoint}`);
+  }
+  const json = await res.json();
+  return json.data as T;
 }
 
-const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
-  PENDING: { bg: 'rgba(245,158,11,0.1)', color: '#f59e0b' },
-  APPROVED: { bg: 'rgba(16,185,129,0.1)', color: 'var(--status-active)' },
-  REJECTED: { bg: 'rgba(239,68,68,0.1)', color: '#ef4444' },
-  UPLOADED: { bg: 'rgba(99,102,241,0.1)', color: 'var(--accent-primary)' },
-};
+/**
+ * Opens a document download.
+ *
+ * The download endpoint is no longer public — it previously served bank customer paperwork to
+ * anyone who could reach the API. It now requires a short-lived token bound to that one
+ * document, so a bare `<a href>` (which cannot send our Authorization header) would just 401.
+ * Exchange the session for a scoped token first, then open the signed URL.
+ */
+async function openDocumentDownload(documentId: string): Promise<void> {
+  const { downloadUrl } = await apiGet<{ downloadUrl: string }>(`/documents/${documentId}/download-token`);
+  window.open(`/api/v1${downloadUrl}`, '_blank', 'noopener,noreferrer');
+}
+
+async function apiPost(endpoint: string, body?: any): Promise<any> {
+  const token = localStorage.getItem('fapoms_token');
+  const res = await fetch(`/api/v1${endpoint}`, {
+    method: 'POST',
+    headers: {
+      ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Request failed: ${endpoint}`);
+  }
+  const json = await res.json();
+  return json.data;
+}
+
+async function apiUpload(endpoint: string, formData: FormData): Promise<any> {
+  const token = localStorage.getItem('fapoms_token');
+  const res = await fetch(`/api/v1${endpoint}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Upload failed: ${endpoint}`);
+  }
+  const json = await res.json();
+  return json.data;
+}
+
+/**
+ * Like apiUpload but returns the whole response envelope, not just `data`.
+ * The batch-packet upload reports per-file outcomes (what was filed, what could
+ * not be matched) alongside a summary message, and the caller needs both.
+ */
+async function apiUploadRaw(endpoint: string, formData: FormData): Promise<any> {
+  const token = localStorage.getItem('fapoms_token');
+  const res = await fetch(`/api/v1${endpoint}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.message || `Upload failed: ${endpoint}`);
+  return json;
+}
+
+/**
+ * Upload one document, preferring the presigned direct-to-storage path (POST
+ * /documents/upload/presign → client PUT straight to object storage → POST
+ * /documents/upload/finalize) so the file bytes never buffer through the API process.
+ *
+ * Falls back to the original multipart `/documents/upload` on ANY failure of the presigned path
+ * — the local-disk storage driver (no presign), a storage endpoint the browser cannot reach, or
+ * a bucket without CORS. The fallback guarantees this can never upload *less* reliably than
+ * before; it only upgrades the transport when direct-to-storage is actually available.
+ */
+async function uploadDocumentSmart(assessmentId: string, type: string, file: File): Promise<any> {
+  const contentType = file.type || 'application/octet-stream';
+  try {
+    const presign = await apiPost('/documents/upload/presign', { fileName: file.name, contentType });
+    if (!presign?.uploadUrl || !presign?.objectKey) throw new Error('presign unavailable');
+
+    const put = await fetch(presign.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: file,
+    });
+    if (!put.ok) throw new Error(`storage PUT failed (${put.status})`);
+
+    return await apiPost('/documents/upload/finalize', {
+      objectKey: presign.objectKey,
+      assessmentId,
+      type,
+      fileName: file.name,
+      contentType,
+    });
+  } catch {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiUpload(
+      `/documents/upload?assessmentId=${encodeURIComponent(assessmentId)}&type=${encodeURIComponent(type)}`,
+      formData,
+    );
+  }
+}
 
 export const Documents: React.FC = () => {
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  // Grouped-by-branch is the default: it's what answers "where is this branch's
+  // paperwork" without a branch's name appearing once per file. The flat view is
+  // kept for auditing everything by pipeline stage regardless of which branch it
+  // belongs to. There used to be four tabs (Control / Upload & Dispatch / Data
+  // Entry Queue / All Documents) — the latter two were separate disconnected
+  // screens for actions that now happen inline on the branch card that needs
+  // them, and "All Documents" duplicated this same flat view with a plainer,
+  // less informative table.
+  // The daily run leads: the client's file arrives per audit date and drives that
+  // day's work, so that is the view someone opens this page to act on. The
+  // branch and file views remain for looking across dates.
+  const [view, setView] = useState<'daily' | 'branch' | 'flat' | 'versions'>('daily');
+  const [projectId, setProjectId] = useState<string>('');
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [projectBranchId, setProjectBranchId] = useState('');
-  const [docType, setDocType] = useState('CUSTOMER_MASTER_DATA');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
-  useEffect(() => { loadDocuments(); }, []);
-
-  const loadDocuments = async () => {
-    setIsLoading(true);
-    setError(null);
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true);
     try {
-      const projects = await api.request<any[]>('/projects');
-      if (projects && projects.length > 0) {
-        const pId = projects[0].id;
-        const branches = await api.request<any[]>(`/projects/${pId}/branches`);
-        if (branches && branches.length > 0) {
-          const pbId = branches[0].id;
-          setProjectBranchId(pbId);
-          const docs = await api.request<Document[]>(`/documents/project-branch/${pbId}`);
-          setDocuments(docs);
-        }
-      }
+      setOverview(await apiGet<OverviewData>('/documents/operations/overview'));
     } catch (err: any) {
-      setError(err.message || 'Network connection error while fetching documents.');
+      setError(err.message);
     } finally {
-      setIsLoading(false);
+      setOverviewLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // The daily run is scoped to one project's schedule for a date.
+    apiGet<Array<{ id: string; name: string }>>('/projects')
+      .then((list) => {
+        setProjects(list || []);
+        if (list?.length) setProjectId((cur) => cur || list[0].id);
+      })
+      .catch((e: any) => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    loadOverview();
+    connectSocket();
+    const socket = getSocket();
+    if (socket) {
+      socket.on('document:uploaded', loadOverview);
+      socket.on('document:status-changed', loadOverview);
+      socket.on('document:received', loadOverview);
+    }
+    return () => {
+      const s = getSocket();
+      if (s) {
+        s.off('document:uploaded', loadOverview);
+        s.off('document:status-changed', loadOverview);
+        s.off('document:received', loadOverview);
+      }
+    };
+  }, [loadOverview]);
+
+  /** Releases one or many documents, then refreshes the console. */
+  const handleDispatchMany = async (ids: string[]) => {
+    if (!window.confirm(`Dispatch ${ids.length} document(s)? This updates the paperwork workflow.`)) return;
+    setBusyKey('batch-dispatch');
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const result = await apiPost('/documents/dispatch-batch', { documentIds: ids });
+      setSuccessMsg(result?.message || 'Documents dispatched.');
+      await loadOverview();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusyKey(null);
     }
   };
 
-  const handleUploadSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!projectBranchId || !selectedFile) return;
-    setIsUploading(true);
+  /** Uploads a missing file directly onto the branch that needs it — the action
+   *  that used to require leaving this screen for a separate project/branch
+   *  picker form, entirely disconnected from the branch you were looking at. */
+  const handleUploadForBranch = async (projectBranchId: string, type: string, file: File) => {
     setError(null);
+    setSuccessMsg(null);
+    try {
+      await uploadDocumentSmart(projectBranchId, type, file);
+      setSuccessMsg(`"${file.name}" uploaded.`);
+      await loadOverview();
+    } catch (err: any) {
+      setError(err.message || 'Upload failed.');
+    }
+  };
+
+  const handleMarkReceived = async (docId: string) => {
+    if (!window.confirm('Mark this document as received?')) return;
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const result = await apiPost(`/documents/${docId}/receive`);
+      setSuccessMsg(result?.message || 'Marked as received.');
+      await loadOverview();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleSendToOcr = async (docId: string) => {
+    if (!window.confirm('Send this document to the external OCR application?')) return;
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      await apiPost(`/documents/${docId}/send-external-ocr`);
+      setSuccessMsg('Marked as sent to the external OCR application.');
+      await loadOverview();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleUploadExcel = async (assessmentId: string, file: File) => {
+    setError(null);
+    setSuccessMsg(null);
     try {
       const formData = new FormData();
-      formData.append('file', selectedFile);
-      await api.request(`/documents/upload?projectBranchId=${projectBranchId}&type=${docType}`, {
-        method: 'POST',
-        body: formData
-      });
-      setSelectedFile(null);
-      const fileInput = document.getElementById('file-upload-input') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
-      loadDocuments();
+      formData.append('file', file);
+      await apiUpload(`/documents/upload-excel?assessmentId=${assessmentId}`, formData);
+      setSuccessMsg('Excel report uploaded.');
+      await loadOverview();
     } catch (err: any) {
-      setError(err.message || 'Upload registration failed.');
-    } finally {
-      setIsUploading(false);
+      setError(err.message || 'Upload failed.');
     }
   };
-
-  const filtered = documents.filter(d =>
-    d.fileName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.type.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const totalCount = documents.length;
-  const pendingCount = documents.filter(d => String(d.status) === 'PENDING').length;
-  const approvedCount = documents.filter(d => String(d.status) === 'APPROVED').length;
-  const rejectedCount = documents.filter(d => String(d.status) === 'REJECTED').length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* ── MASTER DOCUMENT & OCR WORKFLOW HEADER ── */}
-      <div style={{ background: 'linear-gradient(90deg, rgba(99,102,241,0.12) 0%, rgba(16,185,129,0.06) 100%)', border: '1px solid rgba(99,102,241,0.25)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ backgroundColor: '#6366f1', color: '#fff', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Master Data & PDF Ingestion
+      {/* Header */}
+      <div style={{ background: 'linear-gradient(90deg, var(--status-pending-bg) 0%, var(--status-completed-bg) 100%)', border: '1px solid var(--status-pending-bg)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+          <span style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Document Management
           </span>
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-              Master File Upload & PDF Document Distribution
+              Branch Paperwork Tracking
             </h3>
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Upload customer master files, store audit report PDFs, and dispatch incoming documents to the OCR parsing queue.
+              Every branch's files in one place — upload, dispatch, receive and process without switching screens
             </span>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button 
-            onClick={() => window.location.href = '/validation'} 
-            style={{ padding: '6px 12px', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)', borderRadius: '6px', color: '#6ee7b7', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            🔍 View OCR Validation Queue ➔
-          </button>
-        </div>
-      </div>
-
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Document Management</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>Upload, manage, and track audit documents</p>
-        </div>
-        <button onClick={loadDocuments} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
 
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Files size={20} style={{ color: 'var(--accent-primary)' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{totalCount}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Total Documents</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(245,158,11,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Clock size={20} style={{ color: '#f59e0b' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{pendingCount}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Pending Review</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CheckCircle size={20} style={{ color: 'var(--status-active)' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{approvedCount}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Approved</div></div>
-        </div>
-        <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <XCircle size={20} style={{ color: '#ef4444' }} />
-          </div>
-          <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{rejectedCount}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rejected</div></div>
-        </div>
-      </div>
+      {error && <AlertBanner type="error" message={error} onClose={() => setError(null)} />}
+      {successMsg && <AlertBanner type="success" message={successMsg} onClose={() => setSuccessMsg(null)} />}
 
-      {/* Main Content */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: '20px' }}>
-        {/* Document List */}
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ flex: 1, position: 'relative' }}>
-              <Search size={14} style={{ position: 'absolute', left: '10px', top: '8px', color: 'var(--text-muted)' }} />
-              <input type="text" placeholder="Search documents..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                style={{ width: '100%', padding: '7px 10px 7px 30px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-            </div>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} documents</span>
-          </div>
-
-          {error && (
-            <div style={{ display: 'flex', gap: '8px', padding: '12px 16px', background: 'rgba(239,68,68,0.08)', color: '#f87171', fontSize: '13px', borderBottom: '1px solid rgba(239,68,68,0.2)' }}>
-              <AlertCircle size={14} /><span>{error}</span>
-            </div>
-          )}
-
-          {isLoading ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>
-          ) : filtered.length === 0 ? (
-            <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
-              <Files size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
-              <p style={{ fontSize: '14px' }}>{searchTerm ? 'No matching documents.' : 'No documents uploaded yet. Use the upload panel to add files.'}</p>
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>File Name</th>
-                    <th>Type</th>
-                    <th>Size</th>
-                    <th>Status</th>
-                    <th>Uploaded</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map(doc => {
-                    const st = STATUS_STYLES[doc.status] || STATUS_STYLES.PENDING;
-                    return (
-                      <tr key={doc.id}>
-                        <td style={{ fontWeight: 600 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <FileText size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-                            {doc.fileName}
-                          </div>
-                        </td>
-                        <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{doc.type.replace(/_/g, ' ')}</td>
-                        <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{(doc.fileSize / 1024).toFixed(1)} KB</td>
-                        <td>
-                          <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, background: st.bg, color: st.color }}>
-                            {doc.status}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(doc.createdAt).toLocaleDateString()}</td>
-                        <td>
-                          <a href={`/api/v1/documents/${doc.id}/download`} target="_blank" rel="noreferrer"
-                            style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', background: 'rgba(99,102,241,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontSize: '12px', textDecoration: 'none' }}>
-                            <Download size={12} /> Download
-                          </a>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Upload Panel for Sajid & Operations Team */}
-        <div className="glass-card" style={{ height: 'fit-content', display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-          <h4 style={{ fontWeight: 600, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-primary)' }}>
-            <Upload size={16} /> Master Customer Excel Upload (Sajid/Operations)
-          </h4>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-            Upload customer master Excel file for planned branches. System performs accountability checks against planned branches and dispatches to the external OCR application.
-          </p>
-
-          <form onSubmit={handleUploadSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Project Branch Link ID</label>
-              <input type="text" value={projectBranchId} onChange={e => setProjectBranchId(e.target.value)} required
-                placeholder="e.g. pb-001 or select branch..."
-                style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Document Workflow Category</label>
-              <select value={docType} onChange={e => setDocType(e.target.value)}
-                style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }}>
-                <option value="CUSTOMER_MASTER_DATA">Customer Master Excel (Sajid Team)</option>
-                <option value="RETURNED_AUDIT_PDF">Returned Scanned Audit PDF (Field Auditor)</option>
-                <option value="BRANCH_LIST">Branch Mandate List</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Select File (.xlsx / .pdf)</label>
-              <input id="file-upload-input" type="file" onChange={e => { if (e.target.files?.length) setSelectedFile(e.target.files[0]); }} required
-                style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: '#fff', outline: 'none', fontSize: '13px' }} />
-            </div>
-            <button type="submit" disabled={isUploading} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px' }}>
-              <Upload size={15} /> {isUploading ? 'Uploading & Triggering OCR Bridge...' : 'Upload & Send to OCR Engine'}
+      {overviewLoading && !overview ? (
+        <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading document control…</div>
+      ) : overview ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <DocumentModelLegend />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              Daily Run
             </button>
-          </form>
-
-          <div style={{ padding: '12px', background: 'rgba(16,185,129,0.06)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16,185,129,0.2)', fontSize: '11px', color: 'var(--status-active)' }}>
-            ✓ Accountability Check: Verification system will cross-reference customer rows against planned branch IDs.
+            <button onClick={() => setView('branch')} className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              By Branch
+            </button>
+            <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              All Files
+            </button>
+            <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              Customer Master
+            </button>
+            {view === 'daily' && projects.length > 1 && (
+              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}
+                style={{ padding: '6px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, marginLeft: 4 }}>
+                {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            )}
           </div>
+          {view === 'versions' ? (
+            <CustomerMasterVersions embedded />
+          ) : view === 'daily' ? (
+            <DailyRunPanel
+              projectId={projectId}
+              apiGet={apiGet}
+              apiUpload={apiUpload}
+              apiUploadRaw={apiUploadRaw}
+              onDispatch={handleDispatchMany}
+              onSendToOcr={handleSendToOcr}
+              onDownload={(id) => { openDocumentDownload(id).catch(e => setError(e.message)); }}
+              onError={setError}
+              onSuccess={setSuccessMsg}
+            />
+          ) : view === 'branch' ? (
+            <BranchDocumentPanel
+              branches={overview.branches || []}
+              neverPrepared={overview.neverPrepared || []}
+              pipeline={overview.pipeline || []}
+              busy={busyKey === 'batch-dispatch'}
+              onDispatch={handleDispatchMany}
+              onDownload={(id) => { openDocumentDownload(id).catch(e => setError(e.message)); }}
+              onUpload={handleUploadForBranch}
+              onMarkReceived={handleMarkReceived}
+              onSendToOcr={handleSendToOcr}
+              onUploadExcel={handleUploadExcel}
+            />
+          ) : (
+            <DocumentControlPanel
+              data={overview}
+              busy={busyKey === 'batch-dispatch'}
+              onDispatch={handleDispatchMany}
+              onDownload={(id) => { openDocumentDownload(id).catch(e => setError(e.message)); }}
+            />
+          )}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 };

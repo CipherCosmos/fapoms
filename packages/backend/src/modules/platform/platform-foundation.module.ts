@@ -5,7 +5,6 @@ import { DefaultConfigurationService } from './configuration/configuration.servi
 import { DefaultAuthorizationService } from './authz/authorization.service';
 import { DefaultEventDispatcher } from './events/event-dispatcher.service';
 import { ReusableWorkflowEngine } from './workflow/workflow-engine.service';
-import { TenantContextResolver } from './tenant/tenant-resolver.service';
 import { PlatformAuditService } from './audit/platform-audit.service';
 import { AuditLogEntity } from './audit/audit-log.entity';
 import { DefaultObservabilityService } from './observability/observability.service';
@@ -26,7 +25,6 @@ import { BullQueueManager } from '../../infrastructure/queue/bull-queue-manager'
     { provide: 'AuthorizationService', useClass: DefaultAuthorizationService },
     { provide: 'EventDispatcherInterface', useClass: DefaultEventDispatcher },
     ReusableWorkflowEngine,
-    TenantContextResolver,
     PlatformAuditService,
     { provide: 'StructuredLogger', useClass: DefaultObservabilityService },
     { provide: 'BackgroundQueueManager', useClass: BullQueueManager },
@@ -36,7 +34,6 @@ import { BullQueueManager } from '../../infrastructure/queue/bull-queue-manager'
     'AuthorizationService',
     'EventDispatcherInterface',
     ReusableWorkflowEngine,
-    TenantContextResolver,
     PlatformAuditService,
     'StructuredLogger',
     'BackgroundQueueManager',

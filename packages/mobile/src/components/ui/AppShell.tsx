@@ -1,0 +1,191 @@
+import React, { useEffect, useRef } from 'react';
+import { View, Text, Animated, Pressable, Platform, StatusBar, TextStyle, StyleSheet } from 'react-native';
+import { BlurView } from 'expo-blur';
+
+import { useTheme } from '../../theme/ThemeProvider';
+import { AppText, Avatar, Icon, IconButton, Tappable } from './primitives';
+import * as haptics from '../../lib/haptics';
+
+/**
+ * App chrome: the top bar and the bottom navigation.
+ *
+ * The old header was a cramped row of three bordered buttons and a fake
+ * "● ONLINE" pill; the old tab bar was four equal boxes with 9px labels. Both
+ * are replaced: the header now leads with who you are and what needs attention,
+ * and the tab bar is a floating, animated dock sized for thumbs.
+ */
+
+type IconName = string;
+
+export type TabType = 'HOME' | 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
+
+/** Safe top padding without pulling in react-native-safe-area-context. */
+const TOP_INSET = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 10, default: 16 });
+/** Home-indicator clearance on iOS; Android nav bars are handled by the OS. */
+export const BOTTOM_INSET = Platform.select({ ios: 26, android: 24, default: 12 });
+
+export const TopBar: React.FC<{
+  name: string;
+  subtitle?: string;
+  unreadCount: number;
+  onNotifications: () => void;
+  /** Opens the profile. The avatar is the control — the tab that used to do this is gone. */
+  onOpenProfile?: () => void;
+}> = ({ name, subtitle, unreadCount, onNotifications, onOpenProfile }) => {
+  const t = useTheme();
+
+  return (
+    <View style={{
+      paddingTop: TOP_INSET, paddingHorizontal: t.space.xl, paddingBottom: t.space.md,
+      backgroundColor: t.colors.bg,
+      flexDirection: 'row', alignItems: 'center', gap: t.space.md,
+    }}>
+      {/*
+        Identity is the way into the profile, which is how nearly every app of this shape
+        works — so the fifth dock slot is free for the four things an assayer does all day.
+      */}
+      <Tappable
+        onPress={onOpenProfile}
+        accessibilityLabel="Open your profile"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, flex: 1, minWidth: 0 }}
+      >
+        <Avatar name={name} size={44} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <AppText variant="h3" numberOfLines={1}>{name || 'Field Assayer'}</AppText>
+          <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? 'Field Assayer'}</AppText>
+        </View>
+      </Tappable>
+
+      {/*
+        No refresh button. Every scrollable screen already pulls to refresh, so this was a
+        second control for the same action taking permanent space in the header — and the one
+        an assayer reaches for by reflex is the pull.
+
+        The theme toggle that also lived here has moved to Profile > App > Appearance, where
+        the rest of the app's settings are.
+      */}
+      <IconButton
+        icon="notifications-outline"
+        onPress={onNotifications}
+        badge={unreadCount}
+        accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+      />
+    </View>
+  );
+};
+
+interface TabSpec { key: TabType; label: string; icon: IconName; iconActive: IconName; badge?: number }
+
+/**
+ * Floating dock. The active tab's pill slides between slots with a spring, and
+ * the icon swaps to its filled variant — so the current location is obvious at a
+ * glance rather than being a 1px colour difference on a 9px label.
+ */
+export const TabDock: React.FC<{
+  selected: TabType;
+  onSelect: (t: TabType) => void;
+  queryCount?: number;
+}> = ({ selected, onSelect, queryCount }) => {
+  const t = useTheme();
+  const tabs: TabSpec[] = [
+    { key: 'HOME', label: 'Home', icon: 'home-outline', iconActive: 'home' },
+    { key: 'SCHEDULE', label: 'Route', icon: 'map-outline', iconActive: 'map' },
+    { key: 'QUERIES', label: 'Queries', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', badge: queryCount },
+    { key: 'EARNINGS', label: 'Earnings', icon: 'wallet-outline', iconActive: 'wallet' },
+    // Profile is deliberately absent: it is reached by tapping your own avatar in the header.
+    // Four slots give the tabs an assayer actually works in room to breathe.
+  ];
+
+  const [width, setWidth] = React.useState(0);
+  const x = useRef(new Animated.Value(0)).current;
+  const index = Math.max(0, tabs.findIndex((tb) => tb.key === selected));
+  const seg = width > 0 ? (width - 10) / tabs.length : 0;
+
+  useEffect(() => {
+    Animated.spring(x, { toValue: index * seg, ...t.motion.spring }).start();
+  }, [index, seg, x, t.motion.spring]);
+
+  // Frosted material: content scrolls under the floating dock, so a real blur reads as the
+  // translucent glass iOS uses for its own tab bar. The translucent tint keeps text legible over
+  // the blur and doubles as the fallback fill if blur is unsupported.
+  const dark = t.mode === 'dark';
+  const material = dark ? 'rgba(25,28,36,0.66)' : 'rgba(255,255,255,0.62)';
+
+  return (
+    <View style={{
+      position: 'absolute', left: t.space.lg, right: t.space.lg, bottom: BOTTOM_INSET,
+    }}>
+      <View style={[{ borderRadius: t.radius['2xl'] }, t.elevation(3)]}>
+      <View
+        onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+        style={{
+          flexDirection: 'row', borderRadius: t.radius['2xl'], padding: 5,
+          borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden',
+          backgroundColor: material,
+        }}
+      >
+        <BlurView
+          intensity={dark ? 40 : 55}
+          tint={dark ? 'dark' : 'light'}
+          style={StyleSheet.absoluteFill}
+        />
+        {seg > 0 && (
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: 'absolute', top: 5, left: 5, bottom: 5, width: seg,
+              backgroundColor: t.colors.primarySoft, borderRadius: t.radius.xl,
+              // A hairline violet edge turns the selection pill from a flat tint into the lit
+              // neon marker the identity is built on.
+              borderWidth: 1, borderColor: t.colors.primary + '55',
+              transform: [{ translateX: x }],
+            }}
+          />
+        )}
+        {tabs.map((tab) => {
+          const active = tab.key === selected;
+          return (
+            <Pressable
+              key={tab.key}
+              onPress={() => { if (!active) haptics.select(); onSelect(tab.key); }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={tab.label}
+              style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, gap: 3 }}
+            >
+              <View>
+                <Icon
+                  name={active ? tab.iconActive : tab.icon}
+                  size={21}
+                  color={active ? t.colors.primary : t.colors.textFaint}
+                />
+                {tab.badge != null && tab.badge > 0 && (
+                  <View style={{
+                    position: 'absolute', top: -4, right: -8, minWidth: 16, height: 16, borderRadius: 8,
+                    paddingHorizontal: 4, backgroundColor: t.colors.danger,
+                    alignItems: 'center', justifyContent: 'center',
+                    borderWidth: 2, borderColor: t.colors.surface,
+                  }}>
+                    <Text style={{ color: '#fff', fontSize: 9, fontWeight: '800' }}>
+                      {tab.badge > 9 ? '9+' : tab.badge}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <Text style={[
+                t.type.caption as TextStyle,
+                { fontSize: 10.5, color: active ? t.colors.primary : t.colors.textFaint },
+              ]}>
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      </View>
+    </View>
+  );
+};
+
+/** Bottom padding a scroll view needs so content clears the floating dock. */
+export const DOCK_CLEARANCE = 108;

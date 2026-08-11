@@ -1,10 +1,13 @@
 import React from 'react';
-import { Modal, View, Text, TextInput, TouchableOpacity } from 'react-native';
-import { styles } from '../theme/styles';
+import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Button, Card } from './ui/primitives';
 
 interface RejectionModalProps {
   visible: boolean;
   rejectReason: string;
+  /** True while the decline is being persisted — drives the button spinner + prevents double-submit. */
+  submitting?: boolean;
   onChangeReason: (text: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -13,34 +16,60 @@ interface RejectionModalProps {
 export const RejectionModal: React.FC<RejectionModalProps> = ({
   visible,
   rejectReason,
+  submitting,
   onChangeReason,
   onConfirm,
   onCancel,
 }) => {
+  const t = useTheme();
+
+  if (!visible) return null;
+
+  const inputStyle: TextStyle = {
+    backgroundColor: t.colors.bg,
+    borderRadius: t.radius.md,
+    borderWidth: 1.5,
+    borderColor: t.colors.border,
+    paddingHorizontal: t.space.lg,
+    paddingVertical: t.space.md,
+    minHeight: 90,
+    color: t.colors.text,
+    fontSize: 15,
+    fontWeight: '500',
+    textAlignVertical: 'top',
+  };
+
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Reject Assignment</Text>
-          <Text style={[styles.inputLabel, { marginBottom: 8 }]}>Reason for rejection:</Text>
-          <TextInput
-            style={[styles.textInput, { minHeight: 80 }]}
-            placeholder="Enter reason..."
-            placeholderTextColor="#475569"
-            multiline
-            value={rejectReason}
-            onChangeText={onChangeReason}
-          />
-          <View style={[styles.actionGrid, { marginTop: 18 }]}>
-            <TouchableOpacity style={[styles.rejectBtn, { flex: 1, borderRadius: 12, paddingVertical: 14 }]} onPress={onConfirm}>
-              <Text style={styles.btnTextWhite}>Confirm Rejection</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.mapBtn, { flex: 1, borderRadius: 12, paddingVertical: 14 }]} onPress={onCancel}>
-              <Text style={styles.btnTextWhite}>Cancel</Text>
-            </TouchableOpacity>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <View style={{
+          flex: 1,
+          backgroundColor: t.colors.scrim,
+          justifyContent: 'center',
+          padding: t.space.xl,
+        }}>
+        <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
+          <AppText variant="h2">Decline Assignment</AppText>
+
+          <View style={{ gap: t.space.xs }}>
+            <AppText variant="overline" tone="faint">REASON FOR DECLINING</AppText>
+            <TextInput
+              style={inputStyle}
+              placeholder="Provide context for operations..."
+              placeholderTextColor={t.colors.textFaint}
+              multiline
+              value={rejectReason}
+              onChangeText={onChangeReason}
+            />
           </View>
+
+          <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
+            <Button label="Decline Assignment" variant="danger" icon="close" loading={submitting} disabled={submitting} onPress={onConfirm} style={{ flex: 1 }} />
+            <Button label="Cancel" variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
+          </View>
+        </Card>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

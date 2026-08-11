@@ -11,6 +11,7 @@ import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 describe('BranchService', () => {
   let service: BranchService;
@@ -46,7 +47,7 @@ describe('BranchService', () => {
   const mockCityRepo = { findOne: jest.fn() };
 
   const mockClientService = { findOne: jest.fn() };
-  const mockAuditService = { recordEvent: jest.fn() };
+  const mockAuditService = { recordEvent: jest.fn() , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })};
 
   const mockBranchQueryService = {
     findOne: jest.fn().mockImplementation((id) => Promise.resolve({ id, name: 'Branch 1' })),
@@ -67,6 +68,7 @@ describe('BranchService', () => {
         { provide: ClientService, useValue: mockClientService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: BranchQueryService, useValue: mockBranchQueryService },
+        { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
       ],
     }).compile();
 
@@ -90,7 +92,9 @@ describe('BranchService', () => {
           },
           'user-1',
         ),
-      ).rejects.toThrow(/State 'UnknownState' not found/);
+        // Geocoding now reports the whole unresolvable address rather than blaming the state
+        // field alone — an unknown place is usually a typo in any of the three parts.
+      ).rejects.toThrow(/Could not verify .*UnknownState.* as a real place/);
     });
 
     it('should successfully create a branch if geography validation passes', async () => {
@@ -131,4 +135,51 @@ describe('BranchService', () => {
       await expect(service.findOne('non-existent-id')).rejects.toThrow(NotFoundException);
     });
   });
+
+  /**
+   * Adding a contact or document was audited; removing one was not. For an audit business the
+   * removal is the more consequential half — it is what makes evidence stop being visible.
+   */
+  describe('removals leave a trail', () => {
+    it('records who removed a branch contact, and what was removed', async () => {
+      mockContactRepo.findOne.mockResolvedValue({
+        id: 'ct-1', branchId: 'br-1', name: 'Ravi Kumar', designation: 'Manager',
+        email: 'ravi@bank.example', phone: '9000000000', isActive: true,
+      });
+      mockContactRepo.save.mockImplementation(async (c: any) => c);
+
+      await service.removeContact('ct-1', 'user-9');
+
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'BRANCH_CONTACT_REMOVED',
+          entityType: 'BRANCH',
+          entityId: 'br-1',
+          userId: 'user-9',
+          metadata: expect.objectContaining({ contactId: 'ct-1', name: 'Ravi Kumar' }),
+        }),
+      );
+    });
+
+    it('records who removed a branch document, and which file', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue({
+        id: 'doc-1', branchId: 'br-1', fileName: 'vault-register.pdf',
+        category: 'EVIDENCE', filePath: '/docs/vault-register.pdf', isActive: true,
+      });
+      mockDocumentRepo.save.mockImplementation(async (d: any) => d);
+
+      await service.removeDocument('doc-1', 'user-9');
+
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'BRANCH_DOCUMENT_REMOVED',
+          entityType: 'BRANCH',
+          entityId: 'br-1',
+          userId: 'user-9',
+          metadata: expect.objectContaining({ documentId: 'doc-1', fileName: 'vault-register.pdf' }),
+        }),
+      );
+    });
+  });
+
 });

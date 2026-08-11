@@ -26,12 +26,26 @@ export class ValidationQueryEntity extends BaseEntity {
   @Column({ name: 'responded_at', type: 'timestamptz', nullable: true })
   respondedAt: Date | null;
 
+  @Column({ name: 'attachments', type: 'jsonb', nullable: true })
+  attachments: { url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[] | null;
+
   @Column({
     type: 'enum',
     enum: ValidationQueryStatus,
     default: ValidationQueryStatus.OPEN,
   })
   status: ValidationQueryStatus;
+
+  /** The returned PDF this clarification is about, so the desk opens the right file. */
+  @Column({ name: 'document_id', type: 'uuid', nullable: true })
+  documentId: string | null;
+
+  @Column({ name: 'raised_by_user_id', type: 'uuid', nullable: true })
+  raisedByUserId: string | null;
+
+  /** Denormalised so a thread list can sort by activity without joining messages. */
+  @Column({ name: 'last_message_at', type: 'timestamptz', nullable: true })
+  lastMessageAt: Date | null;
 
   @Column({ name: 'sla_due_date', type: 'timestamptz', nullable: true })
   slaDueDate: Date | null;

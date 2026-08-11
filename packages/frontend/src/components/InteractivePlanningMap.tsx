@@ -3,6 +3,7 @@ import L from 'leaflet';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { api } from '../services/api';
 import { MapLayerControls } from './MapLayerControls';
+import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
 
 interface MapBranch {
   id: string;
@@ -23,6 +24,19 @@ interface InteractivePlanningMapProps {
   selectedAssayerFromParent?: any | null;
   slaEnabled?: boolean;
   slaRadius?: number;
+  /**
+   * Recommendation results for the selected branch. The map previously coloured every assayer
+   * purely by straight-line distance, so the engine's top pick and an assayer blocked by a
+   * regulation looked identical — the operator had to cross-reference the list by hand.
+   */
+  rankedCandidates?: { id: string; score?: number; scoreBreakdown?: Record<string, number> }[];
+  excludedCandidates?: { assayerId: string; reason: string; detail?: string }[];
+  /**
+   * The client's contracted travel rates, from /pricing/rates. The map used to price travel as
+   * `distance x 8` with no free-commute allowance, so the figure an operator read here was not
+   * the figure the assignment would be billed at.
+   */
+  travelRates?: { travelFeePerKm: number; freeTravelAllowanceKm: number } | null;
 }
 
 export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
@@ -34,6 +48,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   selectedAssayerFromParent,
   slaEnabled: slaEnabledProp = false,
   slaRadius: slaRadiusProp = 50,
+  rankedCandidates,
+  excludedCandidates,
+  travelRates,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -65,14 +82,32 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   useEffect(() => localStorage.setItem('map_showWorkforceDensity', String(showWorkforceDensity)), [showWorkforceDensity]);
   useEffect(() => localStorage.setItem('map_showRevenueDensity', String(showRevenueDensity)), [showRevenueDensity]);
 
-  // Basemap selection state (persisted in localStorage)
-  const [mapStyle, setMapStyle] = useState<'voyager' | 'dark' | 'satellite'>(() => {
+  // Basemap selection state (persisted in localStorage).
+  // 'auto' tracks the app theme: dark/glass-dark/custom-dark -> Dark, else -> Light.
+  const [mapStyle, setMapStyle] = useState<'auto' | 'voyager' | 'dark' | 'satellite'>(() => {
     const saved = localStorage.getItem('map_style');
-    return (saved === 'voyager' || saved === 'dark' || saved === 'satellite') ? saved : 'dark';
+    return (saved === 'voyager' || saved === 'dark' || saved === 'satellite' || saved === 'auto') ? saved : 'auto';
   });
+  const [appTheme, setAppTheme] = useState(() =>
+    typeof document !== 'undefined' ? (document.documentElement.dataset.theme || '') : ''
+  );
   const [showLegend, setShowLegend] = useState(false);
 
   useEffect(() => localStorage.setItem('map_style', mapStyle), [mapStyle]);
+
+  // Keep the map basemap in sync with the app theme (listens for data-theme changes).
+  useEffect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => setAppTheme(root.dataset.theme || ''));
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
+
+  const DARK_THEMES = ['noir', 'black-gold', 'black-white', 'slate', 'midnight', 'glass-dark'];
+  const effectiveMapStyle: 'voyager' | 'dark' | 'satellite' =
+    mapStyle === 'auto'
+      ? DARK_THEMES.includes(appTheme) ? 'dark' : 'voyager'
+      : mapStyle;
 
   // Radius search filter config (persisted in localStorage)
   const [radiusKm, setRadiusKm] = useState<number>(() => {
@@ -204,10 +239,15 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       });
   }, [selectedAssayerForRouting, travelMode]);
 
-  // Reset routing if selected branch changes
+  // Resize Leaflet container whenever map visibility or container layout changes
   useEffect(() => {
-    setSelectedAssayerForRouting(null);
-  }, [selectedBranchId]);
+    const timer = setTimeout(() => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [branches, selectedBranchId, routePoints, selectedAssayerFromParent]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -224,13 +264,13 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       tileLayerRef.current.remove();
     }
 
-    const tileUrl = mapStyle === 'satellite'
+    const tileUrl = effectiveMapStyle === 'satellite'
       ? 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}' // Google Hybrid Satellite
-      : mapStyle === 'dark'
+      : effectiveMapStyle === 'dark'
       ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' // CartoDB Dark Matter
       : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'; // CartoDB Voyager
 
-    const isSatellite = mapStyle === 'satellite';
+    const isSatellite = effectiveMapStyle === 'satellite';
     tileLayerRef.current = L.tileLayer(tileUrl, {
       subdomains: isSatellite ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c', 'd'],
       attribution: isSatellite ? '&copy; Google Maps' : '&copy; OpenStreetMap &copy; CARTO',
@@ -271,11 +311,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           const lng = Number(b.longitude);
 
           const isSelected = b.id === selectedBranchId;
-          const color = isSelected
-            ? '#6366f1' // Selected Indigo
-            : b.status === 'ASSIGNMENT_CONFIRMED' || b.status === 'SCHEDULED'
-            ? '#10b981' // Green
-            : '#f59e0b'; // Amber
+          const color = isSelected ? '#6366f1' : branchStatusColor(b.status);
 
           const markerSvg = `
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="28px" height="28px" style="filter: drop-shadow(0 2px 5px rgba(0,0,0,0.4));">
@@ -366,6 +402,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
     // 2. Render Assayers
     if (showAssayers) {
+      // Rank/exclusion lookups so each pin can show where the engine placed that assayer.
+      const rankById = new Map<string, { rank: number; score?: number }>();
+      (rankedCandidates || []).forEach((c, i) => rankById.set(c.id, { rank: i + 1, score: c.score }));
+      const blockedById = new Map<string, { reason: string; detail?: string }>();
+      (excludedCandidates || []).forEach((e) => blockedById.set(e.assayerId, { reason: e.reason, detail: e.detail }));
+
       filteredAssayers.forEach((assayer) => {
       if (assayer.latitude !== null && assayer.longitude !== null) {
         const aLat = Number(assayer.latitude);
@@ -385,10 +427,39 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }
 
         if (shouldRender) {
-          const slaCompliant = slaEnabledProp && selectedBranchLatLng
-            ? straightDist >= slaRadiusProp
+          // Uses the same *effective* radius/enabled the "Restricted Zone" circle above is
+          // drawn with (effectiveSlaEnabled/effectiveSlaRadius), not the raw slaEnabledProp/
+          // slaRadiusProp. Those two used to diverge: the map has its own independent "Show
+          // SLA Risk" layer toggle (showSlaRisk/slaRadiusKm) that draws the restricted-zone
+          // circle on its own, separate from the Planning page's min-radius filter — so an
+          // assayer standing inside a visibly-drawn red restricted zone could still be
+          // coloured green/gold as "recommended", directly contradicting the circle drawn
+          // around them.
+          const slaCompliant = effectiveSlaEnabled && selectedBranchLatLng
+            ? straightDist >= effectiveSlaRadius
             : null;
-          const markerColor = slaCompliant === null ? '#a855f7' : slaCompliant ? '#10b981' : '#ef4444';
+          const ranking = rankById.get(assayer.id);
+          const blocked = blockedById.get(assayer.id);
+          // An assayer inside the restricted radius must never read as recommended, even if
+          // they're still present in rankedCandidates (e.g. the Planning page's own min-radius
+          // filter is off but the map's local "Show SLA Risk" toggle is on) — so this is
+          // checked ahead of ranking, not folded into the same priority level as it.
+          const inBreach = slaCompliant === false;
+
+          // Ranking wins over raw distance: what matters operationally is who the engine
+          // recommends, not merely who is nearest. Blocked assayers are greyed so they read as
+          // "cannot be assigned" at a glance instead of looking like an ordinary option.
+          const markerColor = blocked
+            ? '#64748b'
+            : inBreach
+            ? '#ef4444'
+            : ranking?.rank === 1
+            ? '#f59e0b'
+            : ranking
+            ? '#10b981'
+            : slaCompliant === null
+            ? '#a855f7'
+            : '#10b981';
           const assayerSvg = `
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${markerColor}" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
               <circle cx="12" cy="12" r="10" fill="none" stroke="${markerColor}" stroke-width="2"/>
@@ -396,8 +467,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             </svg>
           `;
 
+          // A small rank badge on the top three, so the best options are findable on the map
+          // without reading the list. Suppressed when in breach — a "#1 recommended" badge on
+          // a marker that's simultaneously coloured red as a restricted-zone breach is a direct
+          // visual contradiction.
+          const rankBadge = ranking && ranking.rank <= 3 && !inBreach
+            ? `<div style="position:absolute;top:-6px;right:-6px;background:${markerColor};color:#0f172a;font-size:9px;font-weight:800;width:14px;height:14px;line-height:14px;border-radius:50%;text-align:center;border:1.5px solid #0f172a;">${ranking.rank}</div>`
+            : '';
+          const blockedMark = blocked
+            ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:12px;font-weight:800;">✕</div>`
+            : '';
+
           const assayerIcon = L.divIcon({
-            html: assayerSvg,
+            html: `<div style="position:relative;width:26px;height:26px;opacity:${blocked ? 0.55 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`,
             className: 'custom-assayer-marker',
             iconSize: [24, 24],
             iconAnchor: [12, 24],
@@ -408,15 +490,28 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
           if (selectedBranchLatLng) {
             const slaStatus = slaCompliant === null ? '' : slaCompliant
-              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${slaRadiusProp}km SLA</div>`
-              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${slaRadiusProp}km SLA — Breach Risk</div>`;
+              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${effectiveSlaRadius}km SLA</div>`
+              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${effectiveSlaRadius}km SLA — Breach Risk</div>`;
+            // Surface the engine's verdict on the pin itself — rank and score when eligible,
+            // the blocking reason when not. A breach always wins over a stale ranking: an
+            // assayer can be in `rankedCandidates` (unfiltered by radius, e.g. when only the
+            // map's own SLA-risk layer is on) while still standing inside the restricted zone.
+            const verdict = blocked
+              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — ${blocked.reason}</div>` +
+                (blocked.detail ? `<div style="font-size:10px;color:#92400e;">└─ ${blocked.detail}</div>` : '')
+              : inBreach
+              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — within the ${effectiveSlaRadius}km restricted zone</div>`
+              : ranking
+              ? `<div style="margin-top:3px;color:#047857;font-weight:600;">#${ranking.rank} recommended · score ${ranking.score ?? '—'}</div>`
+              : '';
             assayerMarker.bindPopup(`
-              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:150px;">
+              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:170px;">
                 <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Distance: <b>${straightDist.toFixed(1)} km</b></div>
+                ${verdict}
                 ${slaStatus}
-                <div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>
+                ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>'}
               </div>
             `);
             assayerMarker.on('click', () => {
@@ -436,7 +531,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                 <b style="color:#a855f7; display:block; margin-bottom: 4px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Status: <span style="color:var(--status-active)">${assayer.status}</span></div>
-                <div>Skills: <i>${assayer.skills?.join(', ') || 'gold'}</i></div>
+                <div>Skills: <i>${assayer.skills?.length ? assayer.skills.join(', ') : 'None recorded'}</i></div>
               </div>
             `);
           }
@@ -533,7 +628,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         map.fitBounds(bounds, { padding: [30, 30] });
       }
     }
-  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp]);
+  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, appTheme, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
@@ -546,8 +641,22 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     ? Math.round(roadDurationMinutes) 
     : Math.round((straightDist / speed) * 60);
 
-  const costModes = { driving: 8, 'two-wheeler': 3, walking: 0 };
-  const estCost = Math.round(actualDistance * costModes[travelMode]);
+  /**
+   * Travel allowance, calculated the way FeePolicyService calculates it: the free commute
+   * allowance is deducted first, then the contracted per-km rate applies. This used to be
+   * `distance x 8` flat, which both ignored the allowance and hardcoded a rate that no longer
+   * matched the client's contract, so the operator was shown a number nothing would ever pay.
+   *
+   * Only driving is a billable allowance. The two-wheeler and walking figures are fuel
+   * estimates for comparing how the assayer might travel, and are labelled as such.
+   */
+  const perKmRate = travelRates?.travelFeePerKm ?? 8;
+  const freeAllowanceKm = travelRates?.freeTravelAllowanceKm ?? 0;
+  const chargeableKm = Math.max(0, actualDistance - freeAllowanceKm);
+  const fuelModes = { driving: perKmRate, 'two-wheeler': 3, walking: 0 };
+  const estCost = travelMode === 'driving'
+    ? Math.round(chargeableKm * perKmRate)
+    : Math.round(actualDistance * fuelModes[travelMode]);
 
   return (
     <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative', flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px', boxSizing: 'border-box' }}>
@@ -590,7 +699,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             bottom: '20px',
             left: '20px',
             zIndex: 1000,
-            background: 'rgba(21, 23, 30, 0.9)',
+            background: 'var(--bg-surface-2)',
             backdropFilter: 'blur(8px)',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-md)',
@@ -600,25 +709,24 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             flexDirection: 'column',
             gap: '8px',
             fontSize: '11px',
-            color: '#fff',
+            color: 'var(--text-primary)',
             minWidth: '160px'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', borderBottom: '1px solid var(--border-hair)', paddingBottom: '4px' }}>
               <span style={{ fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-primary)' }}>Map Legend</span>
-              <button type="button" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}>&times;</button>
+              <button type="button" aria-label="Close legend" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}>&times;</button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#6366f1' }} />
               <span>Selected Target</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }} />
-              <span>Planning Queue</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
-              <span>Scheduled/Confirmed</span>
-            </div>
+            {/* Branch pin colours, generated from the same buckets that draw them. */}
+            {BRANCH_STATUS_LEGEND.map((entry) => (
+              <div key={entry.bucket} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: entry.hex }} />
+                <span>{entry.label}</span>
+              </div>
+            ))}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#a855f7' }} />
               <span>Assayer (Auditor)</span>
@@ -642,12 +750,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             bottom: '20px',
             left: '20px',
             zIndex: 1000,
-            background: 'rgba(21, 23, 30, 0.85)',
+            background: 'var(--bg-surface-2)',
             backdropFilter: 'blur(8px)',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-sm)',
             padding: '6px 10px',
-            color: '#fff',
+            color: 'var(--text-primary)',
             fontSize: '11px',
             fontWeight: 600,
             cursor: 'pointer',
@@ -678,10 +786,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <b style={{ color: '#a855f7', fontSize: '13px' }}>{selectedAssayerForRouting.firstName} {selectedAssayerForRouting.lastName}</b>
+              <b style={{ color: 'var(--accent)', fontSize: '13px' }}>{selectedAssayerForRouting.firstName} {selectedAssayerForRouting.lastName}</b>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Route to {selectedAssayerForRouting.branchName}</div>
             </div>
-            <button onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>&times;</button>
+            <button type="button" aria-label="Close routing panel" onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>&times;</button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
@@ -691,10 +799,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                 onClick={() => setTravelMode(mode)}
                 style={{
                   padding: '4px',
-                  background: travelMode === mode ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
+                  background: travelMode === mode ? 'var(--status-pending-bg)' : 'transparent',
                   border: 'none',
                   borderRadius: 'var(--radius-sm)',
-                  color: travelMode === mode ? '#fff' : 'var(--text-secondary)',
+                  color: travelMode === mode ? 'var(--text-primary)' : 'var(--text-secondary)',
                   fontSize: '11px',
                   cursor: 'pointer',
                   textAlign: 'center'
@@ -719,9 +827,11 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span>{travelMode === 'driving' ? '🚗 Car' : travelMode === 'two-wheeler' ? '🏍️ Motorcycle' : '🚶 Walking'}</span>
               <span>| Speed: ~{speed} km/h</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '6px', marginTop: '4px' }}>
-              <span>{roadDistanceKm !== null ? 'Est. Travel Cost:' : 'Est. Travel Cost (approx):'}</span>
-              <b style={{ color: '#fff', fontSize: '12px' }}>₹{estCost}</b>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-hair)', paddingTop: '6px', marginTop: '4px' }}>
+              <span>{travelMode === 'driving'
+                ? (roadDistanceKm !== null ? 'Travel allowance:' : 'Travel allowance (approx):')
+                : 'Est. fuel cost:'}</span>
+              <b style={{ color: 'var(--text-primary)', fontSize: '12px' }}>₹{estCost}</b>
             </div>
             <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {roadDistanceKm !== null ? 'Road distance from OSRM' : 'Estimate based on straight-line distance'} — traffic not included

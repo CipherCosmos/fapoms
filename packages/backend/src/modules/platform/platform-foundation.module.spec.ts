@@ -4,7 +4,6 @@ import { ConfigurationManagerInterface } from './configuration/configuration-man
 import { AuthorizationService } from './authz/authorization.interface';
 import { EventDispatcherInterface } from './events/event-dispatcher.interface';
 import { ReusableWorkflowEngine } from './workflow/workflow-engine.service';
-import { TenantContextResolver } from './tenant/tenant-resolver.service';
 import { PlatformAuditService } from './audit/platform-audit.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogEntity } from './audit/audit-log.entity';
@@ -39,14 +38,12 @@ describe('PlatformFoundationModule', () => {
     const authzService = moduleRef.get<AuthorizationService>('AuthorizationService');
     const eventDispatcher = moduleRef.get<EventDispatcherInterface>('EventDispatcherInterface');
     const workflowEngine = moduleRef.get<ReusableWorkflowEngine>(ReusableWorkflowEngine);
-    const tenantResolver = moduleRef.get<TenantContextResolver>(TenantContextResolver);
     const auditService = moduleRef.get<PlatformAuditService>(PlatformAuditService);
 
     expect(configManager).toBeDefined();
     expect(authzService).toBeDefined();
     expect(eventDispatcher).toBeDefined();
     expect(workflowEngine).toBeDefined();
-    expect(tenantResolver).toBeDefined();
     expect(auditService).toBeDefined();
   });
 });

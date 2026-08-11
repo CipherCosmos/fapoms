@@ -22,6 +22,7 @@ import { IsString, IsNotEmpty, IsOptional, IsArray } from 'class-validator';
 
 import { ZoneService, CreateZoneDto, UpdateZoneDto } from './zone.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateZoneRequestDto implements CreateZoneDto {
@@ -58,6 +59,8 @@ class UpdateZoneRequestDto implements UpdateZoneDto {
 @ApiTags('Zones')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('zones')
 export class ZoneController {
   constructor(private readonly zoneService: ZoneService) {}
@@ -110,7 +113,7 @@ export class ZoneController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('zone:update:organization')
+  @RequirePermissions('zone:edit:organization')
   @ApiOperation({ summary: 'Update operational zone mappings' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,

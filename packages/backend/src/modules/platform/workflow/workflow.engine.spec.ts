@@ -10,7 +10,7 @@ describe('WorkflowEngine', () => {
   let engine: WorkflowEngine;
 
   const mockAuditService = {
-    recordEvent: jest.fn().mockResolvedValue(undefined),
+    recordEvent: jest.fn().mockResolvedValue(undefined), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
   const mockHistoryRepository = {

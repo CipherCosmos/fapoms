@@ -12,12 +12,17 @@ import {
   ParseUUIDPipe,
   UseInterceptors,
   UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { Region } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateBranchRequestDto implements CreateBranchDto {
@@ -110,6 +115,8 @@ class CreateDocumentRequestDto implements CreateDocumentDto {
 @ApiTags('Branches')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('branches')
 export class BranchController {
   constructor(private readonly branchService: BranchService) {}
@@ -128,15 +135,17 @@ export class BranchController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List branches with filters' })
+  @ApiOperation({ summary: 'List branches under the global scope filter' })
+  @ApiQuery({ name: 'clientId', required: false })
+  @ApiQuery({ name: 'region', required: false, enum: Region })
+  @ApiQuery({ name: 'zoneId', required: false })
+  @ApiQuery({ name: 'state', required: false })
   async findAll(
     @Query('page') page = 1,
     @Query('limit') limit = 20,
-    @Query('clientId') clientId?: string,
-    @Query('region') region?: string,
-    @Query('zoneId') zoneId?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const { branches, total } = await this.branchService.findAll(page, limit, clientId, region, zoneId);
+    const { branches, total } = await this.branchService.findAll(page, limit, scope);
     return {
       success: true,
       data: branches,
@@ -160,7 +169,7 @@ export class BranchController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('branch:update:organization')
+  @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch details' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchRequestDto, @Req() req: any) {
     const branch = await this.branchService.update(id, dto, req.user.id);
@@ -198,7 +207,7 @@ export class BranchController {
 
   @Put(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('branch:update:organization')
+  @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch contact' })
   async updateContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Body() dto: UpdateContactRequestDto, @Req() req: any) {
     const contact = await this.branchService.updateContact(contactId, dto, req.user.id);
@@ -250,7 +259,7 @@ export class BranchController {
   @Post('import/:clientId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('branch:create:organization')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Import branches from Excel' })
   @ApiBody({
@@ -264,8 +273,9 @@ export class BranchController {
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
   ) {
-    if (!file) {
-      return { success: false, error: 'No file uploaded.' };
+    // Same as above: this returned HTTP 201 Created for a request with no file attached.
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
     const result = await this.branchService.importExcel(file.buffer, clientId, req.user.id);
     return { success: true, data: result };

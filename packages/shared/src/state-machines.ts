@@ -1,30 +1,16 @@
-/**
- * FAPOMS — State Machine Definitions
- *
- * These transition maps define valid state changes for business entities.
- * Derived from Part 6 — Business State & Event Model.
- *
- * Invalid transitions must be rejected by business services.
- * Every transition generates a business event.
- */
-
 import {
-  AssignmentStatus,
-  ProjectBranchStatus,
+  AssessmentStatus,
+  BillingState,
+  ClientBillingStatus,
+  InvoiceStatus,
+  PaymentState,
+  AssayerPayableStatus,
   ProjectStatus,
   ScheduleStatus,
   ValidationStatus,
 } from './enums';
 
-// ---------------------------------------------------------------------------
-// State Transition Definition
-// ---------------------------------------------------------------------------
-
 export type TransitionMap<T extends string> = Partial<Record<T, T[]>>;
-
-// ---------------------------------------------------------------------------
-// Project State Machine (Part 6 §3)
-// ---------------------------------------------------------------------------
 
 export const PROJECT_TRANSITIONS: TransitionMap<ProjectStatus> = {
   [ProjectStatus.DRAFT]: [ProjectStatus.PLANNING],
@@ -34,64 +20,41 @@ export const PROJECT_TRANSITIONS: TransitionMap<ProjectStatus> = {
   [ProjectStatus.VALIDATION]: [ProjectStatus.COMPLETED],
   [ProjectStatus.COMPLETED]: [ProjectStatus.ARCHIVED],
   [ProjectStatus.ON_HOLD]: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION],
-  // ARCHIVED and CANCELLED are terminal states
 };
 
-// ---------------------------------------------------------------------------
-// Project Branch State Machine (Part 6 §4, consolidated)
-// ---------------------------------------------------------------------------
-
-export const PROJECT_BRANCH_TRANSITIONS: TransitionMap<ProjectBranchStatus> = {
-  [ProjectBranchStatus.IMPORTED]: [ProjectBranchStatus.PLANNING],
-  [ProjectBranchStatus.PLANNING]: [
-    ProjectBranchStatus.CANDIDATE_SEARCH,
-    ProjectBranchStatus.UNABLE_TO_COVER,
+export const ASSESSMENT_TRANSITIONS: TransitionMap<AssessmentStatus> = {
+  [AssessmentStatus.PENDING_PLANNING]: [AssessmentStatus.ASSESSOR_RECOMMENDED],
+  [AssessmentStatus.ASSESSOR_RECOMMENDED]: [
+    AssessmentStatus.IN_NEGOTIATION,
+    AssessmentStatus.UNASSIGNED,
   ],
-  [ProjectBranchStatus.CANDIDATE_SEARCH]: [
-    ProjectBranchStatus.CONTACT_INITIATED,
-    ProjectBranchStatus.UNABLE_TO_COVER,
+  [AssessmentStatus.IN_NEGOTIATION]: [
+    AssessmentStatus.ASSIGNED_AND_SCHEDULED,
+    AssessmentStatus.ASSESSOR_RECOMMENDED,
   ],
-  [ProjectBranchStatus.CONTACT_INITIATED]: [
-    ProjectBranchStatus.NEGOTIATION,
-    ProjectBranchStatus.CANDIDATE_SEARCH, // Rejected → search new candidate
+  [AssessmentStatus.ASSIGNED_AND_SCHEDULED]: [
+    AssessmentStatus.AWAITING_CLIENT_DATA,
+    AssessmentStatus.UNASSIGNED,
   ],
-  [ProjectBranchStatus.NEGOTIATION]: [
-    ProjectBranchStatus.ASSIGNMENT_CONFIRMED,
-    ProjectBranchStatus.CANDIDATE_SEARCH, // Rejected → search new candidate
+  [AssessmentStatus.AWAITING_CLIENT_DATA]: [AssessmentStatus.CLIENT_DATA_RECEIVED],
+  [AssessmentStatus.CLIENT_DATA_RECEIVED]: [AssessmentStatus.PDF_GENERATED],
+  [AssessmentStatus.PDF_GENERATED]: [AssessmentStatus.READY_FOR_DISPATCH],
+  [AssessmentStatus.READY_FOR_DISPATCH]: [AssessmentStatus.DISPATCHED_TO_ASSESSOR],
+  [AssessmentStatus.DISPATCHED_TO_ASSESSOR]: [AssessmentStatus.AUDITED_PDF_RECEIVED],
+  [AssessmentStatus.AUDITED_PDF_RECEIVED]: [AssessmentStatus.SENT_TO_DATA_ENTRY],
+  [AssessmentStatus.SENT_TO_DATA_ENTRY]: [AssessmentStatus.DATA_ENTRY_IN_PROGRESS],
+  [AssessmentStatus.DATA_ENTRY_IN_PROGRESS]: [
+    AssessmentStatus.CLARIFICATION_NEEDED,
+    AssessmentStatus.REPORT_FINALIZED,
   ],
-  [ProjectBranchStatus.ASSIGNMENT_CONFIRMED]: [ProjectBranchStatus.SCHEDULED],
-  [ProjectBranchStatus.SCHEDULED]: [ProjectBranchStatus.AUDIT_COMPLETED],
-  [ProjectBranchStatus.AUDIT_COMPLETED]: [ProjectBranchStatus.VALIDATION_COMPLETED],
-  [ProjectBranchStatus.VALIDATION_COMPLETED]: [ProjectBranchStatus.CLOSED],
-  // UNABLE_TO_COVER, ON_HOLD, CANCELLED are (near-)terminal states
-  [ProjectBranchStatus.UNABLE_TO_COVER]: [ProjectBranchStatus.PLANNING], // Can be reopened
-  [ProjectBranchStatus.ON_HOLD]: [ProjectBranchStatus.PLANNING],
+  [AssessmentStatus.CLARIFICATION_NEEDED]: [AssessmentStatus.DATA_ENTRY_IN_PROGRESS],
+  [AssessmentStatus.REPORT_FINALIZED]: [AssessmentStatus.PENDING_HEAD_APPROVAL],
+  [AssessmentStatus.PENDING_HEAD_APPROVAL]: [
+    AssessmentStatus.DELIVERED_TO_CLIENT,
+    AssessmentStatus.DATA_ENTRY_IN_PROGRESS,
+  ],
+  [AssessmentStatus.DELIVERED_TO_CLIENT]: [AssessmentStatus.COMPLETED],
 };
-
-// ---------------------------------------------------------------------------
-// Assignment State Machine (Part 6 §5)
-// ---------------------------------------------------------------------------
-
-export const ASSIGNMENT_TRANSITIONS: TransitionMap<AssignmentStatus> = {
-  [AssignmentStatus.CREATED]: [AssignmentStatus.CANDIDATE_SELECTED],
-  [AssignmentStatus.CANDIDATE_SELECTED]: [AssignmentStatus.CONTACT_INITIATED],
-  [AssignmentStatus.CONTACT_INITIATED]: [AssignmentStatus.NEGOTIATION],
-  [AssignmentStatus.NEGOTIATION]: [
-    AssignmentStatus.ACCEPTED,
-    AssignmentStatus.REJECTED,
-  ],
-  [AssignmentStatus.ACCEPTED]: [
-    AssignmentStatus.SCHEDULED,
-    AssignmentStatus.CANCELLED, // Emergency only
-  ],
-  [AssignmentStatus.SCHEDULED]: [AssignmentStatus.AUDIT_COMPLETED],
-  [AssignmentStatus.AUDIT_COMPLETED]: [AssignmentStatus.CLOSED],
-  // REJECTED and CANCELLED are terminal states
-};
-
-// ---------------------------------------------------------------------------
-// Schedule State Machine (Part 6 §6)
-// ---------------------------------------------------------------------------
 
 export const SCHEDULE_TRANSITIONS: TransitionMap<ScheduleStatus> = {
   [ScheduleStatus.TENTATIVE]: [ScheduleStatus.CONFIRMED],
@@ -99,13 +62,8 @@ export const SCHEDULE_TRANSITIONS: TransitionMap<ScheduleStatus> = {
     ScheduleStatus.RESCHEDULED,
     ScheduleStatus.COMPLETED,
   ],
-  [ScheduleStatus.RESCHEDULED]: [ScheduleStatus.CONFIRMED],
-  // COMPLETED is terminal
+  [ScheduleStatus.RESCHEDULED]: [ScheduleStatus.RESCHEDULED, ScheduleStatus.CONFIRMED, ScheduleStatus.COMPLETED],
 };
-
-// ---------------------------------------------------------------------------
-// Validation State Machine (Part 6 §8)
-// ---------------------------------------------------------------------------
 
 export const VALIDATION_TRANSITIONS: TransitionMap<ValidationStatus> = {
   [ValidationStatus.PENDING]: [ValidationStatus.ASSIGNED],
@@ -117,17 +75,15 @@ export const VALIDATION_TRANSITIONS: TransitionMap<ValidationStatus> = {
   ],
   [ValidationStatus.CORRECTION_REQUIRED]: [ValidationStatus.HUMAN_REVIEW],
   [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED],
-  // SUBMITTED is terminal
 };
 
-// ---------------------------------------------------------------------------
-// Transition Validator
-// ---------------------------------------------------------------------------
+export const BILLING_TRANSITIONS: TransitionMap<ClientBillingStatus> = {
+  [ClientBillingStatus.DRAFT]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
+  [ClientBillingStatus.ACTIVE]: [ClientBillingStatus.SUSPENDED, ClientBillingStatus.INACTIVE],
+  [ClientBillingStatus.SUSPENDED]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
+  [ClientBillingStatus.INACTIVE]: [ClientBillingStatus.ACTIVE],
+};
 
-/**
- * Checks whether a state transition is valid according to the transition map.
- * Returns true if the transition is allowed.
- */
 export function isValidTransition<T extends string>(
   transitions: TransitionMap<T>,
   currentState: T,
@@ -137,3 +93,87 @@ export function isValidTransition<T extends string>(
   if (!allowedTargets) return false;
   return allowedTargets.includes(targetState);
 }
+
+/**
+ * Multi-level billing state machine (spec §6).
+ *
+ * Forward spine:
+ *   NOT_BILLABLE → PENDING_BILLING → READY_FOR_BILLING → DRAFT → SUBMITTED
+ *     → UNDER_REVIEW → (REJECTED ⇄ DRAFT) → APPROVED → INVOICED
+ *     → PARTIALLY_PAID → PAID
+ * Cross-cutting hold/dispute/cancel/adjust, each with an escape hatch.
+ */
+export const BILLING_STATE_TRANSITIONS: TransitionMap<BillingState> = {
+  [BillingState.NOT_BILLABLE]: [BillingState.PENDING_BILLING],
+  [BillingState.PENDING_BILLING]: [BillingState.READY_FOR_BILLING, BillingState.NOT_BILLABLE, BillingState.CANCELLED],
+  [BillingState.READY_FOR_BILLING]: [BillingState.DRAFT, BillingState.ON_HOLD, BillingState.CANCELLED],
+  [BillingState.DRAFT]: [
+    BillingState.SUBMITTED,
+    BillingState.READY_FOR_BILLING,
+    BillingState.ON_HOLD,
+    BillingState.CANCELLED,
+  ],
+  [BillingState.SUBMITTED]: [BillingState.UNDER_REVIEW, BillingState.DRAFT, BillingState.ON_HOLD, BillingState.CANCELLED],
+  [BillingState.UNDER_REVIEW]: [
+    BillingState.APPROVED,
+    BillingState.REJECTED,
+    BillingState.ON_HOLD,
+    BillingState.DISPUTED,
+  ],
+  [BillingState.REJECTED]: [BillingState.DRAFT, BillingState.CANCELLED],
+  [BillingState.APPROVED]: [
+    BillingState.INVOICED,
+    BillingState.ON_HOLD,
+    BillingState.DISPUTED,
+    BillingState.CANCELLED,
+    BillingState.ADJUSTED,
+  ],
+  [BillingState.INVOICED]: [
+    BillingState.PARTIALLY_PAID,
+    BillingState.PAID,
+    BillingState.ON_HOLD,
+    BillingState.DISPUTED,
+    BillingState.ADJUSTED,
+  ],
+  [BillingState.PARTIALLY_PAID]: [BillingState.PAID, BillingState.DISPUTED, BillingState.ON_HOLD, BillingState.ADJUSTED],
+  [BillingState.PAID]: [BillingState.ADJUSTED, BillingState.DISPUTED],
+  [BillingState.ON_HOLD]: [
+    BillingState.READY_FOR_BILLING,
+    BillingState.DRAFT,
+    BillingState.UNDER_REVIEW,
+    BillingState.CANCELLED,
+  ],
+  [BillingState.DISPUTED]: [BillingState.UNDER_REVIEW, BillingState.APPROVED, BillingState.ON_HOLD, BillingState.CANCELLED],
+  [BillingState.CANCELLED]: [],
+  [BillingState.ADJUSTED]: [BillingState.APPROVED, BillingState.ON_HOLD],
+};
+
+export const INVOICE_TRANSITIONS: TransitionMap<InvoiceStatus> = {
+  [InvoiceStatus.DRAFT]: [InvoiceStatus.ISSUED, InvoiceStatus.CANCELLED, InvoiceStatus.VOID],
+  [InvoiceStatus.ISSUED]: [
+    InvoiceStatus.PARTIALLY_PAID,
+    InvoiceStatus.PAID,
+    InvoiceStatus.DISPUTED,
+    InvoiceStatus.CANCELLED,
+  ],
+  [InvoiceStatus.PARTIALLY_PAID]: [InvoiceStatus.PAID, InvoiceStatus.DISPUTED, InvoiceStatus.CANCELLED],
+  [InvoiceStatus.PAID]: [InvoiceStatus.DISPUTED],
+  [InvoiceStatus.DISPUTED]: [InvoiceStatus.ISSUED, InvoiceStatus.CANCELLED],
+  [InvoiceStatus.CANCELLED]: [],
+  [InvoiceStatus.VOID]: [],
+};
+
+export const PAYMENT_STATE_TRANSITIONS: TransitionMap<PaymentState> = {
+  [PaymentState.UNPAID]: [PaymentState.PARTIALLY_PAID, PaymentState.PAID],
+  [PaymentState.PARTIALLY_PAID]: [PaymentState.PAID, PaymentState.UNPAID],
+  [PaymentState.PAID]: [PaymentState.PARTIALLY_PAID],
+  [PaymentState.REVERSED]: [PaymentState.UNPAID],
+};
+
+export const PAYABLE_TRANSITIONS: TransitionMap<AssayerPayableStatus> = {
+  [AssayerPayableStatus.PENDING]: [AssayerPayableStatus.APPROVED, AssayerPayableStatus.ON_HOLD, AssayerPayableStatus.DISPUTED],
+  [AssayerPayableStatus.APPROVED]: [AssayerPayableStatus.PAID, AssayerPayableStatus.ON_HOLD, AssayerPayableStatus.DISPUTED],
+  [AssayerPayableStatus.PAID]: [AssayerPayableStatus.DISPUTED],
+  [AssayerPayableStatus.DISPUTED]: [AssayerPayableStatus.PENDING, AssayerPayableStatus.APPROVED, AssayerPayableStatus.ON_HOLD],
+  [AssayerPayableStatus.ON_HOLD]: [AssayerPayableStatus.PENDING, AssayerPayableStatus.APPROVED, AssayerPayableStatus.DISPUTED],
+};

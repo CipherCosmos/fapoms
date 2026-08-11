@@ -17,6 +17,9 @@ export interface CustomerMasterReconciliationReportDto {
   duplicateAccountsCount: number;
   unmappedBranchCodesCount: number;
   status: CustomerMasterStatus;
+  /** Distinct branches present in the file — the branches to be audited that day. */
+  coveredBranchCount: number;
+  auditDate: string | null;
   recommendation: string;
 }
 
@@ -39,6 +42,7 @@ export class CustomerMasterService {
     filePath: string,
     fileBuffer: Buffer,
     userId: string,
+    auditDate?: string,
   ): Promise<CustomerMasterReconciliationReportDto> {
     const existingVersions = await this.versionRepository.find({
       where: { projectId, isActive: true },
@@ -52,7 +56,7 @@ export class CustomerMasterService {
     const sheetName = workbook.SheetNames[0];
     const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-    let totalRows = rows.length;
+    const totalRows = rows.length;
     let duplicateAccounts = 0;
     let unmappedBranchCodes = 0;
     const accountSet = new Set<string>();
@@ -114,6 +118,11 @@ export class CustomerMasterService {
       });
     }
 
+    // The distinct branches present in the file are the branches being audited that
+    // day. Reporting this back is what lets ops confirm the batch matches the
+    // schedule before anything is generated from it.
+    const coveredBranchIds = new Set(recordEntities.map((r) => r.branchId).filter(Boolean) as string[]);
+
     const isBlocked = duplicateAccounts > 50 || unmappedBranchCodes > 10;
     const status = isBlocked ? CustomerMasterStatus.REJECTED : CustomerMasterStatus.RECONCILED;
 
@@ -123,6 +132,7 @@ export class CustomerMasterService {
         versionNumber: nextVersionNumber,
         fileName,
         filePath,
+        auditDate: auditDate ?? null,
         totalRows,
         uniqueAccounts: accountSet.size,
         duplicateAccounts,
@@ -169,6 +179,8 @@ export class CustomerMasterService {
         duplicateAccountsCount: duplicateAccounts,
         unmappedBranchCodesCount: unmappedBranchCodes,
         status,
+        coveredBranchCount: coveredBranchIds.size,
+        auditDate: auditDate ?? null,
         recommendation: isBlocked
           ? 'Reconciliation Rejected: Exceeds duplicate account or unmapped branch threshold.'
           : 'Reconciliation Passed: Version created and records mapped cleanly.',
@@ -212,6 +224,137 @@ export class CustomerMasterService {
     });
   }
 
+  /**
+   * A single day's run, end to end.
+   *
+   * The client's batch for an audit date lists the branches to be audited that day.
+   * This resolves each of those branches to its generated audit PDF and reports
+   * where that PDF has reached — so one view answers "the batch had ten branches;
+   * how many are generated, sent, returned, and processed?".
+   *
+   * That question was previously unanswerable: batches were unreachable entirely,
+   * and the PDFs they produce were uploaded one at a time with no record of which
+   * run they belonged to.
+   */
+  async dailyRun(projectId: string, auditDate: string): Promise<any> {
+    const version = await this.versionRepository.findOne({
+      where: { projectId, auditDate, isActive: true },
+      order: { versionNumber: 'DESC' },
+    });
+
+    // Branches scheduled for this date, from the plan — independent of whether the
+    // client's data has arrived. Comparing the two is the point: a branch scheduled
+    // but absent from the batch means the client under-delivered.
+    const scheduled = await this.dataSource.query(
+      `SELECT pb.id AS project_branch_id, b.id AS branch_id, b.name AS branch_name, b.branch_code
+         FROM project_branches pb
+         JOIN branches b ON b.id = pb.branch_id
+        WHERE pb.project_id = $1 AND pb.is_active = true AND pb.scheduled_date = $2
+        ORDER BY b.name`,
+      [projectId, auditDate],
+    );
+
+    // Branches actually present in the client's file.
+    const inBatch: Array<{ branch_id: string; record_count: string; packet_total: string }> = version
+      ? await this.dataSource.query(
+          `SELECT branch_id, COUNT(*) AS record_count, COALESCE(SUM(packet_count), 0) AS packet_total
+             FROM customer_records
+            WHERE customer_master_version_id = $1 AND branch_id IS NOT NULL AND is_active = true
+            GROUP BY branch_id`,
+          [version.id],
+        )
+      : [];
+    const batchByBranch = new Map(inBatch.map((r) => [r.branch_id, r]));
+
+    // The audit packet produced for each branch, and where it has got to.
+    const pdfs = await this.dataSource.query(
+      `SELECT a.branch_id, d.id, d.file_name, d.status, d.dispatched_at, d.received_at,
+              d.sent_to_external_ocr_at, d.customer_master_version_id
+         FROM documents d
+         JOIN assessments a ON a.id = d.assessment_id
+        WHERE a.project_id = $1 AND d.type = 'PRE_FIELD_AUDIT_PDF' AND d.is_active = true`,
+      [projectId],
+    );
+    const pdfByBranch = new Map<string, any>();
+    for (const p of pdfs) {
+      // Prefer the PDF explicitly produced from this batch; fall back to any packet
+      // for the branch so runs predating the link still display.
+      const existing = pdfByBranch.get(p.branch_id);
+      if (!existing || p.customer_master_version_id === version?.id) pdfByBranch.set(p.branch_id, p);
+    }
+
+    const branches = scheduled.map((s: any) => {
+      const batch = batchByBranch.get(s.branch_id);
+      const pdf = pdfByBranch.get(s.branch_id);
+      return {
+        projectBranchId: s.project_branch_id,
+        branchId: s.branch_id,
+        branchName: s.branch_name,
+        branchCode: s.branch_code,
+        inBatch: !!batch,
+        customerCount: batch ? Number(batch.record_count) : 0,
+        packetCount: batch ? Number(batch.packet_total) : 0,
+        pdf: pdf
+          ? {
+              id: pdf.id,
+              fileName: pdf.file_name,
+              status: pdf.status,
+              dispatchedAt: pdf.dispatched_at,
+              receivedAt: pdf.received_at,
+              sentToExternalOcrAt: pdf.sent_to_external_ocr_at,
+              fromThisBatch: pdf.customer_master_version_id === version?.id,
+            }
+          : null,
+        // The single most useful field: what is the next thing a human must do.
+        nextAction: !batch
+          ? 'AWAITING_CLIENT_DATA'
+          : !pdf
+            ? 'GENERATE_PDF'
+            : pdf.status === 'UPLOADED'
+              ? 'DISPATCH'
+              : pdf.status === 'DISPATCHED'
+                ? 'AWAITING_ASSAYER_RETURN'
+                : pdf.status === 'RECEIVED'
+                  ? 'SEND_TO_OCR'
+                  : 'IN_PROGRESS',
+      };
+    });
+
+    // Branches the client sent data for that are not scheduled for this date — a
+    // real mismatch worth surfacing rather than silently ignoring.
+    const scheduledIds = new Set(scheduled.map((s: any) => s.branch_id));
+    const unexpected = inBatch.filter((r) => !scheduledIds.has(r.branch_id)).length;
+
+    return {
+      projectId,
+      auditDate,
+      batch: version
+        ? {
+            id: version.id,
+            versionNumber: version.versionNumber,
+            fileName: version.fileName,
+            status: version.status,
+            totalRows: version.totalRows,
+            uniqueAccounts: version.uniqueAccounts,
+            duplicateAccounts: version.duplicateAccounts,
+            uploadedAt: version.createdAt,
+            approvedAt: version.approvedAt,
+          }
+        : null,
+      summary: {
+        scheduledBranches: branches.length,
+        inBatch: branches.filter((b: any) => b.inBatch).length,
+        awaitingClientData: branches.filter((b: any) => b.nextAction === 'AWAITING_CLIENT_DATA').length,
+        toGenerate: branches.filter((b: any) => b.nextAction === 'GENERATE_PDF').length,
+        toDispatch: branches.filter((b: any) => b.nextAction === 'DISPATCH').length,
+        awaitingReturn: branches.filter((b: any) => b.nextAction === 'AWAITING_ASSAYER_RETURN').length,
+        toSendToOcr: branches.filter((b: any) => b.nextAction === 'SEND_TO_OCR').length,
+        unexpectedBranchesInBatch: unexpected,
+      },
+      branches,
+    };
+  }
+
   async findByProject(projectId: string): Promise<CustomerMasterVersionEntity[]> {
     return this.versionRepository.find({
       where: { projectId, isActive: true },
@@ -219,13 +362,24 @@ export class CustomerMasterService {
     });
   }
 
-  async findRecords(versionId: string, page = 1, limit = 50): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+  async findRecords(versionId: string, page = 1, limit = 50, branchId?: string): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+    const where: any = { customerMasterVersionId: versionId, isActive: true };
+    if (branchId) {
+      where.branchId = branchId;
+    }
     const [records, total] = await this.recordRepository.findAndCount({
-      where: { customerMasterVersionId: versionId, isActive: true },
+      where,
       relations: ['branch'],
       take: limit,
       skip: (page - 1) * limit,
     });
     return { records, total };
+  }
+
+  async findRecordsByVersionAndBranch(versionId: string, branchId: string): Promise<CustomerRecordEntity[]> {
+    return this.recordRepository.find({
+      where: { customerMasterVersionId: versionId, branchId, isActive: true },
+      relations: ['branch'],
+    });
   }
 }

@@ -5,14 +5,17 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Like, In } from 'typeorm';
 import { ClientEntity } from './client.entity';
 import { ClientConfigurationEntity } from './client-configuration.entity';
 import { ClientContactEntity } from './client-contact.entity';
 import { ClientContractEntity } from './client-contract.entity';
 import { ClientBillingEntity } from './client-billing.entity';
+import { ClientBillingHistoryEntity } from './client-billing-history.entity';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory, ClientLifecycleStatus } from '@fapoms/shared';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+import { EventCategory, ClientLifecycleStatus, ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
 
 export interface CreateClientDto {
   clientCode: string;
@@ -41,6 +44,9 @@ export interface CreateClientDto {
     maxResponseTimeHours?: number;
     penaltyRate?: number;
     serviceHours?: Record<string, any>;
+    defaultBaseFee?: number;
+    travelFeePerKm?: number;
+    freeTravelAllowanceKm?: number;
   };
 }
 
@@ -70,6 +76,9 @@ export interface UpdateClientDto {
     maxResponseTimeHours?: number;
     penaltyRate?: number;
     serviceHours?: Record<string, any>;
+    defaultBaseFee?: number;
+    travelFeePerKm?: number;
+    freeTravelAllowanceKm?: number;
     effectiveTo?: Date;
   };
 }
@@ -130,6 +139,8 @@ export interface UpdateBillingDto {
   bankName?: string;
   ifscCode?: string;
   notes?: string;
+  gstRate?: number;
+  tdsRate?: number;
 }
 
 const VALID_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
@@ -141,6 +152,33 @@ const VALID_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
   [ClientLifecycleStatus.INACTIVE]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.ARCHIVED],
   [ClientLifecycleStatus.TERMINATED]: [ClientLifecycleStatus.ARCHIVED],
   [ClientLifecycleStatus.ARCHIVED]: [],
+};
+
+/** Ordered path of client lifecycle states from `from` to `target`, walking only
+ *  allowed transitions (BFS). Returns [] when already there, or null when the
+ *  target is unreachable — used by bulk operations to walk a batch forward. */
+function findLifecyclePathTo(from: string, target: string): string[] | null {
+  if (from === target) return [];
+  const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
+  const visited = new Set<string>([from]);
+  while (queue.length) {
+    const { stage, path } = queue.shift()!;
+    for (const next of VALID_LIFECYCLE_TRANSITIONS[stage] ?? []) {
+      if (next === target) return [...path, next];
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push({ stage: next, path: [...path, next] });
+      }
+    }
+  }
+  return null;
+}
+
+const VALID_BILLING_TRANSITIONS: Record<string, string[]> = {
+  [ClientBillingStatus.DRAFT]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
+  [ClientBillingStatus.ACTIVE]: [ClientBillingStatus.SUSPENDED, ClientBillingStatus.INACTIVE],
+  [ClientBillingStatus.SUSPENDED]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
+  [ClientBillingStatus.INACTIVE]: [ClientBillingStatus.ACTIVE],
 };
 
 @Injectable()
@@ -156,7 +194,11 @@ export class ClientService {
     private readonly contractRepository: Repository<ClientContractEntity>,
     @InjectRepository(ClientBillingEntity)
     private readonly billingRepository: Repository<ClientBillingEntity>,
+    @InjectRepository(ClientBillingHistoryEntity)
+    private readonly billingHistoryRepository: Repository<ClientBillingHistoryEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
+    private readonly cache: CacheService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -178,6 +220,9 @@ export class ClientService {
       maxResponseTimeHours: dto.configuration?.maxResponseTimeHours ?? null,
       penaltyRate: dto.configuration?.penaltyRate ?? null,
       serviceHours: dto.configuration?.serviceHours ?? null,
+      defaultBaseFee: dto.configuration?.defaultBaseFee ?? null,
+      travelFeePerKm: dto.configuration?.travelFeePerKm ?? null,
+      freeTravelAllowanceKm: dto.configuration?.freeTravelAllowanceKm ?? null,
       effectiveFrom: new Date(),
       createdBy: userId,
       updatedBy: userId,
@@ -219,6 +264,20 @@ export class ClientService {
       remarks: `Created client ${saved.name} (${saved.clientCode})`,
     });
 
+    try {
+      this.eventPublisher.publish('client:created', {
+        eventType: 'client:created',
+        clientId: saved.id,
+        clientCode: saved.clientCode,
+        name: saved.name,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish client:created event:', err);
+    }
+
     return saved;
   }
 
@@ -233,13 +292,46 @@ export class ClientService {
     return client;
   }
 
-  async findAll(page = 1, limit = 20): Promise<{ clients: ClientEntity[]; total: number }> {
+  async findAll(
+    page = 1,
+    limit = 20,
+    filters: {
+      search?: string;
+      status?: string;
+      clientType?: string;
+      priority?: string;
+      sortBy?: string;
+      sortOrder?: 'ASC' | 'DESC';
+    } = {},
+  ): Promise<{ clients: ClientEntity[]; total: number }> {
+    const where: Record<string, unknown> = { isActive: true };
+
+    if (filters.search) {
+      where.name = Like(`%${filters.search}%`);
+    }
+    if (filters.status) {
+      where.lifecycleStatus = filters.status;
+    }
+    if (filters.clientType) {
+      where.clientType = filters.clientType;
+    }
+    if (filters.priority) {
+      where.priority = filters.priority;
+    }
+
+    const sortable = new Set([
+      'name', 'displayName', 'clientCode', 'clientType', 'priority',
+      'lifecycleStatus', 'industry', 'createdAt', 'updatedAt',
+    ]);
+    const sortBy: string = sortable.has(filters.sortBy ?? '') ? (filters.sortBy ?? 'name') : 'name';
+    const sortOrder: 'ASC' | 'DESC' = filters.sortOrder === 'DESC' ? 'DESC' : 'ASC';
+
     const [clients, total] = await this.clientRepository.findAndCount({
-      where: { isActive: true },
+      where,
       relations: ['configuration'],
       take: limit,
       skip: (page - 1) * limit,
-      order: { name: 'ASC' },
+      order: { [sortBy]: sortOrder },
     });
     return { clients, total };
   }
@@ -274,12 +366,21 @@ export class ClientService {
       if (dto.configuration.maxResponseTimeHours !== undefined) conf.maxResponseTimeHours = dto.configuration.maxResponseTimeHours;
       if (dto.configuration.penaltyRate !== undefined) conf.penaltyRate = dto.configuration.penaltyRate;
       if (dto.configuration.serviceHours !== undefined) conf.serviceHours = dto.configuration.serviceHours;
+      if (dto.configuration.defaultBaseFee !== undefined) conf.defaultBaseFee = dto.configuration.defaultBaseFee;
+      if (dto.configuration.travelFeePerKm !== undefined) conf.travelFeePerKm = dto.configuration.travelFeePerKm;
+      if (dto.configuration.freeTravelAllowanceKm !== undefined) conf.freeTravelAllowanceKm = dto.configuration.freeTravelAllowanceKm;
       if (dto.configuration.effectiveTo !== undefined) conf.effectiveTo = dto.configuration.effectiveTo;
       conf.updatedBy = userId;
     }
 
     client.updatedBy = userId;
     const saved = await this.clientRepository.save(client);
+
+    // A changed rate card (defaultBaseFee / travelFeePerKm / freeTravelAllowanceKm) must not
+    // be served stale by FeePolicyService.getRates, which caches under ref:rates:client:{id}.
+    if (dto.configuration) {
+      await this.cache.del(`ref:rates:client:${id}`);
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -289,6 +390,19 @@ export class ClientService {
       userId,
       remarks: `Updated client ${client.name}`,
     });
+
+    try {
+      this.eventPublisher.publish('client:updated', {
+        eventType: 'client:updated',
+        clientId: saved.id,
+        name: saved.name,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish client:updated event:', err);
+    }
 
     return saved;
   }
@@ -329,7 +443,7 @@ export class ClientService {
     const saved = await this.clientRepository.save(client);
 
     await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: 'CLIENT_LIFECYCLE_CHANGED',
       entityType: 'CLIENT',
       entityId: id,
@@ -339,12 +453,71 @@ export class ClientService {
       remarks: reason || `Lifecycle transitioned from ${currentStatus} to ${newStatus}`,
     });
 
+    try {
+      this.eventPublisher.publish('client:status-changed', {
+        eventType: 'client:status-changed',
+        clientId: saved.id,
+        name: saved.name,
+        previousStatus: currentStatus,
+        newStatus,
+        organizationId: saved.organizationId,
+        userId,
+        reason,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish client:status-changed event:', err);
+    }
+
     return saved;
   }
 
-  // -----------------------------------------------------------------------
-  // Contacts
-  // -----------------------------------------------------------------------
+  /**
+   * Migrate a batch of clients forward to a target lifecycle stage as one
+   * operation. Each row is walked through the allowed state-machine path to the
+   * target and every step runs the normal transition (validation, audit, domain
+   * event). Rows that cannot reach the target are skipped; per-row errors are
+   * isolated so one bad client never aborts the rest.
+   */
+  async bulkTransitionLifecycle(
+    ids: string[],
+    newStatus: string,
+    userId: string,
+    reason?: string,
+  ): Promise<{
+    succeeded: { id: string; from: string; to: string }[];
+    skipped: { id: string; current: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    const validTargets = Object.values(ClientLifecycleStatus);
+    if (!validTargets.includes(newStatus as ClientLifecycleStatus)) {
+      throw new BadRequestException(`Invalid target status: ${newStatus}`);
+    }
+
+    const succeeded: { id: string; from: string; to: string }[] = [];
+    const skipped: { id: string; current: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        const client = await this.findOne(id);
+        const from = client.lifecycleStatus;
+        const path = findLifecyclePathTo(from, newStatus);
+        if (path === null) {
+          skipped.push({ id, current: from, reason: `No valid path from ${from} to ${newStatus}` });
+          continue;
+        }
+        for (const step of path) {
+          await this.transitionLifecycle(id, step, userId, reason);
+        }
+        succeeded.push({ id, from, to: newStatus });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+
+    return { succeeded, skipped, failed };
+  }
 
   async findContacts(clientId: string): Promise<ClientContactEntity[]> {
     await this.findOne(clientId);
@@ -415,6 +588,16 @@ export class ClientService {
     contact.isActive = false;
     contact.updatedBy = userId;
     await this.contactRepository.save(contact);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_CONTACT_REMOVED',
+      entityType: 'CLIENT',
+      entityId: contact.clientId,
+      userId,
+      remarks: `Removed contact ${contact.name} from client`,
+      metadata: { contactId: contact.id, name: contact.name, designation: contact.designation ?? null, email: contact.email ?? null, phone: contact.phone ?? null },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -505,6 +688,25 @@ export class ClientService {
     contract.isActive = false;
     contract.updatedBy = userId;
     await this.contractRepository.save(contract);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_CONTRACT_REMOVED',
+      entityType: 'CLIENT',
+      entityId: contract.clientId,
+      userId,
+      remarks: `Removed contract ${contract.contractNumber} - ${contract.title}`,
+      metadata: {
+        contractId: contract.id,
+        contractNumber: contract.contractNumber,
+        title: contract.title,
+        effectiveFrom: contract.effectiveFrom,
+        effectiveTo: contract.effectiveTo ?? null,
+        value: contract.value ?? null,
+        currency: contract.currency,
+        status: contract.status,
+      },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -516,14 +718,46 @@ export class ClientService {
     return this.billingRepository.findOne({ where: { clientId, isActive: true } });
   }
 
+  // Editable billing profile fields, in display order.
+  private readonly BILLING_FIELDS: Array<{ key: keyof ClientBillingEntity; label: string }> = [
+    { key: 'paymentTerms', label: 'Payment Terms' },
+    { key: 'currency', label: 'Currency' },
+    { key: 'taxIdentifier', label: 'Tax Identifier' },
+    { key: 'invoiceCycle', label: 'Invoice Cycle' },
+    { key: 'billingAddress', label: 'Billing Address' },
+    { key: 'bankAccount', label: 'Bank Account' },
+    { key: 'bankName', label: 'Bank Name' },
+    { key: 'ifscCode', label: 'IFSC Code' },
+    { key: 'notes', label: 'Notes' },
+    { key: 'gstRate', label: 'GST Rate' },
+    { key: 'tdsRate', label: 'TDS Rate' },
+  ];
+
+  private stringify(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    return String(value);
+  }
+
+  private async recordBillingHistory(
+    clientId: string,
+    userId: string,
+    entry: Partial<ClientBillingHistoryEntity>,
+  ): Promise<ClientBillingHistoryEntity> {
+    return this.billingHistoryRepository.save(
+      this.billingHistoryRepository.create({ clientId, createdBy: userId, updatedBy: userId, ...entry }),
+    );
+  }
+
   async upsertBilling(clientId: string, dto: UpdateBillingDto, userId: string): Promise<ClientBillingEntity> {
     await this.findOne(clientId);
 
     let billing = await this.billingRepository.findOne({ where: { clientId } });
+    const changes: Array<{ field: string; label: string; fromValue: string | null; toValue: string | null }> = [];
 
     if (!billing) {
       billing = this.billingRepository.create({
         clientId,
+        status: ClientBillingStatus.DRAFT,
         paymentTerms: dto.paymentTerms ?? 'NET30',
         currency: dto.currency ?? 'INR',
         taxIdentifier: dto.taxIdentifier ?? null,
@@ -533,23 +767,39 @@ export class ClientService {
         bankName: dto.bankName ?? null,
         ifscCode: dto.ifscCode ?? null,
         notes: dto.notes ?? null,
+        gstRate: dto.gstRate ?? 18,
+        tdsRate: dto.tdsRate ?? 10,
         createdBy: userId,
         updatedBy: userId,
       });
     } else {
-      if (dto.paymentTerms !== undefined) billing.paymentTerms = dto.paymentTerms;
-      if (dto.currency !== undefined) billing.currency = dto.currency;
-      if (dto.taxIdentifier !== undefined) billing.taxIdentifier = dto.taxIdentifier;
-      if (dto.invoiceCycle !== undefined) billing.invoiceCycle = dto.invoiceCycle;
-      if (dto.billingAddress !== undefined) billing.billingAddress = dto.billingAddress;
-      if (dto.bankAccount !== undefined) billing.bankAccount = dto.bankAccount;
-      if (dto.bankName !== undefined) billing.bankName = dto.bankName;
-      if (dto.ifscCode !== undefined) billing.ifscCode = dto.ifscCode;
-      if (dto.notes !== undefined) billing.notes = dto.notes;
+      for (const f of this.BILLING_FIELDS) {
+        const incoming = (dto as any)[f.key];
+        if (incoming === undefined) continue;
+        const fromValue = this.stringify(billing[f.key]);
+        const toValue = this.stringify(incoming);
+        if (fromValue !== toValue) {
+          changes.push({ field: f.key, label: f.label, fromValue, toValue });
+          (billing as any)[f.key] = incoming;
+        }
+      }
       billing.updatedBy = userId;
     }
 
     const saved = await this.billingRepository.save(billing);
+
+    // Record profile edits on the timeline.
+    if (changes.length > 0) {
+      for (const change of changes) {
+        await this.recordBillingHistory(clientId, userId, {
+          eventType: ClientBillingEventType.PROFILE_UPDATE,
+          field: change.field,
+          remarks: `${change.label} updated`,
+          fromValue: change.fromValue,
+          toValue: change.toValue,
+        });
+      }
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -561,5 +811,87 @@ export class ClientService {
     });
 
     return saved;
+  }
+
+  async transitionBillingStatus(
+    clientId: string,
+    targetStatus: ClientBillingStatus,
+    userId: string,
+    remarks?: string,
+  ): Promise<ClientBillingEntity> {
+    await this.findOne(clientId);
+
+    const billing = await this.billingRepository.findOne({ where: { clientId } });
+    if (!billing) {
+      throw new NotFoundException('Billing profile not found for this client.');
+    }
+
+    const allowed = VALID_BILLING_TRANSITIONS[billing.status] ?? [];
+    if (billing.status === targetStatus) {
+      throw new ConflictException(`Billing is already ${targetStatus}.`);
+    }
+    if (!allowed.includes(targetStatus)) {
+      throw new BadRequestException(
+        `Cannot transition billing from ${billing.status} to ${targetStatus}. Allowed: ${allowed.join(', ') || 'none'}.`,
+      );
+    }
+
+    const fromStatus = billing.status;
+    billing.status = targetStatus;
+    billing.updatedBy = userId;
+    const saved = await this.billingRepository.save(billing);
+
+    await this.recordBillingHistory(clientId, userId, {
+      eventType: ClientBillingEventType.STATUS_CHANGE,
+      fromStatus,
+      toStatus: targetStatus,
+      remarks: remarks ?? null,
+    });
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_BILLING_STATUS_CHANGED',
+      entityType: 'CLIENT',
+      entityId: clientId,
+      userId,
+      remarks: `Billing status ${fromStatus} -> ${targetStatus}`,
+    });
+
+    return saved;
+  }
+
+  async addBillingRemark(clientId: string, remarks: string, userId: string): Promise<ClientBillingHistoryEntity> {
+    await this.findOne(clientId);
+    const billing = await this.billingRepository.findOne({ where: { clientId } });
+    if (!billing) {
+      throw new NotFoundException('Billing profile not found for this client.');
+    }
+    const entry = await this.recordBillingHistory(clientId, userId, {
+      eventType: ClientBillingEventType.REMARK,
+      remarks,
+    });
+
+    // Billing status changes reach audit_events; a remark against the same billing profile did
+    // not, so a note explaining why an invoice was held existed only in the billing history and
+    // was invisible to the client's unified trail.
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'CLIENT_BILLING_REMARK_ADDED',
+      entityType: 'CLIENT',
+      entityId: clientId,
+      userId,
+      remarks,
+      metadata: { billingHistoryId: entry.id },
+    });
+
+    return entry;
+  }
+
+  async findBillingHistory(clientId: string): Promise<ClientBillingHistoryEntity[]> {
+    await this.findOne(clientId);
+    return this.billingHistoryRepository.find({
+      where: { clientId },
+      order: { createdAt: 'DESC' },
+    });
   }
 }

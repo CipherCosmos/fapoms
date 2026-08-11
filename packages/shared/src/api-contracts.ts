@@ -43,10 +43,16 @@ export interface PaginationParams {
   cursor?: string;
 }
 
+/**
+ * The paginated envelope the API actually returns: `data` plus `meta.pagination`. It was previously
+ * declared with a flat `meta: PaginationMeta`, which no controller emits — so every caller hand-cast an
+ * inline shape and this type documented a contract that did not exist. Nesting under `meta.pagination`
+ * matches the dominant real shape (clients, users, assayers, projects, branches, zones, holidays…).
+ */
 export interface PaginatedResponse<T> {
   success: boolean;
   data: T[];
-  meta: PaginationMeta;
+  meta: { pagination: PaginationMeta };
 }
 
 export interface PaginationMeta {

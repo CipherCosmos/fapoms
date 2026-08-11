@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OrganizationEntity } from './organization.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory } from '@fapoms/shared';
 
 export interface CreateOrganizationDto {
@@ -31,6 +32,7 @@ export class OrganizationService {
     @InjectRepository(OrganizationEntity)
     private readonly organizationRepository: Repository<OrganizationEntity>,
     private readonly auditService: AuditService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   async create(dto: CreateOrganizationDto, userId: string): Promise<OrganizationEntity> {
@@ -55,6 +57,20 @@ export class OrganizationService {
       userId,
       remarks: `Created organization: ${saved.name} (${saved.code})`,
     });
+
+    try {
+      this.eventPublisher.publish('organization:created', {
+        eventType: 'organization:created',
+        organizationId: saved.id,
+        code: saved.code,
+        name: saved.name,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish organization:created event:', err);
+    }
+
     return saved;
   }
 
@@ -91,6 +107,19 @@ export class OrganizationService {
       userId,
       remarks: `Updated organization: ${org.name}`,
     });
+
+    try {
+      this.eventPublisher.publish('organization:updated', {
+        eventType: 'organization:updated',
+        organizationId: saved.id,
+        name: saved.name,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish organization:updated event:', err);
+    }
+
     return saved;
   }
 

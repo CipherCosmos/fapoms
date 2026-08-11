@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { ProjectService } from './project.service';
 import { ProjectEntity } from './project.entity';
@@ -13,7 +13,10 @@ import { ClientEntity } from '../client/client.entity';
 import { BranchService } from '../branch/branch.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { AssessmentEntity } from './assessment.entity';
 import { ProjectQueryService } from './project-query.service';
+import { ZoneEntity } from '../zone/zone.entity';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 describe('ProjectService', () => {
   let service: ProjectService;
@@ -27,11 +30,16 @@ describe('ProjectService', () => {
     findAndCount: jest.fn(),
   };
 
+  const mockLiveAssignmentRepo = { findOne: jest.fn().mockResolvedValue(null) };
+
   const mockProjectBranchRepo = {
     find: jest.fn(),
     findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
+    // removeProjectBranch reaches the assignment repo through the entity manager to avoid a
+    // circular module dependency.
+    manager: { getRepository: jest.fn(() => mockLiveAssignmentRepo) },
   };
 
   const mockClientRepo = {
@@ -64,7 +72,7 @@ describe('ProjectService', () => {
   };
 
   const mockAuditService = {
-    recordEvent: jest.fn(),
+    recordEvent: jest.fn(), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
   const mockWorkflowEngine = {
@@ -90,8 +98,20 @@ describe('ProjectService', () => {
           useValue: mockProjectBranchRepo,
         },
         {
+          provide: getRepositoryToken(AssessmentEntity),
+          useValue: { findOne: jest.fn(), save: jest.fn() },
+        },
+        {
           provide: getRepositoryToken(ClientEntity),
           useValue: mockClientRepo,
+        },
+        {
+          provide: getRepositoryToken(ZoneEntity),
+          useValue: { createQueryBuilder: jest.fn(() => ({ where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(), getMany: jest.fn().mockResolvedValue([]) })), find: jest.fn().mockResolvedValue([]), findOne: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: NotificationDispatchService,
+          useValue: { emit: jest.fn().mockResolvedValue(undefined), emitSafe: jest.fn() },
         },
         {
           provide: BranchQueryService,
@@ -159,6 +179,46 @@ describe('ProjectService', () => {
       mockProjectRepo.findOne.mockResolvedValue(null);
 
       await expect(service.findOne('p-missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('removeProjectBranch', () => {
+    beforeEach(() => {
+      mockLiveAssignmentRepo.findOne.mockResolvedValue(null);
+      mockProjectBranchRepo.find.mockResolvedValue([]);
+    });
+
+    it('reports a missing branch instead of silently succeeding', async () => {
+      // Was wrapped in `if (pb) {}` with no else — a non-existent branch, or one belonging to
+      // another project, returned HTTP 200 and a branch list, so the operator believed a
+      // removal had happened when nothing was touched.
+      mockProjectBranchRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.removeProjectBranch('proj-1', 'missing-pb', 'user-1'))
+        .rejects.toThrow(NotFoundException);
+      expect(mockProjectBranchRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses to unlink a branch that still has live field work on it', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', isActive: true });
+      mockLiveAssignmentRepo.findOne.mockResolvedValue({
+        assignmentNumber: 'ASN-1', status: 'CHECKED_IN',
+      });
+
+      await expect(service.removeProjectBranch('proj-1', 'pb-1', 'user-1'))
+        .rejects.toThrow(BadRequestException);
+      // The branch must stay active — deactivating it strands the assignment pointing at it.
+      expect(mockProjectBranchRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('removes a branch with no active assignment', async () => {
+      const pb: any = { id: 'pb-1', isActive: true };
+      mockProjectBranchRepo.findOne.mockResolvedValue(pb);
+
+      await service.removeProjectBranch('proj-1', 'pb-1', 'user-1');
+
+      expect(mockProjectBranchRepo.save).toHaveBeenCalled();
+      expect(pb.isActive).toBe(false);
     });
   });
 });

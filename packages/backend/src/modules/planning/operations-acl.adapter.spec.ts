@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { OperationsAntiCorruptionLayer } from './operations-acl.adapter';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AssignmentStatus } from '@fapoms/shared';
 
 describe('OperationsAntiCorruptionLayer', () => {
   let acl: OperationsAntiCorruptionLayer;
@@ -18,13 +19,13 @@ describe('OperationsAntiCorruptionLayer', () => {
       id: 'asn-1',
       assayerId: 'as-1',
       agreedFee: 2500,
-      status: 'SCHEDULED',
+      status: AssignmentStatus.ACCEPTED,
     } as AssignmentEntity;
 
     const allocation = acl.mapAssignmentToWorkAllocation(mockAssignment);
     expect(allocation.allocationId).toBe('asn-1');
     expect(allocation.assayerId).toBe('as-1');
     expect(allocation.agreedFee).toBe(2500);
-    expect(allocation.status).toBe('SCHEDULED');
+    expect(allocation.status).toBe(AssignmentStatus.ACCEPTED);
   });
 });

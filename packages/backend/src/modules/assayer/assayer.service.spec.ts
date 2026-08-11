@@ -13,6 +13,7 @@ import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 
 describe('AssayerService', () => {
@@ -24,6 +25,7 @@ describe('AssayerService', () => {
     findOne: jest.fn(),
     findAndCount: jest.fn(),
     find: jest.fn(),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
 
   const mockCommercialRepo = {
@@ -38,6 +40,7 @@ describe('AssayerService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
+    delete: jest.fn(),
   };
 
   const mockGovDocRepo = {
@@ -70,7 +73,7 @@ describe('AssayerService', () => {
   };
 
   const mockAuditService = {
-    recordEvent: jest.fn(),
+    recordEvent: jest.fn(), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
   const mockDomainEventPublisher = {
@@ -96,6 +99,7 @@ describe('AssayerService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
+        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
       ],
     }).compile();
   }
@@ -110,6 +114,114 @@ describe('AssayerService', () => {
   // ---------------------------------------------------------------------------
   // CRUD
   // ---------------------------------------------------------------------------
+
+  /**
+   * Skills, certifications, languages and specializations are replaced wholesale by whatever the
+   * caller sends. That is fine for the kind the caller sent, and destructive for the ones it did
+   * not — which is what an edit form offering one field at a time inevitably does.
+   */
+  describe('getRosterCommercialProfiles', () => {
+    const onDate = new Date('2026-08-20');
+
+    it('reports the profile in force on the date and flags a future one', async () => {
+      mockAssayerRepo.find.mockResolvedValue([{ id: 'a-current' }, { id: 'a-future' }, { id: 'a-none' }]);
+      mockCommercialRepo.find.mockResolvedValue([
+        // a-current: one profile started this year — in force.
+        { id: 'p1', assayerId: 'a-current', baseFee: 2000, effectiveStartDate: new Date('2026-01-01'), effectiveEndDate: null },
+        // a-future: only a profile starting in December — not yet in force.
+        { id: 'p2', assayerId: 'a-future', baseFee: 3000, effectiveStartDate: new Date('2026-12-01'), effectiveEndDate: null },
+      ]);
+
+      const rows = await service.getRosterCommercialProfiles(onDate);
+      const byId = Object.fromEntries(rows.map((r) => [r.assayerId, r]));
+
+      expect(byId['a-current'].profile?.id).toBe('p1');
+      expect(byId['a-future'].profile).toBeNull();
+      expect(byId['a-future'].hasFutureProfile).toBe(true);
+      // Every assayer appears, including one with no profile at all — it is priced at the default.
+      expect(byId['a-none'].profile).toBeNull();
+      expect(byId['a-none'].hasFutureProfile).toBe(false);
+    });
+
+    it('does not treat an expired profile as in force', async () => {
+      mockAssayerRepo.find.mockResolvedValue([{ id: 'a-1' }]);
+      mockCommercialRepo.find.mockResolvedValue([
+        { id: 'p-old', assayerId: 'a-1', baseFee: 1500, effectiveStartDate: new Date('2025-01-01'), effectiveEndDate: new Date('2025-12-31') },
+      ]);
+
+      const [row] = await service.getRosterCommercialProfiles(onDate);
+      expect(row.profile).toBeNull();
+    });
+  });
+
+  describe('resetPasswordByStaff', () => {
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1' });
+      mockAssayerRepo.update.mockResolvedValue({ affected: 1 });
+    });
+
+    it('generates a temporary password and returns it once when HR supplies none', async () => {
+      const result = await service.resetPasswordByStaff('asr-1', undefined, 'hr-1');
+
+      expect(result.generatedPassword).toBeDefined();
+      expect(result.generatedPassword!.length).toBeGreaterThanOrEqual(8);
+      // The stored hash is of the generated password, not the password itself.
+      const { passwordHash, mustChangePassword } = mockAssayerRepo.update.mock.calls.at(-1)![1] as any;
+      expect(passwordHash).not.toEqual(result.generatedPassword);
+      // A staff-set credential is temporary — the holder must choose their own next sign-in.
+      expect(mustChangePassword).toBe(true);
+    });
+
+    it('uses the password HR supplied, and returns nothing to echo', async () => {
+      const result = await service.resetPasswordByStaff('asr-1', 'chosen-strong-pw', 'hr-1');
+      expect(result.generatedPassword).toBeUndefined();
+    });
+
+    it('refuses a known shared default even from staff', async () => {
+      await expect(service.resetPasswordByStaff('asr-1', 'assayer123', 'hr-1')).rejects.toThrow();
+    });
+
+    it('records who reset whose credential', async () => {
+      await service.resetPasswordByStaff('asr-1', undefined, 'hr-1');
+      expect(mockAuditService.recordEventSafe).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'ASSAYER_PASSWORD_RESET', entityId: 'asr-1', userId: 'hr-1' }),
+      );
+    });
+  });
+
+  describe('workforce attributes are replaced per kind, not wholesale', () => {
+    const existing = { id: 'asr-1', assayerCode: 'AS-01', displayName: 'John Doe' };
+
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue(existing);
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+      mockWorkforceRepo.delete.mockResolvedValue({ affected: 0 });
+      mockWorkforceRepo.save.mockResolvedValue([]);
+    });
+
+    it('touches only the kind supplied, leaving certifications and languages alone', async () => {
+      await service.update('asr-1', { skills: ['Gold Assaying'] } as any, 'user-1');
+
+      expect(mockWorkforceRepo.delete).toHaveBeenCalledWith(
+        expect.objectContaining({ assayerId: 'asr-1' }),
+      );
+      const { type } = mockWorkforceRepo.delete.mock.calls.at(-1)![0] as any;
+      // In(['SKILL']) — the operator carries its values under _value.
+      expect(type._value ?? type).toEqual(['SKILL']);
+    });
+
+    it('replaces several kinds when several are supplied', async () => {
+      await service.update('asr-1', { skills: ['Gold'], languages: ['Tamil'] } as any, 'user-1');
+
+      const { type } = mockWorkforceRepo.delete.mock.calls.at(-1)![0] as any;
+      expect((type._value ?? type).sort()).toEqual(['LANGUAGE', 'SKILL']);
+    });
+
+    it('deletes nothing at all when none is supplied', async () => {
+      await service.update('asr-1', { firstName: 'Jonathan' } as any, 'user-1');
+      expect(mockWorkforceRepo.delete).not.toHaveBeenCalled();
+    });
+  });
 
   describe('create', () => {
     it('should create an assayer with INVITED lifecycle status', async () => {
@@ -421,6 +533,50 @@ describe('AssayerService', () => {
       const result = await service.addWorkforceAttribute('asr-1', { type: 'SKILL', name: 'Communication' }, 'user-1');
 
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+  });
+
+  describe('live location writes', () => {
+    /**
+     * These previously loaded the whole assayer and called save(), writing back every column
+     * from a stale in-memory copy. Position is reported continuously from the field, so any
+     * column changed in between was silently reverted — including must_change_password,
+     * locked_until and failed_login_attempts. Observed in practice: a forced-rotation flag
+     * set by the rotation script was cleared moments later by a location ping.
+     */
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'a-1', isActive: true });
+      mockAssayerRepo.update.mockClear();
+      mockAssayerRepo.save.mockClear();
+    });
+
+    it('updates only the position columns, never the whole row', async () => {
+      await service.updateLiveLocation('a-1', 19.07, 72.87, 'a-1');
+
+      expect(mockAssayerRepo.save).not.toHaveBeenCalled();
+      expect(mockAssayerRepo.update).toHaveBeenCalledTimes(1);
+
+      const [, patch] = mockAssayerRepo.update.mock.calls[0];
+      expect(Object.keys(patch).sort()).toEqual(
+        ['liveLatitude', 'liveLocation', 'liveLongitude', 'updatedBy'].sort(),
+      );
+      // Nothing security-related may ride along on a location ping.
+      for (const forbidden of ['mustChangePassword', 'lockedUntil', 'failedLoginAttempts', 'status', 'passwordHash']) {
+        expect(patch).not.toHaveProperty(forbidden);
+      }
+    });
+
+    it('toggles live sharing without rewriting the rest of the record', async () => {
+      await service.setLiveTracking('a-1', true, 'a-1');
+
+      expect(mockAssayerRepo.save).not.toHaveBeenCalled();
+      const [, patch] = mockAssayerRepo.update.mock.calls[0];
+      expect(Object.keys(patch).sort()).toEqual(['isLiveEnabled', 'updatedBy'].sort());
+    });
+
+    it('rejects a non-finite coordinate rather than storing it', async () => {
+      await expect(service.updateLiveLocation('a-1', NaN, 72.87)).rejects.toThrow();
+      expect(mockAssayerRepo.update).not.toHaveBeenCalled();
     });
   });
 });

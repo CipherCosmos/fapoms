@@ -1,117 +1,125 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, Linking, ActivityIndicator } from 'react-native';
+import React from 'react';
+import { View } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
-import { MobileApiService } from '../services/api.service';
-import { styles } from '../theme/styles';
+import { useTheme } from '../theme/ThemeProvider';
+import { AppText, Badge, Button, Card, EmptyState, Icon, Section } from '../components/ui/primitives';
 
 interface PdfDocsScreenProps {
   activeAssignment: AssayerAssignment | null;
   uploadedPdfName: string | null;
   uploadingPdf: boolean;
   onSelectPdfFile: () => void;
+  onOpenScanner?: () => void;
   onSubmitCompletedPdf: () => void;
   onOpenExpenseModal: () => void;
+  onReportIssue: () => void;
 }
 
+/**
+ * Returning the completed audit packet.
+ *
+ * Presented as the three ordered steps it actually is — capture, review, submit
+ * — because the old screen showed every control at once with no indication of
+ * which came first, and left the submit button tappable with nothing attached.
+ */
 export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   activeAssignment,
   uploadedPdfName,
   uploadingPdf,
   onSelectPdfFile,
+  onOpenScanner,
   onSubmitCompletedPdf,
   onOpenExpenseModal,
+  onReportIssue,
 }) => {
-  const [branchDocuments, setBranchDocuments] = useState<any[]>([]);
-  const [loadingDocs, setLoadingDocs] = useState(false);
+  const t = useTheme();
 
-  useEffect(() => {
-    if (activeAssignment?.projectBranchId) {
-      setLoadingDocs(true);
-      MobileApiService.getBranchDocuments(activeAssignment.projectBranchId).then((res) => {
-        if (res.success && res.data) {
-          setBranchDocuments(res.data);
-        }
-        setLoadingDocs(false);
-      });
-    }
-  }, [activeAssignment?.projectBranchId]);
+  if (!activeAssignment) {
+    return (
+      <EmptyState
+        icon="document-text-outline"
+        title="No audit selected"
+        body="Open a stop from your route and check in to start returning its paperwork."
+      />
+    );
+  }
 
-  if (!activeAssignment) return null;
-
-  const branchDocUrl = `${MobileApiService.getBaseUrl()}/documents/project-branch/${activeAssignment.projectBranchId}`;
+  const hasFile = Boolean(uploadedPdfName);
 
   return (
-    <View>
-      <Text style={styles.sectionHeading}>Branch Audit Documents: {activeAssignment.branchName}</Text>
+    <View style={{ gap: t.space.xl }}>
+      <Card level={1} style={{ gap: t.space.sm }}>
+        <AppText variant="overline" tone="faint">RETURNING PAPERWORK FOR</AppText>
+        <AppText variant="h2" numberOfLines={2}>{activeAssignment.branchName}</AppText>
+        <AppText variant="small" tone="muted" numberOfLines={2}>{activeAssignment.branchAddress}</AppText>
+      </Card>
 
-      {/* SECTION 1: DOWNLOAD ASSIGNED BRANCH PDF */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>1. Download Assigned Branch Audit PDF</Text>
-        <Text style={styles.branchSubText}>
-          Download the generated customer audit PDF document sent by the operations team for this branch.
-        </Text>
-
-        {loadingDocs && <ActivityIndicator color="#6366f1" style={{ marginBottom: 10 }} />}
-
-        {branchDocuments.length > 0 && (
-          <View style={{ marginBottom: 12 }}>
-            {branchDocuments.map((doc: any) => (
-              <TouchableOpacity
-                key={doc.id}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#334155' }}
-                onPress={() => {
-                  const url = doc.downloadUrl || `${MobileApiService.getBaseUrl()}/documents/${doc.id}/download`;
-                  Linking.openURL(url);
-                }}
-              >
-                <Text style={{ fontSize: 14, color: '#818cf8', fontWeight: '600', flex: 1 }}>{doc.fileName || doc.documentType || 'Document'}</Text>
-                <Text style={{ fontSize: 11, color: '#94a3b8' }}>⬇ Download</Text>
-              </TouchableOpacity>
-            ))}
+      <Section title="1 · Capture the audited sheets">
+        <Card level={1} style={{ gap: t.space.md }}>
+          <AppText variant="small" tone="muted">
+            Scan every page of the completed packet, or attach a PDF you have already produced.
+          </AppText>
+          <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+            {onOpenScanner && (
+              <Button label="Scan pages" icon="scan" onPress={onOpenScanner} style={{ flex: 1 }} />
+            )}
+            <Button label="Attach PDF" icon="folder-open-outline" variant="neutral" onPress={onSelectPdfFile} style={{ flex: 1 }} />
           </View>
-        )}
+        </Card>
+      </Section>
 
-        <TouchableOpacity
-          style={styles.saveBtn}
-          onPress={() => Linking.openURL(branchDocUrl)}
-        >
-          <Text style={styles.btnTextWhite}>📄 View All Branch Documents</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* SECTION 2: UPLOAD COMPLETED SCANNED PDF */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>2. Upload Completed & Signed Audit PDF</Text>
-        <Text style={styles.branchSubText}>
-          After completing the physical gold assay audit at the branch, scan or capture the completed PDF report with signatures and upload it here to complete your assignment.
-        </Text>
-
-        {uploadedPdfName && (
-          <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#10b981' }}>
-            <Text style={{ color: '#34d399', fontWeight: '700', fontSize: 13 }}>Selected File: {uploadedPdfName}</Text>
-          </View>
-        )}
-
-        <TouchableOpacity style={styles.mapBtn} onPress={onSelectPdfFile}>
-          <Text style={styles.btnTextWhite}>📁 Choose / Scan Completed PDF File</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.checkInBtn, { marginTop: 14, backgroundColor: uploadedPdfName ? '#10b981' : '#475569' }]}
-          disabled={uploadingPdf}
-          onPress={onSubmitCompletedPdf}
-        >
-          {uploadingPdf ? (
-            <ActivityIndicator color="#ffffff" />
+      <Section title="2 · Review">
+        <Card level={1}>
+          {hasFile ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+              <View style={{
+                width: 40, height: 40, borderRadius: t.radius.md, backgroundColor: t.colors.successSoft,
+                alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Icon name="document-text" size={19} color={t.colors.success} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
+                <AppText variant="bodyStrong" numberOfLines={1}>{uploadedPdfName}</AppText>
+                <View style={{ flexDirection: 'row' }}>
+                  <Badge label="Ready to submit" tone="success" dot />
+                </View>
+              </View>
+            </View>
           ) : (
-            <Text style={styles.btnTextWhite}>✅ Submit Completed PDF & Finalize Audit</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+              <Icon name="alert-circle-outline" size={19} color={t.colors.textFaint} />
+              <AppText variant="small" tone="muted" style={{ flex: 1 }}>
+                Nothing captured yet — complete step 1 first.
+              </AppText>
+            </View>
           )}
-        </TouchableOpacity>
-      </View>
+        </Card>
+      </Section>
 
-      <TouchableOpacity style={styles.addExpBtn} onPress={onOpenExpenseModal}>
-        <Text style={styles.btnTextDark}>➕ Add Travel / Additional Expense</Text>
-      </TouchableOpacity>
+      <Section title="3 · Submit">
+        <Button
+          label={uploadingPdf ? 'Submitting…' : 'Submit to the data entry desk'}
+          icon="cloud-upload-outline"
+          onPress={onSubmitCompletedPdf}
+          loading={uploadingPdf}
+          disabled={!hasFile}
+          size="lg"
+          full
+        />
+        {!hasFile && (
+          <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+            Capture the sheets before submitting.
+          </AppText>
+        )}
+      </Section>
+
+      <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+        <Button label="Log an expense" icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} style={{ flex: 1 }} />
+        {/* The field app's one route to raise a problem to the desk — it cannot cancel or
+            reassign the job, so this is how an assayer signals "I can't do this / something's
+            wrong" and the desk picks it up. */}
+        <Button label="Report an issue" icon="flag-outline" variant="ghost" onPress={onReportIssue} style={{ flex: 1 }} />
+      </View>
     </View>
   );
 };

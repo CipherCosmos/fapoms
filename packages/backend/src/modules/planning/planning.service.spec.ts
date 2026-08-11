@@ -3,10 +3,13 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { PlanningService } from './planning.service';
 import { RecommendationEngine } from './recommendation.engine';
+import { ConstraintEvaluator } from './constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AssayerService } from '../assayer/assayer.service';
+import { AuditService } from '../../core/audit/audit.service';
+import { FeePolicyService } from '../pricing/fee-policy.service';
 
 describe('PlanningService', () => {
   let service: PlanningService;
@@ -48,6 +51,16 @@ describe('PlanningService', () => {
       providers: [
         PlanningService,
         {
+          provide: FeePolicyService,
+          useValue: {
+            // Mirrors the real service: a client rate card when configured, platform defaults
+            // otherwise, and a base fee resolved for the date the candidate is scored on.
+            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: false }),
+            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1500, usedFallback: false }),
+          },
+        },
+        { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
+        {
           provide: BranchQueryService,
           useValue: mockBranchQueryService,
         },
@@ -66,6 +79,11 @@ describe('PlanningService', () => {
         {
           provide: RoutingService,
           useValue: mockRoutingService,
+        },
+        {
+          provide: ConstraintEvaluator,
+          // Every day is a working day unless a test says otherwise.
+          useValue: { checkHoliday: jest.fn().mockResolvedValue({ passed: true }) },
         },
       ],
     }).compile();
@@ -103,6 +121,10 @@ describe('PlanningService', () => {
       city: 'Mumbai',
       latitude: 19.082,
       longitude: 72.882,
+      // Mirrors the AssayerEntity getters the service now reads. A plain fixture object
+      // doesn't inherit them, so without these the assayer maps to 0,0.
+      effectiveLatitude: 19.082,
+      effectiveLongitude: 72.882,
     };
     mockRecommendationEngine.recommend.mockResolvedValue([
       {

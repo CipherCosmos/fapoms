@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, Platform } from 'react-native';
+import { Icon } from './ui/primitives';
 
 interface InteractiveMapProps {
   latitude: number;
@@ -17,7 +18,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   onRadiusChange,
 }) => {
   const mapRef = useRef<any>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const circleRef = useRef<any>(null);
 
@@ -35,6 +36,9 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
     if (!containerRef.current) return;
 
+    const domNode = containerRef.current as unknown as HTMLElement;
+    if (!domNode) return;
+
     const initMap = async () => {
       const L = await import('leaflet');
 
@@ -42,7 +46,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         mapRef.current.remove();
       }
 
-      const map = L.map(containerRef.current!, {
+      const map = L.map(domNode, {
         center: [latitude, longitude],
         zoom: 12,
         zoomControl: true,
@@ -54,7 +58,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       }).addTo(map);
 
       const markerIcon = L.divIcon({
-        html: '<div style="width:24px;height:24px;background:#6366f1;border:3px solid #818cf8;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3)"></div>',
+        html: '<div style="width:24px;height:24px;background:#FF6B00;border:3px solid #FF9E00;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3)"></div>',
         iconSize: [24, 24],
         iconAnchor: [12, 12],
       });
@@ -71,8 +75,8 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
       const circle = L.circle([latitude, longitude], {
         radius: radiusKm * 1000,
-        color: '#6366f1',
-        fillColor: '#6366f1',
+        color: '#FF6B00',
+        fillColor: '#FF6B00',
         fillOpacity: 0.1,
         weight: 2,
         dashArray: '8 4',
@@ -114,21 +118,22 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     }
   }, [radiusKm]);
 
-  return (
+  return Platform.OS === 'web' ? (
     <View style={{ position: 'relative', height: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0f172a' }}>
-      {Platform.OS === 'web' ? (
-        <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-      ) : (
-        <View style={{ flex: 1, padding: 16, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={{ fontSize: 32, marginBottom: 6 }}>📍</Text>
-          <Text style={{ color: '#38bdf8', fontSize: 14, fontWeight: '700' }}>GPS Coordinates: {latitude.toFixed(4)}, {longitude.toFixed(4)}</Text>
-          <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>Coverage Radius: {radiusKm} km</Text>
-        </View>
-      )}
+      <View ref={containerRef} style={{ width: '100%', height: '100%' }} />
       <View style={{ position: 'absolute', bottom: 8, left: 8, backgroundColor: 'rgba(15,23,42,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 }}>
-        <Text style={{ fontSize: 10, color: '#94a3b8' }}>
-          {Platform.OS === 'web' ? `Drag pin • Zoom with scroll • ${radiusKm}km radius` : `GPS Marker • ${radiusKm}km radius`}
-        </Text>
+        <Text style={{ fontSize: 10, color: '#94a3b8' }}>Drag pin • Zoom with scroll • {radiusKm}km radius</Text>
+      </View>
+    </View>
+  ) : (
+    <View style={{ position: 'relative', height: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0f172a' }}>
+      <View style={{ flex: 1, padding: 16, justifyContent: 'center', alignItems: 'center' }}>
+        <Icon name="location" size={32} color="#38bdf8" style={{ marginBottom: 6 }} />
+        <Text style={{ color: '#38bdf8', fontSize: 14, fontWeight: '700' }}>GPS Coordinates: {latitude.toFixed(4)}, {longitude.toFixed(4)}</Text>
+        <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>Coverage Radius: {radiusKm} km</Text>
+      </View>
+      <View style={{ position: 'absolute', bottom: 8, left: 8, backgroundColor: 'rgba(15,23,42,0.85)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 }}>
+        <Text style={{ fontSize: 10, color: '#94a3b8' }}>GPS Marker • {radiusKm}km radius</Text>
       </View>
     </View>
   );

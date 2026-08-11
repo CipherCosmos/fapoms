@@ -2,9 +2,62 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- The real Sumeru mark. This pointed at logo.png, which is a different product's
+         logo ("Gold Audit Pro"). AVIF first, PNG for browsers without AVIF support. -->
+    <link rel="icon" type="image/avif" href="/logo.avif" />
+    <link rel="icon" type="image/png" href="/sumeru-logo.png" />
+    <link rel="apple-touch-icon" href="/sumeru-logo@2x.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FAPOMS — Field Audit Planning & Operations Management</title>
+    <title>Sumeru Global — Field Audit Operations</title>
+    <script>
+      // Apply theme before first paint to avoid FOUC. Persisted choice wins;
+      // otherwise fall back to the OS preference. Supports all named themes
+      // plus a custom base+accent combo.
+      (function () {
+        var ids = ['gold', 'paper', 'sepia', 'snow', 'noir', 'black-gold', 'black-white', 'slate', 'midnight', 'glass-light', 'glass-dark', 'custom'];
+        function hex2rgb(hex) { var c = hex.replace('#', ''); if (c.length === 3) c = c.split('').map(function (x) { return x + x; }).join(''); return [parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16)]; }
+        function relLum(rgb) { var n = rgb.map(function (v) { var s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); }); return 0.2126 * n[0] + 0.7152 * n[1] + 0.0722 * n[2]; }
+        function contrast(fg, bg) { var l1 = relLum(hex2rgb(fg)), l2 = relLum(hex2rgb(bg)), lo = Math.min(l1, l2), hi = Math.max(l1, l2); return (hi + 0.05) / (lo + 0.05); }
+        function bestInk(hex) { return contrast('#FFFFFF', hex) >= contrast('#111113', hex) ? '#FFFFFF' : '#111113'; }
+        function toHex(rgb) { var h = function (v) { return Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0'); }; return '#' + h(rgb[0]) + h(rgb[1]) + h(rgb[2]); }
+        function shade(hex, f) { var c = hex2rgb(hex); return toHex([c[0] * f, c[1] * f, c[2] * f]); }
+        function ensureContrast(hex, bg, min) { var lighten = relLum(hex2rgb(bg)) < 0.5; var rgb = hex2rgb(hex); for (var i = 0; i < 24; i++) { if (contrast(toHex(rgb), bg) >= min) break; rgb = lighten ? [rgb[0] * 0.78 + 255 * 0.22, rgb[1] * 0.78 + 255 * 0.22, rgb[2] * 0.78 + 255 * 0.22] : [rgb[0] * 0.82, rgb[1] * 0.82, rgb[2] * 0.82]; } return toHex(rgb); }
+        var BASE_BG = { gold: '#FAF6EE', noir: '#161210', 'glass-light': '#EFE9DD', 'glass-dark': '#14121A' };
+        try {
+          var saved = localStorage.getItem('fapoms_theme');
+          var root = document.documentElement;
+          if (saved === 'custom') {
+            var cfg = JSON.parse(localStorage.getItem('fapoms_custom') || 'null');
+            var base = cfg && cfg.base && ids.indexOf(cfg.base) !== -1 ? cfg.base : 'noir';
+            root.setAttribute('data-theme', base);
+            if (cfg && cfg.accent) {
+              var a = cfg.accent.indexOf('#') === 0 ? cfg.accent : '#' + cfg.accent;
+              var bg = BASE_BG[base] || BASE_BG.noir;
+              var link = ensureContrast(a, bg, 4.5);
+              var strong = ensureContrast(shade(a, 0.72), bg, 4.5);
+              var hover = ensureContrast(shade(a, 0.8), bg, 4.5);
+              var hover2 = ensureContrast(shade(a, 1.28), bg, 4.5);
+              var ink = bestInk(a);
+              root.style.setProperty('--accent', link);
+              root.style.setProperty('--accent-strong', strong);
+              root.style.setProperty('--accent-primary', link);
+              root.style.setProperty('--accent-primary-hover', hover);
+              root.style.setProperty('--accent-secondary', link);
+              root.style.setProperty('--accent-secondary-hover', hover2);
+              root.style.setProperty('--btn-bg', a);
+              root.style.setProperty('--btn-text', ink);
+            }
+          } else {
+            var theme = ids.indexOf(saved) !== -1
+              ? saved
+              : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'noir' : 'gold');
+            root.setAttribute('data-theme', theme);
+          }
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'gold');
+        }
+      })();
+    </script>
     <!-- Leaflet GIS Maps CDN -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   </head>

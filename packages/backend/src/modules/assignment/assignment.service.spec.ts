@@ -7,16 +7,23 @@ import { AssignmentEntity } from './assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationService } from '../notifications/notification.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
-import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { AssessmentEntity } from '../project/assessment.entity';
+import { OperationsInboxService } from './operations-inbox.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { RoutingService } from '../geo/routing.provider';
+import { ValidationService } from '../validation/validation.service';
+import { FeePolicyService } from '../pricing/fee-policy.service';
+import { DocumentService } from '../document/document.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -28,6 +35,7 @@ describe('AssignmentService', () => {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
+    find: jest.fn(),
     findAndCount: jest.fn(),
   };
 
@@ -41,7 +49,6 @@ describe('AssignmentService', () => {
   };
 
   const mockProjectService = {
-    transitionProjectBranchStatus: jest.fn(),
     initiateBranchPlanning: jest.fn(),
     confirmBranchAssignment: jest.fn(),
     scheduleBranchAudit: jest.fn(),
@@ -56,13 +63,34 @@ describe('AssignmentService', () => {
   const mockAssayerService = {
     findOne: mockAssayerRepo.findOne,
     updateAssayerStats: jest.fn(),
+    getActiveCommercialProfile: jest.fn().mockResolvedValue({ baseFee: 1500 }),
+  };
+
+  const mockFeePolicyService = {
+            quote: jest.fn().mockResolvedValue({
+              baseFee: 1200, branchCount: 1, baseComponent: 1200,
+              distanceKm: 0, chargeableKm: 0, travelFee: 0, total: 1200,
+              usedFallbackBaseFee: false,
+              rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
+            }),
+            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            ratesFromConfiguration: jest.fn().mockReturnValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true }),
+            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1200, usedFallback: false }),
+            calculateTravelFee: jest.fn().mockReturnValue({ chargeableKm: 0, travelFee: 0 }),
+            resolveClientIdForProject: jest.fn().mockResolvedValue(null),
   };
 
   const mockHolidayService = {
     isHoliday: jest.fn(),
   };
 
-  const mockNotificationService = {
+  const mockNotificationDispatch = {
+  emit: jest.fn().mockResolvedValue({ groupKey: 'g', created: 1, suppressed: 0, recipients: { userIds: [], assayerIds: [] } }),
+  emitSafe: jest.fn(),
+  markRead: jest.fn(),
+};
+
+const mockNotificationService = {
     create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
   };
 
@@ -71,85 +99,58 @@ describe('AssignmentService', () => {
   };
 
   const mockAuditService = {
-    recordEvent: jest.fn(),
+    recordEvent: jest.fn(), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
   const mockDomainEventPublisher = {
     publish: jest.fn(),
   };
 
+  const mockUserRepoViaDataSource = {
+    findOne: jest.fn(),
+  };
+
   const mockDataSource = {
     transaction: jest.fn((cb) => cb({
       save: jest.fn((arg) => Promise.resolve(arg)),
+      getRepository: jest.fn().mockReturnValue({
+        findOne: jest.fn(),
+        save: jest.fn((arg) => Promise.resolve(arg)),
+        create: jest.fn((arg) => arg),
+      }),
     })),
+    getRepository: jest.fn().mockReturnValue(mockUserRepoViaDataSource),
   };
 
-  const mockWorkflowEngine = {
-    registerWorkflow: jest.fn(),
-    executeTransition: jest.fn().mockImplementation(async (key, id, from, to, ctx) => {
-      // Simulate valid transition paths
-      const validPaths: Record<string, string[]> = {
-        CREATED: ['ACCEPTED', 'REJECTED', 'CANCELLED', 'CANDIDATE_SELECTED'],
-        ACCEPTED: ['SCHEDULED'],
-        SCHEDULED: ['AUDIT_COMPLETED'],
-        AUDIT_COMPLETED: ['CLOSED'],
-      };
-      const allowed = validPaths[from] || [];
-      if (!allowed.includes(to)) {
-        throw new BadRequestException(`Invalid transition from '${from}' to '${to}'`);
-      }
+  // The real UnitOfWork releases emitted events through the publisher after commit; this
+  // double runs the work with a manager and routes emit() to the same publisher mock, so the
+  // domain-event assertions below exercise the events the service now emits from inside its
+  // transaction rather than publishing after it.
+  const mockUnitOfWork = {
+    run: jest.fn(async (work: any) =>
+      work(
+        {
+          save: jest.fn((arg: any) => Promise.resolve(arg)),
+          getRepository: jest.fn().mockReturnValue({
+            findOne: jest.fn(),
+            save: jest.fn((arg: any) => Promise.resolve(arg)),
+            create: jest.fn((arg: any) => arg),
+          }),
+        },
+        (event: string, payload: any) =>
+          mockDomainEventPublisher.publish(event, { ...payload, timestamp: new Date() }),
+      ),
+    ),
+  };
 
-      if (to === 'ACCEPTED') {
-        ctx.payload.assignment.agreedFee = ctx.payload.fee ?? ctx.payload.assignment.proposedFee;
-        ctx.payload.assignment.projectBranch.status = 'ASSIGNMENT_CONFIRMED';
-      }
-      if (to === 'REJECTED') {
-        ctx.payload.assignment.rejectReason = ctx.payload.reason ?? 'Rejected';
-        ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
-      }
-      if (to === 'CANCELLED') {
-        ctx.payload.assignment.cancelReason = ctx.payload.reason ?? 'Cancelled';
-        ctx.payload.assignment.projectBranch.status = 'CANDIDATE_SEARCH';
-      }
-      if (to === 'SCHEDULED') {
-        if (ctx.payload.scheduledDate) {
-          ctx.payload.assignment.scheduledDate = new Date(ctx.payload.scheduledDate);
-          ctx.payload.assignment.projectBranch.scheduledDate = new Date(ctx.payload.scheduledDate);
-        }
-        ctx.payload.assignment.projectBranch.status = 'SCHEDULED';
-      }
-      if (to === 'AUDIT_COMPLETED') {
-        ctx.payload.assignment.completionDate = new Date();
-        ctx.payload.assignment.projectBranch.status = 'AUDIT_COMPLETED';
-      }
-      if (to === 'CLOSED') {
-        ctx.payload.assignment.projectBranch.status = 'CLOSED';
-      }
-    }),
-    executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => {
-      const mockCtx = {
-        userId: uid,
-        payload: {
-          assignment: {
-            id,
-            status: from,
-            proposedFee: 1000,
-            projectBranch: {
-              id: 'pb-1',
-              status: 'PLANNING',
-              branch: { state: 'Karnataka' }
-            }
-          }
-        }
-      };
-      // We can also call executeTransition mock to simulate hook/payload mutations if any tests depend on it
-      try {
-        await mockWorkflowEngine.executeTransition(key, id, from, to, mockCtx);
-      } catch (err) {
-        // ignore validation issues for simplified calls
-      }
-      return action();
-    }),
+  const mockConstraintEvaluator = {
+    checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
+    checkLeaves: jest.fn().mockReturnValue({ passed: true }),
+    checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
+    checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+    checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
+    checkDistancePolicy: jest.fn().mockReturnValue({ passed: true }),
+    checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
   beforeEach(async () => {
@@ -157,92 +158,31 @@ describe('AssignmentService', () => {
       providers: [
         AssignmentService,
         {
-          provide: getRepositoryToken(AssignmentEntity),
-          useValue: mockAssignmentRepo,
-        },
-        {
-          provide: ProjectQueryService,
-          useValue: mockProjectQueryService,
-        },
-        {
-          provide: ProjectService,
-          useValue: mockProjectService,
-        },
-        {
-          provide: AssayerService,
-          useValue: mockAssayerService,
-        },
-        {
-          provide: HolidayService,
-          useValue: mockHolidayService,
-        },
-        {
-          provide: NotificationService,
-          useValue: mockNotificationService,
-        },
-        {
-          provide: PushNotificationService,
-          useValue: mockPushNotificationService,
-        },
-        {
-          provide: AuditService,
-          useValue: mockAuditService,
-        },
-        {
-          provide: WorkflowEngine,
-          useValue: mockWorkflowEngine,
-        },
-        {
-          provide: DomainEventPublisher,
-          useValue: mockDomainEventPublisher,
-        },
-        {
-          provide: DataSource,
-          useValue: mockDataSource,
-        },
-        {
-          provide: ConstraintEvaluator,
+          provide: DocumentService,
           useValue: {
-            checkDoubleBooking: jest.fn().mockImplementation(async (assayerId, date) => {
-              // If the test has mocked a double booking count/find, return failed
-              const existing = await mockAssignmentRepo.findOne();
-              if (existing) {
-                return { passed: false, reason: 'Assayer Collision: Assayer is already assigned.' };
-              }
-              return { passed: true };
-            }),
-            checkLeaves: jest.fn().mockReturnValue({ passed: true }),
-            checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
-            checkHoliday: jest.fn().mockImplementation(async (state, date) => {
-              const isHoliday = await mockHolidayService.isHoliday(date, state);
-              if (isHoliday) {
-                return { passed: false, reason: 'Holiday Conflict' };
-              }
-              return { passed: true };
-            }),
-            checkSkillsAndCertifications: jest.fn().mockImplementation((assayer, project) => {
-              if (project.requiredSkills && project.requiredSkills.length > 0) {
-                const assayerSkills = (assayer.skills || []).map((s: string) => s.trim().toLowerCase());
-                const missingSkills = project.requiredSkills.filter(
-                  (skill: string) => !assayerSkills.includes(skill.trim().toLowerCase())
-                );
-                if (missingSkills.length > 0) {
-                  return { passed: false, reason: 'Assayer lacks required skills' };
-                }
-              }
-              if (project.requiredCertifications && project.requiredCertifications.length > 0) {
-                const assayerCerts = (assayer.certifications || []).map((c: any) => c.name.trim().toLowerCase());
-                const missingCerts = project.requiredCertifications.filter(
-                  (cert: string) => !assayerCerts.includes(cert.trim().toLowerCase())
-                );
-                if (missingCerts.length > 0) {
-                  return { passed: false, reason: 'Assayer lacks required certifications' };
-                }
-              }
-              return { passed: true };
-            }),
+            findByProjectBranch: jest.fn().mockResolvedValue([]),
+            findDispatchedForAssayer: jest.fn().mockResolvedValue({ documents: [], readiness: {} }),
+            dispatchDocument: jest.fn(),
           },
         },
+        { provide: FeePolicyService, useValue: mockFeePolicyService },
+        { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
+        { provide: getRepositoryToken(AssessmentEntity), useValue: { findOne: jest.fn(), save: jest.fn() } },
+        { provide: ProjectQueryService, useValue: mockProjectQueryService },
+        { provide: ProjectService, useValue: mockProjectService },
+        { provide: AssayerService, useValue: mockAssayerService },
+        { provide: HolidayService, useValue: mockHolidayService },
+        { provide: NotificationService, useValue: mockNotificationService },
+        { provide: NotificationDispatchService, useValue: mockNotificationDispatch },
+        { provide: PushNotificationService, useValue: mockPushNotificationService },
+        { provide: AuditService, useValue: mockAuditService },
+        { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
+        { provide: DataSource, useValue: mockDataSource },
+        { provide: UnitOfWork, useValue: mockUnitOfWork },
+        { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
+        { provide: OperationsInboxService, useValue: { resolveChannels: jest.fn().mockResolvedValue(new Map()) } },
+        { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
+        { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
       ],
     }).compile();
 
@@ -255,269 +195,550 @@ describe('AssignmentService', () => {
   });
 
   describe('create', () => {
+    const validDto = {
+      projectBranchId: 'pb-1',
+      assayerId: 'as-1',
+      proposedFee: 500,
+      scheduledDate: '2026-08-01',
+    };
+
     it('should throw NotFoundException if project branch does not exist', async () => {
       mockProjectBranchRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw NotFoundException if assayer does not exist', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', branch: { state: 'MH' }, project: {} });
       mockAssayerRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw BadRequestException if assayer lacks required skills', async () => {
-      const mockBranch = {
-        id: 'pb-1',
-        branch: { state: 'MH' },
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', branch: { state: 'MH' },
         project: { requiredSkills: ['Expert Appraiser'] },
-      };
-      const mockAssayer = { id: 'as-1', skills: ['Junior Valuer'] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: ['Junior Valuer'] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({
+        passed: false, reason: 'Assayer lacks required skills',
+      });
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('should throw BadRequestException if assayer lacks required certifications', async () => {
-      const mockBranch = {
-        id: 'pb-1',
-        branch: { state: 'MH' },
-        project: { requiredSkills: [], requiredCertifications: ['Gold Appraiser Cert'] },
-      };
-      const mockAssayer = {
-        id: 'as-1',
-        skills: [],
-        certifications: [{ name: 'Basic Valuer Cert', expiryDate: '2027-01-01' }],
-      };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
+    it('should throw ConflictException if existing active assignment exists', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', branch: { state: 'MH' }, project: {} });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing', status: AssignmentStatus.ACCEPTED });
+      await expect(service.create(validDto, 'user-1')).rejects.toThrow(ConflictException);
     });
 
-    it('should throw BadRequestException if date is a holiday', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(true);
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw ConflictException if assayer is double-booked', async () => {
-      const mockBranch = { id: 'pb-1', branch: { state: 'MH' }, project: {} };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(false);
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing-asn' });
-
-      await expect(
-        service.create(
-          {
-            projectBranchId: 'pb-1',
-            assayerId: 'as-1',
-            proposedFee: 500,
-            scheduledDate: '2026-08-01',
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('should successfully create an assignment in CREATED status', async () => {
-      const mockBranch = { id: 'pb-1', projectId: 'p-1', branch: { name: 'Branch 1', state: 'MH' }, project: {} };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(false);
+    it('should create assignment in PENDING status', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1', branch: { name: 'Test', state: 'MH' }, project: {},
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
       mockAssignmentRepo.findOne.mockResolvedValue(null);
-
-      const mockCreatedAssignment = {
-        id: 'asn-123',
-        assignmentNumber: 'ASN-2026-1234',
-        status: AssignmentStatus.CREATED,
+      const created = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1',
+        status: AssignmentStatus.PENDING, proposedFee: 500,
       };
-      mockAssignmentRepo.create.mockReturnValue(mockCreatedAssignment);
-      mockAssignmentRepo.save.mockResolvedValue(mockCreatedAssignment);
+      mockAssignmentRepo.create.mockReturnValue(created);
+      mockAssignmentRepo.save.mockResolvedValue(created);
 
-      const result = await service.create(
-        {
-          projectBranchId: 'pb-1',
-          assayerId: 'as-1',
-          proposedFee: 500,
-          scheduledDate: '2026-08-01',
-        },
-        'user-1',
-      );
-
-      expect(result.status).toBe(AssignmentStatus.CREATED);
-      expect(mockDataSource.transaction).toHaveBeenCalled();
+      const result = await service.create(validDto, 'user-1');
+      expect(result.status).toBe(AssignmentStatus.PENDING);
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
     });
   });
 
-  describe('transition', () => {
-    it('should throw BadRequestException if transition is invalid', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        status: AssignmentStatus.CREATED,
-        projectBranch: { id: 'pb-1', branch: { state: 'MH' } },
+  describe('acceptOffer', () => {
+    it('should accept and update project branch to ASSIGNMENT_CONFIRMED', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING, agreedFee: null,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION, isActive: true },
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
 
-      await expect(
-        service.transition('asn-123', AssignmentStatus.SCHEDULED, 'user-1'),
-      ).rejects.toThrow(BadRequestException);
+      const result = await service.acceptOffer('asn-1', 'user-1', 2000);
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(result.agreedFee).toBe(2000);
+      expect(assignment.projectBranch.status).toBe(ProjectBranchStatus.ASSIGNMENT_CONFIRMED);
+      // Confirming via the real ProjectBranchStateMachine (not a raw status mutation) must
+      // also publish the domain event so real-time subscribers get notified.
+      expect(mockDomainEventPublisher.publish).toHaveBeenCalledWith(
+        'ProjectBranchAssignmentConfirmedEvent',
+        expect.objectContaining({ aggregateId: 'pb-1' }),
+      );
+    });
+  });
+
+  describe('rejectOffer', () => {
+    it('should reject and mark branch as CANDIDATE_SEARCH', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.rejectOffer('asn-1', 'user-1', 'Too far');
+      expect(result.status).toBe(AssignmentStatus.REJECTED);
+      expect(result.rejectReason).toBe('Too far');
+    });
+  });
+
+  describe('cancelAssignment', () => {
+    it('should cancel assignment', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.ASSIGNMENT_CONFIRMED },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.cancelAssignment('asn-1', 'user-1', 'Admin override');
+      expect(result.status).toBe(AssignmentStatus.CANCELLED);
+    });
+  });
+
+  /**
+   * minDistanceKm is a conflict-of-interest floor: an assayer must be far ENOUGH from the
+   * branch they audit. The day planner always excluded on it, but the single-branch path only
+   * subtracted 40 points from the score and this write path did not check at all, so the
+   * control could be bypassed simply by using the per-branch flow.
+   */
+  /**
+   * The day planner charges a shared route once and says so; assignment creation charged full
+   * travel per branch, so a two-branch day billed the same journey twice and the plan's
+   * estimate never matched the assignments it produced.
+   */
+  /**
+   * The day planner charges a shared route once and says so; assignment creation charged full
+   * travel per branch, so a two-branch day billed the same journey twice and the plan's
+   * estimate never matched the assignments it produced.
+   */
+  describe('travel is charged once per assayer-day', () => {
+    const setup = () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1',
+        branch: { name: 'Test', state: 'MH', latitude: 18.5, longitude: 73.8 },
+        project: {},
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({
+        // homeLatitude/homeLongitude are getters on AssayerEntity; a plain fixture object does
+        // not inherit them, so they must be set explicitly or the distance reads as absent.
+        id: 'as-1', skills: [], certifications: [],
+        latitude: 19.0, longitude: 72.0, homeLatitude: 19.0, homeLongitude: 72.0,
+      });
+      mockAssignmentRepo.create.mockReturnValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
+      mockAssignmentRepo.save.mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
+      mockFeePolicyService.quote.mockClear();
+    };
+
+    it('quotes travel on the first assignment of a day', async () => {
+      setup();
+      // No existing assignment for this assayer on this date — the journey is not yet paid for.
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 500, scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.distanceKm).toBeGreaterThan(0);
     });
 
-    it('should transition from CREATED to CANDIDATE_SELECTED', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        status: AssignmentStatus.CREATED,
-        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
-      };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
-      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
+    it('quotes base fee only for a second branch on the same day', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-existing', assayerId: 'as-1' });
 
-      const result = await service.transition('asn-123', AssignmentStatus.CANDIDATE_SELECTED, 'user-1');
-      expect(result.status).toBe(AssignmentStatus.CANDIDATE_SELECTED);
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 500, scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.distanceKm).toBe(0);
+    });
+  });
+
+  describe('client distance policy', () => {
+    it('refuses an assayer too close to the branch they would audit', async () => {
+      mockConstraintEvaluator.checkDistancePolicy.mockReturnValueOnce({
+        passed: false,
+        reason: "Conflict of interest: 2.0km is within the client's 5km minimum-distance rule.",
+      });
+
+      await expect(
+        service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 1500, scheduledDate: '2026-08-20' }, 'user-1'),
+      ).rejects.toThrow(/Conflict of interest/);
+
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scheduleAudit', () => {
+    it('should update project branch status to SCHEDULED', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED, scheduledDate: null,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.ASSIGNMENT_CONFIRMED },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.scheduleAudit('asn-1', 'user-1', '2026-08-15');
+      expect(result.scheduledDate).toEqual(new Date('2026-08-15'));
+    });
+
+    /**
+     * scheduleAudit is the funnel every scheduled-date write passes through — assignment
+     * creation, SchedulingService.create, and the Reschedule button, which previously reached
+     * it with no date validation at all. Guarding here closes all of them, so this test is
+     * what stops a reschedule onto a holiday or onto an assayer's leave.
+     */
+    it('refuses a date the assayer cannot work, whichever path asked', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED, assayerId: 'as-1',
+        projectBranch: { id: 'pb-1', branch: { state: 'Maharashtra' } },
+      });
+      mockConstraintEvaluator.checkDateAvailability.mockResolvedValueOnce({
+        passed: false,
+        reason: 'Holiday Conflict: 2026-08-15 is a national/bank holiday in Maharashtra.',
+      });
+
+      await expect(
+        service.scheduleAudit('asn-1', 'user-1', '2026-08-15'),
+      ).rejects.toThrow(/Holiday Conflict/);
+
+      // Nothing may be written when the date is rejected.
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
     });
   });
 
   describe('update', () => {
-    it('should throw BadRequestException if assignment is locked (ACCEPTED status)', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        status: AssignmentStatus.ACCEPTED,
+    it('should throw BadRequestException if assignment is not PENDING', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED,
         projectBranch: { id: 'pb-1' },
-      };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
-
+      });
       await expect(
-        service.update('asn-123', { proposedFee: 600 }, 'user-1'),
+        service.update('asn-1', { proposedFee: 600 }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
     });
   });
 
-  describe('SLA and Notifications validation', () => {
-    it('should calculate SLA due date based on client configuration in create', async () => {
-      const mockBranch = {
-        id: 'pb-1',
-        projectId: 'p-1',
-        branch: { name: 'Branch 1', state: 'MH' },
-        project: {
-          client: {
-            configuration: {
-              maxResponseTimeHours: 48,
-            },
-          },
-        },
+  describe('autoDeclineExpiredOffers', () => {
+    it('auto-declines a PENDING assignment past its slaDueDate', async () => {
+      const pastDue = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING, slaDueDate: pastDue,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
       };
-      const mockAssayer = { id: 'as-1', skills: [], certifications: [] };
-      mockProjectBranchRepo.findOne.mockResolvedValue(mockBranch);
-      mockAssayerRepo.findOne.mockResolvedValue(mockAssayer);
-      mockHolidayService.isHoliday.mockResolvedValue(false);
-      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockAssignmentRepo.find.mockResolvedValue([assignment]);
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
 
-      const mockCreatedAssignment = {
-        id: 'asn-123',
-        assignmentNumber: 'ASN-2026-1234',
-        status: AssignmentStatus.CREATED,
-      };
-      mockAssignmentRepo.create.mockImplementation((arg) => ({ ...mockCreatedAssignment, ...arg }));
-      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
+      const declinedCount = await service.autoDeclineExpiredOffers();
 
-      const result = await service.create(
-        {
-          projectBranchId: 'pb-1',
-          assayerId: 'as-1',
-          proposedFee: 500,
-          scheduledDate: '2026-08-01',
-        },
-        'user-1',
-      );
-
-      expect(result.slaDueDate).toBeDefined();
-      const expectedTime = new Date().getTime() + 48 * 60 * 60 * 1000;
-      expect(Math.abs(result.slaDueDate!.getTime() - expectedTime)).toBeLessThan(5000);
+      expect(declinedCount).toBe(1);
+      expect(assignment.status).toBe(AssignmentStatus.REJECTED);
+      expect((assignment as any).rejectReason).toBe('AUTO_DECLINED_SLA_EXPIRED');
+      expect(assignment.projectBranch.status).toBe(ProjectBranchStatus.CANDIDATE_SEARCH);
     });
 
-    it('should trigger notification when transitioning to ACCEPTED status', async () => {
-      const mockAssignment = {
-        id: 'asn-123',
-        assignmentNumber: 'ASN-2026-1234',
-        status: AssignmentStatus.CREATED,
-        createdBy: 'creator-user',
-        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.PLANNING, branch: { state: 'MH' } },
+    it('leaves a PENDING assignment untouched if its slaDueDate has not passed yet', async () => {
+      const notYetDue = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.PENDING, slaDueDate: notYetDue,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(mockAssignment);
-      mockAssignmentRepo.save.mockImplementation((arg) => Promise.resolve(arg));
+      mockAssignmentRepo.find.mockResolvedValue([assignment]);
 
-      await service.transition('asn-123', AssignmentStatus.ACCEPTED, 'user-1');
+      const declinedCount = await service.autoDeclineExpiredOffers();
 
-      expect(mockNotificationService.create).toHaveBeenCalledWith(
+      expect(declinedCount).toBe(0);
+      expect(assignment.status).toBe(AssignmentStatus.PENDING);
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('queries only active PENDING assignments, so non-PENDING assignments are never considered', async () => {
+      mockAssignmentRepo.find.mockResolvedValue([]);
+
+      const declinedCount = await service.autoDeclineExpiredOffers();
+
+      expect(declinedCount).toBe(0);
+      expect(mockAssignmentRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: 'creator-user',
-          title: 'Assignment Accepted',
+          where: expect.objectContaining({ status: AssignmentStatus.PENDING, isActive: true }),
         }),
-        'user-1',
       );
+    });
+  });
+
+  describe('escalate', () => {
+    it('bumps priority to CRITICAL and records an audit event', async () => {
+      const assignment = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        priority: Priority.MEDIUM, createdBy: 'ops-user-1',
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const result = await service.escalate('asn-1', 'ops-user-2', 'Branch manager unresponsive');
+
+      expect(result.priority).toBe(Priority.CRITICAL);
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1' }),
+      );
+    });
+
+    it('escalation notifies the operations roles, not just the raiser', async () => {
+      // Escalation previously notified `createdBy` alone, so an escalation
+      // raised while that one person was away reached nobody. It now goes
+      // through the catalog, which resolves the operations and administrator
+      // roles at send time.
+      const assignment = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        priority: Priority.MEDIUM, createdBy: 'ops-user-1',
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-user-1' });
+
+      await service.escalate('asn-1', 'ops-user-2', 'Client escalated.');
+
+      expect(mockNotificationDispatch.emitSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'ASSIGNMENT_ESCALATED',
+          entityId: 'asn-1',
+          actorUserId: 'ops-user-2',
+          ownerUserId: 'ops-user-1',
+        }),
+      );
+    });
+
+    it('does not re-notify an assignment that is already CRITICAL', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        priority: Priority.CRITICAL, createdBy: 'ops-user-1',
+      });
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      await service.escalate('asn-1', 'ops-user-2');
+
+      expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalled();
+    });
+
+    it('rejects escalating an assignment that is already COMPLETED', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.COMPLETED, priority: Priority.MEDIUM,
+      });
+
+      await expect(service.escalate('asn-1', 'ops-user-2')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('recordCheckIn — attendance evidence integrity', () => {
+    // Check-in is the record asserting a field worker physically stood inside a bank branch.
+    // It is evidence in a collateral audit, so each of these guards protects a real claim.
+
+    const acceptedAssignment = (over: any = {}) => ({
+      id: 'asn-1',
+      assayerId: 'assayer-1',
+      status: AssignmentStatus.ACCEPTED,
+      syncToken: null,
+      projectBranch: { branch: { latitude: '12.9716', longitude: '77.5946' } },
+      assessment: null,
+      ...over,
+    });
+
+    it('refuses a check-in from an assayer the assignment does not belong to', async () => {
+      // Previously any authenticated assayer could check in on ANY assignment id, recording
+      // attendance at a branch they were never assigned.
+      mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment());
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] });
+
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-2');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('NOT_YOUR_ASSIGNMENT');
+    });
+
+    it('refuses a check-in before the assignment has been accepted', async () => {
+      // Checking in straight from PENDING skipped acceptance entirely.
+      mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment({ status: AssignmentStatus.PENDING }));
+
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-1');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('INVALID_STATE_FOR_CHECK_IN');
+    });
+
+    it('lets an operations manager check in on an assayer behalf', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment());
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS_MANAGER' }] });
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'ops-1');
+
+      expect(res.success).toBe(true);
+    });
+
+    it('stores position in real columns and computes distance from the branch', async () => {
+      // This used to be concatenated into free-text `remarks`, making the single most
+      // important fact in the audit unqueryable and unusable as evidence.
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 12);
+
+      expect(assignment).toMatchObject({
+        checkInLatitude: 12.9716,
+        checkInLongitude: 77.5946,
+        checkInAccuracyMeters: 12,
+      });
+      expect(assignment.checkedInAt).toBeInstanceOf(Date);
+      // Same point as the branch => ~0 m away.
+      expect(assignment.checkInDistanceMeters).toBeLessThan(5);
+    });
+
+    it('refuses an assayer check-in from far outside the branch geofence', async () => {
+      // Production data held an assignment CHECKED_IN 677 km from its branch. The distance
+      // was recorded but never acted on; now the check-in itself is refused, with the money
+      // question ("were you there?") answered at the door instead of in a later dispute.
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      // ~1,700 km away — the old New Delhi fallback would have looked exactly like this.
+      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'assayer-1');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('TOO_FAR_FROM_BRANCH');
+      expect(assignment.status).toBe(AssignmentStatus.ACCEPTED); // untouched
+    });
+
+    it('still records a distant check-in when staff perform it as a correction', async () => {
+      // The guard protects the assayer's own attestation; ops fixing a record is exactly the
+      // case that must pass — and the anomalous distance stays on the row as evidence.
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS_MANAGER' }] });
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'ops-1');
+
+      expect(res.success).toBe(true);
+      expect(assignment.checkInDistanceMeters).toBeGreaterThan(1_000_000);
+    });
+
+    it('widens the geofence by the GPS fix accuracy instead of punishing a poor rural signal', async () => {
+      const assignment = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      // ~2.7 km from the branch with a reported 1,000 m accuracy: 2000 + 1000 allowance lets
+      // it through; the same point with a sharp fix would be refused.
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.6194, undefined, 'assayer-1', 1000);
+
+      expect(res.success).toBe(true);
+      const sharp = acceptedAssignment();
+      mockAssignmentRepo.findOne.mockResolvedValue(sharp);
+      const refused = await service.recordCheckIn('asn-1', 12.9716, 77.6194, undefined, 'assayer-1', 10);
+      expect(refused.success).toBe(false);
+      expect(refused.error).toBe('TOO_FAR_FROM_BRANCH');
+    });
+
+    it('refuses a check-in days before the scheduled date', async () => {
+      // The nine-days-early case from production: check-in is attendance evidence for a
+      // specific visit, so it opens on the visit's own day. Ops reschedule first if the
+      // visit has genuinely moved.
+      const future = new Date();
+      future.setDate(future.getDate() + 9);
+      const assignment = acceptedAssignment({ scheduledDate: future.toISOString() });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('NOT_SCHEDULED_TODAY');
+      expect(res.message).toContain('scheduled for');
+    });
+
+    it('accepts a same-day check-in inside the geofence', async () => {
+      const assignment = acceptedAssignment({ scheduledDate: new Date().toISOString() });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 15);
+
+      expect(res.success).toBe(true);
+      expect(assignment.status).toBe(AssignmentStatus.CHECKED_IN);
+    });
+
+    it('leaves distance null when the branch itself has no coordinates', async () => {
+      const assignment = acceptedAssignment({ projectBranch: { branch: { latitude: null, longitude: null } } });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-1');
+
+      expect(assignment.checkInDistanceMeters).toBeNull();
+    });
+  });
+
+
+  describe('syncScheduleCompletion', () => {
+    /**
+     * The schedule row must be brought to COMPLETED through the caller's transaction manager.
+     * It used to be raw SQL on the DataSource, outside the transaction that saves the
+     * assignment and with failures swallowed — so a rollback left the schedule COMPLETED and
+     * the assignment not, with nothing reported.
+     */
+    const makeManager = (existing: any) => {
+      const repo = {
+        findOne: jest.fn().mockResolvedValue(existing),
+        save: jest.fn((arg: any) => Promise.resolve(arg)),
+        create: jest.fn((arg: any) => arg),
+      };
+      return { manager: { getRepository: jest.fn().mockReturnValue(repo) } as any, repo };
+    };
+
+    const assignment: any = {
+      id: 'asn-1', projectId: 'proj-1', assayerId: 'asr-1', scheduledDate: new Date('2026-06-01'),
+    };
+
+    it('completes the existing schedule through the transaction manager', async () => {
+      const { manager, repo } = makeManager({ id: 'sch-1', status: 'CONFIRMED', completedAt: null });
+      await (service as any).syncScheduleCompletion(assignment, 'user-1', manager);
+
+      expect(manager.getRepository).toHaveBeenCalled();
+      const saved = repo.save.mock.calls[0][0];
+      expect(saved.status).toBe('COMPLETED');
+      expect(saved.completedAt).toBeInstanceOf(Date);
+      expect(saved.updatedBy).toBe('user-1');
+    });
+
+    it('preserves an existing completedAt — the first completion is the real one', async () => {
+      const first = new Date('2026-05-01');
+      const { manager, repo } = makeManager({ id: 'sch-1', status: 'COMPLETED', completedAt: first });
+      await (service as any).syncScheduleCompletion(assignment, 'user-1', manager);
+      expect(repo.save.mock.calls[0][0].completedAt).toBe(first);
+    });
+
+    it('creates a schedule when the assignment was never scheduled through the calendar', async () => {
+      const { manager, repo } = makeManager(null);
+      await (service as any).syncScheduleCompletion(assignment, 'user-1', manager);
+
+      const created = repo.save.mock.calls[0][0];
+      expect(created).toMatchObject({
+        assignmentId: 'asn-1', projectId: 'proj-1', assayerId: 'asr-1', status: 'COMPLETED',
+      });
+    });
+
+    it('propagates a failure instead of swallowing it', async () => {
+      const { manager, repo } = makeManager({ id: 'sch-1', status: 'CONFIRMED', completedAt: null });
+      repo.save.mockRejectedValueOnce(new Error('db down'));
+      await expect((service as any).syncScheduleCompletion(assignment, 'user-1', manager)).rejects.toThrow('db down');
     });
   });
 });

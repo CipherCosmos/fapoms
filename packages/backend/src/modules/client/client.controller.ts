@@ -14,11 +14,12 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
-  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min,
+  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, IsUUID,
 } from 'class-validator';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
-import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
+import { STAFF_ROLES } from '../auth/staff-roles';
+import { SystemRole, ClientLifecycleStatus, ClientBillingStatus } from '@fapoms/shared';
 
 class CreateClientConfigDto {
   @IsOptional() @IsObject() importMapping?: Record<string, string>;
@@ -29,6 +30,14 @@ class CreateClientConfigDto {
   @IsOptional() @IsNumber() maxResponseTimeHours?: number;
   @IsOptional() @IsNumber() penaltyRate?: number;
   @IsOptional() @IsObject() serviceHours?: Record<string, any>;
+  // The client rate card that determines what the client is billed — distinct from the
+  // assayer's own commercial profile, which determines what the assayer is paid. The gap
+  // between them is the margin. These columns exist and FeePolicyService reads them, but
+  // nothing could write them, so they stayed NULL and billing fell through to platform
+  // defaults on every client.
+  @IsOptional() @IsNumber() defaultBaseFee?: number;
+  @IsOptional() @IsNumber() travelFeePerKm?: number;
+  @IsOptional() @IsNumber() freeTravelAllowanceKm?: number;
 }
 
 class CreateClientRequestDto implements CreateClientDto {
@@ -128,6 +137,8 @@ class UpdateBillingRequestDto implements UpdateBillingDto {
   @IsOptional() @IsString() bankName?: string;
   @IsOptional() @IsString() ifscCode?: string;
   @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsNumber() gstRate?: number;
+  @IsOptional() @IsNumber() tdsRate?: number;
 }
 
 class LifecycleTransitionDto {
@@ -138,9 +149,36 @@ class LifecycleTransitionDto {
   reason?: string;
 }
 
+class BulkLifecycleTransitionDto {
+  @IsArray() @IsNotEmpty()
+  @IsUUID('4', { each: true })
+  ids: string[];
+
+  @IsEnum(ClientLifecycleStatus)
+  status: string;
+
+  @IsOptional() @IsString()
+  reason?: string;
+}
+
+class BillingStatusTransitionDto {
+  @IsEnum(ClientBillingStatus)
+  status: string;
+
+  @IsOptional() @IsString()
+  remarks?: string;
+}
+
+class BillingRemarkDto {
+  @IsString() @IsNotEmpty()
+  remarks: string;
+}
+
 @ApiTags('Clients')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+// Internal book: staff only. Individual routes narrow this further.
+@Roles(...STAFF_ROLES)
 @Controller('clients')
 export class ClientController {
   constructor(private readonly clientService: ClientService) {}
@@ -160,8 +198,24 @@ export class ClientController {
 
   @Get()
   @ApiOperation({ summary: 'List all active client profiles' })
-  async findAll(@Query('page') page = 1, @Query('limit') limit = 20) {
-    const { clients, total } = await this.clientService.findAll(page, limit);
+  async findAll(
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('clientType') clientType?: string,
+    @Query('priority') priority?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: 'ASC' | 'DESC',
+  ) {
+    const { clients, total } = await this.clientService.findAll(page, limit, {
+      search,
+      status,
+      clientType,
+      priority,
+      sortBy,
+      sortOrder,
+    });
     return {
       success: true,
       data: clients,
@@ -185,7 +239,7 @@ export class ClientController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client profile and configuration' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientRequestDto, @Req() req: any) {
     const client = await this.clientService.update(id, dto, req.user.id);
@@ -205,9 +259,21 @@ export class ClientController {
   // Lifecycle
   // -----------------------------------------------------------------------
 
+  @Patch('bulk/lifecycle')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:edit:organization')
+  @ApiOperation({ summary: 'Migrate a batch of clients forward to a target lifecycle stage' })
+  async bulkTransitionLifecycle(
+    @Body() dto: BulkLifecycleTransitionDto,
+    @Req() req: any,
+  ) {
+    const result = await this.clientService.bulkTransitionLifecycle(dto.ids, dto.status, req.user.id, dto.reason);
+    return { success: true, data: result };
+  }
+
   @Patch(':id/lifecycle')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Transition client lifecycle status' })
   async transitionLifecycle(
     @Param('id', ParseUUIDPipe) id: string,
@@ -244,7 +310,7 @@ export class ClientController {
 
   @Put(':id/contacts/:contactId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client contact' })
   async updateContact(
     @Param('contactId', ParseUUIDPipe) contactId: string,
@@ -293,7 +359,7 @@ export class ClientController {
 
   @Put(':id/contracts/:contractId')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client contract' })
   async updateContract(
     @Param('contractId', ParseUUIDPipe) contractId: string,
@@ -327,9 +393,16 @@ export class ClientController {
     return { success: true, data: billing };
   }
 
+  @Get(':id/billing/history')
+  @ApiOperation({ summary: 'Get client billing timeline (status changes, remarks, profile edits)' })
+  async findBillingHistory(@Param('id', ParseUUIDPipe) id: string) {
+    const history = await this.clientService.findBillingHistory(id);
+    return { success: true, data: history };
+  }
+
   @Put(':id/billing')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('client:update:organization')
+  @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Create or update client billing information' })
   async upsertBilling(
     @Param('id', ParseUUIDPipe) id: string,
@@ -338,5 +411,31 @@ export class ClientController {
   ) {
     const billing = await this.clientService.upsertBilling(id, dto, req.user.id);
     return { success: true, data: billing };
+  }
+
+  @Patch(':id/billing/status')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @RequirePermissions('client:edit:organization')
+  @ApiOperation({ summary: 'Transition client billing status' })
+  async transitionBillingStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: BillingStatusTransitionDto,
+    @Req() req: any,
+  ) {
+    const billing = await this.clientService.transitionBillingStatus(id, dto.status as ClientBillingStatus, req.user.id, dto.remarks);
+    return { success: true, data: billing };
+  }
+
+  @Post(':id/billing/remarks')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('client:edit:organization')
+  @ApiOperation({ summary: 'Add a remark to client billing timeline' })
+  async addBillingRemark(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: BillingRemarkDto,
+    @Req() req: any,
+  ) {
+    const entry = await this.clientService.addBillingRemark(id, dto.remarks, req.user.id);
+    return { success: true, data: entry };
   }
 }

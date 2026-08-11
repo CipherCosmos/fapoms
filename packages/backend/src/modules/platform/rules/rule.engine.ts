@@ -112,15 +112,24 @@ export class RuleEngine {
     }
 
     // 4. Capacity Limits
-    if (rule.ruleType === 'CAPACITY' && cond.maxWeeklyCapacity) {
-      const currentLoad = activeWorkload || 0;
-      if (currentLoad >= Number(cond.maxWeeklyCapacity)) {
-        return {
-          passed: false,
-          actionType,
-          scoreModifier,
-          message: `Weekly workload (${currentLoad}) exceeds capacity limit (${cond.maxWeeklyCapacity})`,
-        };
+    //
+    // `activeWorkload` is a count of concurrent open commitments — it is not windowed to a week
+    // anywhere in the platform — so the limit is expressed and reported in those terms. The
+    // stored condition key is read under both spellings because rules exist under each: the UI
+    // writes `maxWeeklyCapacity`, while the seeded rule uses `maxConcurrent`, and reading only
+    // the first meant a rule authored with the second silently never applied.
+    if (rule.ruleType === 'CAPACITY') {
+      const limit = cond.maxConcurrentAssignments ?? cond.maxWeeklyCapacity ?? cond.maxConcurrent;
+      if (limit) {
+        const currentLoad = activeWorkload || 0;
+        if (currentLoad >= Number(limit)) {
+          return {
+            passed: false,
+            actionType,
+            scoreModifier,
+            message: `Open assignments (${currentLoad}) reached the limit of ${limit}`,
+          };
+        }
       }
     }
 

@@ -1,24 +1,107 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, calculateHaversineDistance, businessDateKey } from '@fapoms/shared';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
+import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+
+/**
+ * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
+ */
+const EXCLUSION_REASONS: Record<string, string> = {
+  availability: 'Unavailable on this date (already booked, on leave, or inactive)',
+  consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
+  clientRestriction: 'Restricted by this client',
+  clientEligibility: 'Not approved to work for this client',
+  ruleEngineEligibility: 'Blocked by a business rule',
+  requiredSkills: 'Missing a skill or certification this project requires',
+  distancePolicy: "Outside the client's permitted distance band for this branch",
+};
+
+/**
+ * What KIND of exclusion each filter produces — because they are not equally final.
+ * A DATE exclusion (booked that day, on leave) is a perfectly good candidate for another
+ * date and should be offered as such, not buried; SKILLS/POLICY exclusions are structural.
+ */
+const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS'> = {
+  availability: 'DATE',
+  consecutiveBranchAudit: 'ROTATION',
+  distancePolicy: 'DISTANCE',
+  clientRestriction: 'POLICY',
+  clientEligibility: 'POLICY',
+  ruleEngineEligibility: 'POLICY',
+  requiredSkills: 'SKILLS',
+};
 
 export interface PlanningContext {
   branch: BranchEntity;
   client: ClientEntity | null;
   scheduledDate: Date;
   weights: Record<string, number>;
+  /**
+   * Facts about the branch itself, resolved once per recommendation rather than once per
+   * candidate.
+   *
+   * Several filters and scorers issue their own query for every assayer in the pool, and some
+   * of those queries do not depend on the assayer at all — the no-repeat-auditor rule looks up
+   * *this branch's* most recent assignment identically for all of them. With a national
+   * workforce that is one wasted round trip per assayer, per recommendation, and it grows with
+   * headcount rather than with anything meaningful.
+   *
+   * Optional so a filter used outside recommend() still works standalone; each consumer falls
+   * back to querying when it is absent.
+   */
+  branchFacts?: {
+    /** Most recent assignment on this branch, or null if it has never been audited. */
+    lastAssignment: { assayerId: string; status: AssignmentStatus } | null;
+    /** Committed workload per assayer id, for every candidate in the pool. */
+    activeWorkloadByAssayer: Record<string, number>;
+    /**
+     * Branch-to-assayer route, computed once per candidate.
+     *
+     * The distance and travel-time scorers each called `calculateRoute` with the identical
+     * origin and destination, so every candidate was routed twice — and routing is the most
+     * expensive thing in this pipeline, since it can reach an external provider. Sharing one
+     * result halves the calls and makes the ranking self-consistent: the two scores can no
+     * longer disagree because they were computed from separate responses.
+     */
+    routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }>;
+    /** The project-branch row for this branch — identical for every candidate. */
+    projectBranch?: any;
+    /**
+     * Every active commercial profile per assayer, newest effective date first.
+     *
+     * The cost and profitability scorers each queried this table per candidate, and they
+     * select from it differently — cost takes the profile in force on the scheduled date,
+     * profitability takes the most recent regardless of date. Both rules are preserved exactly
+     * here; the rows are simply fetched once instead of 2N times. That the two disagree about
+     * which fee applies is a real inconsistency, but correcting it would move scores, so it is
+     * left visible rather than folded in silently.
+     */
+    commercialProfilesByAssayer: Record<string, any[]>;
+    /** Clarification queries raised against each assayer. */
+    queryCountByAssayer: Record<string, number>;
+    /** Lifetime assignment counts per assayer: everything dispatched, and everything taken. */
+    assignmentTotalsByAssayer: Record<string, { total: number; accepted: number }>;
+    /**
+     * Assayers already committed on the scheduled date, mapped to the assignment that holds
+     * them. Double-booking was one findOne per candidate asking the same date question.
+     */
+    doubleBookedByAssayer: Record<string, string>;
+    /** Recent completed assignments per assayer, for the delivery-speed score. */
+    completedByAssayer: Record<string, Array<{ completionDate: Date | null; createdAt: Date }>>;
+  };
 }
 
 export interface CandidateFilter {
@@ -45,9 +128,13 @@ export class AvailabilityFilter implements CandidateFilter {
     }
 
     // 1. Check double booking
-    const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
-    if (!dbResult.passed) {
-      return false;
+    // Resolved for the whole pool in one query when recommend() supplied the facts; the
+    // per-candidate check remains for standalone use.
+    if (context.branchFacts) {
+      if (context.branchFacts.doubleBookedByAssayer[assayer.id]) return false;
+    } else {
+      const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
+      if (!dbResult.passed) return false;
     }
 
     // 2. Check leaves
@@ -57,6 +144,100 @@ export class AvailabilityFilter implements CandidateFilter {
     }
 
     return true;
+  }
+}
+
+@Injectable()
+export class ConsecutiveBranchAuditFilter implements CandidateFilter {
+  name = 'consecutiveBranchAudit';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    if (!context.branch?.id) return true;
+
+    // The branch's last assignment is the same answer for every candidate, so recommend()
+    // resolves it once and passes it here. Falling back to the query keeps this filter usable
+    // on its own.
+    const lastAssignment = context.branchFacts
+      ? context.branchFacts.lastAssignment
+      : await this.assignmentRepository.findOne({
+          where: {
+            projectBranch: { branchId: context.branch.id },
+            isActive: true,
+          },
+          order: { createdAt: 'DESC' },
+          relations: ['projectBranch'],
+        });
+
+    if (!lastAssignment) return true; // No prior audit recorded for this branch
+
+    // Only block the assayer once they're actually locked in (ACCEPTED) or have already
+    // completed this branch's audit (anti-collusion / no-repeat-auditor rule). A still-PENDING
+    // offer awaiting response — or one that was REJECTED/CANCELLED — should not prevent the same
+    // assayer from still showing up as a recommendable backup candidate.
+    const locksOutCandidate = [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED].includes(lastAssignment.status);
+    if (lastAssignment.assayerId === assayer.id && locksOutCandidate) {
+      return false;
+    }
+
+    return true;
+  }
+}
+
+/**
+ * The client's territorial rules as an exclusion, not a discount.
+ *
+ * `minDistanceKm` is a conflict-of-interest floor: an assayer must be far enough from the
+ * branch they audit. The day planner has always enforced it by dropping the candidate, but this
+ * path only subtracted 40 points, so a disqualified assayer still appeared on the list — merely
+ * lower down — and could be assigned. Scoring cannot express "not allowed".
+ */
+@Injectable()
+export class DistancePolicyFilter implements CandidateFilter {
+  name = 'distancePolicy';
+
+  constructor(private readonly constraintEvaluator: ConstraintEvaluator) {}
+
+  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    const preferences = context.client?.planningPreferences;
+    if (!preferences) return true;
+    /**
+     * Measured from the assayer's registered home, not their live position. The floor asks how
+     * close this person lives to the branch they would audit — a structural fact about conflict
+     * of interest. Measuring it from wherever their phone happened to be would let someone
+     * disqualified by where they live pass simply by travelling, and would make the same
+     * candidate eligible or not depending on the hour.
+     */
+    if (
+      context.branch?.latitude == null || context.branch?.longitude == null ||
+      assayer.homeLatitude == null || assayer.homeLongitude == null
+    ) {
+      return true;
+    }
+
+    const distance = calculateHaversineDistance(
+      Number(context.branch.latitude),
+      Number(context.branch.longitude),
+      Number(assayer.homeLatitude),
+      Number(assayer.homeLongitude),
+    );
+
+    /**
+     * The floor only. `minDistanceKm` is a compliance control — an assayer must not audit a
+     * branch on their own doorstep — so it is never negotiable and is enforced by exclusion.
+     *
+     * `maxDistanceKm` is a serviceability preference, not a control: the day planner treats it
+     * as relaxable and widens the search when nothing is reachable. This path has no such
+     * relaxation, so excluding on it would leave ops with an empty list and no way to reopen it
+     * — on live data it cut a 26-candidate list to 2. The ceiling therefore stays a scoring
+     * penalty here (ClientPreferenceScoreCalculator), which ranks distant assayers last while
+     * still letting ops see and choose them.
+     */
+    return this.constraintEvaluator.checkDistancePolicy(preferences, distance, { relaxDistance: true }).passed;
   }
 }
 
@@ -89,25 +270,82 @@ export class ClientEligibilityFilter implements CandidateFilter {
 export class RuleEngineEligibilityFilter implements CandidateFilter {
   name = 'ruleEngineEligibility';
 
-  constructor(private readonly ruleEngine: RuleEngine) {}
+  constructor(
+    private readonly ruleEngine: RuleEngine,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
 
-  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
+  async evaluate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<boolean> {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
+
+    // A CAPACITY rule compares against `activeWorkload`, which was never supplied here — so it
+    // always read 0 and no capacity limit could ever trigger. Counting committed work makes
+    // that rule type enforceable.
+    // One grouped count for the whole pool is resolved by recommend() and read from context;
+    // this per-candidate count is the standalone fallback.
+    const activeWorkload = context.branchFacts
+      ? (context.branchFacts.activeWorkloadByAssayer[assayer.id] ?? 0)
+      : await this.assignmentRepository.count({
+          where: {
+            assayerId: assayer.id,
+            status: In(COMMITTED_ASSIGNMENT_STATUSES),
+            isActive: true,
+          },
+        });
+
     const results = await this.ruleEngine.evaluate({
       subject: {
         id: assayer.id,
         state: assayer.state,
         skills: assayer.skills || [],
-        certifications: assayer.certifications || [],
+        certifications: (assayer.certifications || []).map((c) => ({ name: c.name, expiryDate: c.expiryDate ?? undefined })),
       },
       target: {
         id: context.branch.id,
         clientId: context.branch.clientId,
       },
       scheduledDate: context.scheduledDate,
+      activeWorkload,
       restrictedAssayers: context.client?.restrictedAssayers,
     });
     // If any active rule block action fails, return false
     return !results.some((r) => !r.passed && r.actionType === 'BLOCK');
+  }
+
+  /**
+   * Same evaluation, but returns the human-readable reasons a candidate was blocked.
+   * Ops needs "why is my best assayer missing?" answered — a silently shorter list is the
+   * least useful possible output.
+   */
+  async explain(assayerEntity: AssayerEntity, context: PlanningContext): Promise<string[]> {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
+    // One grouped count for the whole pool is resolved by recommend() and read from context;
+    // this per-candidate count is the standalone fallback.
+    const activeWorkload = context.branchFacts
+      ? (context.branchFacts.activeWorkloadByAssayer[assayer.id] ?? 0)
+      : await this.assignmentRepository.count({
+          where: {
+            assayerId: assayer.id,
+            status: In(COMMITTED_ASSIGNMENT_STATUSES),
+            isActive: true,
+          },
+        });
+    const results = await this.ruleEngine.evaluate({
+      subject: {
+        id: assayer.id,
+        state: assayer.state,
+        skills: assayer.skills || [],
+        certifications: (assayer.certifications || []).map((c) => ({ name: c.name, expiryDate: c.expiryDate ?? undefined })),
+      },
+      target: { id: context.branch.id, clientId: context.branch.clientId },
+      scheduledDate: context.scheduledDate,
+      activeWorkload,
+      restrictedAssayers: context.client?.restrictedAssayers,
+    });
+    return results
+      .filter((r) => !r.passed && r.actionType === 'BLOCK')
+      .map((r) => r.message || 'Blocked by a business rule');
   }
 }
 
@@ -122,16 +360,20 @@ export class RequiredSkillsFilter implements CandidateFilter {
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
-    const pb = await this.projectBranchRepository.findOne({
-      where: { branchId: context.branch.id, isActive: true },
-      relations: ['project'],
-    });
+    // Same row for every candidate, so recommend() resolves it once. The query remains as a
+    // standalone fallback.
+    const pb = context.branchFacts?.projectBranch !== undefined
+      ? context.branchFacts.projectBranch
+      : await this.projectBranchRepository.findOne({
+          where: { branchId: context.branch.id, isActive: true },
+          relations: ['project'],
+        });
 
     if (!pb || !pb.project) {
       return true;
     }
 
-    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project);
+    const checkResult = this.constraintEvaluator.checkSkillsAndCertifications(assayer, pb.project, context.scheduledDate);
     return checkResult.passed;
   }
 }
@@ -143,13 +385,14 @@ export class DistanceScoreCalculator implements ScoreCalculator {
   constructor(private readonly routingService: RoutingService) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    if (!context.branch.latitude || !context.branch.longitude || !assayer.latitude || !assayer.longitude) {
+    if (!context.branch.latitude || !context.branch.longitude || !assayer.effectiveLatitude || !assayer.effectiveLongitude) {
       return 0;
     }
-    const route = await this.routingService.calculateRoute(
-      { latitude: context.branch.latitude, longitude: context.branch.longitude },
-      { latitude: assayer.latitude, longitude: assayer.longitude },
-    );
+    const route = context.branchFacts?.routeByAssayer[assayer.id]
+      ?? await this.routingService.calculateRoute(
+        { latitude: context.branch.latitude, longitude: context.branch.longitude },
+        { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
+      );
     return Math.max(0, 100 - (route.distanceKm / 5));
   }
 }
@@ -161,13 +404,15 @@ export class TravelTimeScoreCalculator implements ScoreCalculator {
   constructor(private readonly routingService: RoutingService) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    if (!context.branch.latitude || !context.branch.longitude || !assayer.latitude || !assayer.longitude) {
+    if (!context.branch.latitude || !context.branch.longitude || !assayer.effectiveLatitude || !assayer.effectiveLongitude) {
       return 0;
     }
-    const route = await this.routingService.calculateRoute(
-      { latitude: context.branch.latitude, longitude: context.branch.longitude },
-      { latitude: assayer.latitude, longitude: assayer.longitude },
-    );
+    // Shared with the distance scorer — see branchFacts.routeByAssayer.
+    const route = context.branchFacts?.routeByAssayer[assayer.id]
+      ?? await this.routingService.calculateRoute(
+        { latitude: context.branch.latitude, longitude: context.branch.longitude },
+        { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
+      );
     return Math.max(0, 100 - (route.durationMinutes / 6));
   }
 }
@@ -182,15 +427,17 @@ export class WorkloadScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    // Committed work, matching every other capacity reader. Counting ACCEPTED alone treated an
+    // assayer who was checked in at a branch, or mid-audit, as completely free.
     const activeCount = await this.assignmentRepository.count({
       where: {
         assayerId: assayer.id,
-        status: In([AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+        status: In(COMMITTED_ASSIGNMENT_STATUSES),
         isActive: true,
       },
     });
 
-    const maxCapacity = assayer.maxWeeklyWorkload || 15;
+    const maxCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
     const remaining = Math.max(0, maxCapacity - activeCount);
     return Math.min(100, (remaining / maxCapacity) * 100);
   }
@@ -201,8 +448,114 @@ export class PerformanceScoreCalculator implements ScoreCalculator {
   name = 'performance';
 
   async calculate(assayer: AssayerEntity): Promise<number> {
-    const rating = assayer.performanceRating || 5.0;
+    const rating = Number(assayer.performanceRating) || 5.0;
     return (rating / 5.0) * 100;
+  }
+}
+
+@Injectable()
+export class RejectionAcceptanceScoreCalculator implements ScoreCalculator {
+  name = 'acceptanceRate';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    // Both counts for the whole pool arrive in one grouped query; the per-candidate pair below
+    // remains for standalone use.
+    const shared = context?.branchFacts?.assignmentTotalsByAssayer[assayer.id];
+    if (shared) {
+      if (shared.total === 0) return 85;
+      return Math.round((shared.accepted / shared.total) * 100);
+    }
+
+    const totalDispatched = await this.assignmentRepository.count({
+      where: { assayerId: assayer.id, isActive: true },
+    });
+
+    if (totalDispatched === 0) return 85; // Baseline default for new assayers
+
+    const acceptedCount = await this.assignmentRepository.count({
+      where: {
+        assayerId: assayer.id,
+        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
+        isActive: true,
+      },
+    });
+
+    return Math.round((acceptedCount / totalDispatched) * 100);
+  }
+}
+
+@Injectable()
+export class DeliverySpeedScoreCalculator implements ScoreCalculator {
+  name = 'deliverySpeed';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    // The whole pool's completed history arrives in one query; this per-candidate fetch stays
+    // for standalone use.
+    const completedAssignments = context?.branchFacts
+      ? (context.branchFacts.completedByAssayer[assayer.id] ?? [])
+      : await this.assignmentRepository.find({
+          where: {
+            assayerId: assayer.id,
+            status: AssignmentStatus.COMPLETED,
+            isActive: true,
+          },
+          take: 20,
+        });
+
+    if (completedAssignments.length === 0) return 80;
+
+    let totalScore = 0;
+    for (const a of completedAssignments) {
+      if (a.completionDate && a.createdAt) {
+        const diffHours = (new Date(a.completionDate).getTime() - new Date(a.createdAt).getTime()) / (1000 * 3600);
+        if (diffHours <= 24) totalScore += 100;
+        else if (diffHours <= 48) totalScore += 80;
+        else if (diffHours <= 72) totalScore += 60;
+        else totalScore += 40;
+      } else {
+        totalScore += 75;
+      }
+    }
+
+    return Math.round(totalScore / completedAssignments.length);
+  }
+}
+
+@Injectable()
+export class QueryVolumeScoreCalculator implements ScoreCalculator {
+  name = 'queryVolume';
+
+  constructor(
+    @InjectRepository(ValidationQueryEntity)
+    private readonly queryRepository: Repository<ValidationQueryEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    const sharedQueryCount = context?.branchFacts?.queryCountByAssayer[assayer.id];
+    if (sharedQueryCount !== undefined) {
+      if (sharedQueryCount === 0) return 95;
+      return Math.max(20, Math.round(100 - (sharedQueryCount * 10)));
+    }
+
+    const queries = await this.queryRepository.find({
+      where: { assayerId: assayer.id, isActive: true },
+      take: 50,
+    });
+
+    if (queries.length === 0) return 95; // Excellent score: 0 queries raised for this assayer
+
+    // Deduct points per raised validation query
+    return Math.max(20, Math.round(100 - (queries.length * 10)));
   }
 }
 
@@ -226,6 +579,31 @@ function getCityTierMultiplier(city?: string): number {
   return 1.0;
 }
 
+/**
+ * The commercial profile governing an assayer on a given date.
+ *
+ * This is the same rule FeePolicyService.resolveBaseFee applies (effective on the date, most
+ * recent start wins), stated once so the scorers cannot drift from the calculator that
+ * actually bills the work. The Cost and Profitability scorers previously disagreed: Cost
+ * selected the profile effective on the audit date, Profitability took whichever profile was
+ * newest regardless of date. An assayer with a future rate change was therefore scored as
+ * cheap by one and expensive by the other in the same recommendation.
+ *
+ * `profiles` must be ordered by effectiveStartDate DESC, matching both the batched preload and
+ * the per-candidate query fallback.
+ */
+function selectProfileEffectiveOn(
+  profiles: AssayerCommercialProfileEntity[],
+  onDate: Date,
+): AssayerCommercialProfileEntity | null {
+  for (const p of profiles) {
+    const startsBy = new Date(p.effectiveStartDate) <= onDate;
+    const notEnded = !p.effectiveEndDate || new Date(p.effectiveEndDate) >= onDate;
+    if (startsBy && notEnded) return p;
+  }
+  return null;
+}
+
 @Injectable()
 export class CostScoreCalculator implements ScoreCalculator {
   name = 'cost';
@@ -236,19 +614,14 @@ export class CostScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    const profiles = await this.commercialRepository.find({
-      where: { assayerId: assayer.id, isActive: true },
-      order: { effectiveStartDate: 'DESC' },
-    });
+    const profiles = context.branchFacts
+      ? (context.branchFacts.commercialProfilesByAssayer[assayer.id] ?? [])
+      : await this.commercialRepository.find({
+          where: { assayerId: assayer.id, isActive: true },
+          order: { effectiveStartDate: 'DESC' },
+        });
 
-    let activeProfile: AssayerCommercialProfileEntity | null = null;
-    const targetDate = context.scheduledDate;
-    for (const p of profiles) {
-      if (p.effectiveStartDate <= targetDate && (!p.effectiveEndDate || p.effectiveEndDate >= targetDate)) {
-        activeProfile = p;
-        break;
-      }
-    }
+    const activeProfile = selectProfileEffectiveOn(profiles, context.scheduledDate);
 
     if (!activeProfile) {
       return 50;
@@ -264,7 +637,8 @@ export class CostScoreCalculator implements ScoreCalculator {
 export class ClientPreferenceScoreCalculator implements ScoreCalculator {
   name = 'clientPreference';
 
-  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+  async calculate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<number> {
+    const assayer = assayerEntity as AssayerWithWorkforceAttributes;
     let score = 50;
 
     const isPreferred = context.client?.preferredAssayers?.includes(assayer.id);
@@ -275,17 +649,19 @@ export class ClientPreferenceScoreCalculator implements ScoreCalculator {
     const preferences = context.client?.planningPreferences || {};
 
     // 1. Distance Preferences
-    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+    if (context.branch.latitude && context.branch.longitude && assayer.effectiveLatitude && assayer.effectiveLongitude) {
       const distance = calculateHaversineDistance(
         Number(context.branch.latitude),
         Number(context.branch.longitude),
-        Number(assayer.latitude),
-        Number(assayer.longitude)
+        Number(assayer.effectiveLatitude),
+        Number(assayer.effectiveLongitude)
       );
 
       const minDistance = Number(preferences.minDistanceKm);
       const maxDistance = Number(preferences.maxDistanceKm);
 
+      // Eligibility is decided by DistancePolicyFilter; anything outside the band never
+      // reaches a scorer. These penalties remain only as a ranking nudge for the boundary.
       if (!isNaN(minDistance) && distance < minDistance) {
         score -= 40;
       }
@@ -359,16 +735,19 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
   ) {}
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    // 1. Client Familiarity score
-    const count = await this.assignmentRepository.count({
+    // 1. Branch History score — reward assayers who have previously audited this exact
+    // branch (accepted or completed assignments only; the currently-open PENDING offer
+    // being replaced is excluded since it isn't ACCEPTED/COMPLETED yet).
+    const priorVisits = await this.assignmentRepository.count({
       where: {
         assayerId: assayer.id,
-        projectId: context.branch.clientId ? context.branch.clientId : undefined,
-        status: AssignmentStatus.CLOSED,
+        projectBranch: { branchId: context.branch.id },
+        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
         isActive: true,
       },
+      relations: ['projectBranch'],
     });
-    let score = 50 + count * 10;
+    let score = 50 + Math.min(priorVisits, 3) * 15; // up to +45 for 3+ prior visits to this branch
 
     // 2. Same-Day Route Grouping Boost (for maximizing auditor utilization in one day)
     if (context.scheduledDate) {
@@ -420,12 +799,12 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
     let score = 80; // Baseline
 
     // 1. Proximity & Travel Feasibility for SLA
-    if (context.branch.latitude && context.branch.longitude && assayer.latitude && assayer.longitude) {
+    if (context.branch.latitude && context.branch.longitude && assayer.effectiveLatitude && assayer.effectiveLongitude) {
       const dist = calculateHaversineDistance(
         Number(context.branch.latitude),
         Number(context.branch.longitude),
-        Number(assayer.latitude),
-        Number(assayer.longitude)
+        Number(assayer.effectiveLatitude),
+        Number(assayer.effectiveLongitude)
       );
 
       if (dist <= 15) {
@@ -443,7 +822,7 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
         where: {
           assayerId: assayer.id,
           scheduledDate: context.scheduledDate,
-          status: In([AssignmentStatus.CREATED, AssignmentStatus.ACCEPTED, AssignmentStatus.SCHEDULED]),
+        status: In([AssignmentStatus.ACCEPTED]),
           isActive: true,
         },
       });
@@ -479,10 +858,29 @@ export class CustomerDensityScoreCalculator implements ScoreCalculator {
   name = 'customerDensity';
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
-    const customerCount = Number(context.branch.riskScore || 20);
-    const maxCapacity = assayer.maxWeeklyWorkload || 50;
-    // Score increases when high-customer-density branches are assigned to high-capacity assayers
-    return Math.min(100, (customerCount / maxCapacity) * 100);
+    /**
+     * How heavy this branch is, measured in packets — the same figure the day planner sizes a
+     * branch's working hours from.
+     *
+     * This read `context.branch.riskScore` as if it were a customer count and divided it by a
+     * weekly assignment capacity: a 0-10 risk rating over a count of assignments, two different
+     * units, producing a number that meant nothing. Every branch in the database carries the
+     * same risk score, so in practice the scorer returned a near-constant for everybody.
+     */
+    const packetCount = Number(context.branchFacts?.projectBranch?.packetCount ?? 0);
+    if (!Number.isFinite(packetCount) || packetCount <= 0) {
+      // Nothing recorded for this cycle — say "no signal" rather than inventing a ranking.
+      return 50;
+    }
+
+    // Deliberately the platform default, not the 50 that used to sit here: this is the same
+    // "how much can this assayer take on" figure every other engine uses, and a second default
+    // meant a capacity-less assayer scored as three times roomier here than anywhere else.
+    const maxCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
+
+    // A heavy branch is better given to an assayer with room for it, so the score rises with
+    // capacity relative to the load and is capped at 100.
+    return Math.max(0, Math.min(100, (maxCapacity / packetCount) * 100));
   }
 }
 
@@ -499,10 +897,16 @@ export class ProfitabilityScoreCalculator implements ScoreCalculator {
     const budget = context.client?.budget ? Number(context.client.budget) : 0;
     if (budget <= 0) return 100; // No budget constraint
 
-    const profile = await this.commercialRepository.findOne({
-      where: { assayerId: assayer.id, isActive: true },
-      order: { effectiveStartDate: 'DESC' },
-    });
+    // Same selection as the Cost scorer and FeePolicyService: the profile in force on the
+    // audit date. This used to take the newest profile outright, so a rate change dated in the
+    // future priced this assayer differently here than everywhere else in the platform.
+    const profiles = context.branchFacts
+      ? (context.branchFacts.commercialProfilesByAssayer[assayer.id] ?? [])
+      : await this.commercialRepository.find({
+          where: { assayerId: assayer.id, isActive: true },
+          order: { effectiveStartDate: 'DESC' },
+        });
+    const profile = selectProfileEffectiveOn(profiles, context.scheduledDate);
 
     if (!profile) return 50;
 
@@ -535,21 +939,57 @@ export class RiskScoreCalculator implements ScoreCalculator {
   }
 }
 
+/** Per-client data a batch of recommendation runs can share. */
+export interface RecommendationPreload {
+  client: ClientEntity | null;
+  assayers: AssayerEntity[];
+}
+
+/**
+ * Coarse geographic pre-filter for the candidate pool.
+ *
+ * Before any scoring, the candidate set is narrowed to assayers whose registered home is within
+ * this many kilometres of the branch (plus anyone sharing a live location — see
+ * findNearbyActiveAssayerIds). This bounds an otherwise O(branches × all-assayers) pass: every
+ * branch previously scored, routed, and ran seven eligibility filters against every active
+ * assayer in the country, so at national headcount the cost of one recommendation grew with total
+ * workforce size rather than with anything about the branch.
+ *
+ * It is deliberately generous — far wider than the ~50 km serviceability radius the day planner
+ * and the distance scorers work in — because this is only a "could this person conceivably be
+ * considered?" bound, not a serviceability decision. Distance still ranks candidates
+ * (DistanceScoreCalculator / TravelTimeScoreCalculator) and the client's min-distance floor still
+ * excludes them (DistancePolicyFilter); this only keeps the pool from spanning the whole country.
+ * The effective radius is max(this, the client's configured defaultRadius), so a client that
+ * widens its serviceability radius past this is never pruned inside it.
+ *
+ * Additive and reversible: if the branch has no coordinates, nobody falls in range, or the
+ * spatial query fails, the engine falls back to the full active pool exactly as before, so
+ * coverage is never silently reduced.
+ */
+const CANDIDATE_PREFILTER_RADIUS_KM = 200;
+
 @Injectable()
 export class RecommendationEngine {
+  private static readonly logger = new Logger(RecommendationEngine.name);
   private filters: CandidateFilter[] = [];
   private calculators: ScoreCalculator[] = [];
 
   constructor(
     private readonly availabilityFilter: AvailabilityFilter,
+    private readonly consecutiveBranchAuditFilter: ConsecutiveBranchAuditFilter,
     private readonly clientRestrictionFilter: ClientRestrictionFilter,
     private readonly clientEligibilityFilter: ClientEligibilityFilter,
     private readonly ruleEngineEligibilityFilter: RuleEngineEligibilityFilter,
     private readonly requiredSkillsFilter: RequiredSkillsFilter,
+    private readonly distancePolicyFilter: DistancePolicyFilter,
     private readonly distanceCalculator: DistanceScoreCalculator,
     private readonly travelTimeCalculator: TravelTimeScoreCalculator,
     private readonly workloadCalculator: WorkloadScoreCalculator,
     private readonly performanceCalculator: PerformanceScoreCalculator,
+    private readonly rejectionAcceptanceCalculator: RejectionAcceptanceScoreCalculator,
+    private readonly deliverySpeedCalculator: DeliverySpeedScoreCalculator,
+    private readonly queryVolumeCalculator: QueryVolumeScoreCalculator,
     private readonly experienceCalculator: ExperienceScoreCalculator,
     private readonly costCalculator: CostScoreCalculator,
     private readonly clientPreferenceCalculator: ClientPreferenceScoreCalculator,
@@ -563,15 +1003,28 @@ export class RecommendationEngine {
     private readonly assayerRepository: Repository<AssayerEntity>,
     @InjectRepository(ClientEntity)
     private readonly clientRepository: Repository<ClientEntity>,
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly constraintEvaluator: ConstraintEvaluator,
+    // Used only to resolve the per-recommendation shared facts, so filters and scorers no
+    // longer each query for these per candidate.
+    @InjectRepository(ProjectBranchEntity)
+    private readonly engineProjectBranchRepository: Repository<ProjectBranchEntity>,
+    @InjectRepository(AssayerCommercialProfileEntity)
+    private readonly commercialRepositoryForFacts: Repository<AssayerCommercialProfileEntity>,
+    @InjectRepository(ValidationQueryEntity)
+    private readonly queryRepositoryForFacts: Repository<ValidationQueryEntity>,
+    private readonly engineRoutingService: RoutingService,
     private readonly assayerService: AssayerService,
   ) {
     this.filters.push(
       this.availabilityFilter,
+      this.consecutiveBranchAuditFilter,
       this.clientRestrictionFilter,
       this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
       this.requiredSkillsFilter,
+      this.distancePolicyFilter,
     );
 
     this.calculators.push(
@@ -579,6 +1032,9 @@ export class RecommendationEngine {
       this.travelTimeCalculator,
       this.workloadCalculator,
       this.performanceCalculator,
+      this.rejectionAcceptanceCalculator,
+      this.deliverySpeedCalculator,
+      this.queryVolumeCalculator,
       this.experienceCalculator,
       this.costCalculator,
       this.clientPreferenceCalculator,
@@ -588,14 +1044,106 @@ export class RecommendationEngine {
       this.profitabilityCalculator,
       this.riskCalculator,
     );
+
+    // A calculator with no configured weight still runs — it just contributes nothing, which
+    // is invisible in the output. Six shipped that way. Surface it loudly instead.
+    const unweighted = ConfigurationResolver.assertWeightsCoverAllCalculators(
+      this.calculators.map((c) => c.name),
+    );
+    if (unweighted.length > 0) {
+      RecommendationEngine.logger.error(
+        `Scoring calculators registered with no configured weight — they will run on every ` +
+          `recommendation and contribute nothing to the ranking: ${unweighted.join(', ')}. ` +
+          `Add them to DEFAULT_RECOMMENDATION_CONFIG.weights.`,
+      );
+    }
+  }
+
+  /**
+   * Load the parts of a recommendation run that do not vary between branches of the same
+   * client, so a batch caller can pay for them once instead of once per branch.
+   *
+   * Coverage planning scores 31 clusters for a single project, and each `recommend()` call
+   * independently re-fetched the same client, re-loaded every active assayer, and re-ran
+   * workforce hydration over all of them — 31 times. That is most of why the coverage-plan
+   * endpoint took over four seconds on 72 branches, and it scales with branch count, so a
+   * national rollout would push it past any reasonable timeout.
+   */
+  async preloadContext(clientId?: string | null): Promise<RecommendationPreload> {
+    const client = clientId
+      ? await this.clientRepository.findOne({ where: { id: clientId, isActive: true } })
+      : null;
+
+    const assayers = await this.assayerRepository.find({
+      where: { isActive: true, status: AssayerStatus.ACTIVE },
+    });
+    await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+
+    return { client, assayers };
+  }
+
+  /**
+   * IDs of the active assayers worth scoring for a given branch: those whose registered home is
+   * within `radiusKm` of the branch, plus any assayer sharing a live location. Returns null to
+   * signal "no usable pre-filter" — the branch has no coordinates, nobody fell in range, or the
+   * spatial query failed — in which case the caller keeps the full active pool exactly as before,
+   * so this can only ever shrink the pool, never silently empty it.
+   *
+   * Home coordinates (latitude/longitude) are used deliberately, matching the conflict-of-interest
+   * floor in DistancePolicyFilter: a candidate pool that moved with someone's phone would not be a
+   * stable notion of "near this branch". Live-enabled assayers are kept unconditionally so an
+   * opted-in mobile auditor whose home is far away is never dropped by a stale home coordinate —
+   * their effective (live) position is what the scorers actually route from.
+   *
+   * ST_DistanceSphere on ST_SetSRID(ST_MakePoint(lng, lat), 4326) mirrors the existing spatial
+   * queries in RoutingService and CommandCenterService (metres, computed from the lat/long columns
+   * rather than the optional `location` geometry, which some rows may not have populated).
+   */
+  private async findNearbyActiveAssayerIds(
+    branch: BranchEntity,
+    radiusKm: number,
+  ): Promise<Set<string> | null> {
+    if (branch.latitude == null || branch.longitude == null) return null;
+
+    const radiusMeters = radiusKm * 1000;
+    const rows: Array<{ id: string }> | null = await this.assayerRepository
+      .query(
+        `SELECT a.id AS id
+           FROM assayers a
+          WHERE a.is_active = true
+            AND a.status = $1
+            AND (
+              a.is_live_enabled = true
+              OR (
+                a.latitude IS NOT NULL AND a.longitude IS NOT NULL
+                AND ST_DistanceSphere(
+                  ST_SetSRID(ST_MakePoint(a.longitude, a.latitude), 4326),
+                  ST_SetSRID(ST_MakePoint($2, $3), 4326)
+                ) <= $4
+              )
+            )`,
+        [AssayerStatus.ACTIVE, Number(branch.longitude), Number(branch.latitude), radiusMeters],
+      )
+      .catch(() => null);
+
+    if (!rows) return null; // query failed — fall back to the full pool
+    if (rows.length === 0) return null; // nobody in range — fall back rather than return empty
+    return new Set(rows.map((r) => r.id));
   }
 
   async recommend(
     branch: BranchEntity,
     scheduledDate: Date,
     weights: Record<string, number> = {},
+    /**
+     * Supplied by batch callers that already hold the client and hydrated assayer list.
+     * Omitted, this method behaves exactly as before and loads them itself.
+     */
+    preloaded?: RecommendationPreload,
   ) {
-    const client = branch.clientId
+    const client = preloaded
+      ? preloaded.client
+      : branch.clientId
       ? await this.clientRepository.findOne({ where: { id: branch.clientId, isActive: true } })
       : null;
 
@@ -608,22 +1156,308 @@ export class RecommendationEngine {
       weights: resolvedConfig.weights,
     };
 
-    const assayers = await this.assayerRepository.find({
-      where: { isActive: true, status: 'ACTIVE' },
+    // Bound the candidate pool by geography before any scoring — see CANDIDATE_PREFILTER_RADIUS_KM.
+    // The effective radius never drops below the client's configured serviceability radius, so the
+    // pre-filter can only ever be wider than what scoring already tolerates. `nearbyIds` is null
+    // when there is no usable pre-filter (no branch coordinates, nobody in range, or the query
+    // failed), in which case the full active pool is kept exactly as before.
+    const prefilterRadiusKm = Math.max(
+      CANDIDATE_PREFILTER_RADIUS_KM,
+      Number(resolvedConfig.defaultRadius) || 0,
+    );
+    const nearbyIds = await this.findNearbyActiveAssayerIds(branch, prefilterRadiusKm);
+
+    // Reused from the preload when a batch caller supplied one; hydration is idempotent and
+    // the scorers only read these, so sharing one list across branches is safe.
+    let assayers = preloaded?.assayers;
+    if (assayers) {
+      // Batch path: the preloaded pool is already loaded and hydrated. Narrow it in memory to the
+      // branch's neighbourhood; if the narrowing would empty it, keep the full pool (safe fallback).
+      if (nearbyIds) {
+        const narrowed = assayers.filter((a) => nearbyIds.has(a.id));
+        if (narrowed.length > 0) assayers = narrowed;
+      }
+    } else {
+      // Non-batch path: load only the in-range assayers when we have a pre-filter, otherwise the
+      // full active pool. The isActive/status predicate is identical to before in both branches;
+      // `nearbyIds` was itself resolved under the same predicate, so the set is unchanged apart
+      // from the geographic bound.
+      assayers = nearbyIds
+        ? await this.assayerRepository.find({
+            where: { id: In([...nearbyIds]), isActive: true, status: AssayerStatus.ACTIVE },
+          })
+        : await this.assayerRepository.find({
+            where: { isActive: true, status: AssayerStatus.ACTIVE },
+          });
+      await this.assayerService.hydrateAllWorkforceAttributes(assayers);
+    }
+
+    /**
+     * Resolve, once, the two things several filters and scorers were each querying per
+     * candidate: this branch's most recent assignment (identical for everyone) and the
+     * committed workload of every assayer in the pool (one grouped count instead of N).
+     *
+     * With a national workforce the per-candidate versions made the cost of a single
+     * recommendation grow with total headcount rather than with anything about the branch.
+     */
+    const [lastAssignment, workloadRows, projectBranchRow] = await Promise.all([
+      this.assignmentRepository.findOne({
+        where: { projectBranch: { branchId: branch.id }, isActive: true },
+        order: { createdAt: 'DESC' },
+        relations: ['projectBranch'],
+      }).catch(() => null),
+      this.assignmentRepository
+        .createQueryBuilder('a')
+        .select('a.assayerId', 'assayerId')
+        .addSelect('COUNT(*)::int', 'count')
+        .where('a.isActive = true')
+        .andWhere('a.status IN (:...statuses)', {
+          statuses: COMMITTED_ASSIGNMENT_STATUSES,
+        })
+        .andWhere('a.assayerId IN (:...ids)', { ids: assayers.map((a) => a.id) })
+        .groupBy('a.assayerId')
+        .getRawMany()
+        .catch(() => []),
+      this.engineProjectBranchRepository.findOne({
+        where: { branchId: branch.id, isActive: true },
+        relations: ['project'],
+      }).catch(() => null),
+    ]);
+
+    /**
+     * One route per candidate instead of two.
+     *
+     * The distance and travel-time scorers each routed the same origin/destination pair, so a
+     * pool of N candidates produced 2N calls to the routing provider — the single most
+     * expensive operation here, since it can be an external service. Computed once, in
+     * parallel across candidates, and shared. A failed route is omitted rather than defaulted,
+     * so the scorers fall through to their own call and no candidate is silently scored zero.
+     */
+    const routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }> = {};
+    if (branch.latitude && branch.longitude) {
+      const routed = await Promise.all(
+        assayers.map(async (a) => {
+          if (!a.effectiveLatitude || !a.effectiveLongitude) return null;
+          const route = await this.engineRoutingService
+            .calculateRoute(
+              { latitude: Number(branch.latitude), longitude: Number(branch.longitude) },
+              { latitude: Number(a.effectiveLatitude), longitude: Number(a.effectiveLongitude) },
+            )
+            .catch(() => null);
+          return route ? ([a.id, route] as const) : null;
+        }),
+      );
+      for (const entry of routed) {
+        if (entry) routeByAssayer[entry[0]] = { distanceKm: entry[1].distanceKm, durationMinutes: entry[1].durationMinutes };
+      }
+    }
+
+    /**
+     * Three more sets of per-candidate lookups collapsed into one query each.
+     *
+     * Cost and profitability both read the commercial profile table per assayer; rejection
+     * rate issued two counts per assayer; query volume issued one. Across a pool of N that is
+     * 4N round trips producing values that a single grouped query returns in one.
+     */
+    const assayerIds = assayers.map((a) => a.id);
+    const [profileRows, queryRows, totalRows, acceptedRows, doubleBookedRows, completedRows] = await Promise.all([
+      assayerIds.length
+        ? this.commercialRepositoryForFacts.find({
+            where: { assayerId: In(assayerIds), isActive: true },
+            order: { effectiveStartDate: 'DESC' },
+          }).catch(() => [])
+        : Promise.resolve([]),
+      assayerIds.length
+        ? this.queryRepositoryForFacts
+            .createQueryBuilder('q')
+            .select('q.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('q.isActive = true')
+            .andWhere('q.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('q.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('a.isActive = true')
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('a.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('a.isActive = true')
+            .andWhere('a.status IN (:...statuses)', {
+              statuses: [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED],
+            })
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('a.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      // Who is already committed on this date. One query answers it for the whole pool; it
+      // was previously a findOne per candidate asking the same date question.
+      assayerIds.length
+        ? this.assignmentRepository.find({
+            where: {
+              assayerId: In(assayerIds),
+              // The column is `date`; comparing it to a full Date-with-time is always false in
+              // Postgres (a mid-afternoon `new Date()` never equals a midnight date), which
+              // silently emptied this set and defeated the double-booking guard. Match on the
+              // date-only business key so it actually fires.
+              scheduledDate: businessDateKey(scheduledDate) as any,
+              status: In([AssignmentStatus.ACCEPTED]),
+              isActive: true,
+            },
+            select: ['assayerId', 'assignmentNumber'] as any,
+          }).catch(() => [])
+        : Promise.resolve([]),
+      // Completed history for the delivery-speed score.
+      assayerIds.length
+        ? this.assignmentRepository.find({
+            where: {
+              assayerId: In(assayerIds),
+              status: AssignmentStatus.COMPLETED,
+              isActive: true,
+            },
+            select: ['assayerId', 'completionDate', 'createdAt'] as any,
+            order: { createdAt: 'DESC' },
+          }).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const doubleBookedByAssayer = (doubleBookedRows as any[]).reduce<Record<string, string>>((acc, r) => {
+      acc[r.assayerId] = r.assignmentNumber ?? 'an existing assignment';
+      return acc;
+    }, {});
+
+    // Capped at 20 per assayer, matching the `take: 20` the per-candidate query applied.
+    const completedByAssayer = (completedRows as any[]).reduce<Record<string, any[]>>((acc, r) => {
+      const list = (acc[r.assayerId] ||= []);
+      if (list.length < 20) list.push({ completionDate: r.completionDate ?? null, createdAt: r.createdAt });
+      return acc;
+    }, {});
+
+    const commercialProfilesByAssayer = (profileRows as any[]).reduce<Record<string, any[]>>((acc, p) => {
+      (acc[p.assayerId] ||= []).push(p);
+      return acc;
+    }, {});
+
+    const queryCountByAssayer = (queryRows as any[]).reduce<Record<string, number>>((acc, r) => {
+      acc[r.assayerId] = Number(r.count) || 0;
+      return acc;
+    }, {});
+
+    const acceptedByAssayer = (acceptedRows as any[]).reduce<Record<string, number>>((acc, r) => {
+      acc[r.assayerId] = Number(r.count) || 0;
+      return acc;
+    }, {});
+
+    // Every candidate gets an entry, including those with no history at all — otherwise the
+    // scorer would fall through to its own queries for exactly the assayers with no rows.
+    const assignmentTotalsByAssayer = assayerIds.reduce<Record<string, { total: number; accepted: number }>>((acc, id) => {
+      const total = (totalRows as any[]).find((r) => r.assayerId === id);
+      acc[id] = { total: Number(total?.count) || 0, accepted: acceptedByAssayer[id] ?? 0 };
+      return acc;
+    }, {});
+
+    context.branchFacts = {
+      lastAssignment: lastAssignment
+        ? { assayerId: lastAssignment.assayerId, status: lastAssignment.status }
+        : null,
+      activeWorkloadByAssayer: (workloadRows as any[]).reduce<Record<string, number>>((acc, r) => {
+        acc[r.assayerId] = Number(r.count) || 0;
+        return acc;
+      }, {}),
+      routeByAssayer,
+      projectBranch: projectBranchRow,
+      commercialProfilesByAssayer,
+      queryCountByAssayer,
+      assignmentTotalsByAssayer,
+      doubleBookedByAssayer,
+      completedByAssayer,
+    };
+
+    // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this
+    // branch, so they can still be surfaced as a candidate (e.g. as their own backup reference,
+    // or simply visible while ops decides) but flagged distinctly rather than hidden outright.
+    const pendingOffer = await this.assignmentRepository.findOne({
+      where: {
+        projectBranch: { branchId: branch.id },
+        status: AssignmentStatus.PENDING,
+        isActive: true,
+      },
+      relations: ['projectBranch'],
     });
-    await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
     const candidates = [];
+    // Excluded candidates are recorded rather than silently dropped. Ops repeatedly hits
+    // "why isn't <assayer> in this list?" — a shorter list with no explanation is the least
+    // actionable possible answer, and it hides genuine data problems (an expired
+    // certification, a full diary) behind an apparently-normal result.
+    const excluded: {
+      assayerId: string;
+      displayName: string;
+      reason: string;
+      detail?: string;
+      kind: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS';
+      distanceKm: number | null;
+      nextAvailableDate: string | null;
+    }[] = [];
+
     for (const assayer of assayers) {
-      let passed = true;
+      let blockedBy: string | null = null;
       for (const filter of this.filters) {
         if (!(await filter.evaluate(assayer, context))) {
-          passed = false;
+          blockedBy = filter.name;
           break;
         }
       }
 
-      if (!passed) continue;
+      if (blockedBy) {
+        let detail: string | undefined;
+        if (blockedBy === this.ruleEngineEligibilityFilter.name) {
+          detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
+        }
+
+        // DATE-kind exclusions are candidates for ANOTHER day, and ops needs enough to act on
+        // that: when the block is a leave, the first day after it; when it is a booking, any
+        // other date works (nextAvailableDate stays null and the kind alone says "date-bound").
+        const kind = EXCLUSION_KINDS[blockedBy] ?? 'POLICY';
+        let nextAvailableDate: string | null = null;
+        if (kind === 'DATE') {
+          const dateKey = businessDateKey(context.scheduledDate);
+          const leave = ((assayer as any).leaves ?? []).find(
+            (l: { startDate?: string; endDate?: string }) =>
+              l?.startDate && l?.endDate && l.startDate <= dateKey && dateKey <= l.endDate,
+          );
+          if (leave) {
+            const after = new Date(`${leave.endDate}T00:00:00`);
+            after.setDate(after.getDate() + 1);
+            nextAvailableDate = after.toISOString().slice(0, 10);
+          }
+        }
+
+        excluded.push({
+          assayerId: assayer.id,
+          displayName: assayer.displayName,
+          reason: EXCLUSION_REASONS[blockedBy] ?? blockedBy,
+          detail,
+          kind,
+          // Already computed for the whole pool — free context for the ops decision.
+          distanceKm: routeByAssayer[assayer.id]?.distanceKm ?? null,
+          nextAvailableDate,
+        });
+        continue;
+      }
 
       let weightedSum = 0;
       let totalWeight = 0;
@@ -644,9 +1478,14 @@ export class RecommendationEngine {
         assayer,
         score: parseFloat(finalScore.toFixed(2)),
         breakdown: scoreBreakdown,
+        pendingOnThisBranch: pendingOffer?.assayerId === assayer.id,
       });
     }
 
-    return candidates.sort((a, b) => b.score - a.score);
+    const ranked = candidates.sort((a, b) => b.score - a.score);
+    // Attached to the array so existing callers that just iterate results keep working
+    // unchanged, while callers that want the audit trail can read it.
+    (ranked as any).excluded = excluded;
+    return ranked;
   }
 }

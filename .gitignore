@@ -24,6 +24,8 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+.env.docker
+!.env.docker.example
 
 # IDE & OS Files
 .DS_Store
@@ -48,10 +50,14 @@ test-results/
 playwright-report/
 blob-report/
 coverage/
+evidence/
 
 # Test spreadsheets & Excel dumps
 *.xlsx
 *.xls
+
+# Geocoding cache (auto-generated, machine-specific)
+**/geocoding-cache.json
 
 # Firebase config files (root copies)
 google-services.json
@@ -59,7 +65,17 @@ GoogleService-Info.plist
 service-account-key.json
 *-firebase-adminsdk-*.json
 
-# Mobile platform build dirs
+# Mobile platform build dirs — `expo prebuild` output only.
+# Anchored to the generated directories rather than a bare `android/`, which matched every
+# directory of that name at any depth and silently excluded the hand-written native source
+# under packages/mobile/modules/*/android/.
 .expo/
-android/
-ios/
+/packages/mobile/android/
+/packages/mobile/ios/
+
+# Compiled output must never sit beside the sources in packages/shared/src: a NodeNext
+# `./enums.js` import resolves to the stale artifact instead of enums.ts, so every export
+# added after the last stray compile appears missing. Build output belongs in dist/.
+packages/shared/src/*.js
+packages/shared/src/*.js.map
+packages/shared/src/*.d.ts

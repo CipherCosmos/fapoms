@@ -26,13 +26,21 @@ export class OcrWorker {
       return;
     }
 
-    ocrJob.status = OcrJobStatus.PROCESSING;
-    ocrJob.retryCount = (ocrJob.retryCount || 0) + 1;
-    await this.ocrJobRepository.save(ocrJob);
+    try {
+      ocrJob.status = OcrJobStatus.PROCESSING;
+      ocrJob.retryCount = (ocrJob.retryCount || 0) + 1;
+      await this.ocrJobRepository.save(ocrJob);
 
-    // OCR processing will be implemented in Wave 3.
-    // For now, the job is claimed and moved to PROCESSING state,
-    // and the actual OCR call will happen via the callback endpoint.
-    this.logger.log(`OCR job ${job.id} claimed (attempt ${ocrJob.retryCount})`);
+      // OCR processing will be implemented in Wave 3.
+      // For now, the job is claimed and moved to PROCESSING state,
+      // and the actual OCR call will happen via the callback endpoint.
+      this.logger.log(`OCR job ${job.id} claimed (attempt ${ocrJob.retryCount})`);
+    } catch (err: any) {
+      this.logger.error(`Error processing OCR job ${job.id}:`, err);
+      ocrJob.status = OcrJobStatus.FAILED;
+      ocrJob.failureReason = err.message || 'Worker processing exception';
+      await this.ocrJobRepository.save(ocrJob).catch(() => {});
+      throw err;
+    }
   }
 }

@@ -8,6 +8,8 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { ScheduleStatus, AssignmentStatus } from '@fapoms/shared';
 
 describe('SchedulingService', () => {
@@ -33,7 +35,7 @@ describe('SchedulingService', () => {
   };
 
   const mockAuditService = {
-    recordEvent: jest.fn(),
+    recordEvent: jest.fn(), recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }),
   };
 
   const mockConstraintEvaluator = {
@@ -41,6 +43,7 @@ describe('SchedulingService', () => {
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
     checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
     checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
+    checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
     checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
@@ -67,6 +70,14 @@ describe('SchedulingService', () => {
         {
           provide: ConstraintEvaluator,
           useValue: mockConstraintEvaluator,
+        },
+        {
+          provide: DomainEventPublisher,
+          useValue: { publish: jest.fn() },
+        },
+        {
+          provide: NotificationDispatchService,
+          useValue: { emitSafe: jest.fn() },
         },
       ],
     }).compile();

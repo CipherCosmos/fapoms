@@ -8,6 +8,7 @@ import { Entity, Column, Index, ManyToOne, JoinColumn, OneToMany } from 'typeorm
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import { AssessmentEntity } from './assessment.entity';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 
 @Entity('projects')
@@ -79,4 +80,7 @@ export class ProjectEntity extends BaseEntity {
 
   @OneToMany(() => ProjectBranchEntity, (pb) => pb.project)
   projectBranches: ProjectBranchEntity[];
+
+  @OneToMany(() => AssessmentEntity, (a) => a.project)
+  assessments: AssessmentEntity[];
 }

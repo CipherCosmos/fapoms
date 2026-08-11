@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, In } from 'typeorm';
 import * as xlsx from 'xlsx';
+import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
@@ -13,36 +15,92 @@ import { AuditService } from '../../core/audit/audit.service';
 import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
-import { EventCategory, AssayerLifecycleStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 
-async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
-  const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
-    .replace(/\s+/g, ' ')
-    .trim();
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-      }
-    });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = await res.json() as any[];
-      if (data && data[0]) {
-        return {
-          lat: parseFloat(data[0].lat),
-          lng: parseFloat(data[0].lon)
-        };
-      }
-    }
-  } catch (err) {
-    console.error(`Error geocoding inside assayer service: ${cleanQ}`, err);
+/**
+ * Resolves an assayer's home coordinates using ONLY the shared Google geocoder.
+ * Returns null when nothing resolves (no key, error, or no sane in-state hit) —
+ * the caller must treat that as "unknown" rather than inventing a location.
+ */
+async function geocodeAddress(
+  address: string,
+  city: string,
+  district: string,
+  state: string,
+  pincode?: string | null,
+): Promise<{ lat: number; lng: number; accuracyMeters: number } | null> {
+  return geocodeIndia(address, city, district, state, pincode);
+}
+
+/**
+ * Returns the authoritative state and district a 6-digit Indian pincode belongs
+ * to, asking the same Google geocoder the coordinates come from (so the
+ * validation and the pin always agree). Used to stop the classic silent
+ * mistake: an address that says one place while state/district/city/pincode say
+ * another.
+ *
+ * Returns null when the pincode can't be verified — the caller must then skip
+ * the check rather than invent one.
+ */
+async function fetchPincodeAuthority(
+  pincode: string,
+): Promise<{ state: string; district: string } | null> {
+  return pincodeAuthority(pincode);
+}
+
+/** Loose comparer for place names: case/space/punctuation-insensitive and blind
+ * to the common "Urban"/"Rural"/"District"/"City" suffixes so "Bengaluru Urban"
+ * and "Bengaluru" compare equal. */
+function normalizePlace(s?: string): string {
+  return (s || '')
+    .toLowerCase()
+    .replace(/\b(urban|rural|district|city|metro)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Enforces that an assayer's state, district and pincode all describe the same
+ * place, using the pincode as the anchor of truth. A mixed entry — a Bengaluru
+ * pincode with "Karnataka" in the state field but a Delhi district, or a Delhi
+ * address tagged as Karnataka — produces a clear, actionable error instead of a
+ * silently wrong map pin.
+ */
+async function assertAddressConsistent(dto: {
+  address?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pincode?: string | null;
+}): Promise<void> {
+  const pin = dto.pincode || (dto.address || '').match(/\b\d{6}\b/)?.[0] || '';
+  if (!/^\d{6}$/.test(pin)) return; // no pincode to anchor on — nothing to verify
+  const authority = await fetchPincodeAuthority(pin);
+  if (!authority) return; // couldn't verify — skip rather than block on a guess
+
+  const where = `${dto.state ?? 'unknown state'}, ${dto.district ?? 'unknown district'}`;
+  if (
+    dto.state &&
+    authority.state &&
+    normalizePlace(dto.state) !== normalizePlace(authority.state)
+  ) {
+    throw new BadRequestException(
+      `Pincode ${pin} is in ${authority.state}, but the entered state is "${dto.state}". ` +
+        `State, district, city, address and pincode must all describe the same place (got ${where}).`,
+    );
   }
-  return null;
+  if (
+    dto.district &&
+    authority.district &&
+    normalizePlace(dto.district) !== normalizePlace(authority.district)
+  ) {
+    throw new BadRequestException(
+      `Pincode ${pin} is in ${authority.district} district (${authority.state}), but the entered district is "${dto.district}". ` +
+        `State, district, city, address and pincode must all describe the same place (got ${where}).`,
+    );
+  }
 }
 
 const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
@@ -205,6 +263,7 @@ export interface UpdateAssayerDocumentDto {
 
 @Injectable()
 export class AssayerService implements OnModuleInit {
+  private readonly logger = new Logger(AssayerService.name);
   constructor(
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
@@ -223,6 +282,7 @@ export class AssayerService implements OnModuleInit {
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly workflowEngine: WorkflowEngine,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   onModuleInit() {
@@ -285,15 +345,59 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
-  private async syncWorkforceAttributes(assayerId: string, dto: CreateAssayerDto | UpdateAssayerDto, userId: string): Promise<void> {
-    const syncedFields = ['skills', 'certifications', 'languages', 'specializations'] as const;
-    const hasAny = syncedFields.some(f => (dto as any)[f] !== undefined);
-    if (!hasAny) return;
+  /**
+   * Every distinct capability name already recorded across the roster, by kind.
+   *
+   * The picker on the capability screen is built from this rather than a hardcoded list, so it
+   * offers the vocabulary this workforce actually uses — and a name typed once is offered to
+   * everyone afterwards, which is what stops "Gold Assaying" and "Gold assaying" becoming two
+   * different skills that the eligibility filter treats as unrelated.
+   */
+  async getWorkforceAttributeVocabulary(): Promise<Record<string, Array<{ name: string; assayerCount: number }>>> {
+    const rows = await this.workforceAttributeRepository
+      .createQueryBuilder('a')
+      .select('a.type', 'type')
+      .addSelect('a.name', 'name')
+      .addSelect('COUNT(DISTINCT a.assayerId)', 'assayerCount')
+      .where('a.isActive = true')
+      .groupBy('a.type')
+      .addGroupBy('a.name')
+      .orderBy('a.type')
+      .addOrderBy('COUNT(DISTINCT a.assayerId)', 'DESC')
+      .getRawMany();
 
-    // Remove old workforce attrs for these types
+    return rows.reduce<Record<string, Array<{ name: string; assayerCount: number }>>>((acc, r) => {
+      (acc[r.type] ??= []).push({ name: r.name, assayerCount: Number(r.assayerCount) });
+      return acc;
+    }, {});
+  }
+
+  private async syncWorkforceAttributes(assayerId: string, dto: CreateAssayerDto | UpdateAssayerDto, userId: string): Promise<void> {
+    const FIELD_TO_TYPE = {
+      skills: 'SKILL',
+      certifications: 'CERTIFICATION',
+      languages: 'LANGUAGE',
+      specializations: 'SPECIALIZATION',
+    } as const;
+
+    /**
+     * Replace only the kinds of attribute the caller actually sent.
+     *
+     * This used to delete all four types whenever any one of them was present, then re-insert
+     * just the ones supplied. Saving an assayer's skills therefore erased their certifications,
+     * languages and specializations — including certification expiry dates, which the
+     * eligibility gate reads. A partial update is the normal shape for an edit form, so this
+     * was data loss waiting for the first screen that offered one field without the others.
+     */
+    const providedTypes = (Object.keys(FIELD_TO_TYPE) as Array<keyof typeof FIELD_TO_TYPE>)
+      .filter((f) => (dto as any)[f] !== undefined)
+      .map((f) => FIELD_TO_TYPE[f]);
+
+    if (providedTypes.length === 0) return;
+
     await this.workforceAttributeRepository.delete({
       assayerId,
-      type: In(['SKILL', 'CERTIFICATION', 'LANGUAGE', 'SPECIALIZATION']),
+      type: In(providedTypes),
     });
 
     const newAttrs: Partial<WorkforceAttributeEntity>[] = [];
@@ -326,9 +430,19 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
-  async findAll(page = 1, limit = 50): Promise<{ assayers: AssayerEntity[]; total: number }> {
+  async findAll(
+    page = 1,
+    limit = 50,
+    scope?: Partial<GlobalScope>,
+  ): Promise<{ assayers: AssayerEntity[]; total: number }> {
+    // Only region applies. An assayer has a home region but no client, zone or state of their
+    // own in the sense the scope means, and inferring one from their assignment history would
+    // hide anyone who has not yet worked for the client the operator happens to be scoped to.
+    const where: Record<string, unknown> = { isActive: true };
+    if (scope?.regions?.length) where.region = In(scope.regions);
+
     const [assayers, total] = await this.assayerRepository.findAndCount({
-      where: { isActive: true },
+      where,
       skip: (page - 1) * limit,
       take: limit,
       order: { createdAt: 'DESC' },
@@ -348,16 +462,31 @@ export class AssayerService implements OnModuleInit {
     const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
     if (existing) throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
 
+    await assertAddressConsistent(dto);
+
     let lat = dto.latitude;
     let lng = dto.longitude;
     if (!lat || !lng) {
-      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
-      if (coords) {
-        lat = coords.lat;
-        lng = coords.lng;
-      } else {
-        lat = 19.076;
-        lng = 72.8777;
+      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
+      // Left null when nothing resolves. This used to fall back to a hardcoded
+      // Mumbai coordinate, which is worse than no location at all: the assayer
+      // appears on the map somewhere they have never been, and every distance
+      // filter and travel-cost calculation silently uses that fiction. An unknown
+      // location is visible and fixable; a plausible wrong one is neither.
+      lat = coords?.lat ?? undefined;
+      lng = coords?.lng ?? undefined;
+      if (coords && coords.accuracyMeters > 0) {
+        this.logger.log(
+          `Assayer ${dto.assayerCode}: pinned at ±${coords.accuracyMeters}m ` +
+          `(${lat}, ${lng}) from "${dto.address}"`,
+        );
+      }
+      if (!coords) {
+        this.logger.warn(
+          `Assayer ${dto.assayerCode}: could not resolve coordinates from "${dto.address}" ` +
+          `(${dto.city}, ${dto.district}, ${dto.state}). Saved without a location — ` +
+          `they will not appear on the map and distance-based matching will skip them.`,
+        );
       }
     }
     const location = { type: 'Point', coordinates: [lng, lat] };
@@ -370,7 +499,7 @@ export class AssayerService implements OnModuleInit {
       longitude: lng,
       location,
       lifecycleStatus: AssayerLifecycleStatus.INVITED,
-      status: 'INACTIVE',
+      status: AssayerStatus.INACTIVE,
       organizationId: organizationId ?? null,
       createdBy: userId,
       updatedBy: userId,
@@ -379,7 +508,7 @@ export class AssayerService implements OnModuleInit {
     const saved = await this.assayerRepository.save(assayer);
     await this.syncWorkforceAttributes(saved.id, dto, userId);
     await this.recordActivity(saved.id, 'ASSAYER_CREATED', null, AssayerLifecycleStatus.INVITED, userId, 'Assayer profile created');
-    await this.auditService.recordEvent({
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_CREATED',
       entityType: 'ASSAYER',
@@ -387,12 +516,26 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
     });
+    await this.eventPublisher.publish('assayer:created', {
+      eventType: 'assayer:created',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, displayName: saved.displayName, assayerCode: saved.assayerCode },
+    });
     await this.hydrateWorkforceAttributes(saved);
     return saved;
   }
 
   async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
     const assayer = await this.findOne(id);
+    const orig = {
+      address: assayer.address,
+      city: assayer.city,
+      district: assayer.district,
+      state: assayer.state,
+      pincode: assayer.pincode,
+    };
     Object.keys(dto).forEach((key) => {
       if ((dto as any)[key] !== undefined) (assayer as any)[key] = (dto as any)[key];
     });
@@ -405,21 +548,35 @@ export class AssayerService implements OnModuleInit {
     let lat = dto.latitude !== undefined ? dto.latitude : assayer.latitude;
     let lng = dto.longitude !== undefined ? dto.longitude : assayer.longitude;
 
-    const addressChanged = dto.address !== undefined && dto.address !== assayer.address;
-    const cityChanged = dto.city !== undefined && dto.city !== assayer.city;
-    const districtChanged = dto.district !== undefined && dto.district !== assayer.district;
-    const stateChanged = dto.state !== undefined && dto.state !== assayer.state;
+    const addressChanged = dto.address !== undefined && dto.address !== orig.address;
+    const cityChanged = dto.city !== undefined && dto.city !== orig.city;
+    const districtChanged = dto.district !== undefined && dto.district !== orig.district;
+    const stateChanged = dto.state !== undefined && dto.state !== orig.state;
+
+    if (addressChanged || cityChanged || districtChanged || stateChanged) {
+      await assertAddressConsistent({
+        address: dto.address ?? orig.address,
+        city: dto.city ?? orig.city,
+        district: dto.district ?? orig.district,
+        state: dto.state ?? orig.state,
+        pincode: dto.pincode ?? orig.pincode,
+      });
+    }
 
     if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
       const coords = await geocodeAddress(
-        dto.address ?? assayer.address,
-        dto.city ?? assayer.city,
-        dto.district ?? assayer.district,
-        dto.state ?? assayer.state
+        dto.address ?? orig.address,
+        dto.city ?? orig.city,
+        dto.district ?? orig.district,
+        dto.state ?? orig.state,
+        dto.pincode ?? orig.pincode,
       );
       if (coords) {
         lat = coords.lat;
         lng = coords.lng;
+        if (coords.accuracyMeters > 0) {
+          this.logger.log(`Assayer ${assayer.assayerCode}: re-pinned at ±${coords.accuracyMeters}m`);
+        }
       }
     }
 
@@ -440,8 +597,64 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Updated assayer profile: ${saved.displayName}`,
     });
+    await this.eventPublisher.publish('assayer:updated', {
+      eventType: 'assayer:updated',
+      aggregateId: saved.id,
+      userId,
+      organizationId: saved.organizationId,
+      payload: { id: saved.id, displayName: saved.displayName },
+    });
     await this.hydrateWorkforceAttributes(saved);
     return saved;
+  }
+
+  /**
+   * Records the assayer's live position WITHOUT touching their home address
+   * (`latitude`/`longitude`). Live coordinates only feed the recommendation
+   * engine when the assayer has also opted in (`isLiveEnabled === true`).
+   */
+  async updateLiveLocation(id: string, latitude: number, longitude: number, userId?: string): Promise<AssayerEntity> {
+    // Existence check only — the row itself is updated by column below, never written back
+    // wholesale.
+    await this.findOne(id);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      throw new BadRequestException('Invalid live coordinates');
+    }
+    /**
+     * A targeted column update, not a whole-entity save.
+     *
+     * This previously loaded the full assayer and called `save()`, which writes back every
+     * column from the in-memory copy. Live position is reported continuously while an
+     * assayer is in the field (one row here reached version 53), so any column changed by
+     * something else between the read and the write was silently reverted to its stale
+     * value. That included security state: a forced-password-change flag, a lockout, or a
+     * failed-attempt counter set while the worker's phone was reporting its position would
+     * simply disappear. Observed in practice — a `must_change_password` flag set by the
+     * rotation script was cleared moments later by a location ping.
+     */
+    await this.assayerRepository.update(id, {
+      liveLatitude: latitude,
+      liveLongitude: longitude,
+      liveLocation: { type: 'Point', coordinates: [longitude, latitude] } as any,
+      updatedBy: userId ?? id,
+    });
+
+    return this.findOne(id);
+  }
+
+  /**
+   * Turns live sharing on/off for an assayer. Off by default; turning it off
+   * keeps any last live coordinate but the engine no longer uses it.
+   */
+  async setLiveTracking(id: string, enabled: boolean, userId?: string): Promise<AssayerEntity> {
+    await this.findOne(id); // existence check
+    // Same reasoning as updateLiveLocation: touch only the column being changed.
+    await this.assayerRepository.update(id, {
+      isLiveEnabled: !!enabled,
+      updatedBy: userId ?? id,
+    });
+
+    return this.findOne(id);
   }
 
   async remove(id: string, userId: string): Promise<void> {
@@ -456,6 +669,13 @@ export class AssayerService implements OnModuleInit {
       entityId: id,
       userId,
       remarks: `Soft deleted assayer profile ${assayer.displayName}`,
+    });
+    await this.eventPublisher.publish('assayer:deleted', {
+      eventType: 'assayer:deleted',
+      aggregateId: id,
+      userId,
+      organizationId: assayer.organizationId,
+      payload: { id, displayName: assayer.displayName },
     });
   }
 
@@ -483,6 +703,62 @@ export class AssayerService implements OnModuleInit {
     } else {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
     }
+  }
+
+  /**
+   * Move a batch of assayers forward to a single target stage as one operation.
+   *
+   * Each row is advanced through the allowed state-machine path to the target
+   * (e.g. INVITED → DOCUMENT_VERIFICATION → BACKGROUND_VERIFICATION → TRAINING),
+   * so a mixed-stage batch can be onboarded together without invalid jumps.
+   * Every intermediate step still runs through the normal workflow command,
+   * activity log and audit trail. Rows that cannot reach the target are skipped,
+   * and per-row errors are isolated so one bad row never aborts the rest.
+   */
+  async bulkTransitionLifecycle(
+    ids: string[],
+    targetStatus: string,
+    userId: string,
+    reason?: string,
+  ): Promise<{
+    succeeded: { id: string; from: string; to: string }[];
+    skipped: { id: string; current: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    const validTargets = Object.values(AssayerLifecycleStatus);
+    if (!validTargets.includes(targetStatus as AssayerLifecycleStatus)) {
+      throw new BadRequestException(`Invalid target status: ${targetStatus}`);
+    }
+
+    const succeeded: { id: string; from: string; to: string }[] = [];
+    const skipped: { id: string; current: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        const assayer = await this.findOne(id);
+        const path = AssayerStateMachine.findPathTo(assayer.lifecycleStatus, targetStatus);
+        if (path === null) {
+          skipped.push({
+            id,
+            current: assayer.lifecycleStatus,
+            reason: `No valid path from ${assayer.lifecycleStatus} to ${targetStatus}`,
+          });
+          continue;
+        }
+        const from = assayer.lifecycleStatus;
+        for (const step of path) {
+          const { saved, event } = await this.doTransitionLifecycle(id, step as AssayerLifecycleStatus, userId, reason);
+          if (event) this.eventPublisher.publish(event.constructor.name, event);
+          void saved;
+        }
+        succeeded.push({ id, from, to: targetStatus });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+
+    return { succeeded, skipped, failed };
   }
 
   private async doTransitionLifecycle(
@@ -531,9 +807,9 @@ export class AssayerService implements OnModuleInit {
       [],
       async () => {
         const saved = await this.assayerRepository.save(assayer);
-        await this.recordActivity(saved.id, 'LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+        await this.recordActivity(saved.id, 'ASSAYER_LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
         await this.auditService.recordEvent({
-          category: EventCategory.OPERATIONAL,
+          category: EventCategory.WORKFLOW,
           eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
           entityType: 'ASSAYER',
           entityId: saved.id,
@@ -542,6 +818,22 @@ export class AssayerService implements OnModuleInit {
           userId,
           remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
         });
+
+        // Only on the crossing into ACTIVE, never on a re-save at ACTIVE. The dedupe key is the
+        // assayer alone, so a later ON_LEAVE → ACTIVE return does not re-announce someone who
+        // was onboarded months ago — "newly onboarded" is true exactly once per person.
+        if (targetStatus === AssayerLifecycleStatus.ACTIVE && currentStatus !== AssayerLifecycleStatus.ACTIVE) {
+          this.notificationDispatch.emitSafe({
+            type: 'ASSAYER_ONBOARDED',
+            entityType: 'ASSAYER',
+            entityId: saved.id,
+            actorUserId: userId,
+            assayerId: saved.id,
+            dedupeKey: `ASSAYER_ONBOARDED:${saved.id}`,
+            payload: { assayerName: saved.displayName },
+          });
+        }
+
         return { saved, event };
       }
     );
@@ -868,9 +1160,18 @@ export class AssayerService implements OnModuleInit {
 
     const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
 
-    const completed = await mgr.count('assignments', {
-      where: { assayerId, status: AssignmentStatus.CLOSED, isActive: true },
-    });
+    // NOTE: 'AUDIT_COMPLETED'/'VALIDATION_COMPLETED'/'CLOSED' are ProjectBranchStatus values,
+    // not AssignmentStatus values — they belong only in the pb.status clause. Putting them in
+    // a.status IN (...) makes Postgres reject the whole query (invalid enum value for
+    // assignments_status_enum), which silently no-ops every call via the caller's catch block.
+    const completedResult = await mgr.query(
+      `SELECT COUNT(*) as cnt FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`,
+      [assayerId],
+    );
+    const completed = Number(completedResult[0]?.cnt ?? 0);
 
     const cancelled = await mgr.count('assignments', {
       where: { assayerId, status: AssignmentStatus.CANCELLED, isActive: true },
@@ -878,17 +1179,39 @@ export class AssayerService implements OnModuleInit {
 
     const onTimeResult = await mgr.query(
       `SELECT COUNT(*) as cnt FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status = $2
-       AND a.completion_date IS NOT NULL AND a.scheduled_date IS NOT NULL
-       AND a.completion_date <= a.scheduled_date`,
-      [assayerId, AssignmentStatus.AUDIT_COMPLETED],
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
+       AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`,
+      [assayerId],
     );
 
-    const earningsResult = await mgr.query(
-      `SELECT COALESCE(SUM(a.agreed_fee), 0) as total FROM assignments a
-       WHERE a.assayer_id = $1 AND a.status IN ($2, $3)`,
-      [assayerId, AssignmentStatus.AUDIT_COMPLETED, AssignmentStatus.CLOSED],
-    );
+    // Earnings come from the billing engine's payables — the record finance
+    // actually pays against — rather than being re-derived from assignment fees.
+    // Summing earnings & running balance from authoritative payables table
+    const finRes = await mgr.query(
+      `SELECT 
+         COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+         COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+         COALESCE(SUM(paid_amount), 0)                                      AS paid,
+         COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
+       FROM assayer_payables
+       WHERE assayer_id = $1 AND is_active = true
+         AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
+      [assayerId],
+    ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
+
+    const totalEarnedFromPayables = Number(finRes[0]?.total_earned ?? 0);
+    const totalEarnedFromAssignments = await mgr.query(
+      `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
+         FROM assignments a
+        WHERE a.assayer_id = $1 AND a.is_active = true
+          AND a.status IN ('ACCEPTED', 'COMPLETED')`,
+      [assayerId],
+    ).then(r => Number(r[0]?.total ?? 0)).catch(() => 0);
+
+    const realTotalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
+    const realRunningBalance = totalEarnedFromPayables > 0 ? Number(finRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
 
     const lastAssignment = await mgr.query(
       `SELECT updated_at FROM assignments a
@@ -902,7 +1225,7 @@ export class AssayerService implements OnModuleInit {
       completedAssignments: completed,
       cancelledAssignments: cancelled,
       onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
-      totalEarnings: Number(earningsResult[0]?.total ?? 0),
+      totalEarnings: realTotalEarnings,
       lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
     });
     await this.recomputeAverageRating(assayerId);
@@ -915,8 +1238,76 @@ export class AssayerService implements OnModuleInit {
       : [{ assayerCode: assayerId, isActive: true }, { employeeId: assayerId, isActive: true }];
     const assayer = await this.assayerRepository.findOne({ where });
     if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
-    await this.hydrateWorkforceAttributes(assayer);
-    return assayer;
+
+    // Live update stats & ratings from real DB tables
+    await this.updateAssayerStats(assayer.id).catch(err => console.error('Failed to update assayer stats in profile:', err));
+
+    // Refetch to get fresh metrics
+    const updated = await this.assayerRepository.findOne({ where: { id: assayer.id } });
+    const target = updated || assayer;
+
+    await this.hydrateWorkforceAttributes(target);
+
+    const mgr = this.assayerRepository.manager;
+
+    // 1. Query Count raised against this assayer
+    const queryRes = await mgr.query(
+      `SELECT COUNT(*) as cnt FROM validation_queries vq
+       JOIN assignments a ON a.id = vq.assignment_id
+       WHERE a.assayer_id = $1 AND vq.is_active = true`,
+      [target.id],
+    ).catch(() => [{ cnt: 0 }]);
+    (target as any).queryCount = Number(queryRes[0]?.cnt ?? 0);
+
+    // Money still owed to this assayer, derived from real payables in the billing engine
+    const balanceRes = await mgr.query(
+      `SELECT COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+              COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+              COALESCE(SUM(paid_amount), 0)                                      AS paid,
+              COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
+         FROM assayer_payables
+        WHERE assayer_id = $1 AND is_active = true
+          AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
+      [target.id],
+    ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
+
+    const totalEarnedFromPayables = Number(balanceRes[0]?.total_earned ?? 0);
+    const totalEarnedFromAssignments = target.totalEarnings || 0;
+    const finalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
+    const finalBalance = totalEarnedFromPayables > 0 ? Number(balanceRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
+
+    (target as any).totalEarnings = finalEarnings;
+    (target as any).runningBalance = finalBalance;
+    (target as any).earningsPaid = Number(balanceRes[0]?.paid ?? 0);
+    (target as any).earningsAwaitingApproval = Number(balanceRes[0]?.awaiting_approval ?? 0);
+
+    // 2. Acceptance vs Rejection Rate Breakdown
+    const totalOffered = await mgr.count('assignments', { where: { assayerId: target.id, isActive: true } });
+    const acceptedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]), isActive: true } });
+    const rejectedCount = await mgr.count('assignments', { where: { assayerId: target.id, status: AssignmentStatus.REJECTED, isActive: true } });
+    
+    (target as any).acceptanceRate = totalOffered > 0 ? Math.round((acceptedCount / totalOffered) * 100) : 100;
+    (target as any).rejectionRate = totalOffered > 0 ? Math.round((rejectedCount / totalOffered) * 100) : 0;
+
+    // 3. Full Audit History with branch details & fees
+    const auditHistory = await mgr.query(
+      `SELECT a.id, a.assignment_number, a.status, a.agreed_fee, a.proposed_fee, a.scheduled_date, a.completion_date,
+              b.name as branch_name, b.city as branch_city, b.state as branch_state, p.name as project_name
+       FROM assignments a
+       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+       LEFT JOIN branches b ON b.id = pb.branch_id
+       LEFT JOIN projects p ON p.id = pb.project_id
+       WHERE a.assayer_id = $1 AND a.is_active = true
+       ORDER BY a.created_at DESC LIMIT 20`,
+      [target.id],
+    ).catch(() => []);
+    (target as any).auditHistory = auditHistory;
+
+    // 4. Attach active commercial profile
+    const activeCommercial = await this.getActiveCommercialProfile(target.id, new Date()).catch(() => null);
+    (target as any).activeCommercialProfile = activeCommercial;
+
+    return target;
   }
 
   // ---- Activity Timeline ----
@@ -943,7 +1334,35 @@ export class AssayerService implements OnModuleInit {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return { activities, total };
+    return { activities: await this.withActorNames(activities), total };
+  }
+
+  /**
+   * Fills in `performedByName`, which is written as null at event time — the audit
+   * trail stored only an actor UUID, so every history view rendered "system" no
+   * matter who actually made the change. Resolved on read so existing rows gain
+   * names too. An actor is a staff user, or an assayer acting on their own record.
+   */
+  private async withActorNames(activities: AssayerActivityEntity[]): Promise<AssayerActivityEntity[]> {
+    const ids = [...new Set(activities.map((a) => a.performedBy).filter(Boolean))] as string[];
+    if (ids.length === 0) return activities;
+
+    const names = new Map<string, string>();
+    const rows = await this.activityRepository.manager.query(
+      `SELECT id, COALESCE(NULLIF(TRIM(CONCAT_WS(' ', first_name, last_name)), ''), username) AS name
+         FROM users WHERE id = ANY($1)
+       UNION ALL
+       SELECT id, display_name AS name FROM assayers WHERE id = ANY($1)`,
+      [ids],
+    );
+    for (const r of rows) names.set(r.id, r.name);
+
+    return activities.map((a) => {
+      if (!a.performedByName && a.performedBy && names.has(a.performedBy)) {
+        a.performedByName = names.get(a.performedBy)!;
+      }
+      return a;
+    });
   }
 
   // ---- Commercial Profiles ----
@@ -967,7 +1386,7 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Created commercial profile for assayer ${assayerId} with base fee ₹${dto.baseFee}`,
     });
-    await this.recordActivity(assayerId, 'COMMERCIAL_PROFILE_CREATED', null, null, userId, `Commercial profile created with base fee ₹${dto.baseFee}`);
+    await this.recordActivity(assayerId, 'ASSAYER_COMMERCIAL_PROFILE_CREATED', null, null, userId, `Commercial profile created with base fee ₹${dto.baseFee}`);
     return saved;
   }
 
@@ -993,7 +1412,7 @@ export class AssayerService implements OnModuleInit {
       userId,
       remarks: `Updated commercial profile ${profileId}`,
     });
-    await this.recordActivity(profile.assayerId, 'COMMERCIAL_PROFILE_UPDATED', null, null, userId, `Commercial profile updated`);
+    await this.recordActivity(profile.assayerId, 'ASSAYER_COMMERCIAL_PROFILE_UPDATED', null, null, userId, `Commercial profile updated`);
     return saved;
   }
 
@@ -1013,6 +1432,38 @@ export class AssayerService implements OnModuleInit {
       if (!p.effectiveEndDate || p.effectiveEndDate >= date) return p;
     }
     return null;
+  }
+
+  /**
+   * Every assayer's commercial terms as they stand today, in one query.
+   *
+   * The pay screen needs the whole roster's rate card at once — to compare terms, and to see
+   * who has no active profile and therefore falls back to the client's default fee. Loading it
+   * one assayer at a time (the only route that existed) is 26+ round trips for one table.
+   *
+   * "As they stand today" uses the same rule the fee calculator and the recommendation scorers
+   * use: the profile effective on the date, newest start winning. A profile dated in the future
+   * is not yet in force and is reported as such rather than as the current rate.
+   */
+  async getRosterCommercialProfiles(onDate: Date = new Date()):
+    Promise<Array<{ assayerId: string; profile: AssayerCommercialProfileEntity | null; hasFutureProfile: boolean }>> {
+    const assayers = await this.assayerRepository.find({ select: { id: true } });
+    const all = await this.commercialRepository.find({
+      where: { isActive: true },
+      order: { effectiveStartDate: 'DESC' },
+    });
+
+    const byAssayer = new Map<string, AssayerCommercialProfileEntity[]>();
+    for (const p of all) {
+      (byAssayer.get(p.assayerId) ?? byAssayer.set(p.assayerId, []).get(p.assayerId)!).push(p);
+    }
+
+    return assayers.map((a) => {
+      const rows = byAssayer.get(a.id) ?? [];
+      const inForce = rows.find((p) => p.effectiveStartDate <= onDate && (!p.effectiveEndDate || p.effectiveEndDate >= onDate)) ?? null;
+      const hasFutureProfile = rows.some((p) => p.effectiveStartDate > onDate);
+      return { assayerId: a.id, profile: inForce, hasFutureProfile };
+    });
   }
 
   // ---- Workforce Attributes ----
@@ -1068,7 +1519,7 @@ export class AssayerService implements OnModuleInit {
     await this.workforceAttributeRepository.save(attr);
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
-      eventType: 'WORKFORCE_ATTRIBUTE_DELETED',
+      eventType: 'WORKFORCE_ATTRIBUTE_REMOVED',
       entityType: 'WORKFORCE_ATTRIBUTE',
       entityId: attributeId,
       userId,
@@ -1083,97 +1534,91 @@ export class AssayerService implements OnModuleInit {
     return this.workforceAttributeRepository.find({ where, order: { type: 'ASC', name: 'ASC' } });
   }
 
+  /**
+   * Assayer intake template.
+   *
+   * Headers deliberately match the column names on the rosters actually received
+   * ("Assayer code", "Assayer Name", "Residence Address", "Location", "Zone")
+   * rather than an idealised internal shape, so a roster can be filled in and sent
+   * back without being restructured. The importer accepts both spellings.
+   *
+   * Only the four fields the record genuinely cannot function without are
+   * required. Everything else is optional and can be filled in later — a long
+   * mandatory list is what pushes people back to editing the database by hand.
+   */
   async generateTemplate(): Promise<Buffer> {
     const headers = [
-      'Assayer Code',
-      'First Name',
-      'Last Name',
-      'Display Name',
-      'Email',
-      'Phone',
-      'Alternate Phone',
-      'Address',
-      'State',
-      'District',
-      'City',
-      'Pincode',
-      'Region',
-      'Employee ID',
-      'Employee Code',
-      'Employment Type',
-      'Department',
-      'Joining Date',
-      'PAN Number',
-      'Bank Account Number',
-      'IFSC Code',
-      'Experience (Years)',
-      'Performance Rating',
-      'Max Daily Workload',
-      'Max Weekly Workload',
-      'Skills (comma-separated)',
-      'Languages (comma-separated)',
-      'Certifications (semicolon-separated: Name|YYYY-MM-DD)',
-      'Preferred Regions (comma-separated)',
-      'Specializations (comma-separated)',
-      'Emergency Contact Name',
-      'Emergency Contact Phone',
-      'Emergency Contact Relation',
-      'Working Hours Start',
-      'Working Hours End',
+      // Required — the record cannot function without these
+      'Assayer code', 'Assayer Name', 'Phone', 'Residence Address', 'Initial Password',
+      // Location / coverage
+      'Location', 'District', 'State', 'Zone', 'Pincode', 'Preferred Regions',
+      // Contact
+      'Email', 'Alternate Phone',
+      // Employment
+      'Employment Type', 'Employee ID', 'Department', 'Joining Date',
+      // Capability — drives which assayer the engine can match to which branch
+      'Skills', 'Certifications', 'Specializations', 'Languages',
+      'Experience (Years)', 'Performance Rating',
+      'Max Daily Workload', 'Max Weekly Workload',
+      'Working Hours Start', 'Working Hours End',
+      // Commercial — drives what we owe them and the cost side of every audit
+      'Base Fee', 'Daily Rate', 'Hourly Rate',
+      'Travel Reimbursement', 'Accommodation Allowance', 'Meal Allowance',
+      // Payment
+      'PAN Number', 'Bank Account Number', 'IFSC Code',
+      // Emergency
+      'Emergency Contact Name', 'Emergency Contact Phone', 'Emergency Contact Relation',
     ];
 
     const ws = xlsx.utils.json_to_sheet([], { header: headers });
-    ws['!cols'] = headers.map((h) => ({
-      wch: h === 'Certifications (semicolon-separated: Name|YYYY-MM-DD)' ? 45 : h.length > 25 ? 30 : 20,
-    }));
+    ws['!cols'] = headers.map((h) => ({ wch: h === 'Residence Address' ? 50 : Math.max(16, h.length + 4) }));
 
-    // Add a second sheet with instructions
     const wb = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(wb, ws, 'Assayers');
 
     const instructions = [
-      { Field: 'Assayer Code', Required: 'Yes', Description: 'Unique identifier for the assayer' },
-      { Field: 'First Name', Required: 'Yes', Description: 'Assayer first name' },
-      { Field: 'Last Name', Required: 'Yes', Description: 'Assayer last name' },
-      { Field: 'Display Name', Required: 'No', Description: 'Auto-generated from first+last if left blank' },
-      { Field: 'Email', Required: 'No', Description: 'Work email address' },
-      { Field: 'Phone', Required: 'Yes', Description: 'Primary contact number' },
-      { Field: 'Alternate Phone', Required: 'No', Description: 'Secondary contact number' },
-      { Field: 'Address', Required: 'Yes', Description: 'Residential address' },
-      { Field: 'State', Required: 'Yes', Description: 'State name' },
-      { Field: 'District', Required: 'Yes', Description: 'District name' },
-      { Field: 'City', Required: 'Yes', Description: 'City name' },
-      { Field: 'Pincode', Required: 'No', Description: '6-digit pincode' },
-      { Field: 'Region', Required: 'No', Description: 'Geographic region' },
-      { Field: 'Employee ID', Required: 'No', Description: 'HR employee identifier' },
-      { Field: 'Employee Code', Required: 'No', Description: 'Internal employee code' },
-      { Field: 'Employment Type', Required: 'No', Description: 'INTERNAL / EXTERNAL / CONTRACT' },
-      { Field: 'Department', Required: 'No', Description: 'Department name' },
-      { Field: 'Joining Date', Required: 'No', Description: 'YYYY-MM-DD format' },
-      { Field: 'PAN Number', Required: 'No', Description: 'Tax PAN card number' },
-      { Field: 'Bank Account Number', Required: 'No', Description: 'Bank account for fee payments' },
-      { Field: 'IFSC Code', Required: 'No', Description: 'Bank IFSC code' },
-      { Field: 'Experience (Years)', Required: 'No', Description: 'Total years of experience' },
-      { Field: 'Performance Rating', Required: 'No', Description: 'Rating 1.00 - 10.00' },
-      { Field: 'Max Daily Workload', Required: 'No', Description: 'Max branches per day (default 3)' },
-      { Field: 'Max Weekly Workload', Required: 'No', Description: 'Max branches per week (default 15)' },
-      { Field: 'Skills', Required: 'No', Description: 'Comma-separated, e.g. Audit, Risk Assessment, Compliance' },
-      { Field: 'Languages', Required: 'No', Description: 'Comma-separated, e.g. English, Hindi, Marathi' },
-      { Field: 'Certifications', Required: 'No', Description: 'Semicolon-separated: Name|YYYY-MM-DD, e.g. CA|2015-06-01;CFA|2018-12-15' },
-      { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated region names' },
-      { Field: 'Specializations', Required: 'No', Description: 'Comma-separated specializations' },
-      { Field: 'Emergency Contact Name', Required: 'No', Description: 'Emergency contact person name' },
-      { Field: 'Emergency Contact Phone', Required: 'No', Description: 'Emergency contact phone number' },
-      { Field: 'Emergency Contact Relation', Required: 'No', Description: 'Relationship to assayer' },
-      { Field: 'Working Hours Start', Required: 'No', Description: 'Default shift start time, e.g. 09:00' },
-      { Field: 'Working Hours End', Required: 'No', Description: 'Default shift end time, e.g. 18:00' },
+      { Field: 'Assayer code', Required: 'Yes', Description: 'Unique code, e.g. AS0643. Re-importing the same code updates that assayer instead of creating a duplicate.' },
+      { Field: 'Assayer Name', Required: 'Yes', Description: 'Full name in one cell, e.g. "Shinil T". Split automatically — the last word is taken as the surname.' },
+      { Field: 'Phone', Required: 'Yes', Description: "The assayer's login identifier AND how dispatch notifications reach them. A record without it cannot be used." },
+      { Field: 'Residence Address', Required: 'Yes', Description: 'Full address. Used to compute travel distance to branches; a 6-digit pincode inside this text is picked up automatically.' },
+      { Field: 'Initial Password', Required: 'No', Description: "Password the assayer signs in with. Defaults to 'assayer123' when blank. Only applied when the assayer is first created — re-importing a roster never resets an existing password." },
+      { Field: 'Location', Required: 'No', Description: 'Town or locality, e.g. Kunnamangalam. Stored as the city.' },
+      { Field: 'District', Required: 'No', Description: 'Used for travel distance and coverage planning.' },
+      { Field: 'State', Required: 'No', Description: 'Used to apply state-specific public holidays to this assayer.' },
+      { Field: 'Zone', Required: 'No', Description: 'Operating zone, e.g. South. Casing is normalised, so "north" and "North" are one zone.' },
+      { Field: 'Pincode', Required: 'No', Description: 'Leave blank if already present in the address.' },
+      { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated. Regions this assayer prefers; improves their match score for branches there.' },
+      { Field: 'Email', Required: 'No', Description: 'Used for notifications where available.' },
+      { Field: 'Alternate Phone', Required: 'No', Description: 'Secondary contact number.' },
+      { Field: 'Employment Type', Required: 'No', Description: 'INTERNAL / EXTERNAL / CONTRACT.' },
+      { Field: 'Employee ID', Required: 'No', Description: 'HR identifier, for internal staff.' },
+      { Field: 'Department', Required: 'No', Description: 'Department name.' },
+      { Field: 'Joining Date', Required: 'No', Description: 'YYYY-MM-DD.' },
+      { Field: 'Skills', Required: 'No', Description: 'Comma-separated, e.g. Gold Assaying, Hallmarking. A branch or client that requires a skill will only be matched to assayers who have it — blank means this assayer is excluded from any such work.' },
+      { Field: 'Certifications', Required: 'No', Description: 'Semicolon-separated as Name|YYYY-MM-DD, e.g. Certified Gold Assayer|2027-06-01. Expiry is enforced: an expired certification blocks assignment to work requiring it.' },
+      { Field: 'Specializations', Required: 'No', Description: 'Comma-separated areas of speciality.' },
+      { Field: 'Languages', Required: 'No', Description: 'Comma-separated, e.g. English, Malayalam, Tamil. Used to match assayers to branches where the language matters.' },
+      { Field: 'Experience (Years)', Required: 'No', Description: 'Whole number. Feeds the match score.' },
+      { Field: 'Performance Rating', Required: 'No', Description: '1.00 – 10.00. Feeds the match score; leave blank to let the system derive it from completed work.' },
+      { Field: 'Max Daily Workload', Required: 'No', Description: 'Branches per day. Defaults to 3. The day planner will not exceed this.' },
+      { Field: 'Max Weekly Workload', Required: 'No', Description: 'Branches per week. Defaults to 15. Enforced when scheduling.' },
+      { Field: 'Working Hours Start', Required: 'No', Description: 'e.g. 09:00. Used to fit branches into a realistic working day.' },
+      { Field: 'Working Hours End', Required: 'No', Description: 'e.g. 18:00.' },
+      { Field: 'Base Fee', Required: 'No', Description: 'Standard fee per audit for this assayer. Used as the opening offer during negotiation and as the cost side of every audit they perform.' },
+      { Field: 'Daily Rate', Required: 'No', Description: 'Day rate where the engagement is priced per day rather than per audit.' },
+      { Field: 'Hourly Rate', Required: 'No', Description: 'Hourly rate, where applicable.' },
+      { Field: 'Travel Reimbursement', Required: 'No', Description: 'Travel paid per assignment. This is recharged to the client where their contract allows, so leaving it blank understates both cost and recoverable revenue.' },
+      { Field: 'Accommodation Allowance', Required: 'No', Description: 'Paid for overnight assignments.' },
+      { Field: 'Meal Allowance', Required: 'No', Description: 'Paid per assignment day.' },
+      { Field: 'PAN Number', Required: 'No', Description: 'Needed before payment; TDS is withheld against it.' },
+      { Field: 'Bank Account Number', Required: 'No', Description: 'Needed to disburse fees.' },
+      { Field: 'IFSC Code', Required: 'No', Description: 'Needed to disburse fees.' },
+      { Field: 'Emergency Contact Name', Required: 'No', Description: 'Emergency contact person.' },
+      { Field: 'Emergency Contact Phone', Required: 'No', Description: 'Emergency contact number.' },
+      { Field: 'Emergency Contact Relation', Required: 'No', Description: 'Relationship to the assayer.' },
     ];
     const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
-    instrWs['!cols'] = [
-      { wch: 30 },
-      { wch: 10 },
-      { wch: 60 },
-    ];
+    instrWs['!cols'] = [{ wch: 26 }, { wch: 10 }, { wch: 95 }];
     xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
 
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
@@ -1193,27 +1638,43 @@ export class AssayerService implements OnModuleInit {
       const rowNum = i + 2;
 
       try {
-        const assayerCode = (row['Assayer Code'] || '').toString().trim();
+        // Accepts both the canonical header and the spelling used in the client's
+        // own roster ("Assayer code"), so a file exported from their system imports
+        // without being hand-edited first.
+        const assayerCode = (row['Assayer Code'] || row['Assayer code'] || '').toString().trim();
         if (!assayerCode) {
           errors.push(`Row ${rowNum}: Assayer Code is required`);
           continue;
         }
 
-        const firstName = (row['First Name'] || '').toString().trim();
+        // Rosters carry one combined name column; the record stores first/last
+        // separately. Split on whitespace, treating the final token as the surname
+        // and everything before it as the given name, so "R Jeganathan" and
+        // "Shinil T" both resolve sensibly.
+        let firstName = (row['First Name'] || '').toString().trim();
+        let lastName = (row['Last Name'] || '').toString().trim();
+        const combinedName = (row['Assayer Name'] || row['Name'] || '').toString().trim();
+        if ((!firstName || !lastName) && combinedName) {
+          const parts = combinedName.split(/\s+/).filter(Boolean);
+          if (parts.length === 1) {
+            firstName = firstName || parts[0];
+            lastName = lastName || parts[0];
+          } else {
+            firstName = firstName || parts.slice(0, -1).join(' ');
+            lastName = lastName || parts[parts.length - 1];
+          }
+        }
         if (!firstName) {
-          errors.push(`Row ${rowNum} (${assayerCode}): First Name is required`);
+          errors.push(`Row ${rowNum} (${assayerCode}): provide 'Assayer Name' or 'First Name'`);
           continue;
         }
+        if (!lastName) lastName = firstName;
 
-        const lastName = (row['Last Name'] || '').toString().trim();
-        if (!lastName) {
-          errors.push(`Row ${rowNum} (${assayerCode}): Last Name is required`);
-          continue;
-        }
-
-        const phone = (row['Phone'] || '').toString().trim();
+        // Phone is the assayer's login identifier and the channel dispatch
+        // notifications go to, so a record without one cannot actually be used.
+        const phone = (row['Phone'] || row['Mobile'] || row['Contact Number'] || '').toString().trim();
         if (!phone) {
-          errors.push(`Row ${rowNum} (${assayerCode}): Phone is required`);
+          errors.push(`Row ${rowNum} (${assayerCode}): Phone is required — it is the login identifier and how dispatch notifications reach this assayer`);
           continue;
         }
 
@@ -1225,12 +1686,20 @@ export class AssayerService implements OnModuleInit {
           email: (row['Email'] || '').toString().trim() || undefined,
           phone,
           alternatePhone: (row['Alternate Phone'] || '').toString().trim() || undefined,
-          address: (row['Address'] || '').toString().trim(),
+          address: (row['Address'] || row['Residence Address'] || '').toString().trim(),
           state: (row['State'] || '').toString().trim(),
           district: (row['District'] || '').toString().trim(),
-          city: (row['City'] || '').toString().trim(),
-          pincode: (row['Pincode'] || '').toString().trim() || undefined,
-          region: (row['Region'] || '').toString().trim() || undefined,
+          // Rosters name the town/locality "Location"; it maps to city.
+          city: (row['City'] || row['Location'] || '').toString().trim(),
+          // Rosters rarely carry a separate pincode column — it is embedded in the
+          // residence address, so recover it rather than dropping it.
+          pincode: (row['Pincode'] || '').toString().trim()
+            || (String(row['Residence Address'] || '').match(/\b\d{6}\b/)?.[0] ?? undefined),
+          // Zone is the operating region on a roster. Normalised because the same
+          // zone appears with inconsistent casing ("North" vs "north"), which would
+          // otherwise create two distinct regions.
+          region: ((row['Region'] || row['Zone'] || '').toString().trim() || undefined)
+            && (row['Region'] || row['Zone']).toString().trim().replace(/\b\w/g, (c: string) => c.toUpperCase()),
           employeeId: (row['Employee ID'] || '').toString().trim() || undefined,
           employeeCode: (row['Employee Code'] || '').toString().trim() || undefined,
           employmentType: (row['Employment Type'] || '').toString().trim() || undefined,
@@ -1280,11 +1749,66 @@ export class AssayerService implements OnModuleInit {
 
         // Check if assayer exists by code
         const existing = await this.assayerRepository.findOne({ where: { assayerCode } });
-        if (existing) {
-          await this.update(existing.id, dto, userId);
-        } else {
-          await this.create(dto, userId);
+        const saved = existing
+          ? await this.update(existing.id, dto, userId)
+          : await this.create(dto, userId);
+
+        // A bulk-imported assayer had no password, so every one of them could be
+        // created successfully and then never sign in — the import looked like it
+        // worked while producing accounts that could not be used. Set an initial
+        // password on creation (from the sheet if supplied, otherwise the documented
+        // default) so an imported assayer can actually log in. Never overwrite an
+        // existing password: re-importing a roster must not reset live credentials.
+        if (!existing) {
+          const supplied = (row['Initial Password'] || row['Password'] || '').toString().trim();
+          const initial = supplied || 'assayer123';
+          await this.assayerRepository.update(saved.id, {
+            passwordHash: await bcrypt.hash(initial, 12),
+          });
         }
+
+        // Commercial rates drive what we owe this assayer and the cost side of
+        // every audit they perform, so they are imported with the record rather
+        // than needing a second pass. Only written when the sheet actually carries
+        // a rate — an all-zero profile would read as "this assayer is free".
+        const num = (v: any) => {
+          const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+          return Number.isFinite(n) ? n : undefined;
+        };
+        const rates = {
+          baseFee: num(row['Base Fee']),
+          dailyRate: num(row['Daily Rate']),
+          hourlyRate: num(row['Hourly Rate']),
+          travelReimbursement: num(row['Travel Reimbursement']),
+          accommodationAllowance: num(row['Accommodation Allowance']),
+          mealAllowance: num(row['Meal Allowance']),
+        };
+        if (Object.values(rates).some((v) => v !== undefined)) {
+          const activeProfile = await this.commercialRepository.findOne({
+            where: { assayerId: saved.id, isActive: true },
+            order: { effectiveStartDate: 'DESC' },
+          }).catch(() => null);
+
+          const payload = {
+            baseFee: rates.baseFee ?? activeProfile?.baseFee ?? 0,
+            dailyRate: rates.dailyRate ?? activeProfile?.dailyRate ?? 0,
+            hourlyRate: rates.hourlyRate ?? activeProfile?.hourlyRate ?? 0,
+            travelReimbursement: rates.travelReimbursement ?? activeProfile?.travelReimbursement ?? 0,
+            accommodationAllowance: rates.accommodationAllowance ?? activeProfile?.accommodationAllowance ?? 0,
+            mealAllowance: rates.mealAllowance ?? activeProfile?.mealAllowance ?? 0,
+          };
+
+          if (activeProfile) {
+            await this.commercialRepository.save({ ...activeProfile, ...payload, updatedBy: userId });
+          } else {
+            await this.createCommercialProfile(
+              saved.id,
+              { ...payload, currency: 'INR', effectiveStartDate: new Date().toISOString() },
+              userId,
+            );
+          }
+        }
+
         importedCount++;
       } catch (err: any) {
         errors.push(`Row ${rowNum}: ${err.message}`);
@@ -1293,4 +1817,138 @@ export class AssayerService implements OnModuleInit {
 
     return { importedCount, errors };
   }
+
+  /**
+   * Lets an assayer change their own password.
+   *
+   * Until now there was no route anywhere that wrote `assayers.password_hash` outside bulk
+   * import, and that write is guarded by `if (!existing)`. `POST /users/me/change-password`
+   * queries the `users` repository, and assayers have no `users` row, so it 404s for them.
+   * The practical effect: a field worker could never change the password they were issued,
+   * and 24 of 25 live accounts were still on the importer's documented default.
+   *
+   * This is also the precondition for rotating that default — without a way for people to set
+   * a new password, rotating it just locks 25 workers out of their jobs.
+   */
+  async changeOwnPassword(assayerId: string, currentPassword: string, newPassword: string): Promise<void> {
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: assayerId },
+      select: { id: true, passwordHash: true },
+    });
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+    if (!assayer.passwordHash) {
+      throw new BadRequestException('This account has no password set. Ask your HR contact to set one for you.');
+    }
+
+    const ok = await bcrypt.compare(currentPassword, assayer.passwordHash);
+    if (!ok) throw new UnauthorizedException('Your current password is not correct.');
+
+    this.assertPasswordAcceptable(newPassword);
+
+    await this.assayerRepository.update(assayerId, {
+      passwordHash: await bcrypt.hash(newPassword, 12),
+      // The holder has now chosen their own credential, so the forced-rotation flag clears.
+      mustChangePassword: false,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      updatedBy: assayerId,
+    });
+
+    /**
+     * Credential changes are audited.
+     *
+     * Neither this method nor resetPasswordByStaff recorded anything, while the equivalent
+     * user paths emit USER_PASSWORD_CHANGED / USER_PASSWORD_RESET. On a system whose output
+     * is legal audit evidence, a credential change with no trail cannot be investigated at
+     * all — found while trying to establish who had changed an assayer's password and
+     * discovering the answer was unrecoverable.
+     */
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'ASSAYER_PASSWORD_CHANGED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: assayerId,
+      remarks: 'Assayer changed their own password.',
+    });
+
+    await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
+  }
+
+  /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
+  async resetPasswordByStaff(
+    assayerId: string,
+    newPassword: string | undefined,
+    actorId: string,
+  ): Promise<{ generatedPassword?: string }> {
+    const assayer = await this.assayerRepository.findOne({ where: { id: assayerId }, select: { id: true } });
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+
+    // When HR does not supply one, generate a readable temporary password and return it once.
+    // The point of the reset is a locked-out field worker on the phone, so the credential has to
+    // be sayable — hence a short memorable form rather than a random hex blob — and it is never
+    // stored in readable form, only its hash.
+    const wasGenerated = !newPassword;
+    const password = newPassword ?? this.generateTemporaryPassword();
+
+    this.assertPasswordAcceptable(password);
+
+    await this.assayerRepository.update(assayerId, {
+      passwordHash: await bcrypt.hash(password, 12),
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      // A password chosen by HR is a temporary credential, not the assayer's own. Forcing a
+      // change at next sign-in keeps a staff-known password from becoming the permanent one.
+      mustChangePassword: true,
+      updatedBy: actorId,
+    });
+
+    // Who reset whose credential, and when — see the note in changeOwnPassword.
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'ASSAYER_PASSWORD_RESET',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks: 'Password reset by staff. The assayer must choose a new one at next sign-in.',
+    });
+
+    await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
+
+    return wasGenerated ? { generatedPassword: password } : {};
+  }
+
+  /**
+   * A short, sayable temporary password: two lowercase words joined by a digit and a symbol,
+   * e.g. "tiger4mango!". Long enough to clear the length rule, memorable enough to read aloud
+   * once, and never a shared default. Not meant to be kept — mustChangePassword forces a change
+   * at first sign-in.
+   */
+  private generateTemporaryPassword(): string {
+    const words = ['tiger', 'mango', 'river', 'stone', 'cloud', 'ember', 'ivory', 'coral', 'delta', 'flint', 'grove', 'larch'];
+    // randomInt is a CSPRNG; Math.random must never mint a credential.
+    const pick = () => words[randomInt(words.length)];
+    const a = pick();
+    let b = pick();
+    while (b === a) b = pick();
+    return `${a}${randomInt(10)}${b}!`;
+  }
+
+  /**
+   * Deliberately modest rules. These users are field workers on cheap handsets, often typing
+   * with one thumb in bad light — a complexity policy they cannot satisfy produces written-down
+   * passwords, which is worse than a simple one they can remember. What it does refuse is the
+   * shared defaults, because those are known to anyone holding the roster spreadsheet.
+   */
+  private assertPasswordAcceptable(password: string): void {
+    const pw = (password ?? '').trim();
+    if (pw.length < 8) {
+      throw new BadRequestException('Please choose a password of at least 8 characters.');
+    }
+    const BANNED = ['assayer123', 'password@123', 'password', '12345678'];
+    if (BANNED.includes(pw.toLowerCase())) {
+      throw new BadRequestException('That password is too easy to guess. Please choose a different one.');
+    }
+  }
+
 }

@@ -1,4 +1,4 @@
-import { GeoCoordinate } from '../../core/value-objects/geo-coordinate.value-object'; // mock shared kernel type paths
+import { GeoCoordinate } from '../../core/value-objects/geo-coordinate.value-object';
 
 export class BranchId {
   constructor(public readonly value: string) {

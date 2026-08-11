@@ -1,18 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsUUID, IsString, MinLength, IsOptional, IsInt, Min } from 'class-validator';
+import { IsUUID, IsString, MinLength, IsOptional, IsInt, Min, IsArray } from 'class-validator';
 
 export class CreateValidationQueryDto {
   @ApiProperty({ description: 'ID of the validation case' })
   @IsUUID()
   validationCaseId: string;
 
-  @ApiProperty({ description: 'ID of the target assayer' })
+  @ApiPropertyOptional({ description: 'ID of the target assayer' })
   @IsUUID()
-  assayerId: string;
+  @IsOptional()
+  assayerId?: string;
 
   @ApiProperty({ description: 'Clarification query text' })
   @IsString()
-  @MinLength(5)
+  @MinLength(1)
   queryText: string;
 
   @ApiPropertyOptional({ description: 'Target field name in document' })
@@ -25,11 +26,21 @@ export class CreateValidationQueryDto {
   @IsInt()
   @Min(1)
   slaHours?: number;
+
+  @ApiPropertyOptional({ description: 'Array of attachment references (lightweight URLs)' })
+  @IsOptional()
+  @IsArray()
+  attachments?: any[];
 }
 
 export class RespondValidationQueryDto {
-  @ApiProperty({ description: 'Assayer response text' })
+  @ApiPropertyOptional({ description: 'Response text (message)' })
+  @IsOptional()
   @IsString()
-  @MinLength(2)
-  response: string;
+  response?: string;
+
+  @ApiPropertyOptional({ description: 'Array of attachment references (lightweight URLs)' })
+  @IsOptional()
+  @IsArray()
+  attachments?: any[];
 }

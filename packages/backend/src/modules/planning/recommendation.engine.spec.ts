@@ -1,16 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { AssignmentStatus } from '@fapoms/shared';
 import {
   RecommendationEngine,
   AvailabilityFilter,
+  ConsecutiveBranchAuditFilter,
   ClientRestrictionFilter,
   ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
   RequiredSkillsFilter,
+  DistancePolicyFilter,
   DistanceScoreCalculator,
   TravelTimeScoreCalculator,
   WorkloadScoreCalculator,
   PerformanceScoreCalculator,
+  RejectionAcceptanceScoreCalculator,
+  DeliverySpeedScoreCalculator,
+  QueryVolumeScoreCalculator,
   ExperienceScoreCalculator,
   CostScoreCalculator,
   ClientPreferenceScoreCalculator,
@@ -32,9 +38,21 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { AssayerService } from '../assayer/assayer.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
+import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
+
+  /** Grouped-count query builder shape used by the engine's fact resolution. */
+  const groupedCountBuilder = () => ({
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    groupBy: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn().mockResolvedValue([]),
+  });
+
 
   const mockAssayerService = {
     hydrateWorkforceAttributes: jest.fn().mockResolvedValue(undefined),
@@ -50,16 +68,33 @@ describe('RecommendationEngine', () => {
 
   const mockAssayerRepo = {
     find: jest.fn(),
+    // The geo pre-filter issues a raw ST_DistanceSphere query. Returning [] makes
+    // findNearbyActiveAssayerIds fall back to the full active pool, so these tests see
+    // every mocked assayer exactly as before the pre-filter was added.
+    query: jest.fn().mockResolvedValue([]),
   };
 
   const mockAssignmentRepo = {
     findOne: jest.fn(),
     count: jest.fn(),
     find: jest.fn(),
+    /**
+     * recommend() now resolves committed workload for the whole candidate pool in one grouped
+     * count instead of one count per assayer. Returning an empty set here means "nobody has
+     * committed work", which is what these fixtures already assumed.
+     */
+    createQueryBuilder: jest.fn(groupedCountBuilder),
   };
 
   const mockCommercialRepo = {
     find: jest.fn(),
+    findOne: jest.fn(),
+  };
+
+  const mockQueryRepo = {
+    count: jest.fn(),
+    find: jest.fn(),
+    createQueryBuilder: jest.fn(groupedCountBuilder),
   };
 
   const mockClientRepo = {
@@ -83,14 +118,19 @@ describe('RecommendationEngine', () => {
       providers: [
         RecommendationEngine,
         AvailabilityFilter,
+        ConsecutiveBranchAuditFilter,
         ClientRestrictionFilter,
         ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
         RequiredSkillsFilter,
+        DistancePolicyFilter,
         DistanceScoreCalculator,
         TravelTimeScoreCalculator,
         WorkloadScoreCalculator,
         PerformanceScoreCalculator,
+        RejectionAcceptanceScoreCalculator,
+        DeliverySpeedScoreCalculator,
+        QueryVolumeScoreCalculator,
         ExperienceScoreCalculator,
         CostScoreCalculator,
         ClientPreferenceScoreCalculator,
@@ -126,6 +166,10 @@ describe('RecommendationEngine', () => {
           useValue: mockProjectBranchRepo,
         },
         {
+          provide: getRepositoryToken(ValidationQueryEntity),
+          useValue: mockQueryRepo,
+        },
+        {
           provide: RoutingService,
           useValue: mockRoutingService,
         },
@@ -149,8 +193,24 @@ describe('RecommendationEngine', () => {
     }).compile();
 
     engine = module.get<RecommendationEngine>(RecommendationEngine);
-    mockAssignmentRepo.find.mockResolvedValue([]);
     jest.clearAllMocks();
+    // Defaults restored after clearAllMocks, which wipes implementations. `findOne` must
+    // resolve rather than return undefined: recommend() now awaits it as part of resolving
+    // the branch facts it shares across candidates.
+    mockAssignmentRepo.find.mockResolvedValue([]);
+    mockAssignmentRepo.findOne.mockResolvedValue(null);
+    mockAssignmentRepo.count.mockResolvedValue(0);
+    // recommend() also awaits these while resolving the facts it shares across candidates,
+    // so they must resolve rather than return undefined.
+    mockProjectBranchRepo.findOne.mockResolvedValue(null);
+    mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 10, durationMinutes: 20 });
+    mockCommercialRepo.find.mockResolvedValue([]);
+    mockCommercialRepo.findOne.mockResolvedValue(null);
+    mockQueryRepo.find.mockResolvedValue([]);
+    mockQueryRepo.count.mockResolvedValue(0);
+    // createQueryBuilder is a factory, so clearAllMocks strips its implementation too.
+    mockAssignmentRepo.createQueryBuilder.mockImplementation(groupedCountBuilder);
+    mockQueryRepo.createQueryBuilder.mockImplementation(groupedCountBuilder);
   });
 
   it('should filter out inactive assayers', async () => {
@@ -185,6 +245,20 @@ describe('RecommendationEngine', () => {
       },
     ]);
 
+    /**
+     * Double-booking is now resolved for the whole pool in one query rather than per
+     * candidate, so the fixture answers that query instead of the old per-assayer findOne.
+     * The rule under test is unchanged: an assayer already committed on the scheduled date
+     * must not be offered a second branch that day.
+     */
+    mockAssignmentRepo.find.mockImplementation(async (opts: any) => {
+      const status = opts?.where?.status;
+      const isDoubleBookingProbe = status && JSON.stringify(status).includes('ACCEPTED');
+      return isDoubleBookingProbe
+        ? [{ assayerId: 'a-1', assignmentNumber: 'ASN-EXISTING' }]
+        : [];
+    });
+    // Kept so the standalone (non-batched) path is still covered by this fixture.
     mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing-assignment' });
 
     const branch = {
@@ -244,6 +318,42 @@ describe('RecommendationEngine', () => {
     expect(results[0].score).toBeGreaterThan(results[1].score);
   });
 
+  it('should flag (not exclude) the assayer holding an unconfirmed pending offer on this branch', async () => {
+    const assayerPending = {
+      id: 'a-pending', status: 'ACTIVE', isActive: true, latitude: 19.08, longitude: 72.88,
+    };
+    const assayerFresh = {
+      id: 'a-fresh', status: 'ACTIVE', isActive: true, latitude: 19.09, longitude: 72.89,
+    };
+
+    mockAssayerRepo.find.mockResolvedValue([assayerPending, assayerFresh]);
+    mockAssignmentRepo.count.mockResolvedValue(0);
+    mockCommercialRepo.find.mockResolvedValue([]);
+    mockClientRepo.findOne.mockResolvedValue(null);
+    mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 5, durationMinutes: 10 });
+
+    // Distinguish the three different findOne() call shapes that share this mock:
+    // the new "pending offer on this branch" lookup (has status: PENDING), the
+    // ConsecutiveBranchAuditFilter lookup (no status filter), and checkDoubleBooking
+    // (status: In([ACCEPTED])) — only the first should report a match here.
+    mockAssignmentRepo.findOne.mockImplementation(async (opts: any) => {
+      if (opts?.where?.status === AssignmentStatus.PENDING) {
+        return { assayerId: 'a-pending', projectBranch: { branchId: 'b-1' } };
+      }
+      return null;
+    });
+
+    const branch = { id: 'b-1', latitude: 19.076, longitude: 72.877 } as any;
+
+    const results = await engine.recommend(branch, new Date());
+
+    expect(results).toHaveLength(2);
+    const pendingResult = results.find((r) => r.assayer.id === 'a-pending');
+    const freshResult = results.find((r) => r.assayer.id === 'a-fresh');
+    expect(pendingResult?.pendingOnThisBranch).toBe(true);
+    expect(freshResult?.pendingOnThisBranch).toBe(false);
+  });
+
   it('should handle missing coordinates gracefully by calculating fallback scores', async () => {
     const assayerNoCoords = {
       id: 'a-no-coords',
@@ -274,3 +384,161 @@ describe('RecommendationEngine', () => {
   });
 });
 
+describe('BranchFamiliarityScoreCalculator', () => {
+  const mockAssignmentRepo = {
+    count: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+  };
+
+  const calculator = new BranchFamiliarityScoreCalculator(mockAssignmentRepo as any);
+
+  const branch = { id: 'branch-1', latitude: 19.076, longitude: 72.877 } as any;
+  const assayer = { id: 'assayer-1' } as any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('scores an assayer with no prior visits to this branch at the baseline', async () => {
+    mockAssignmentRepo.count.mockResolvedValue(0);
+
+    const score = await calculator.calculate(assayer, { branch, client: null, scheduledDate: new Date(), weights: {} });
+
+    expect(score).toBe(50);
+    expect(mockAssignmentRepo.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          assayerId: 'assayer-1',
+          projectBranch: { branchId: 'branch-1' },
+        }),
+      }),
+    );
+  });
+
+  it('scores an assayer with prior accepted/completed visits to this branch higher than a stranger', async () => {
+    mockAssignmentRepo.count.mockResolvedValue(2);
+
+    const score = await calculator.calculate(assayer, { branch, client: null, scheduledDate: new Date(), weights: {} });
+
+    expect(score).toBe(50 + 2 * 15);
+    expect(score).toBeGreaterThan(50);
+  });
+
+  it('caps the branch-history bonus at 3+ prior visits', async () => {
+    mockAssignmentRepo.count.mockResolvedValue(10);
+
+    const score = await calculator.calculate(assayer, { branch, client: null, scheduledDate: new Date(), weights: {} });
+
+    expect(score).toBe(50 + 3 * 15);
+  });
+});
+
+describe('ConsecutiveBranchAuditFilter', () => {
+  const mockAssignmentRepo = {
+    findOne: jest.fn(),
+  };
+
+  const filter = new ConsecutiveBranchAuditFilter(mockAssignmentRepo as any);
+
+  const branch = { id: 'branch-1' } as any;
+  const assayer = { id: 'assayer-1' } as any;
+  const context = { branch, client: null, scheduledDate: new Date(), weights: {} };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('allows the candidate through when there is no prior assignment on this branch', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue(null);
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+
+  it('does NOT exclude the assayer whose offer on this branch is still PENDING', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.PENDING });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+
+  it('excludes the assayer once their assignment on this branch is ACCEPTED', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.ACCEPTED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
+  });
+
+  it('excludes the assayer who already COMPLETED the last audit of this branch', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.COMPLETED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
+  });
+
+  it('does not exclude a different assayer even if the last assignment was ACCEPTED', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'someone-else', status: AssignmentStatus.ACCEPTED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+
+  it('does not exclude the assayer whose prior offer on this branch was REJECTED', async () => {
+    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.REJECTED });
+    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  });
+});
+
+/**
+ * Cost and Profitability both price the same assayer. They must select the same commercial
+ * profile, and it must be the one FeePolicyService would bill against — the profile in force
+ * on the audit date. Profitability previously took whichever profile was newest, so an assayer
+ * with a rate rise dated in the future was scored cheap by one and expensive by the other in
+ * the same recommendation.
+ */
+describe('commercial profile selection is the same for every scorer', () => {
+  const AUDIT_DATE = new Date('2026-08-20');
+
+  // Newest first, matching both the batched preload and the per-candidate query fallback.
+  const PROFILES = [
+    { id: 'p-future', baseFee: 9000, dailyRate: 1000, effectiveStartDate: new Date('2026-12-01'), effectiveEndDate: null },
+    { id: 'p-current', baseFee: 2000, dailyRate: 500, effectiveStartDate: new Date('2026-01-01'), effectiveEndDate: null },
+  ];
+
+  const assayer: any = { id: 'a-1' };
+  const contextFor = (profiles: any[]): any => ({
+    branch: { id: 'b-1', city: 'Pune' },
+    scheduledDate: AUDIT_DATE,
+    client: { budget: 5000 },
+    branchFacts: { commercialProfilesByAssayer: { 'a-1': profiles } },
+  });
+
+  const repoReturning = (profiles: any[]) => ({
+    find: jest.fn().mockResolvedValue(profiles),
+    findOne: jest.fn().mockResolvedValue(profiles[0] ?? null),
+  });
+
+  it('prices against the profile in force on the audit date, not the newest one', async () => {
+    const cost = new CostScoreCalculator(repoReturning(PROFILES) as any);
+    const profitability = new ProfitabilityScoreCalculator(repoReturning(PROFILES) as any);
+
+    // Only the current profile is in force on the audit date. p-future (9000) starts in
+    // December, and a 9000 base fee against a 5000 budget would score 0 here.
+    const costScore = await cost.calculate(assayer, contextFor(PROFILES));
+    const profitScore = await profitability.calculate(assayer, contextFor(PROFILES));
+
+    // 2000 + 500 = 2500 against a 5000 budget is comfortably under, so profitability is high.
+    expect(profitScore).toBeGreaterThan(50);
+    // And cost reflects the same 2000 base fee rather than 9000.
+    expect(costScore).toBeGreaterThan(80);
+  });
+
+  it('agrees with the Cost scorer when only a future profile exists', async () => {
+    const onlyFuture = [PROFILES[0]];
+    const cost = new CostScoreCalculator(repoReturning(onlyFuture) as any);
+    const profitability = new ProfitabilityScoreCalculator(repoReturning(onlyFuture) as any);
+
+    // Neither scorer may fall back to a rate that is not yet in force; both report "unknown".
+    await expect(cost.calculate(assayer, contextFor(onlyFuture))).resolves.toBe(50);
+    await expect(profitability.calculate(assayer, contextFor(onlyFuture))).resolves.toBe(50);
+  });
+
+  it('respects an expired profile the same way in both scorers', async () => {
+    const expired = [{ ...PROFILES[1], effectiveEndDate: new Date('2026-03-01') }];
+    const cost = new CostScoreCalculator(repoReturning(expired) as any);
+    const profitability = new ProfitabilityScoreCalculator(repoReturning(expired) as any);
+
+    await expect(cost.calculate(assayer, contextFor(expired))).resolves.toBe(50);
+    await expect(profitability.calculate(assayer, contextFor(expired))).resolves.toBe(50);
+  });
+});

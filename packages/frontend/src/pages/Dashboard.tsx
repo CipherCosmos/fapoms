@@ -1,303 +1,339 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Building2, 
-  Users, 
-  Percent, 
-  AlertTriangle,
-  ArrowRight,
-  TrendingUp
+import { useQuery } from '@tanstack/react-query';
+import {
+  AlertTriangle, ArrowRight, Map, RefreshCw, Users, IndianRupee,
+  CheckCircle2, Inbox, Layers,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { queryClient } from '../queryClient';
+import { queryKeys } from '../hooks/queryKeys';
+import { useScope, withScope } from '../context/ScopeContext';
+import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
+import { formatRupees as money } from '@fapoms/shared';
 
-interface DashboardMetrics {
-  clients: number;
-  projects: number;
-  activeProjects: number;
-  branches: number;
-  activeBranches: number;
-  users: number;
-  activities: Array<{
-    id: string;
-    action: string;
-    detail: string;
-    occurredAt: string;
-  }>;
+interface Attention {
+  key: string; severity: 'critical' | 'high' | 'medium';
+  count: number; label: string; detail: string; link: string; isMoney?: boolean;
+}
+interface DueItem {
+  projectBranchId: string; branchName: string; district: string | null; state: string;
+  scheduledDate: string; daysAway: number;
+  hasAssayer: boolean; packetSent: boolean;
+  blocker: 'NO_ASSAYER' | 'PACKET_NOT_SENT' | null;
+}
+interface Validation {
+  pending: number; inReview: number; needsCorrection: number;
+  assignedToMe: number; openQueries: number; overdueQueries: number;
+}
+/**
+ * Sections the caller's roles do not include arrive as null. Rendering is driven
+ * by that rather than by a role check in the client, so the page cannot show a
+ * block the server declined to populate.
+ */
+interface Snapshot {
+  generatedAt: string;
+  roles: string[];
+  focus: string;
+  sections: string[];
+  attention: Attention[];
+  funnel: Array<{ key: string; label: string; count: number; packets: number }> | null;
+  due: DueItem[] | null;
+  documents: { packetsUnsent: number; awaitingReturn: number; awaitingOcr: number; inOcr: number } | null;
+  money: { unbilled: number; outstanding: number; collected: number } | null;
+  capacity: { assayers: number; idle: number; dailyCapacity: number } | null;
+  validation: Validation | null;
+  projects: Array<{
+    id: string; name: string; projectNumber: string; status: string; clientName: string;
+    totalBranches: number; audited: number; unplanned: number; packets: number; progressPct: number;
+  }> | null;
+  activities: Array<{ id: string; action: string; detail: string | null; occurredAt: string }> | null;
 }
 
-interface SlaSummary {
-  statusCounts: Record<string, number>;
-  slaCounts: Record<string, number>;
-}
+const SEVERITY: Record<Attention['severity'], string> = {
+  critical: 'var(--danger)', high: 'var(--warning)', medium: 'var(--accent)',
+};
 
+const BLOCKER_TEXT: Record<string, string> = {
+  NO_ASSAYER: 'no assayer confirmed',
+  PACKET_NOT_SENT: 'packet not released',
+};
+
+/**
+ * Operational home.
+ *
+ * The previous dashboard led with counts of clients, users and branches — master
+ * data that does not change day to day and that nobody acts on — and a per-project
+ * completion bar computed from a field the projects endpoint does not return, so
+ * every bar showed 0% permanently. Below that sat three navigation tiles dressed
+ * up as content.
+ *
+ * This shows only things someone has to do something about, ordered by urgency,
+ * each linking to the screen where the work actually happens.
+ */
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [slaSummary, setSlaSummary] = useState<SlaSummary | null>(null);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  useSocketInvalidation();
 
-  useEffect(() => {
-    loadAllData();
-    const interval = setInterval(() => {
-      loadAllData();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  // The territorial sections (funnel, due, capacity, projects) follow the header's global
+  // scope; documents/validation/money stay national — see OperationsSnapshotService.
+  const { scopeParams, scopeKey } = useScope();
 
-  const loadAllData = async () => {
-    setIsLoading(true);
-    try {
-      const [metricsData, slaData, projectsData] = await Promise.all([
-        api.request<DashboardMetrics>('/system-dashboard/metrics'),
-        api.request<SlaSummary>('/assignments/dashboard/summary'),
-        api.request<any[]>('/projects')
-      ]);
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: [...queryKeys.dashboard.all, 'operations', scopeKey],
+    queryFn: () => api.request<Snapshot>(`/system-dashboard/operations?${withScope(scopeParams)}`),
+    staleTime: 30_000,
+  });
 
-      setMetrics(metricsData);
-      setSlaSummary(slaData);
-      setProjects(projectsData || []);
-    } catch (err) {
-      console.error('Failed to fetch dashboard metrics', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const getMetricCards = () => {
-    if (!metrics) return [];
-    const breachCount = slaSummary?.slaCounts?.BREACHED ?? 0;
-    return [
-      { name: 'Total Clients', value: String(metrics.clients), icon: Building2, change: 'Master profiles registered', color: 'var(--accent-primary)', link: '/clients' },
-      { name: 'Active Users', value: String(metrics.users), icon: Users, change: 'System staff accounts', color: 'var(--accent-secondary)', link: '/users' },
-      { name: 'Total Branch Audits', value: String(metrics.branches), icon: Percent, change: 'Master branch directory', color: 'var(--status-active)', link: '/branches' },
-      { 
-        name: 'SLA Breaches', 
-        value: String(breachCount), 
-        icon: AlertTriangle, 
-        change: 'Overdue assignment offers', 
-        color: breachCount > 0 ? '#ef4444' : 'var(--text-muted)',
-        link: '/assignments'
-      },
-    ];
-  };
+  const funnelMax = Math.max(1, ...(data?.funnel ?? []).map((f) => f.count));
+  const dueSoon = (data?.due ?? []).filter((d) => d.daysAway >= 0).slice(0, 8);
+  // Only the roles that /executive-map actually admits (see config/route-permissions.ts) get the
+  // button — linking anyone else there just round-trips them back here through ProtectedRoute.
+  const canSeeCommandCenter = !!data?.roles.some((r) =>
+    ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR', 'OPERATIONS_MANAGER', 'READ_ONLY_AUDITOR'].includes(r));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      
-      {/* Welcome & Command Banner */}
-      <div className="glass-card" style={{ 
-        background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(6, 182, 212, 0.1) 100%)',
-        border: '1px solid rgba(99, 102, 241, 0.2)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: '24px 30px',
-        flexWrap: 'wrap',
-        gap: '16px'
-      }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h3 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '6px', fontFamily: 'var(--font-display)', color: '#fff' }}>
-            Operations Control Dashboard
-          </h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: 0 }}>
-            Unified scheduling system, assayer qualifications tracker, and geographic SLA verification workspace.
+          <h3 style={{ fontSize: 21, fontWeight: 800, margin: 0, fontFamily: 'var(--font-display)' }}>Operations</h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '3px 0 0' }}>
+            {data?.focus ?? 'What needs doing, what’s at risk, and where the book stands.'}
           </p>
         </div>
-        <button onClick={() => navigate('/executive-map')} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 600 }}>
-          🗺️ Command Center Map <ArrowRight size={14} />
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all })}
+            className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+          {canSeeCommandCenter && (
+            <button onClick={() => navigate('/executive-map')} className="btn btn-primary"
+              style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600 }}>
+              <Map size={14} /> Command Center <ArrowRight size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
-      {isLoading ? (
-        <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          Loading live operational snapshot...
+      {isLoading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading operational snapshot…</div>}
+      {error && (
+        <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+          <span>Could not load the operational snapshot.</span>
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}>Retry</button>
         </div>
-      ) : (
+      )}
+
+      {data && (
         <>
-          {/* 3-STAGE END-TO-END PIPELINE LAUNCHER */}
-          <div className="glass-card" style={{ padding: '20px', background: 'linear-gradient(90deg, rgba(99,102,241,0.08) 0%, rgba(16,185,129,0.06) 100%)', border: '1px solid rgba(99,102,241,0.2)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#fff' }}>⚡ 3-Stage Operational Workflow Pipeline</h4>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Follow the audit pipeline from planning & matching through schedule dispatch to field execution.</span>
+          {/* 1. Needs attention — the only section that should change hour to hour. */}
+          <div>
+            <SectionLabel>Needs attention</SectionLabel>
+            {data.attention.length === 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'var(--status-active-bg)', border: '1px solid var(--status-active-bg)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 13 }}>
+                <CheckCircle2 size={16} /> Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled.
               </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-              <div onClick={() => navigate('/planning')} style={{ padding: '14px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase' }}>STAGE 1</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Planning & Matching ➔</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Scope branches, SLA risk radius, & match auditors.</div>
-              </div>
-              <div onClick={() => navigate('/scheduling')} style={{ padding: '14px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#c084fc', textTransform: 'uppercase' }}>STAGE 2</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Schedule Dispatch ➔</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Assign audit dates, dispatch PDF packets, track collection.</div>
-              </div>
-              <div onClick={() => navigate('/assignments')} style={{ padding: '14px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#6ee7b7', textTransform: 'uppercase' }}>STAGE 3</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginTop: '2px' }}>Field Execution ➔</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Acceptance, GPS check-in, audit submission, closure.</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Metrics Row */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '24px' }}>
-            {getMetricCards().map((m) => {
-              const Icon = m.icon;
-              return (
-                <div 
-                  key={m.name} 
-                  className="glass-card" 
-                  onClick={() => navigate(m.link)}
-                  style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '20px', cursor: 'pointer', transition: 'all 0.2s' }}
-                >
-                  <div style={{
-                    background: `rgba(255, 255, 255, 0.03)`,
-                    border: `1px solid var(--border-color)`,
-                    width: '52px',
-                    height: '52px',
-                    borderRadius: 'var(--radius-md)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: m.color
-                  }}>
-                    <Icon size={24} />
-                  </div>
-                  <div>
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>{m.name}</span>
-                    <h4 style={{ fontSize: '28px', fontWeight: 800, margin: '2px 0', color: '#fff', fontFamily: 'var(--font-display)' }}>{m.value}</h4>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{m.change}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Main Grid Split */}
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr', gap: '24px' }}>
-            
-            {/* Active Projects Operational Progress */}
-            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h4 style={{ fontSize: '18px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <TrendingUp size={18} style={{ color: 'var(--accent-primary)' }} /> Live Audit Portfolios
-                  </h4>
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Real-time field completions and compliance tracking.</span>
-                </div>
-                <button onClick={loadAllData} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>
-                  Sync Data
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '6px' }}>
-                {projects.slice(0, 5).map((p) => {
-                  const total = p.branches?.length || 0;
-                  const completed = p.branches?.filter((b: any) => b.status === 'CLOSED' || b.status === 'AUDIT_COMPLETED').length || 0;
-                  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(262px, 1fr))', gap: 12 }}>
+                {data.attention.map((a) => {
+                  const c = SEVERITY[a.severity];
                   return (
-                    <div key={p.id} style={{ padding: '14px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                        <div>
-                          <span style={{ fontWeight: 700, fontSize: '13px', color: '#fff' }}>{p.name}</span>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '8px', fontFamily: 'monospace' }}>({p.projectNumber})</span>
-                        </div>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent-secondary)' }}>{pct}% Complete</span>
+                    <button key={a.key} onClick={() => navigate(a.link)}
+                      style={{
+                        textAlign: 'left', cursor: 'pointer', background: 'var(--bg-secondary)',
+                        border: `1px solid ${c}44`, borderLeft: `3px solid ${c}`,
+                        borderRadius: 'var(--radius-md)', padding: '13px 15px', color: 'var(--text-primary)',
+                      }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: c, fontSize: 11.5, fontWeight: 700 }}>
+                        <AlertTriangle size={13} />{a.label}
                       </div>
-                      
-                      {/* Custom visual progress bar */}
-                      <div style={{ width: '100%', height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--gradient-neon)', borderRadius: '3px', transition: 'width 0.3s' }} />
+                      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>
+                        {a.isMoney ? money(a.count) : a.count}
                       </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
-                        <span>Completed Sites: <b>{completed} / {total}</b></span>
-                        <span>Client: <b>{p.client?.name || 'N/A'}</b></span>
-                      </div>
-                    </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.45 }}>{a.detail}</div>
+                    </button>
                   );
                 })}
               </div>
-            </div>
-
-            {/* SLA Risk Breakdown & Activities */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              
-              {/* SLA & Live Lifecycle Status Widget */}
-              <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <h4 style={{ fontSize: '16px', fontWeight: 700 }}>SLA & Real-Time Assignment Tracking</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div style={{ padding: '14px', background: 'rgba(16,185,129,0.04)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>COMPLIANT</span>
-                    <b style={{ fontSize: '20px', color: '#10b981' }}>{slaSummary?.slaCounts?.COMPLIANT ?? 0}</b>
-                  </div>
-                  <div style={{ padding: '14px', background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>OVERDUE / RISK</span>
-                    <b style={{ fontSize: '20px', color: '#ef4444' }}>{slaSummary?.slaCounts?.BREACHED ?? 0}</b>
-                  </div>
-                </div>
-
-                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Lifecycle Status Breakdown</span>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
-                    <div style={{ padding: '8px 10px', background: 'rgba(6, 182, 212, 0.08)', borderRadius: '6px', color: '#06b6d4', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>📍 Checked In:</span>
-                      <b>{slaSummary?.statusCounts?.CHECKED_IN ?? slaSummary?.statusCounts?.SCHEDULED ?? 0}</b>
-                    </div>
-                    <div style={{ padding: '8px 10px', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '6px', color: '#10b981', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>✅ Accepted:</span>
-                      <b>{slaSummary?.statusCounts?.ACCEPTED ?? 0}</b>
-                    </div>
-                    <div style={{ padding: '8px 10px', background: 'rgba(168, 85, 247, 0.08)', borderRadius: '6px', color: '#a855f7', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>📄 Audit Done:</span>
-                      <b>{slaSummary?.statusCounts?.AUDIT_COMPLETED ?? 0}</b>
-                    </div>
-                    <div style={{ padding: '8px 10px', background: 'rgba(245, 158, 11, 0.08)', borderRadius: '6px', color: '#f59e0b', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>⏳ Planning:</span>
-                      <b>{slaSummary?.statusCounts?.CREATED ?? slaSummary?.statusCounts?.CONTACT_INITIATED ?? 0}</b>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Recent Actions Feed */}
-              <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
-                <h4 style={{ fontSize: '16px', fontWeight: 700 }}>Operations Feed</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '240px', overflowY: 'auto' }}>
-                  {metrics?.activities && metrics.activities.length > 0 ? (
-                    metrics.activities.slice(0, 6).map((act) => (
-                      <div key={act.id} style={{ display: 'flex', gap: '12px', fontSize: '12px' }}>
-                        <div style={{
-                          marginTop: '4px',
-                          width: '6px',
-                          height: '6px',
-                          borderRadius: '50%',
-                          background: 'var(--accent-secondary)',
-                          boxShadow: '0 0 6px var(--accent-secondary)',
-                          flexShrink: 0
-                        }} />
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <span style={{ fontWeight: 700, color: '#fff' }}>{act.action.replace(/_/g, ' ')}</span>
-                          <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{act.detail}</span>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>{new Date(act.occurredAt).toLocaleTimeString()}</span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '20px 0' }}>No recent history.</div>
-                  )}
-                </div>
-              </div>
-
-            </div>
-
+            )}
           </div>
+
+          {/* 2. The week ahead, with readiness rather than just dates. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
+            {data.due && (
+            <div>
+              <SectionLabel>Audits due — next 7 days</SectionLabel>
+              <div className="glass-card" style={{ padding: 14 }}>
+                {dueSoon.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No audits scheduled in the next week.</div>
+                ) : dueSoon.map((d) => (
+                  <div key={d.projectBranchId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: 10.5, fontWeight: 700, minWidth: 54, textAlign: 'center',
+                      padding: '2px 7px', borderRadius: 'var(--radius-sm)',
+                      background: d.daysAway === 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-tertiary)',
+                      color: d.daysAway === 0 ? 'var(--danger)' : 'var(--text-secondary)',
+                    }}>
+                      {d.daysAway === 0 ? 'today' : d.daysAway === 1 ? 'tomorrow' : `${d.daysAway}d`}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 130, fontSize: 12.5 }}>
+                      <strong>{d.branchName}</strong>
+                      <span style={{ color: 'var(--text-muted)' }}> · {d.district}</span>
+                    </span>
+                    {d.blocker ? (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warning)', whiteSpace: 'nowrap' }}>
+                        {BLOCKER_TEXT[d.blocker]}
+                      </span>
+                    ) : (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--success)' }}>
+                        <CheckCircle2 size={11} /> ready
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            )}
+
+            {/* 3. Funnel — where the book is piling up. */}
+            {data.funnel && (
+            <div>
+              <SectionLabel>Where the book stands</SectionLabel>
+              <div className="glass-card" style={{ padding: 14 }}>
+                {data.funnel.filter((f) => f.count > 0).map((f) => (
+                  <div key={f.key} style={{ marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, marginBottom: 3 }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>{f.label}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        <strong style={{ color: 'var(--text-primary)' }}>{f.count}</strong> branches · {f.packets.toLocaleString('en-IN')} pkt
+                      </span>
+                    </div>
+                    <div style={{ height: 6, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${(f.count / funnelMax) * 100}%`, height: '100%', background: 'var(--accent-primary)' }} />
+                    </div>
+                  </div>
+                ))}
+                {data.funnel.every((f) => f.count === 0) && (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No branches loaded yet.</div>
+                )}
+              </div>
+            </div>
+            )}
+          </div>
+
+          {/* Validation — only for the roles that work that queue. */}
+          {data.validation && (
+            <div>
+              <SectionLabel>Validation queue</SectionLabel>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                <Stat icon={<Inbox size={15} />} label="Assigned to you" value={String(data.validation.assignedToMe)}
+                      sub="cases where you are the reviewer" color="var(--accent)" onClick={() => navigate('/validation')} />
+                <Stat icon={<Layers size={15} />} label="Awaiting review" value={String(data.validation.pending + data.validation.inReview)}
+                      sub={`${data.validation.pending} pending · ${data.validation.inReview} in review`} color="var(--accent)" onClick={() => navigate('/validation')} />
+                <Stat icon={<AlertTriangle size={15} />} label="Needs correction" value={String(data.validation.needsCorrection)}
+                      sub="sent back for rework" color={data.validation.needsCorrection ? 'var(--warning)' : 'var(--text-muted)'} onClick={() => navigate('/validation')} />
+                <Stat icon={<AlertTriangle size={15} />} label="Open clarifications" value={String(data.validation.openQueries)}
+                      sub={data.validation.overdueQueries > 0 ? `${data.validation.overdueQueries} past deadline` : 'none overdue'}
+                      color={data.validation.overdueQueries ? 'var(--danger)' : 'var(--success)'} onClick={() => navigate('/validation')} />
+              </div>
+            </div>
+          )}
+
+          {/* 4. Standing position — checked occasionally, not hourly. */}
+          {(data.capacity || data.documents || data.money) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+              {data.capacity && (
+                <Stat icon={<Users size={15} />} label="Assayer capacity" value={`${data.capacity.dailyCapacity}/day`}
+                      sub={`${data.capacity.assayers} active · ${data.capacity.idle} idle`} color="var(--success)"
+                      onClick={() => navigate('/assayers')} />
+              )}
+              {data.documents && (
+                <Stat icon={<Inbox size={15} />} label="Paperwork in flight"
+                      value={String(data.documents.awaitingReturn + data.documents.awaitingOcr + data.documents.inOcr)}
+                      sub={`${data.documents.awaitingReturn} with assayers · ${data.documents.awaitingOcr} at data entry`}
+                      color="var(--accent)" onClick={() => navigate('/documents')} />
+              )}
+              {data.money && (
+                <>
+                  <Stat icon={<IndianRupee size={15} />} label="Unbilled" value={money(data.money.unbilled)}
+                        sub={data.money.outstanding > 0 ? `${money(data.money.outstanding)} awaiting payment` : 'nothing outstanding'}
+                        color="var(--warning)" onClick={() => navigate('/billing')} />
+                  <Stat icon={<IndianRupee size={15} />} label="Collected" value={money(data.money.collected)}
+                        sub="received from clients" color="var(--success)" onClick={() => navigate('/billing')} />
+                </>
+              )}
+            </div>
+          )}
+
+          {/* 5. Projects — real progress, counted server-side. */}
+          {data.projects && (
+          <div>
+            <SectionLabel>Projects</SectionLabel>
+            <div className="glass-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {data.projects.length === 0 && <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No active projects.</div>}
+              {data.projects.map((p) => (
+                <div key={p.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>
+                      {p.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontFamily: 'monospace', fontSize: 11 }}>{p.projectNumber}</span>
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {p.clientName} · <strong style={{ color: 'var(--text-primary)' }}>{p.progressPct}%</strong> audited
+                    </span>
+                  </div>
+                  <div style={{ height: 6, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden', margin: '6px 0 4px' }}>
+                    <div style={{ width: `${p.progressPct}%`, height: '100%', background: 'var(--gradient-neon, var(--success))' }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                    <span><Layers size={10} style={{ display: 'inline' }} /> {p.totalBranches} branches</span>
+                    <span>{p.packets.toLocaleString('en-IN')} packets</span>
+                    <span>{p.audited} audited</span>
+                    {p.unplanned > 0 && <span style={{ color: 'var(--warning)' }}>{p.unplanned} not yet planned</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          )}
+
+          {/* 6. Activity */}
+          {data.activities && data.activities.length > 0 && (
+            <div>
+              <SectionLabel>Recent activity</SectionLabel>
+              <div className="glass-card" style={{ padding: 14, maxHeight: 220, overflowY: 'auto' }}>
+                {data.activities.map((a) => (
+                  <div key={a.id} style={{ display: 'flex', gap: 10, padding: '5px 0', fontSize: 12, alignItems: 'baseline' }}>
+                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent-secondary)', flexShrink: 0 }} />
+                    <span style={{ fontWeight: 600, minWidth: 0 }}>{a.action.replace(/_/g, ' ').toLowerCase()}</span>
+                    {a.detail && <span style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.detail}</span>}
+                    <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                      {new Date(a.occurredAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
-
     </div>
   );
 };
+
+const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; color: string; onClick?: () => void }> = ({ icon, label, value, sub, color, onClick }) => (
+  <button onClick={onClick} style={{
+    textAlign: 'left', cursor: onClick ? 'pointer' : 'default', background: 'var(--bg-secondary)',
+    border: '1px solid var(--border-color)', borderLeft: `3px solid ${color}`,
+    borderRadius: 'var(--radius-md)', padding: '13px 15px', color: 'var(--text-primary)',
+  }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
+      <span style={{ color }}>{icon}</span>{label}
+    </div>
+    <div style={{ fontSize: 19, fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>{value}</div>
+    {sub && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
+  </button>
+);
+
+const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 9 }}>{children}</div>
+);

@@ -10,36 +10,15 @@ import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
-import { EventCategory } from '@fapoms/shared';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { EventCategory, resolveRegion } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { autocompleteIndia } from '../geo/india-autocomplete.helper';
+import { geocodeIndia } from '../geo/india-geocoder';
 
-async function geocodeAddress(address: string, city: string, district: string, state: string): Promise<{ lat: number; lng: number } | null> {
-  const cleanQ = `${address}, ${city || district}, ${district}, ${state}, India`
-    .replace(/\s+/g, ' ')
-    .trim();
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQ)}&format=json&limit=1&countrycodes=in`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'fapoms-production-geocoder/1.0 (info@fapoms.com)'
-      }
-    });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = await res.json() as any[];
-      if (data && data[0]) {
-        return {
-          lat: parseFloat(data[0].lat),
-          lng: parseFloat(data[0].lon)
-        };
-      }
-    }
-  } catch (err) {
-    console.error(`Error geocoding inside service: ${cleanQ}`, err);
-  }
-  return null;
+async function geocodeAddress(address: string, city: string, district: string, state: string, pincode?: string | null): Promise<{ lat: number; lng: number } | null> {
+  const res = await geocodeIndia(address, city, district, state, pincode);
+  return res ? { lat: res.lat, lng: res.lng } : null;
 }
 
 export interface CreateBranchDto {
@@ -149,6 +128,7 @@ export class BranchService {
     private readonly clientService: ClientService,
     private readonly auditService: AuditService,
     private readonly branchQueryService: BranchQueryService,
+    private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -168,13 +148,10 @@ export class BranchService {
     let lat = dto.latitude;
     let lng = dto.longitude;
     if (!lat || !lng) {
-      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state);
+      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
       if (coords) {
         lat = coords.lat;
         lng = coords.lng;
-      } else {
-        lat = 19.076;
-        lng = 72.8777;
       }
     }
     const location = { type: 'Point', coordinates: [lng, lat] };
@@ -188,7 +165,10 @@ export class BranchService {
       district: dto.district,
       city: dto.city,
       pincode: dto.pincode ?? null,
-      region: dto.region ?? null,
+      // Canonicalised on write, state first. Letting a caller store an arbitrary string here
+      // is what made the column unfilterable in the first place; the migration that cleaned it
+      // up would be undone by the next import otherwise.
+      region: resolveRegion(dto.region) ?? resolveRegion(dto.state) ?? null,
       territory: dto.territory ?? null,
       zoneId: dto.zoneId ?? null,
       branchType: dto.branchType ?? null,
@@ -223,6 +203,21 @@ export class BranchService {
       remarks: `Created branch ${saved.name} (${saved.branchCode})`,
     });
 
+    try {
+      this.eventPublisher.publish('branch:created', {
+        eventType: 'branch:created',
+        branchId: saved.id,
+        branchCode: saved.branchCode,
+        name: saved.name,
+        clientId: saved.clientId,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish branch:created event:', err);
+    }
+
     return saved;
   }
 
@@ -233,11 +228,13 @@ export class BranchService {
   async findAll(
     page = 1,
     limit = 20,
-    clientId?: string,
-    region?: string,
-    zoneId?: string,
+    scope: Partial<GlobalScope> = {},
   ): Promise<{ branches: BranchEntity[]; total: number }> {
-    return this.branchQueryService.findAll(page, limit, clientId, region, zoneId);
+    return this.branchQueryService.findAll(page, limit, scope);
+  }
+
+  async scopeFacets(scope: Partial<GlobalScope> = {}) {
+    return this.branchQueryService.scopeFacets(scope);
   }
 
   async update(id: string, dto: UpdateBranchDto, userId: string): Promise<BranchEntity> {
@@ -269,7 +266,8 @@ export class BranchService {
         dto.address ?? branch.address,
         dto.city ?? branch.city,
         dto.district ?? branch.district,
-        dto.state ?? branch.state
+        dto.state ?? branch.state,
+        dto.pincode ?? branch.pincode,
       );
       if (coords) {
         lat = coords.lat;
@@ -294,7 +292,13 @@ export class BranchService {
     if (dto.district !== undefined) branch.district = dto.district;
     if (dto.city !== undefined) branch.city = dto.city;
     if (dto.pincode !== undefined) branch.pincode = dto.pincode;
-    if (dto.region !== undefined) branch.region = dto.region;
+    // Region follows the state unless the caller names one explicitly, and is canonicalised
+    // either way — see the matching note on create().
+    if (dto.region !== undefined) {
+      branch.region = resolveRegion(dto.region) ?? resolveRegion(branch.state) ?? null;
+    } else if (dto.state !== undefined) {
+      branch.region = resolveRegion(dto.state) ?? branch.region;
+    }
     if (dto.territory !== undefined) branch.territory = dto.territory;
     if (dto.zoneId !== undefined) branch.zoneId = dto.zoneId;
     if (dto.branchType !== undefined) branch.branchType = dto.branchType;
@@ -325,6 +329,20 @@ export class BranchService {
       userId,
       remarks: `Updated branch ${saved.name} (${saved.branchCode})`,
     });
+
+    try {
+      this.eventPublisher.publish('branch:updated', {
+        eventType: 'branch:updated',
+        branchId: saved.id,
+        name: saved.name,
+        clientId: saved.clientId,
+        organizationId: saved.organizationId,
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error('Failed to publish branch:updated event:', err);
+    }
 
     return saved;
   }
@@ -418,6 +436,16 @@ export class BranchService {
     contact.isActive = false;
     contact.updatedBy = userId;
     await this.contactRepository.save(contact);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_CONTACT_REMOVED',
+      entityType: 'BRANCH',
+      entityId: contact.branchId,
+      userId,
+      remarks: `Removed contact ${contact.name} from branch`,
+      metadata: { contactId: contact.id, name: contact.name, designation: contact.designation ?? null, email: contact.email ?? null, phone: contact.phone ?? null },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -466,6 +494,16 @@ export class BranchService {
     doc.isActive = false;
     doc.updatedBy = userId;
     await this.documentRepository.save(doc);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_DOCUMENT_REMOVED',
+      entityType: 'BRANCH',
+      entityId: doc.branchId,
+      userId,
+      remarks: `Removed document ${doc.fileName} from branch`,
+      metadata: { documentId: doc.id, fileName: doc.fileName, category: doc.category, filePath: doc.filePath },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -584,20 +622,34 @@ export class BranchService {
 
   private async validateGeography(state: string, district: string, city: string): Promise<void> {
     const stateEntity = await this.stateRepository.findOne({ where: { name: state } });
-    if (!stateEntity) {
-      throw new BadRequestException(`State '${state}' not found in master reference data.`);
-    }
-    const districtEntity = await this.districtRepository.findOne({
-      where: { name: district, stateId: stateEntity.id },
-    });
-    if (!districtEntity) {
-      throw new BadRequestException(`District '${district}' not found under state '${state}'.`);
-    }
-    const cityEntity = await this.cityRepository.findOne({
-      where: { name: city, districtId: districtEntity.id },
-    });
+    const districtEntity = stateEntity
+      ? await this.districtRepository.findOne({ where: { name: district, stateId: stateEntity.id } })
+      : null;
+    const cityEntity = districtEntity
+      ? await this.cityRepository.findOne({ where: { name: city, districtId: districtEntity.id } })
+      : null;
+
+    // The curated reference tables only cover a handful of states. If a real
+    // place is not in them, confirm it exists via live geo search rather than
+    // rejecting a legitimate branch — a hard-coded map can't know every district.
     if (!cityEntity) {
-      throw new BadRequestException(`City '${city}' not found under district '${district}'.`);
+      const live = await autocompleteIndia(city);
+      const found = live.some(
+        (p) =>
+          p.district &&
+          p.state &&
+          p.district.toLowerCase() === district.toLowerCase() &&
+          p.state.toLowerCase() === state.toLowerCase(),
+      );
+      const stateLive = await autocompleteIndia(state);
+      const stateExists = stateLive.some(
+        (p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase(),
+      );
+      if (!found && !stateExists) {
+        throw new BadRequestException(
+          `Could not verify '${city}, ${district}, ${state}' as a real place. Check the spelling of the state, district and city.`,
+        );
+      }
     }
   }
 

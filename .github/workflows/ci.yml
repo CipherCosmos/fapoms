@@ -1,0 +1,43 @@
+name: FAPOMS Stage-3 Verification Pipeline
+
+on:
+  push:
+    branches: [ main, business_req ]
+  pull_request:
+    branches: [ main, business_req ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Monorepo Dependencies
+        run: npm ci
+
+      - name: Build Monorepo Workspaces
+        run: |
+          npm run build:shared
+          npm run build:backend
+          npm run build:frontend
+
+      - name: Lint backend (async-safety ratchet — fails on floating promises)
+        run: npm run lint --workspace=packages/backend
+
+      - name: Lint frontend (React hook-rules + async ratchet)
+        run: npm run lint --workspace=packages/frontend
+
+      - name: Run Backend Unit & Integration Tests
+        run: npm run test --workspace=packages/backend
+
+      # NOTE: E2E currently runs advisory (|| true) because it needs a running stack (DB + API +
+      # object storage) that this job does not yet provision. To make it enforcing, add service
+      # containers (postgres, redis, minio, clamav) and a step that boots the API, then drop `|| true`.
+      - name: Run E2E Automation Suites
+        run: npx playwright test --config=playwright.config.ts || true

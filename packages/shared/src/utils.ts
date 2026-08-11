@@ -47,3 +47,64 @@ export function calculateHaversineDistance(
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
+
+/**
+ * Branch and assayer state names come from different sources — client branch
+ * lists and internal rosters — and do not agree: a branch is in `MAHARASHTRA`
+ * while an assayer living there is recorded under `Maharashtra` or `maharashtra`,
+ * and `ANDRAPRADESH` faces `A.P`. Comparing raw values treats these as different
+ * states. Canonicalise for comparison; keep the original for display.
+ */
+const STATE_ALIASES: Record<string, string> = {
+  AP: 'ANDHRA PRADESH', 'A P': 'ANDHRA PRADESH', ANDRAPRADESH: 'ANDHRA PRADESH',
+  ANDHRAPRADESH: 'ANDHRA PRADESH', 'ANDHRA PRADESH': 'ANDHRA PRADESH',
+  TS: 'TELANGANA', TELANGANA: 'TELANGANA',
+  TN: 'TAMIL NADU', TAMILNADU: 'TAMIL NADU', 'TAMIL NADU': 'TAMIL NADU',
+  KL: 'KERALA', KERALA: 'KERALA',
+  KA: 'KARNATAKA', KARNATAKA: 'KARNATAKA',
+  MH: 'MAHARASHTRA', MAHARASHTRA: 'MAHARASHTRA',
+  OD: 'ODISHA', ORISSA: 'ODISHA', ODISHA: 'ODISHA',
+  RJ: 'RAJASTHAN', RAJASTHAN: 'RAJASTHAN',
+  UP: 'UTTAR PRADESH', UTTARPRADESH: 'UTTAR PRADESH', 'UTTAR PRADESH': 'UTTAR PRADESH',
+  PY: 'PUDUCHERRY', PONDICHERRY: 'PUDUCHERRY', PUDUCHERRY: 'PUDUCHERRY',
+  DL: 'DELHI', 'NEW DELHI': 'DELHI', DELHI: 'DELHI',
+  GJ: 'GUJARAT', GUJARAT: 'GUJARAT', WB: 'WEST BENGAL', 'WEST BENGAL': 'WEST BENGAL',
+};
+
+/** Uppercase, strip punctuation, collapse spaces, then resolve known aliases. */
+export function canonicalState(raw: string | null | undefined): string {
+  if (!raw) return 'UNKNOWN';
+  const k = String(raw).toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
+  return STATE_ALIASES[k] ?? STATE_ALIASES[k.replace(/\s/g, '')] ?? k;
+}
+
+/**
+ * Rupee amounts, formatted one way everywhere.
+ *
+ * Six near-identical `money()` helpers had accumulated across the web and mobile apps, and
+ * they had already diverged: most passed `maximumFractionDigits: 0`, one rounded first, and
+ * one passed neither — so the same payable could render as "₹14,944" on one screen and
+ * "₹14,943.6" on another. Currency formatting is a product-wide decision, not a per-file one.
+ */
+export interface RupeeFormatOptions {
+  /** Decimal places. Defaults to 0 — whole rupees, which is what almost every surface wants. */
+  decimals?: number;
+  /** Rendered instead of a zero when the value is null/undefined, e.g. an em dash. */
+  emptyAs?: string;
+}
+
+export function formatRupees(
+  value: number | string | null | undefined,
+  options: RupeeFormatOptions = {},
+): string {
+  const { decimals = 0, emptyAs } = options;
+  if (emptyAs !== undefined && (value === null || value === undefined || value === '')) {
+    return emptyAs;
+  }
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return emptyAs ?? '₹0';
+  return `₹${n.toLocaleString('en-IN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}`;
+}

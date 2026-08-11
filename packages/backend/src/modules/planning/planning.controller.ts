@@ -10,10 +10,13 @@ import {
   UseGuards,
   Req,
   ParseUUIDPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsObject } from 'class-validator';
+import { Throttle } from '@nestjs/throttler';
+import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength } from 'class-validator';
 
+import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
 import { PlanningOrchestratorService } from './planning-orchestrator.service';
 import { ProjectPlanningService } from './project-planning.service';
@@ -33,7 +36,9 @@ import { ExecutionGroupStatus } from './operations-execution-group.entity';
 import { FieldVisitStatus } from './field-visit.entity';
 import { IncidentSeverity } from './field-incident.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 export class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
   @IsString() @IsNotEmpty()
@@ -75,6 +80,157 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
   actions?: Record<string, any> | null;
 }
 
+/**
+ * Runtime-validated body for execution packaging. Was typed as the `GroupPackageDto`
+ * interface, which is erased at compile time — so ValidationPipe saw nothing and an empty
+ * body reached the service, which then threw on a missing assayer.
+ */
+class GroupPackageRequestDto implements GroupPackageDto {
+  @IsUUID()
+  assayerId: string;
+
+  @IsOptional() @IsString()
+  name?: string;
+
+  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  assignmentIds: string[];
+
+  @IsOptional() @IsObject()
+  logisticsPreferences?: any;
+}
+
+
+/**
+ * Runtime-validated bodies for the operations control-centre and field-visit routes.
+ *
+ * These three took their `@Body()` as an inline TypeScript object literal
+ * (`{ projectId: string; ... }`). Like an interface, that type is erased at compile time, so
+ * ValidationPipe had nothing to check and an empty body reached the service — each returned a
+ * 500 instead of telling the caller which fields were missing. Twenty-two other routes across
+ * the codebase still take bodies this way; these are the three that demonstrably crash.
+ */
+class CreateOperationsTaskRequestDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsString() @IsNotEmpty()
+  title: string;
+
+  @IsString() @IsNotEmpty()
+  reason: string;
+
+  @IsEnum(OperationsTaskPriority)
+  priority: OperationsTaskPriority;
+}
+
+class CreateOperationsExceptionRequestDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsEnum(OperationsExceptionCategory)
+  category: OperationsExceptionCategory;
+
+  @IsString() @IsNotEmpty()
+  message: string;
+
+  @IsOptional() @IsUUID()
+  targetEntityId?: string;
+}
+
+class CreateFieldVisitRequestDto {
+  @IsUUID()
+  coveragePlanId: string;
+
+  @IsUUID()
+  executionGroupId: string;
+
+  @IsUUID()
+  branchId: string;
+
+  @IsUUID()
+  assayerId: string;
+
+  @IsDateString()
+  plannedDate: string;
+}
+
+
+/**
+ * Runtime-validated bodies for the remaining planning mutations.
+ *
+ * All of these took inline object literals, which TypeScript erases — so status and severity
+ * fields typed as enums were accepted as any string, and required ids as anything at all.
+ */
+class UpdateFieldVisitStatusRequestDto {
+  @IsEnum(FieldVisitStatus)
+  status: FieldVisitStatus;
+}
+
+class CreateFieldIncidentRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(255)
+  title: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  description: string;
+
+  @IsEnum(IncidentSeverity)
+  severity: IncidentSeverity;
+}
+
+/**
+ * Deployment date for an approved coverage plan. Without it, execution silently used "today",
+ * which on any holiday or weekend means every assignment is rejected by the date rules and
+ * nothing can be deployed at all.
+ */
+class ExecutePlanRequestDto {
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+}
+
+/** Resolving anything operational requires a stated reason — that is the point of the record. */
+class JustificationRequestDto {
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  justification: string;
+}
+
+class CreateConversationRequestDto {
+  @IsEnum(NegotiationParticipant)
+  sender: NegotiationParticipant;
+
+  @IsString() @IsNotEmpty() @MaxLength(4000)
+  message: string;
+
+  @IsOptional() @IsNumber() @Min(0)
+  feeOverride?: number;
+
+  @IsOptional() @IsDateString()
+  dateOverride?: string;
+}
+
+class CreateCoveragePlanRequestDto {
+  @IsOptional() @IsArray()
+  overrides?: PlanOverrideDto[];
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  justification?: string;
+}
+
+class TransitionCoveragePlanRequestDto {
+  @IsEnum(CoveragePlanStatus)
+  status: CoveragePlanStatus;
+}
+
+class SimulateScenarioRequestDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsOptional() @IsObject()
+  weightOverrides?: Record<string, number>;
+
+  @IsOptional() @IsNumber() @Min(0)
+  defaultRadiusOverride?: number;
+}
+
 @ApiTags('Planning')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -82,6 +238,7 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
 export class PlanningController {
   constructor(
     private readonly planningService: PlanningService,
+    private readonly commandCenterService: CommandCenterService,
     private readonly planningOrchestratorService: PlanningOrchestratorService,
     private readonly projectPlanningService: ProjectPlanningService,
     private readonly optimizationEngine: OptimizationEngine,
@@ -99,14 +256,16 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Initialize new field visit execution record' })
   async createVisit(
-    @Body() body: { coveragePlanId: string; executionGroupId: string; branchId: string; assayerId: string; plannedDate: string }
+    @Body() body: CreateFieldVisitRequestDto,
+    @Req() req: any
   ) {
     const visit = await this.fieldService.createFieldVisit(
       body.coveragePlanId,
       body.executionGroupId,
       body.branchId,
       body.assayerId,
-      body.plannedDate
+      body.plannedDate,
+      req.user?.id
     );
     return {
       success: true,
@@ -116,13 +275,14 @@ export class PlanningController {
 
   @Put('field/visits/:visitId/status')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' })
   async transitionVisit(
     @Param('visitId', ParseUUIDPipe) visitId: string,
-    @Body() body: { status: FieldVisitStatus }
+    @Body() body: UpdateFieldVisitStatusRequestDto,
+    @Req() req: any
   ) {
-    const visit = await this.fieldService.transitionVisitStatus(visitId, body.status);
+    const visit = await this.fieldService.transitionVisitStatus(visitId, body.status, req.user?.id);
     return {
       success: true,
       data: visit,
@@ -135,9 +295,10 @@ export class PlanningController {
   @ApiOperation({ summary: 'Report operational field incident (e.g. branch closed, assayer illness)' })
   async reportIncident(
     @Param('visitId', ParseUUIDPipe) visitId: string,
-    @Body() body: { title: string; description: string; severity: IncidentSeverity }
+    @Body() body: CreateFieldIncidentRequestDto,
+    @Req() req: any
   ) {
-    const incident = await this.fieldService.reportIncident(visitId, body.title, body.description, body.severity);
+    const incident = await this.fieldService.reportIncident(visitId, body.title, body.description, body.severity, req.user?.id);
     return {
       success: true,
       data: incident,
@@ -146,13 +307,14 @@ export class PlanningController {
 
   @Put('field/incidents/:incidentId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Resolve active field incident' })
   async resolveIncident(
     @Param('incidentId', ParseUUIDPipe) incidentId: string,
-    @Body() body: { justification: string }
+    @Body() body: JustificationRequestDto,
+    @Req() req: any
   ) {
-    const incident = await this.fieldService.resolveIncident(incidentId, body.justification);
+    const incident = await this.fieldService.resolveIncident(incidentId, body.justification, req.user?.id);
     return {
       success: true,
       data: incident,
@@ -185,7 +347,7 @@ export class PlanningController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Bundle multiple operational assignments into a single deployment package' })
-  async packageAssignments(@Body() dto: GroupPackageDto) {
+  async packageAssignments(@Body() dto: GroupPackageRequestDto) {
     const pkg = await this.executionService.packageAssignments(dto);
     return {
       success: true,
@@ -199,7 +361,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Record conversation message with fee/date negotiations' })
   async postMessage(
     @Param('groupId', ParseUUIDPipe) groupId: string,
-    @Body() body: { sender: NegotiationParticipant; message: string; feeOverride?: number; dateOverride?: string }
+    @Body() body: CreateConversationRequestDto
   ) {
     const msg = await this.executionService.postConversationMessage(
       groupId,
@@ -241,9 +403,10 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate manual operational task in the queue' })
   async createTask(
-    @Body() body: { projectId: string; title: string; reason: string; priority: OperationsTaskPriority }
+    @Body() body: CreateOperationsTaskRequestDto,
+    @Req() req: any
   ) {
-    const task = await this.controlCenterService.createOperationsTask(body.projectId, body.title, body.reason, body.priority);
+    const task = await this.controlCenterService.createOperationsTask(body.projectId, body.title, body.reason, body.priority, req.user?.id);
     return {
       success: true,
       data: task,
@@ -252,13 +415,14 @@ export class PlanningController {
 
   @Put('control-center/tasks/:taskId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Resolve an operations task with justification log' })
   async resolveTask(
     @Param('taskId', ParseUUIDPipe) taskId: string,
-    @Body() body: { justification: string }
+    @Body() body: JustificationRequestDto,
+    @Req() req: any
   ) {
-    const task = await this.controlCenterService.resolveOperationsTask(taskId, body.justification);
+    const task = await this.controlCenterService.resolveOperationsTask(taskId, body.justification, req.user?.id);
     return {
       success: true,
       data: task,
@@ -270,9 +434,10 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Flag managed exception rule violations' })
   async createException(
-    @Body() body: { projectId: string; category: OperationsExceptionCategory; message: string; targetEntityId?: string }
+    @Body() body: CreateOperationsExceptionRequestDto,
+    @Req() req: any
   ) {
-    const exc = await this.controlCenterService.flagException(body.projectId, body.category, body.message, body.targetEntityId);
+    const exc = await this.controlCenterService.flagException(body.projectId, body.category, body.message, body.targetEntityId, req.user?.id);
     return {
       success: true,
       data: exc,
@@ -281,13 +446,14 @@ export class PlanningController {
 
   @Put('control-center/exceptions/:exceptionId/resolve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Resolve or bypass exception log with justification' })
   async resolveException(
     @Param('exceptionId', ParseUUIDPipe) exceptionId: string,
-    @Body() body: { justification: string }
+    @Body() body: JustificationRequestDto,
+    @Req() req: any
   ) {
-    const exc = await this.controlCenterService.resolveException(exceptionId, body.justification);
+    const exc = await this.controlCenterService.resolveException(exceptionId, body.justification, req.user?.id);
     return {
       success: true,
       data: exc,
@@ -295,6 +461,7 @@ export class PlanningController {
   }
 
   @Get('projects/:projectId/coverage')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get project planning coverage and metrics summary' })
   async getProjectCoverage(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const coverage = await this.planningOrchestratorService.getProjectCoverage(projectId);
@@ -321,7 +488,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Create or regenerate coverage plan version with manual overrides' })
   async createOrRegeneratePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Body() body: { overrides?: PlanOverrideDto[]; justification?: string },
+    @Body() body: CreateCoveragePlanRequestDto,
     @Req() req: any
   ) {
     const plan = await this.operationsPlanningService.createOrRegeneratePlan(projectId, body.overrides || [], req.user.id, body.justification);
@@ -333,11 +500,11 @@ export class PlanningController {
 
   @Put('coverage-plans/:planId/transition')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' })
   async transitionPlan(
     @Param('planId', ParseUUIDPipe) planId: string,
-    @Body() body: { status: CoveragePlanStatus },
+    @Body() body: TransitionCoveragePlanRequestDto,
     @Req() req: any
   ) {
     const plan = await this.operationsPlanningService.transitionPlanStatus(planId, body.status, req.user.id);
@@ -348,17 +515,27 @@ export class PlanningController {
   }
 
   @Post('coverage-plans/:planId/execute')
+  // Engine-heavy and write-heavy (spawns assignments across a whole project). Capped
+  // well below the global default so one caller cannot pin the CPU with repeated runs.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Deploy approved plan and automatically spawn operational assignments' })
   async executePlan(
     @Param('planId', ParseUUIDPipe) planId: string,
+    @Body() body: ExecutePlanRequestDto,
     @Req() req: any
   ) {
-    await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id);
+    const result = await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
     return {
       success: true,
-      data: { message: 'Approved coverage plan executed and deployed successfully.' },
+      data: {
+        message: `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}.`,
+        deployedCount: result.deployed.length,
+        skippedCount: result.skipped.length,
+        deployed: result.deployed,
+        skipped: result.skipped,
+      },
     };
   }
 
@@ -374,6 +551,9 @@ export class PlanningController {
   }
 
   @Post('projects/:projectId/optimize')
+  // Runs the scoring engine across every branch × candidate for a project — the most
+  // CPU-intensive endpoint in the system. Tightly throttled.
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate optimized project-wide assayer matching and routing deployment plan' })
@@ -386,11 +566,14 @@ export class PlanningController {
   }
 
   @Post('scenarios/simulate')
+  // What-if simulation runs the full optimizer without persisting; heavy CPU, so it
+  // gets the same tight budget as optimize.
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' })
   async simulateScenario(
-    @Body() dto: { projectId: string; weightOverrides?: Record<string, number>; defaultRadiusOverride?: number }
+    @Body() dto: SimulateScenarioRequestDto
   ) {
     const plan = await this.scenarioPlanningService.simulatePlanningScenario(dto);
     return {
@@ -399,15 +582,85 @@ export class PlanningController {
     };
   }
 
+  @Get('command-center')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER, SystemRole.READ_ONLY_AUDITOR)
+  @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
+  async commandCenter(@GlobalScopeFilter() scope: GlobalScope) {
+    // Takes the whole global scope now — the map is the surface where an operator most expects
+    // "show me my region" to mean it, both for the branch pins and for the assayer pins.
+    return { success: true, data: await this.commandCenterService.overview(scope) };
+  }
+
+  @Get('suggest-date')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Suggest the first workable audit date for a branch (skips Sundays, holidays, off Saturdays)' })
+  async suggestAuditDate(@Query('branchId', ParseUUIDPipe) branchId: string) {
+    return { success: true, data: await this.planningService.suggestAuditDate(branchId) };
+  }
+
   @Get('recommendations')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch' })
-  async getRecommendations(@Query('branchId', ParseUUIDPipe) branchId: string) {
-    const recommendations = await this.planningService.getRecommendedCandidates(branchId);
+  @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch, for a given audit date' })
+  async getRecommendations(
+    @Query('branchId', ParseUUIDPipe) branchId: string,
+    // The audit date availability is evaluated against (YYYY-MM-DD). Ops plans ahead, so the UI
+    // sends its date picker; omitted, today is assumed (legacy callers).
+    @Query('date') date?: string,
+  ) {
+    const recommendations = await this.planningService.getRecommendedCandidates(branchId, {}, date);
     return {
       success: true,
       data: recommendations,
+      // Candidates the filters removed, with the reason. Ops needs this to distinguish
+      // "nobody is suitable" from "everyone was blocked by one misconfigured rule".
+      meta: { excluded: (recommendations as any).excluded || [] },
     };
+  }
+
+  /**
+   * Day plans across several engagements at once.
+   *
+   * The per-project route below still works and is unchanged. This exists because an assayer
+   * standing in a city with nearby branches should audit all of them, and whether those
+   * branches belong to one engagement or three is an accounting distinction, not a routing
+   * one. Planning one project at a time produced artificially short days and left neighbouring
+   * branches for a second trip.
+   *
+   * Each branch keeps its own client's audit-duration agreement and rate card, and the
+   * conflict-of-interest floor applied is the strictest across the clients in scope.
+   */
+  @Get('day-plans')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Generate day plans spanning several projects, so one assayer can cover nearby branches across engagements' })
+  async getMultiProjectDayPlans(
+    @Query('projectIds') projectIds: string,
+    @Query('targetDate') targetDate?: string,
+    @Query('minDistanceKm') minDistanceKm?: string,
+  ) {
+    const ids = (projectIds ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (ids.length === 0) {
+      throw new BadRequestException('projectIds is required — pass one or more comma-separated project ids.');
+    }
+
+    // Without this, a malformed id reaches Postgres inside In(...) and comes back as a 500
+    // with a driver-level cast error, which tells the caller nothing about what they got wrong.
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const malformed = ids.filter((id) => !UUID.test(id));
+    if (malformed.length > 0) {
+      throw new BadRequestException(`Not a valid project id: ${malformed.join(', ')}`);
+    }
+
+    const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+    const plan = await this.dayPlannerService.generateDayPlans(
+      ids,
+      targetDate,
+      Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+    );
+    return { success: true, data: plan };
   }
 
   @Get('projects/:projectId/day-plans')
@@ -416,8 +669,17 @@ export class PlanningController {
   async getDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Query('targetDate') targetDate?: string,
+    // Same "Min Radius Filter" control already used on the single-branch Planning view —
+    // previously this endpoint had no minimum-distance concept at all (see
+    // DayPlannerService.resolveMinDistanceKm).
+    @Query('minDistanceKm') minDistanceKm?: string,
   ) {
-    const plan = await this.dayPlannerService.generateDayPlans(projectId, targetDate);
+    const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+    const plan = await this.dayPlannerService.generateDayPlans(
+      projectId,
+      targetDate,
+      Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+    );
     return {
       success: true,
       data: plan,
@@ -439,7 +701,7 @@ export class PlanningController {
 
   @Put('rules/:id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('planning:update:organization')
+  @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Update a business planning rule by ID' })
   async updateRule(
     @Param('id', ParseUUIDPipe) id: string,
@@ -465,6 +727,7 @@ export class PlanningController {
     };
   }
 
+  @Roles(...STAFF_ROLES)
   @Get('rules')
   @ApiOperation({ summary: 'List all active business planning rules' })
   async getRules(@Query('scope') scope?: string) {
@@ -476,6 +739,7 @@ export class PlanningController {
   }
 
   @Get('rules/:id')
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get a business planning rule by ID' })
   async getRule(@Param('id', ParseUUIDPipe) id: string) {
     const rule = await this.planningService.getRule(id);

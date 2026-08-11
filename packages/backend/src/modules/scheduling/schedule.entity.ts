@@ -32,6 +32,9 @@ export class ScheduleEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
 
+  @Column({ name: 'completed_at', type: 'timestamptz', nullable: true })
+  completedAt: Date | null;
+
   @OneToOne(() => AssignmentEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'assignment_id' })
   assignment: AssignmentEntity;

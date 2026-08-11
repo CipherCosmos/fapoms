@@ -71,7 +71,7 @@ export class WorkflowEngine {
     await this.historyRepository.save(historyEntry);
 
     await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
+      category: EventCategory.WORKFLOW,
       eventType: 'WORKFLOW_COMMAND_EXECUTED',
       entityType: workflowKey.toUpperCase(),
       entityId,

@@ -6,6 +6,7 @@ import { ScheduleEntity } from './schedule.entity';
 import { HolidayModule } from '../holiday/holiday.module';
 import { AssignmentModule } from '../assignment/assignment.module';
 import { PlanningModule } from '../planning/planning.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -13,6 +14,8 @@ import { PlanningModule } from '../planning/planning.module';
     HolidayModule,
     AssignmentModule,
     PlanningModule,
+    // Dispatching a schedule must reach the assayer's handset — see SCHEDULE_DISPATCHED.
+    NotificationsModule,
   ],
   controllers: [SchedulingController],
   providers: [SchedulingService],

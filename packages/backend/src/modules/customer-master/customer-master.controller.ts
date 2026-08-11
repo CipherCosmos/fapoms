@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { CustomerMasterService } from './customer-master.service';
-import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 @ApiTags('Customer Master')
@@ -13,27 +14,34 @@ import { SystemRole } from '@fapoms/shared';
 export class CustomerMasterController {
   constructor(
     private readonly customerMasterService: CustomerMasterService,
-    private readonly localStorageService: LocalStorageService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
   ) {}
 
   @Post('upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('customer-master:create:organization')
-  @UseInterceptors(FileInterceptor('file'))
+    @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload customer master Excel file, run database branch reconciliation, and register new version' })
   async upload(
     @UploadedFile() file: any,
     @Query('projectId', ParseUUIDPipe) projectId: string,
     @Req() req: any,
+    // The audit date this batch covers. The client sends one file the day before
+    // for all branches scheduled that day, so the date is what identifies the run.
+    @Query('auditDate') auditDate?: string,
   ) {
-    const savedPath = await this.localStorageService.saveFile(file.originalname, file.buffer);
+    const savedPath = await this.storage.saveFile(
+      file.originalname,
+      file.buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
     const report = await this.customerMasterService.uploadAndReconcile(
       projectId,
       file.originalname,
       savedPath,
       file.buffer,
       req.user.id,
+      auditDate,
     );
 
     return {
@@ -44,8 +52,7 @@ export class CustomerMasterController {
 
   @Post('versions/:versionId/approve')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('customer-master:update:organization')
-  @ApiOperation({ summary: 'Approve a reconciled customer master version and supersede prior active version' })
+    @ApiOperation({ summary: 'Approve a reconciled customer master version and supersede prior active version' })
   async approveVersion(
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Req() req: any,
@@ -57,7 +64,18 @@ export class CustomerMasterController {
     };
   }
 
+  @Get('projects/:projectId/daily-run')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @ApiOperation({ summary: "A single audit date's run: the client batch, its branches, and where each branch's PDF has reached" })
+  async dailyRun(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Query('auditDate') auditDate: string,
+  ) {
+    return { success: true, data: await this.customerMasterService.dailyRun(projectId, auditDate) };
+  }
+
   @Get('projects/:projectId/versions')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'List version history for a project mandate' })
   async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const list = await this.customerMasterService.findByProject(projectId);
@@ -68,13 +86,15 @@ export class CustomerMasterController {
   }
 
   @Get('versions/:versionId/records')
-  @ApiOperation({ summary: 'Get paginated customer records inside a version' })
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @ApiOperation({ summary: 'Get paginated customer records inside a version, optionally filtered by branchId' })
   async findRecords(
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('branchId') branchId?: string,
   ) {
-    const result = await this.customerMasterService.findRecords(versionId, page, limit);
+    const result = await this.customerMasterService.findRecords(versionId, page, limit, branchId);
     return {
       success: true,
       data: result.records,

@@ -1,128 +1,1324 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&display=swap');
+
+/* ===========================================================================
+   Sumeru Audit Suite — Multi-Theme Brand System (Gold Audit Pro · Sumeru Global)
+   ---------------------------------------------------------------------------
+   Design tokens are defined per theme via [data-theme="<id>"]. `:root` carries
+   the default theme. Components consume tokens only (never hardcoded colors),
+   so adding a theme is purely additive CSS — no component changes required.
+
+   Theme ids (must match useTheme.ts THEMES):
+     LIGHT : gold (default) · paper · sepia
+     DARK  : noir · slate · midnight
+     GLASS : glass-light · glass-dark   (translucent + blur surfaces)
+
+   Legacy token names (e.g. --bg-primary, --accent-primary, --gradient-neon)
+   are retained as aliases inside every theme so existing var(--…) references
+   resolve without churn.
+   =========================================================================== */
 
 :root {
-  /* Fonts */
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-display: 'Outfit', var(--font-sans);
+  /* Fonts — Cormorant Garamond for display/headings, Manrope for body/UI */
+  --font-sans: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
-  /* Color Palette - Premium Slate & Neon Accents */
-  --bg-primary: #090d16;
-  --bg-secondary: #0f1524;
-  --bg-tertiary: #171f30;
-  --bg-glass: rgba(15, 21, 36, 0.7);
-  --bg-glass-hover: rgba(23, 31, 48, 0.8);
-  
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-color-hover: rgba(255, 255, 255, 0.15);
-  
-  /* Text Colors */
-  --text-primary: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  
-  /* Accent Colors */
-  --accent-primary: #6366f1;       /* Indigo */
-  --accent-primary-hover: #4f46e5;
-  --accent-secondary: #06b6d4;     /* Cyan */
-  --accent-secondary-hover: #0891b2;
-  
-  /* Gradients */
-  --gradient-neon: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
-  --gradient-dark: linear-gradient(180deg, #0f1524 0%, #090d16 100%);
-  --gradient-card: linear-gradient(145deg, rgba(23, 31, 48, 0.6) 0%, rgba(15, 21, 36, 0.6) 100%);
-  
-  /* Status Colors */
-  --status-draft: #9ca3af;
-  --status-draft-bg: rgba(156, 163, 175, 0.1);
-  --status-pending: #fbbf24;
-  --status-pending-bg: rgba(251, 191, 36, 0.1);
-  --status-active: #10b981;
-  --status-active-bg: rgba(16, 185, 129, 0.1);
-  --status-completed: #3b82f6;
-  --status-completed-bg: rgba(59, 130, 246, 0.1);
-  --status-cancelled: #ef4444;
-  --status-cancelled-bg: rgba(239, 68, 68, 0.1);
-  
-  /* Priority Colors */
-  --priority-low: #10b981;
-  --priority-medium: #3b82f6;
-  --priority-high: #f97316;
-  --priority-critical: #ef4444;
+  /* ------------------------------------------------------------------ */
+  /* Sumeru brand flame — lifted directly from logo.svg                  */
+  /* ------------------------------------------------------------------ */
+  /* Sampled directly out of public/logo.avif — the flame tips, body and core
+     measured from the actual pixels, so the mark and the UI are literally the
+     same colour rather than a designer's approximation of it.            */
+  --flame-600: #E95815;  /* flame tips   — sampled from logo.avif */
+  --flame-500: #ED6714;  /* flame body   — the brand orange       */
+  --flame-400: #F37C13;  /* flame core   — warm amber             */
+  --flame-300: #F8912B;  /* highlight    — extended from the core */
 
-  /* Dimensions */
-  --sidebar-width: 260px;
-  
-  /* Shadows */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.35);
-  --shadow-neon: 0 0 20px rgba(99, 102, 241, 0.15);
+  /* Deepened extensions. The logo's own orange is only 2.86:1 on white —
+     fine for a 40px mark, unreadable as 13px body text or a link. These two
+     carry the same hue far enough down the ramp to pass WCAG AA as text
+     (#B8460D = 5.16:1, #8F350A = 7.0:1 on the light ground) so light mode can
+     stay on brand without becoming unreadable. Dark mode needs no such help:
+     the logo's own colours already measure 5.3–7.0:1 on the ground below.  */
+  --flame-700: #B8460D;  /* text/link + button fill on light surfaces */
+  --flame-800: #8F350A;  /* hover / pressed on light surfaces         */
 
-  /* Borders & Radius */
+  /* Warm ink and ground that belong to the flame family rather than a
+     neutral grey — a blue-grey chrome makes the logo look pasted on.     */
+  --flame-ink:   #1C1207;
+  --flame-cream: #FFFAF5;
+
+  --flame-gradient: linear-gradient(180deg, var(--flame-600) 0%, var(--flame-500) 35%, var(--flame-400) 70%, var(--flame-300) 100%);
+
+  /* ------------------------------------------------------------------ */
+  /* Shared brand gold (used by the non-signature themes)                */
+  /* ------------------------------------------------------------------ */
+  --gold-100: #F3D98A;   /* highlight / gradient top     */
+  --gold-400: #D8AE47;   /* primary gold — buttons/links  */
+  --gold-700: #A8791F;   /* deep gold — gradient bottom   */
+  --gold-gradient: linear-gradient(180deg, var(--gold-100) 0%, var(--gold-400) 55%, var(--gold-700) 100%);
+
+  /* Ink guaranteed readable on any --gradient-neon surface (all current
+     gradient-neon ramps are light, so dark ink is always safe). */
+  --on-gradient: #211A14;
+
+  /* ------------------------------------------------------------------ */
+  /* Radius / motion / layout — shared across all themes                 */
+  /* ------------------------------------------------------------------ */
+  --radius-xs: 4px;
   --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
   --radius-full: 9999px;
-  
-  /* Transitions */
+
+  --sidebar-width: 260px;
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Surface blur — 0 for solid themes, >0 for glass themes */
+  --surface-blur: 0px;
 }
 
-/* Reset and Base Styles */
+/* ===========================================================================
+   LIGHT THEMES
+   =========================================================================== */
+
+/* --------------------------------------------------------------------------- */
+/* GOLD  (default) — warm cream + gold                                          */
+/* --------------------------------------------------------------------------- */
+[data-theme="gold"], :root {
+  /* Warm off-white rather than cream: the logo's flame sits on white in the
+     mark itself, and a yellow-cream ground muddies the orange next to it. */
+  --bg-page:      var(--flame-cream);
+  --bg-surface:   #FFFFFF;
+  --bg-surface-2: #FDF0E4;
+  --bg-input:     #FFFFFF;
+  --bg-card:      #FFFFFF;
+  --bg-elevated:  #FFFFFF;
+  --border-hair:  rgba(28, 18, 7, 0.12);
+  --text-primary: var(--flame-ink);
+  --text-secondary: #5C4632;
+  --text-muted:   #806653;
+  /* Deepened flame — the logo orange itself is unreadable at body size on
+     white (2.86:1); this is the same hue at 5.18:1. */
+  --accent:       var(--flame-700);
+  --accent-strong:var(--flame-800);
+  --on-accent:    #FFFFFF;
+  /* Amber fill with dark ink reads at 8.3:1 and keeps the brand warmth on
+     primary buttons without a white-on-orange contrast failure. */
+  --btn-bg:       var(--flame-400);
+  --btn-text:     var(--flame-ink);
+  --success:      #3F7D53;
+  /* Warning is pulled away from the brand orange on purpose — when the whole
+     UI is orange, an orange warning stops reading as a warning. */
+  --warning:      #8A5A00;
+  --danger:       #B3261E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #FFF5EC;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(255, 250, 245, 0.85);
+  --bg-glass-hover: #FDF0E4;
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(28, 18, 7, 0.22);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--flame-500);
+  --accent-secondary-hover: var(--flame-600);
+  --gradient-neon: var(--flame-gradient);
+  --gradient-dark: linear-gradient(180deg, #FDF0E4 0%, var(--flame-cream) 100%);
+  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.92) 0%, rgba(253, 240, 228, 0.85) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(63, 125, 83, 0.12);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(63, 125, 83, 0.12);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(128, 102, 83, 0.12);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(138, 90, 0, 0.14);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(179, 38, 30, 0.10);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: var(--flame-700);
+  --priority-critical: var(--danger);
+
+  /* Shadows tinted with the brand hue rather than neutral black, so elevation
+     feels part of the same family. */
+  --shadow-sm: 0 1px 2px rgba(28, 18, 7, 0.06);
+  --shadow-md: 0 6px 18px rgba(28, 18, 7, 0.10);
+  --shadow-lg: 0 16px 40px rgba(28, 18, 7, 0.14);
+  --shadow-neon: 0 4px 14px rgba(237, 103, 20, 0.22);
+
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------- */
+/* PAPER  — cool neutral white + gold (for users who prefer a plainer look)    */
+/* --------------------------------------------------------------------------- */
+[data-theme="paper"] {
+  --bg-page:      #F6F7F9;
+  --bg-surface:   #FFFFFF;
+  --bg-surface-2: #ECEFF2;
+  --bg-input:     #FFFFFF;
+  --bg-card:      #FFFFFF;
+  --bg-elevated:  #FFFFFF;
+  --border-hair:  rgba(20, 30, 45, 0.12);
+  --text-primary: #1B2430;
+  --text-secondary: #45566B;
+  --text-muted:   #56697E;
+  --accent:       #8A6416;
+  --accent-strong:#6E5010;
+  --on-accent:    #FFFFFF;
+  --btn-bg:       var(--gold-400);
+  --btn-text:     #211A14;
+  --success:      #2E7D4F;
+  --warning:      #7E4E0A;
+  --danger:       #B04040;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #EEF0F4;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(246, 247, 249, 0.85);
+  --bg-glass-hover: #ECEFF2;
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(20, 30, 45, 0.24);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--gold-700);
+  --accent-secondary-hover: var(--gold-100);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #ECEFF2 0%, #F6F7F9 100%);
+  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.9) 0%, rgba(236, 239, 242, 0.85) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(46, 125, 79, 0.12);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(46, 125, 79, 0.12);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(104, 120, 140, 0.14);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(126, 78, 10, 0.16);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(176, 64, 64, 0.12);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #7E4E0A;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(20, 30, 45, 0.06);
+  --shadow-md: 0 6px 18px rgba(20, 30, 45, 0.12);
+  --shadow-lg: 0 16px 40px rgba(20, 30, 45, 0.16);
+  --shadow-neon: 0 4px 14px rgba(216, 174, 71, 0.18);
+
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------- */
+/* SEPIA  — high-contrast warm light (accessibility-friendly)                   */
+/* --------------------------------------------------------------------------- */
+[data-theme="sepia"] {
+  --bg-page:      #FBF6ED;
+  --bg-surface:   #FFFDF8;
+  --bg-surface-2: #F0E6D2;
+  --bg-input:     #FFFDF8;
+  --bg-card:      #FFFDF8;
+  --bg-elevated:  #FFFDF8;
+  --border-hair:  rgba(30, 20, 10, 0.16);
+  --text-primary: #1F160B;
+  --text-secondary: #4A3A22;
+  --text-muted:   #6B5736;
+  --accent:       #7A4E0A;
+  --accent-strong:#5F3C06;
+  --on-accent:    #FFFFFF;
+  --btn-bg:       var(--gold-400);
+  --btn-text:     #211A14;
+  --success:      #22603A;
+  --warning:      #8A5A0E;
+  --danger:       #A02E2E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #F3EBD8;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(251, 246, 237, 0.88);
+  --bg-glass-hover: #F0E6D2;
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(30, 20, 10, 0.28);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--gold-700);
+  --accent-secondary-hover: var(--gold-100);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #F0E6D2 0%, #FBF6ED 100%);
+  --gradient-card: linear-gradient(145deg, rgba(255, 253, 248, 0.92) 0%, rgba(240, 230, 210, 0.88) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(34, 96, 58, 0.14);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(34, 96, 58, 0.14);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(107, 87, 54, 0.14);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(138, 90, 14, 0.16);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(160, 46, 46, 0.14);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #8A5A0E;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(30, 20, 10, 0.08);
+  --shadow-md: 0 6px 18px rgba(30, 20, 10, 0.14);
+  --shadow-lg: 0 16px 40px rgba(30, 20, 10, 0.18);
+  --shadow-neon: 0 4px 14px rgba(216, 174, 71, 0.2);
+
+  color-scheme: light;
+}
+
+/* ===========================================================================
+   DARK THEMES
+   =========================================================================== */
+
+/* --------------------------------------------------------------------------- */
+/* NOIR  (default dark) — warm gold-on-charcoal                                 */
+/* --------------------------------------------------------------------------- */
+[data-theme="noir"] {
+  /* Warm near-black carrying a trace of the flame's red, not a neutral or
+     blue-tinted charcoal — the logo looks foreign against cool greys.       */
+  --bg-page:      #14100C;
+  --bg-surface:   #1F1813;
+  --bg-surface-2: #2A211A;
+  --bg-input:     #1F1813;
+  --bg-card:      #1F1813;
+  --bg-elevated:  #2A211A;
+  --border-hair:  rgba(255, 236, 220, 0.10);
+  --text-primary: #F7EFE7;
+  --text-secondary: rgba(247, 239, 231, 0.66);
+  --text-muted:   rgba(247, 239, 231, 0.46);
+  /* Dark mode can use the logo's own colours directly: #FF8534 measures
+     7.8:1 and #FF9E00 9.1:1 against this ground, so the brand orange is
+     fully readable here with no deepening. */
+  --accent:       #F98A2B;
+  --accent-strong: var(--flame-400);
+  --on-accent:    var(--flame-ink);
+  /* Dark ink on the flame, not white: white on #FF6B00 is only 2.86:1 and fails
+     AA outright. The same fill with near-black text reads at 6.4:1 and keeps the
+     button unmistakably brand-coloured. */
+  --btn-bg:       var(--flame-500);
+  --btn-text:     var(--flame-ink);
+  --success:      #6FAE81;
+  /* Held at gold so it stays distinguishable from the orange accent. */
+  --warning:      #E8B93C;
+  --danger:       #E5675E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #1A1410;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(20, 16, 12, 0.75);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 236, 220, 0.20);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--flame-500);
+  --accent-secondary-hover: var(--flame-400);
+  --gradient-neon: var(--flame-gradient);
+  --gradient-dark: linear-gradient(180deg, #1F1813 0%, #14100C 100%);
+  --gradient-card: linear-gradient(145deg, rgba(42, 33, 26, 0.85) 0%, rgba(31, 24, 19, 0.85) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(111, 174, 129, 0.16);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(111, 174, 129, 0.16);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(247, 239, 231, 0.08);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(232, 185, 60, 0.16);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(229, 103, 94, 0.16);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #F98A2B;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.44);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.54);
+  --shadow-neon: 0 4px 16px rgba(237, 103, 20, 0.28);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* SLATE  — cool neutral dark + gold                                            */
+/* --------------------------------------------------------------------------- */
+[data-theme="slate"] {
+  --bg-page:      #14161A;
+  --bg-surface:   #1D2127;
+  --bg-surface-2: #262B32;
+  --bg-input:     #1D2127;
+  --bg-card:      #1D2127;
+  --bg-elevated:  #262B32;
+  --border-hair:  rgba(255, 255, 255, 0.10);
+  --text-primary: #EDEFF3;
+  --text-secondary: rgba(237, 239, 243, 0.66);
+  --text-muted:   rgba(237, 239, 243, 0.45);
+  --accent:       #D9B25A;
+  --accent-strong:#F0D894;
+  --on-accent:    #211A14;
+  --btn-bg:       #D9B25A;
+  --btn-text:     #191610;
+  --success:      #6FAE81;
+  --warning:      #D8AE47;
+  --danger:       #D97070;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #191C22;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(20, 22, 26, 0.75);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 255, 255, 0.18);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #262B32 0%, #14161A 100%);
+  --gradient-card: linear-gradient(145deg, rgba(38, 43, 50, 0.85) 0%, rgba(29, 33, 39, 0.85) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(111, 174, 129, 0.16);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(111, 174, 129, 0.16);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(255, 255, 255, 0.08);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(216, 174, 71, 0.18);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(217, 112, 112, 0.16);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #D8AE47;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --shadow-neon: 0 4px 14px rgba(217, 178, 90, 0.15);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* MIDNIGHT  — deep, high-contrast dark                                         */
+/* --------------------------------------------------------------------------- */
+[data-theme="midnight"] {
+  --bg-page:      #0C0D11;
+  --bg-surface:   #15161C;
+  --bg-surface-2: #1E2028;
+  --bg-input:     #15161C;
+  --bg-card:      #15161C;
+  --bg-elevated:  #1E2028;
+  --border-hair:  rgba(255, 255, 255, 0.12);
+  --text-primary: #F5F6FA;
+  --text-secondary: rgba(245, 246, 250, 0.70);
+  --text-muted:   rgba(245, 246, 250, 0.50);
+  --accent:       #E0B75F;
+  --accent-strong:#F4DC96;
+  --on-accent:    #141108;
+  --btn-bg:       #E0B75F;
+  --btn-text:     #141108;
+  --success:      #74BB8C;
+  --warning:      #E0B75F;
+  --danger:       #E07A7A;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #101117;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(12, 13, 17, 0.78);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 255, 255, 0.20);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #1E2028 0%, #0C0D11 100%);
+  --gradient-card: linear-gradient(145deg, rgba(30, 32, 40, 0.9) 0%, rgba(21, 22, 28, 0.9) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(116, 187, 140, 0.16);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(116, 187, 140, 0.16);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(255, 255, 255, 0.08);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(224, 183, 95, 0.18);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(224, 122, 122, 0.16);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #E0B75F;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --shadow-neon: 0 4px 14px rgba(224, 183, 95, 0.15);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* BLACK-GOLD  — true black + gold (premium contrast)                           */
+/* --------------------------------------------------------------------------- */
+[data-theme="black-gold"] {
+  --bg-page:      #050505;
+  --bg-surface:   rgba(18, 18, 18, 0.5);
+  --bg-surface-2: rgba(28, 28, 28, 0.5);
+  --bg-input:     rgba(16, 16, 16, 0.6);
+  --bg-card:      rgba(18, 18, 18, 0.5);
+  --bg-elevated:  rgba(30, 30, 30, 0.6);
+  --border-hair:  rgba(255, 255, 255, 0.14);
+  --text-primary: #F5F3EE;
+  --text-secondary: rgba(255, 255, 255, 0.70);
+  --text-muted:   rgba(255, 255, 255, 0.50);
+  --accent:       var(--gold-400);
+  --accent-strong: var(--gold-100);
+  --on-accent:    #211A14;
+  --btn-bg:       var(--gold-400);
+  --btn-text:     #211A14;
+  --success:      #6FAE81;
+  --warning:      #D8AE47;
+  --danger:       #D97070;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(10, 10, 10, 0.45);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(8, 8, 8, 0.55);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 255, 255, 0.22);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--gold-400);
+  --accent-secondary-hover: var(--gold-100);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #1A1A1A 0%, #050505 100%);
+  --gradient-card: linear-gradient(145deg, rgba(34, 34, 34, 0.6) 0%, rgba(18, 18, 18, 0.4) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    26px;
+  --glass-edge:   rgba(255, 255, 255, 0.15);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(111, 174, 129, 0.16);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(111, 174, 129, 0.16);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(255, 255, 255, 0.08);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(216, 174, 71, 0.18);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(217, 112, 112, 0.16);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #D8AE47;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.65);
+  --shadow-neon: 0 4px 14px rgba(216, 174, 71, 0.18);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* BLACK-WHITE  — true black + white/grey monochrome                            */
+/* --------------------------------------------------------------------------- */
+[data-theme="black-white"] {
+  --bg-page:      #000000;
+  --bg-surface:   #111111;
+  --bg-surface-2: #1C1C1C;
+  --bg-input:     #111111;
+  --bg-card:      #111111;
+  --bg-elevated:  #1C1C1C;
+  --border-hair:  rgba(255, 255, 255, 0.14);
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.75);
+  --text-muted:   rgba(255, 255, 255, 0.55);
+  --accent:       #FFFFFF;
+  --accent-strong:#D7D7D7;
+  --on-accent:    #0A0A0A;
+  --btn-bg:       #FFFFFF;
+  --btn-text:     #0A0A0A;
+  --success:      #7CE39F;
+  --warning:      #F0C36D;
+  --danger:       #F08080;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #080808;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(0, 0, 0, 0.78);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 255, 255, 0.24);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: #E0E0E0;
+  --accent-secondary-hover: #FFFFFF;
+  --gradient-neon: linear-gradient(180deg, #FFFFFF 0%, #E0E0E0 55%, #B0B0B0 100%);
+  --gradient-dark: linear-gradient(180deg, #1C1C1C 0%, #000000 100%);
+  --gradient-card: linear-gradient(145deg, rgba(28, 28, 28, 0.92) 0%, rgba(17, 17, 17, 0.92) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(124, 227, 159, 0.16);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(124, 227, 159, 0.16);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(255, 255, 255, 0.08);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(240, 195, 109, 0.18);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(240, 128, 128, 0.16);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #F0C36D;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.7);
+  --shadow-neon: 0 4px 14px rgba(255, 255, 255, 0.12);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* SNOW  — pure white light + black monochrome (inverse black-white)            */
+/* --------------------------------------------------------------------------- */
+[data-theme="snow"] {
+  --bg-page:      #FFFFFF;
+  --bg-surface:   #FFFFFF;
+  --bg-surface-2: #F1F1F3;
+  --bg-input:     #FFFFFF;
+  --bg-card:      #FFFFFF;
+  --bg-elevated:  #FFFFFF;
+  --border-hair:  rgba(10, 10, 12, 0.12);
+  --text-primary: #111113;
+  --text-secondary: #3C3C44;
+  --text-muted:   #6B6B75;
+  --accent:       #111113;
+  --accent-strong:#3C3C44;
+  --on-accent:    #FFFFFF;
+  --btn-bg:       #111113;
+  --btn-text:     #FFFFFF;
+  --success:      #1F7A43;
+  --warning:      #A0630A;
+  --danger:       #B02525;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #F7F7F9;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(255, 255, 255, 0.88);
+  --bg-glass-hover: #F1F1F3;
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(10, 10, 12, 0.24);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: #3C3C44;
+  --accent-secondary-hover: #111113;
+  --gradient-neon: linear-gradient(180deg, #FFFFFF 0%, #E4E4E8 55%, #B9B9C2 100%);
+  --gradient-dark: linear-gradient(180deg, #F1F1F3 0%, #FFFFFF 100%);
+  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(241, 241, 243, 0.9) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    var(--surface-blur);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(31, 122, 67, 0.12);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(31, 122, 67, 0.12);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(107, 107, 117, 0.12);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(160, 99, 10, 0.16);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(176, 37, 37, 0.12);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #A0630A;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(10, 10, 12, 0.06);
+  --shadow-md: 0 6px 18px rgba(10, 10, 12, 0.12);
+  --shadow-lg: 0 16px 40px rgba(10, 10, 12, 0.16);
+  --shadow-neon: 0 4px 14px rgba(120, 120, 130, 0.14);
+
+  color-scheme: light;
+}
+
+/* ===========================================================================
+   GLASS THEMES — frosted translucent surfaces over a soft gradient backdrop
+   =========================================================================== */
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-LIGHT                                                                  */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-light"] {
+  --bg-page:      #EFE9DD;
+  --bg-surface:   rgba(255, 255, 255, 0.48);
+  --bg-surface-2: rgba(255, 255, 255, 0.28);
+  --bg-input:     rgba(255, 255, 255, 0.66);
+  --bg-card:      rgba(255, 255, 255, 0.48);
+  --bg-elevated:  rgba(255, 255, 255, 0.66);
+  --border-hair:  rgba(255, 255, 255, 0.42);
+  --text-primary: #2A2A35;
+  --text-secondary: #4A4A58;
+  --text-muted:   #5A5A66;
+  --accent:       #7A5A14;
+  --accent-strong:#5C420E;
+  --on-accent:    #FFFFFF;
+  --btn-bg:       var(--gold-400);
+  --btn-text:     #211A14;
+  --success:      #2E7D4F;
+  --warning:      #7E4E0A;
+  --danger:       #B04040;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(255, 255, 255, 0.34);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(255, 255, 255, 0.5);
+  --bg-glass-hover: rgba(255, 255, 255, 0.42);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 255, 255, 0.62);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--gold-700);
+  --accent-secondary-hover: var(--gold-100);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #F4EEE2 0%, #E7E0D2 100%);
+  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.36) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    26px;
+  --glass-edge:   rgba(255, 255, 255, 0.66);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(46, 125, 79, 0.16);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(46, 125, 79, 0.16);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(108, 108, 122, 0.16);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(126, 78, 10, 0.18);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(176, 64, 64, 0.16);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #7E4E0A;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(60, 50, 30, 0.08);
+  --shadow-md: 0 6px 18px rgba(60, 50, 30, 0.14);
+  --shadow-lg: 0 16px 40px rgba(60, 50, 30, 0.18);
+  --shadow-neon: 0 4px 14px rgba(216, 174, 71, 0.2);
+
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-DARK                                                                   */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-dark"] {
+  --bg-page:      #14121A;
+  --bg-surface:   rgba(40, 34, 50, 0.44);
+  --bg-surface-2: rgba(60, 52, 74, 0.32);
+  --bg-input:     rgba(40, 34, 50, 0.58);
+  --bg-card:      rgba(40, 34, 50, 0.44);
+  --bg-elevated:  rgba(60, 52, 74, 0.56);
+  --border-hair:  rgba(255, 255, 255, 0.16);
+  --text-primary: #F2EFF7;
+  --text-secondary: rgba(242, 239, 247, 0.70);
+  --text-muted:   rgba(242, 239, 247, 0.50);
+  --accent:       #D9B25A;
+  --accent-strong:#F0D894;
+  --on-accent:    #211A14;
+  --btn-bg:       var(--gold-400);
+  --btn-text:     #211A14;
+  --success:      #74BB8C;
+  --warning:      #D8AE47;
+  --danger:       #E07A7A;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(40, 34, 50, 0.32);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(30, 26, 40, 0.55);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(255, 255, 255, 0.30);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: var(--gold-gradient);
+  --gradient-dark: linear-gradient(180deg, #2A2436 0%, #14121A 100%);
+  --gradient-card: linear-gradient(145deg, rgba(72, 62, 90, 0.6) 0%, rgba(40, 34, 50, 0.42) 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    28px;
+  --glass-edge:   rgba(255, 255, 255, 0.16);
+
+  --status-active: var(--success);
+  --status-active-bg: rgba(116, 187, 140, 0.18);
+  --status-completed: var(--success);
+  --status-completed-bg: rgba(116, 187, 140, 0.18);
+  --status-draft: var(--text-muted);
+  --status-draft-bg: rgba(255, 255, 255, 0.08);
+  --status-pending: var(--warning);
+  --status-pending-bg: rgba(216, 174, 71, 0.20);
+  --status-cancelled: var(--danger);
+  --status-cancelled-bg: rgba(224, 122, 122, 0.18);
+
+  --priority-low: var(--success);
+  --priority-medium: var(--warning);
+  --priority-high: #D8AE47;
+  --priority-critical: var(--danger);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --shadow-neon: 0 4px 14px rgba(217, 178, 90, 0.16);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-OBSIDIAN (Dark Glassmorphic Flame Amber)                              */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-obsidian"] {
+  --bg-page:      #0F0E13;
+  --bg-surface:   rgba(32, 26, 36, 0.46);
+  --bg-surface-2: rgba(48, 40, 56, 0.35);
+  --bg-input:     rgba(32, 26, 36, 0.60);
+  --bg-card:      rgba(32, 26, 36, 0.46);
+  --bg-elevated:  rgba(48, 40, 56, 0.60);
+  --border-hair:  rgba(245, 158, 11, 0.22);
+  --text-primary: #FFFBEB;
+  --text-secondary: rgba(255, 251, 235, 0.75);
+  --text-muted:   rgba(255, 251, 235, 0.50);
+  --accent:       #F59E0B;
+  --accent-strong:#FBBF24;
+  --on-accent:    #18181B;
+  --btn-bg:       #F59E0B;
+  --btn-text:     #18181B;
+  --success:      #10B981;
+  --warning:      #F59E0B;
+  --danger:       #EF4444;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(32, 26, 36, 0.36);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(24, 20, 28, 0.58);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(245, 158, 11, 0.45);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    30px;
+  --glass-edge:   rgba(245, 158, 11, 0.25);
+  color-scheme: dark;
+}
+
+[data-theme="glass-obsidian"] body {
+  background-image:
+    radial-gradient(at 15% 15%, rgba(245, 158, 11, 0.32), transparent 42%),
+    radial-gradient(at 85% 10%, rgba(220, 38, 38, 0.28), transparent 45%),
+    radial-gradient(at 10% 85%, rgba(217, 119, 6, 0.24), transparent 40%),
+    linear-gradient(180deg, #18141F 0%, #0F0E13 100%);
+  background-attachment: fixed;
+}
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-CYBERPUNK (Dark Glassmorphic Neon Cyan)                               */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-cyberpunk"] {
+  --bg-page:      #0D0F18;
+  --bg-surface:   rgba(20, 26, 46, 0.48);
+  --bg-surface-2: rgba(30, 40, 70, 0.36);
+  --bg-input:     rgba(20, 26, 46, 0.62);
+  --bg-card:      rgba(20, 26, 46, 0.48);
+  --bg-elevated:  rgba(30, 40, 70, 0.62);
+  --border-hair:  rgba(0, 240, 255, 0.24);
+  --text-primary: #ECFEFF;
+  --text-secondary: rgba(236, 254, 255, 0.75);
+  --text-muted:   rgba(236, 254, 255, 0.50);
+  --accent:       #00F0FF;
+  --accent-strong:#67E8F9;
+  --on-accent:    #082F49;
+  --btn-bg:       #00F0FF;
+  --btn-text:     #082F49;
+  --success:      #34D399;
+  --warning:      #FBBF24;
+  --danger:       #F43F5E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(20, 26, 46, 0.36);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(15, 20, 36, 0.58);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(0, 240, 255, 0.50);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #00F0FF 0%, #3B82F6 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    30px;
+  --glass-edge:   rgba(0, 240, 255, 0.28);
+  color-scheme: dark;
+}
+
+[data-theme="glass-cyberpunk"] body {
+  background-image:
+    radial-gradient(at 12% 16%, rgba(0, 240, 255, 0.30), transparent 42%),
+    radial-gradient(at 88% 8%, rgba(217, 70, 239, 0.26), transparent 46%),
+    radial-gradient(at 8% 84%, rgba(59, 130, 246, 0.26), transparent 44%),
+    linear-gradient(180deg, #121626 0%, #0D0F18 100%);
+  background-attachment: fixed;
+}
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-EMERALD (Dark Glassmorphic Velvet Mint)                               */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-emerald"] {
+  --bg-page:      #0A1714;
+  --bg-surface:   rgba(18, 42, 36, 0.46);
+  --bg-surface-2: rgba(28, 62, 54, 0.35);
+  --bg-input:     rgba(18, 42, 36, 0.60);
+  --bg-card:      rgba(18, 42, 36, 0.46);
+  --bg-elevated:  rgba(28, 62, 54, 0.60);
+  --border-hair:  rgba(16, 185, 129, 0.22);
+  --text-primary: #ECFDF5;
+  --text-secondary: rgba(236, 253, 245, 0.75);
+  --text-muted:   rgba(236, 253, 245, 0.50);
+  --accent:       #10B981;
+  --accent-strong:#6EE7B7;
+  --on-accent:    #064E3B;
+  --btn-bg:       #10B981;
+  --btn-text:     #064E3B;
+  --success:      #10B981;
+  --warning:      #F59E0B;
+  --danger:       #F43F5E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(18, 42, 36, 0.36);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(14, 34, 28, 0.58);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(16, 185, 129, 0.45);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #10B981 0%, #059669 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    30px;
+  --glass-edge:   rgba(16, 185, 129, 0.25);
+  color-scheme: dark;
+}
+
+[data-theme="glass-emerald"] body {
+  background-image:
+    radial-gradient(at 15% 15%, rgba(16, 185, 129, 0.32), transparent 42%),
+    radial-gradient(at 85% 10%, rgba(217, 178, 90, 0.24), transparent 45%),
+    radial-gradient(at 10% 85%, rgba(14, 116, 144, 0.26), transparent 40%),
+    linear-gradient(180deg, #112621 0%, #0A1714 100%);
+  background-attachment: fixed;
+}
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-AMETHYST (Dark Glassmorphic Royal Violet)                             */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-amethyst"] {
+  --bg-page:      #120D1D;
+  --bg-surface:   rgba(36, 24, 56, 0.46);
+  --bg-surface-2: rgba(54, 36, 84, 0.35);
+  --bg-input:     rgba(36, 24, 56, 0.60);
+  --bg-card:      rgba(36, 24, 56, 0.46);
+  --bg-elevated:  rgba(54, 36, 84, 0.60);
+  --border-hair:  rgba(168, 85, 247, 0.24);
+  --text-primary: #FAF5FF;
+  --text-secondary: rgba(250, 245, 255, 0.75);
+  --text-muted:   rgba(250, 245, 255, 0.50);
+  --accent:       #A855F7;
+  --accent-strong:#C084FC;
+  --on-accent:    #3B0764;
+  --btn-bg:       #A855F7;
+  --btn-text:     #FAF5FF;
+  --success:      #34D399;
+  --warning:      #FBBF24;
+  --danger:       #F43F5E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(36, 24, 56, 0.36);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(28, 18, 44, 0.58);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(168, 85, 247, 0.45);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #A855F7 0%, #7C3AED 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    30px;
+  --glass-edge:   rgba(168, 85, 247, 0.26);
+  color-scheme: dark;
+}
+
+[data-theme="glass-amethyst"] body {
+  background-image:
+    radial-gradient(at 15% 15%, rgba(168, 85, 247, 0.34), transparent 42%),
+    radial-gradient(at 85% 10%, rgba(244, 63, 94, 0.26), transparent 45%),
+    radial-gradient(at 10% 85%, rgba(99, 102, 241, 0.28), transparent 40%),
+    linear-gradient(180deg, #1C142E 0%, #120D1D 100%);
+  background-attachment: fixed;
+}
+
+/* --------------------------------------------------------------------------- */
+/* GLASS-SAPPHIRE (Dark Glassmorphic Ocean Abyss)                              */
+/* --------------------------------------------------------------------------- */
+[data-theme="glass-sapphire"] {
+  --bg-page:      #081220;
+  --bg-surface:   rgba(16, 36, 64, 0.48);
+  --bg-surface-2: rgba(24, 52, 92, 0.36);
+  --bg-input:     rgba(16, 36, 64, 0.62);
+  --bg-card:      rgba(16, 36, 64, 0.48);
+  --bg-elevated:  rgba(24, 52, 92, 0.62);
+  --border-hair:  rgba(59, 130, 246, 0.24);
+  --text-primary: #EFF6FF;
+  --text-secondary: rgba(239, 246, 255, 0.75);
+  --text-muted:   rgba(239, 246, 255, 0.50);
+  --accent:       #3B82F6;
+  --accent-strong:#60A5FA;
+  --on-accent:    #1E3A8A;
+  --btn-bg:       #3B82F6;
+  --btn-text:     #EFF6FF;
+  --success:      #10B981;
+  --warning:      #F59E0B;
+  --danger:       #EF4444;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: rgba(16, 36, 64, 0.36);
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(12, 28, 50, 0.58);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(59, 130, 246, 0.48);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    30px;
+  --glass-edge:   rgba(59, 130, 246, 0.26);
+  color-scheme: dark;
+}
+
+[data-theme="glass-sapphire"] body {
+  background-image:
+    radial-gradient(at 15% 15%, rgba(59, 130, 246, 0.34), transparent 42%),
+    radial-gradient(at 85% 10%, rgba(6, 182, 212, 0.28), transparent 45%),
+    radial-gradient(at 10% 85%, rgba(139, 92, 246, 0.26), transparent 40%),
+    linear-gradient(180deg, #0F1F36 0%, #081220 100%);
+  background-attachment: fixed;
+}
+
+/* --------------------------------------------------------------------------- */
+/* TITANIUM CARBON (High-Tech Dark Theme)                                      */
+/* --------------------------------------------------------------------------- */
+[data-theme="carbon"] {
+  --bg-page:      #0F1115;
+  --bg-surface:   #181B22;
+  --bg-surface-2: #222630;
+  --bg-input:     #1E222B;
+  --bg-card:      #181B22;
+  --bg-elevated:  #252A36;
+  --border-hair:  rgba(255, 255, 255, 0.12);
+  --text-primary: #F1F5F9;
+  --text-secondary: rgba(241, 245, 249, 0.72);
+  --text-muted:   rgba(241, 245, 249, 0.48);
+  --accent:       #38BDF8;
+  --accent-strong:#7DD3FC;
+  --on-accent:    #0F172A;
+  --btn-bg:       #38BDF8;
+  --btn-text:     #0F172A;
+  --success:      #34D399;
+  --warning:      #FBBF24;
+  --danger:       #F43F5E;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #181B22;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(24, 27, 34, 0.9);
+  --bg-glass-hover: var(--bg-surface-2);
+  --border-color: var(--border-hair);
+  --border-color-hover: rgba(56, 189, 248, 0.4);
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #38BDF8 0%, #0284C7 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    0px;
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------- */
+/* NORDIC FROST & ROSE QUARTZ (Light Themes)                                   */
+/* --------------------------------------------------------------------------- */
+[data-theme="nordic-frost"] {
+  --bg-page:      #F8FAFC;
+  --bg-surface:   #FFFFFF;
+  --bg-surface-2: #F1F5F9;
+  --bg-input:     #FFFFFF;
+  --bg-card:      #FFFFFF;
+  --bg-elevated:  #FFFFFF;
+  --border-hair:  #E2E8F0;
+  --text-primary: #0F172A;
+  --text-secondary: #334155;
+  --text-muted:   #64748B;
+  --accent:       #2563EB;
+  --accent-strong:#1D4ED8;
+  --on-accent:    #FFFFFF;
+  --btn-bg:       #2563EB;
+  --btn-text:     #FFFFFF;
+  --success:      #16A34A;
+  --warning:      #D97706;
+  --danger:       #DC2626;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #F1F5F9;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(255, 255, 255, 0.9);
+  --bg-glass-hover: #E2E8F0;
+  --border-color: var(--border-hair);
+  --border-color-hover: #CBD5E1;
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    0px;
+  color-scheme: light;
+}
+
+[data-theme="rose-quartz"] {
+  --bg-page:      #FFFBF9;
+  --bg-surface:   #FFFFFF;
+  --bg-surface-2: #FFF1F2;
+  --bg-input:     #FFFFFF;
+  --bg-card:      #FFFFFF;
+  --bg-elevated:  #FFFFFF;
+  --border-hair:  #FFE4E6;
+  --text-primary: #2D1B22;
+  --text-secondary: #5C3A47;
+  --text-muted:   #885C6D;
+  --accent:       #E11D48;
+  --accent-strong:#BE123C;
+  --on-accent:    #FFFFFF;
+  --btn-bg:       #E11D48;
+  --btn-text:     #FFFFFF;
+  --success:      #10B981;
+  --warning:      #F59E0B;
+  --danger:       #E11D48;
+
+  --bg-primary:   var(--bg-page);
+  --bg-secondary: #FFF1F2;
+  --bg-tertiary:  var(--bg-surface-2);
+  --bg-glass:     rgba(255, 255, 255, 0.9);
+  --bg-glass-hover: #FCE7F3;
+  --border-color: var(--border-hair);
+  --border-color-hover: #FECDD3;
+  --accent-primary: var(--accent);
+  --accent-primary-hover: var(--accent-strong);
+  --accent-secondary: var(--accent);
+  --accent-secondary-hover: var(--accent-strong);
+  --gradient-neon: linear-gradient(135deg, #E11D48 0%, #BE123C 100%);
+  --card-bg:      var(--bg-surface);
+  --card-blur:    0px;
+  color-scheme: light;
+}
+
+/* Glass backdrop — soft aurora gradient behind translucent surfaces */
+[data-theme="glass-light"] body {
+  background-image:
+    radial-gradient(at 12% 16%, rgba(216, 174, 71, 0.42), transparent 40%),
+    radial-gradient(at 88% 6%, rgba(180, 140, 230, 0.36), transparent 44%),
+    radial-gradient(at 6% 84%, rgba(120, 190, 168, 0.30), transparent 42%),
+    radial-gradient(at 82% 78%, rgba(235, 122, 150, 0.20), transparent 46%),
+    radial-gradient(at 50% 42%, rgba(255, 255, 255, 0.60), transparent 58%),
+    linear-gradient(180deg, #F7F2E6 0%, #E7DFCC 100%);
+  background-attachment: fixed;
+}
+
+[data-theme="glass-dark"] body {
+  background-image:
+    radial-gradient(at 12% 16%, rgba(216, 174, 71, 0.34), transparent 42%),
+    radial-gradient(at 88% 6%, rgba(150, 108, 222, 0.34), transparent 46%),
+    radial-gradient(at 6% 84%, rgba(80, 170, 150, 0.26), transparent 44%),
+    radial-gradient(at 82% 76%, rgba(222, 108, 138, 0.20), transparent 48%),
+    radial-gradient(at 50% 45%, rgba(120, 112, 182, 0.22), transparent 55%),
+    linear-gradient(180deg, #211A2E 0%, #0F0D16 100%);
+  background-attachment: fixed;
+}
+
+/* Black-gold — true-black glass with subtle gold ember glows */
+[data-theme="black-gold"] body {
+  background-image:
+    radial-gradient(at 12% 15%, rgba(216, 174, 71, 0.16), transparent 44%),
+    radial-gradient(at 88% 8%, rgba(216, 174, 71, 0.10), transparent 42%),
+    radial-gradient(at 62% 86%, rgba(160, 120, 60, 0.10), transparent 46%),
+    radial-gradient(at 40% 45%, rgba(216, 174, 71, 0.06), transparent 52%),
+    linear-gradient(180deg, #0B0B0B 0%, #050505 100%);
+  background-attachment: fixed;
+}
+
+/* ===========================================================================
+   Reset and Base
+   =========================================================================== */
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
+html, body {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-sans);
-  background-color: var(--bg-primary);
+  background-color: var(--bg-page);
   color: var(--text-primary);
   overflow-x: hidden;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
 /* Custom Scrollbars */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-full);
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-surface-2); border-radius: var(--radius-full); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* Typography Utility Classes */
+/* Typography — display serif for headings only */
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-display);
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+/* Numerals — tabular figures for audit data */
+table, .data-table, .financial, .tabular-nums, td, th {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus ring — visible accent outline on all interactive elements */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Glassmorphism — frosted blur surfaces (glass themes enable it via --card-blur) */
+.glass-card,
+.table-container,
+.sidebar-area,
+[class*="modal"],
+[class*="dropdown"],
+[class*="popover"],
+[class*="drawer"],
+[class*="toast"] {
+  -webkit-backdrop-filter: blur(var(--card-blur, 0px)) saturate(165%);
+  backdrop-filter: blur(var(--card-blur, 0px)) saturate(165%);
 }
 
 /* Glassmorphism utility card */
 .glass-card {
-  background: var(--gradient-card);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  background: var(--card-bg);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--radius-lg);
   padding: 24px;
-  box-shadow: var(--shadow-md);
-  transition: border-color var(--transition-normal), transform var(--transition-normal), box-shadow var(--transition-normal);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-edge, rgba(255, 255, 255, 0.4));
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal), background-color var(--transition-normal);
 }
 
 .glass-card:hover {
   border-color: var(--border-color-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg), var(--shadow-neon);
+  box-shadow: var(--shadow-md), inset 0 1px 0 var(--glass-edge, rgba(255, 255, 255, 0.4));
+}
+
+/* In glass themes almost every surface is drawn with an inline
+   `background: var(--bg-…)` using a translucent glass token. Blur + saturate
+   each one so the whole app — cards, panels, modals, dropdowns, inputs — gets
+   the frosted look over the aurora, not just the few class-based containers.
+   (Opaque surfaces match too but show no blur, so this is safe.) */
+[data-theme^="glass"] [style*="var(--bg-surface"],
+[data-theme="black-gold"] [style*="var(--bg-surface"],
+[data-theme^="glass"] [style*="var(--bg-card"],
+[data-theme="black-gold"] [style*="var(--bg-card"],
+[data-theme^="glass"] [style*="var(--bg-elevated"],
+[data-theme="black-gold"] [style*="var(--bg-elevated"],
+[data-theme^="glass"] [style*="var(--bg-glass"],
+[data-theme="black-gold"] [style*="var(--bg-glass"],
+[data-theme^="glass"] [style*="var(--bg-input"],
+[data-theme="black-gold"] [style*="var(--bg-input"],
+[data-theme^="glass"] [style*="var(--bg-secondary"],
+[data-theme="black-gold"] [style*="var(--bg-secondary"],
+[data-theme^="glass"] [style*="var(--bg-tertiary"],
+[data-theme="black-gold"] [style*="var(--bg-tertiary"],
+[data-theme^="glass"] [style*="var(--gradient-card"],
+[data-theme="black-gold"] [style*="var(--gradient-card"],
+[data-theme^="glass"] [style*="var(--card-bg"],
+[data-theme="black-gold"] [style*="var(--card-bg"] {
+  -webkit-backdrop-filter: blur(24px) saturate(165%);
+  backdrop-filter: blur(24px) saturate(165%);
 }
 
 /* Global Layout Grid */
@@ -131,22 +1327,26 @@ h1, h2, h3, h4, h5, h6 {
   grid-template-columns: var(--sidebar-width) 1fr;
   grid-template-rows: 1fr;
   transition: grid-template-columns var(--transition-normal);
-  grid-template-areas: 
+  grid-template-areas:
     "sidebar main";
   height: 100vh;
   width: 100vw;
+  background-color: var(--bg-page);
 }
 
 .sidebar-area {
   grid-area: sidebar;
   background-color: var(--bg-secondary);
-  border-right: 1px solid var(--border-color);
+  /* Subtle frosted sheen + a glass edge on the right seam */
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 38%);
+  border-right: 1px solid var(--border-hair);
+  box-shadow: inset -1px 0 0 var(--glass-edge, transparent);
 }
 
 .main-area {
   grid-area: main;
   overflow-y: auto;
-  background-color: var(--bg-primary);
+  background-color: transparent;
   padding: 32px;
 }
 
@@ -157,7 +1357,7 @@ h1, h2, h3, h4, h5, h6 {
   justify-content: center;
   gap: 8px;
   font-family: var(--font-sans);
-  font-weight: 500;
+  font-weight: 600;
   font-size: 14px;
   padding: 10px 18px;
   border-radius: var(--radius-md);
@@ -168,59 +1368,66 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .btn-primary {
-  background: var(--gradient-neon);
-  color: #ffffff;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  box-shadow: var(--shadow-sm);
 }
 .btn-primary:hover {
-  filter: brightness(1.1);
+  /* Keep the same --btn-bg so --btn-text stays fully readable; the previous
+     accent-strong swap made text disappear when the accent was darker than
+     the button fill (esp. custom themes). Use a lift + shadow + brightness. */
   transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  filter: brightness(1.05);
 }
 
 .btn-secondary {
-  background: var(--bg-tertiary);
+  background: var(--bg-surface);
   color: var(--text-primary);
-  border-color: var(--border-color);
+  border-color: var(--border-hair);
 }
 .btn-secondary:hover {
-  background: var(--bg-glass-hover);
+  background: var(--bg-surface-2);
   border-color: var(--border-color-hover);
 }
 
-/* Table UI Components (Part 10 §11) */
+/* Table UI Components */
 .table-container {
   overflow-x: auto;
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  border: 1px solid var(--border-hair);
+  background: var(--bg-surface);
 }
 
 .data-table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 
 .data-table th {
-  background-color: var(--bg-tertiary);
-  padding: 16px;
-  font-size: 13px;
+  background-color: var(--bg-surface-2);
+  padding: 14px 16px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-hair);
 }
 
 .data-table td {
-  padding: 16px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-hair);
   font-size: 14px;
   color: var(--text-primary);
   vertical-align: middle;
+  font-variant-numeric: tabular-nums;
 }
 
 .data-table tr:hover {
-  background-color: rgba(255, 255, 255, 0.02);
+  background-color: var(--bg-surface-2);
 }
 
 /* Badge/Tag Styles */
@@ -229,6 +1436,336 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   padding: 4px 10px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   border-radius: var(--radius-full);
+  border: 1px solid transparent;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+/* Reusable inline loading spinner */
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+/* ===========================================================================
+   UNIVERSAL SUPER RESPONSIVE GRID & MEDIA ENGINE
+   =========================================================================== */
+
+/* Global container reset & responsive box sizing */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* Fluid responsive grid utilities */
+.responsive-grid-auto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.responsive-grid-split {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.responsive-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.responsive-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.responsive-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.responsive-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.responsive-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---------------------------------------------------------------------------
+   UNIVERSAL RESPONSIVE BREAKPOINTS
+   --------------------------------------------------------------------------- */
+
+/* Large Tablets & Small Laptops (<= 1200px) */
+@media (max-width: 1200px) {
+  .responsive-grid-4 {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+  .responsive-grid-split {
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 16px;
+  }
+}
+
+/* Mobile Backdrop Overlay */
+.sidebar-backdrop {
+  display: none;
+}
+
+.mobile-bottom-nav {
+  display: none;
+}
+
+/* Tablets (<= 1024px) */
+@media (max-width: 1024px) {
+  .app-container {
+    grid-template-columns: 1fr !important;
+    grid-template-areas: "main";
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+    z-index: 999;
+  }
+
+  .sidebar-area {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px !important;
+    z-index: 1000;
+    background: var(--bg-secondary) !important;
+    box-shadow: var(--shadow-lg);
+    transform: translateX(-100%);
+    transition: transform var(--transition-normal);
+  }
+
+  .sidebar-area.mobile-open {
+    transform: translateX(0) !important;
+  }
+}
+
+/* Mobile Devices (<= 768px) */
+@media (max-width: 768px) {
+  .mobile-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
+    z-index: 990;
+    align-items: center;
+    justify-content: space-around;
+    padding: 4px 8px;
+  }
+
+  .mobile-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    text-decoration: none;
+    flex: 1;
+  }
+
+  .mobile-nav-item.active {
+    color: var(--accent);
+  }
+
+  .main-area {
+    width: 100vw;
+    padding: 16px !important;
+  }
+
+  .responsive-grid-split {
+    grid-template-columns: 1fr !important;
+  }
+
+  .responsive-grid-3 {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)) !important;
+  }
+
+  /* Force common inline two-column grid splits to stack on narrow screens.
+     React serializes inline styles as KEBAB-CASE in the DOM `style` attribute, so these substring
+     selectors must be kebab-case — the camelCase forms that were here never matched anything, which
+     is why these splits didn't stack globally. Covers the split values actually used across the app. */
+  [style*="grid-template-columns: 3fr 1fr"],
+  [style*="grid-template-columns: 1fr 420px"],
+  [style*="grid-template-columns: 1fr 340px"],
+  [style*="grid-template-columns: 1fr 300px"],
+  [style*="grid-template-columns: 300px 1fr"],
+  [style*="grid-template-columns: 260px 1fr"],
+  [style*="grid-template-columns: 320px 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Mobile Devices & Small Tablets (<= 768px) */
+@media (max-width: 768px) {
+  .main-area {
+    padding: 12px !important;
+  }
+
+  .responsive-grid-4,
+  .responsive-grid-3,
+  .responsive-grid-2 {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+
+  .responsive-header-row,
+  .responsive-filter-bar {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+
+  .glass-card {
+    padding: 16px !important;
+  }
+
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Universal input scaling for touch devices */
+  input, select, button, textarea {
+    max-width: 100% !important;
+  }
+
+  /* Enable horizontal scroll on wide data tables & drawers */
+  .table-container,
+  .data-table,
+  [class*="table"],
+  [class*="drawer"] {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Force modal dialogs to be responsive */
+  [class*="modal"], [class*="dialog"], [class*="popup"] {
+    width: 95vw !important;
+    max-width: 95vw !important;
+    margin: 10px auto !important;
+  }
+}
+
+/* Extra Small Mobile Screens (<= 480px) */
+@media (max-width: 480px) {
+  .main-area {
+    padding: 8px !important;
+  }
+
+  h1, .text-h1 {
+    font-size: 18px !important;
+  }
+
+  h2, .text-h2 {
+    font-size: 16px !important;
+  }
+
+  .badge {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   HEADER — keep the top bar from overflowing on small screens. The right-hand
+   action cluster carries a fixed-width search, a project filter, a live badge,
+   notifications and the avatar; on narrow viewports the least-essential of
+   those are trimmed so nothing spills past the edge or overlaps.
+   --------------------------------------------------------------------------- */
+.app-header .header-actions { flex: 0 1 auto; }
+
+@media (max-width: 1024px) {
+  /* The sidebar's own search is reachable via the drawer, so the header search
+     can shrink here to make room for the breadcrumb + actions. */
+  .app-header .header-search { width: 180px !important; }
+}
+
+@media (max-width: 768px) {
+  .app-header { padding: 0 12px !important; gap: 8px !important; }
+  /* Search lives in the drawer on mobile; the live badge label is noise here. */
+  .app-header .header-search { display: none !important; }
+  .app-header .header-live-badge { display: none !important; }
+  .app-header .header-actions { gap: 10px !important; }
+  .app-header .header-project-filter button span { max-width: 96px !important; }
+  /* Header dropdown panels must never be wider than the viewport. */
+  .app-header .header-project-filter > div[style*="position: absolute"],
+  .app-header .header-project-filter > div { max-width: calc(100vw - 24px); }
+}
+
+/* Respect users who prefer reduced motion — neutralise the shell/drawer/tab
+   transitions and any spinner-free decorative animation. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* Keep genuine loading spinners spinning — they signal progress. */
+  .spin,
+  .spinner {
+    animation-duration: 0.8s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* Tab-pane content transition — keyed on the active tab so each switch
+   fades/slides the pane in instead of snapping it into place. */
+@keyframes tabPaneIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.tab-pane {
+  animation: tabPaneIn 0.18s ease;
 }
