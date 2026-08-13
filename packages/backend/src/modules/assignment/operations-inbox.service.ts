@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, In } from 'typeorm';
-import { branchScopeWhere } from '../../infrastructure/scope/apply-scope';
+import { applyBranchScope, branchScopeWhere } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentStatus, ProjectBranchStatus, businessTodayDateKey } from '@fapoms/shared';
@@ -133,7 +133,7 @@ export class OperationsInboxService {
 
     // Recent declines whose branch is back in candidate search and has no newer open assignment —
     // i.e. the decline is still the branch's live state and a replacement is genuinely owed.
-    const rejected = await assignmentRepo
+    const rejectedQuery = assignmentRepo
       .createQueryBuilder('a')
       .leftJoinAndSelect('a.assayer', 'assayer')
       .leftJoinAndSelect('a.projectBranch', 'pb')
@@ -146,10 +146,18 @@ export class OperationsInboxService {
         `NOT EXISTS (SELECT 1 FROM assignments a2 WHERE a2.project_branch_id = a.project_branch_id
            AND a2.is_active = true AND a2.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')
            AND a2.created_at > a.updated_at)`,
-      )
-      .orderBy('a.updatedAt', 'DESC')
-      .take(100)
-      .getMany();
+      );
+
+    // This lane is a query builder rather than a `find`, so it does not go through `scoped()`
+    // above and has to be narrowed explicitly — it was missed on the first pass, which put the
+    // South's declined branches into a West operator's inbox as actionable replacement work.
+    // The branch relation is already joined as `branch`, so this adds predicates, not joins.
+    applyBranchScope(rejectedQuery, scope, { branch: 'branch', project: 'pb' });
+    if (scope?.projectId) {
+      rejectedQuery.andWhere('a.project_id = :scopeProjectId', { scopeProjectId: scope.projectId });
+    }
+
+    const rejected = await rejectedQuery.orderBy('a.updatedAt', 'DESC').take(100).getMany();
 
     const all = [...pending, ...accepted, ...rejected];
     const assayerIds = [...new Set(all.map((a) => a.assayerId))];

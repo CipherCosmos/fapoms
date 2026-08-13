@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
+import { queryKeys } from '../hooks/queryKeys';
+import { useSocketConnection } from '../hooks/useSocketConnection';
 import { getRecommendations } from '../services/planning';
 import { AlertBanner } from '../components/ui';
 
@@ -74,12 +76,18 @@ export const OperationsInbox: React.FC = () => {
   const navigate = useNavigate();
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
+  // Socket invalidation (via the desk.inbox key) already refreshes this queue on every assignment
+  // event, so the poll is only a fallback for when the realtime channel is down.
+  const live = useSocketConnection();
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['operations-inbox', scopeKey],
+    // From the registry, so `useSocketInvalidation` refreshes this queue on every assignment
+    // event. As a bare literal it matched nothing in the socket map, and a counter-offer took up
+    // to the 60-second poll below to reach the desk.
+    queryKey: [...queryKeys.desk.inbox, scopeKey],
     queryFn: () => api.request<InboxData>(`/assignments/inbox?${scopeQuery}`),
     staleTime: 20_000,
-    refetchInterval: 60_000,
+    refetchInterval: live ? false : 60_000,
   });
 
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -92,7 +100,7 @@ export const OperationsInbox: React.FC = () => {
   const [reassignFor, setReassignFor] = useState<InboxItem | null>(null);
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['operations-inbox'] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.desk.inbox });
     queryClient.invalidateQueries({ queryKey: ['assignments'] });
   };
 

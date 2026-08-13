@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { calculateHaversineDistance } from '@fapoms/shared';
+import { resolveFreely, pincodeCentroid, VerificationAnchor, GeoPrecision, networkAllowed } from './osm-geocoder';
 
 // Shared on-disk cache with the branch/assayer geocoders: one lookup paid,
 // every record in the same place free. Persisted so a restart does not re-hit
@@ -15,10 +16,24 @@ function saveGeoCache() {
 }
 
 export interface Coord { lat: number; lng: number }
-export type GeoSource = 'geocoder' | 'pincode' | 'locality' | 'none';
+/**
+ * Widened to the free OSM tiers (and `manual`) so the tier that produced a coordinate survives
+ * into the database. It used to collapse everything to four values, which meant a 10 m rooftop
+ * and a 100 km state centroid were both just "a coordinate" by the time anything read them.
+ */
+export type GeoSource = GeoPrecision;
 export interface GeocodeResult extends Coord {
   accuracyMeters: number;
   source: GeoSource;
+  /**
+   * What the geocoder actually matched ("State Bank of India, Sanghvi Kesari Road, Pune").
+   *
+   * Carried all the way to the UI on purpose. A tier and a radius say how precise the answer
+   * claims to be; only the matched name says whether it is the *right* place, and for Indian
+   * place names — which repeat across districts and states — that is the question that matters.
+   * It is the difference between ops trusting a pin and ops being able to check it.
+   */
+  matchedName?: string;
 }
 
 /** Metres, from the one shared kilometre implementation. */
@@ -225,6 +240,10 @@ async function pincodeFallback(pin: string): Promise<GeocodeResult | null> {
   if (geoCache[cacheKey]) {
     return { ...geoCache[cacheKey], accuracyMeters: 5000, source: 'pincode' };
   }
+  // The only geo lookup that was not behind this gate, so any spec creating an assayer or branch
+  // whose address contained a 6-digit pincode became a live call to api.postalpincode.in —
+  // ~4.5s per row, flaky, and rate-limited by IP. Cache misses in tests resolve to null instead.
+  if (!networkAllowed()) return null;
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -429,21 +448,45 @@ function stateCentroidFallback(state: string): GeocodeResult | null {
 // ROBUST GEOCODER — chains all fallback tiers, guaranteed to return a result
 // ---------------------------------------------------------------------------
 
-/** Robust multi-tier Indian geocoder. Chains:
- *  1. Google Maps Geocoding API (most accurate)
- *  2. India Post pincode lookup (locality-level accuracy)
- *  3. Static district HQ centroid database (district-level accuracy)
- *  4. Static state centroid (state-level, last resort)
+/**
+ * Robust multi-tier Indian geocoder. Chains, most precise first:
  *
- *  **Never returns null** — worst case returns state centroid with source='none'
- *  and accuracyMeters=100000. Callers should check `source` and `accuracyMeters`
- *  to decide whether to flag the branch for manual review. */
+ *  1. Google Maps Geocoding API           — only when GOOGLE_MAPS_API_KEY is set
+ *  2. Free OSM tiers (`precise` only)     — the mapped branch POI, building, street or locality
+ *  3. India Post pincode lookup           — post-office centroid, ~3 km
+ *  4. Static district HQ centroid         — ~15 km
+ *  5. Static state centroid               — ~100 km, i.e. "unknown"
+ *
+ * **Never returns null.** Callers must read `source`/`accuracyMeters` and persist them: tiers 4
+ * and 5 are placeholders, not locations, and the whole point of reporting them is that a branch
+ * sitting on its state's centroid should not look like one pinned at its front door.
+ *
+ * ## `precise`
+ *
+ * Tier 2 is rate-limited to roughly one request per second per provider by their usage policies
+ * (see osm-geocoder). That is right for an interactive single-record save and wrong for a
+ * 400-row import, which would take seven minutes and hold an HTTP request open the whole time.
+ * So bulk callers pass `precise: false` and take the fast tiers, and the precision backfill
+ * upgrades those rows afterwards, out of the request path.
+ *
+ * `anchor`ing: tier 3's pincode centroid, or failing that tier 4's district centroid, is
+ * resolved FIRST and handed to tier 2 as the point every candidate is checked against. Without
+ * it "Salem" or "Aurangabad" can resolve to the wrong state entirely.
+ */
 export async function geocodeIndiaRobust(
   address: string,
   city: string,
   district: string,
   state: string,
   pincode?: string | null,
+  options?: {
+    /** Consult the rate-limited free OSM tiers. Default true; pass false in bulk loops. */
+    precise?: boolean;
+    /** The record's own name, e.g. "Pune Aundh Branch" — the strongest OSM POI signal. */
+    name?: string | null;
+    /** Client/brand name, e.g. "State Bank of India" — how the POI is actually tagged. */
+    brand?: string | null;
+  },
 ): Promise<GeocodeResult> {
   const pin = pincode || (address || '').match(/\b\d{6}\b/)?.[0] || null;
 
@@ -451,17 +494,66 @@ export async function geocodeIndiaRobust(
   const googleResult = await geocodeIndia(address, city, district, state, pin);
   if (googleResult) return googleResult;
 
-  // Tier 2: Pincode lookup via India Post API
-  if (pin) {
-    const pincodeResult = await pincodeFallback(pin);
-    if (pincodeResult) return pincodeResult;
+  // Resolve the coarse tiers first, so the free geocoders have something to be checked against.
+  const pincodeResult = pin ? await pincodeFallback(pin) : null;
+  const districtResult = districtCentroidFallback(district, state);
+
+  /**
+   * The pincode centroid, from whichever source has one.
+   *
+   * It serves two jobs: it is the anchor every free candidate is verified against, and it is
+   * itself a fallback tier far better than a district HQ. India Post is tried first because
+   * earlier runs have already cached it; OSM answers for the many pincodes India Post returns
+   * without coordinates, which is exactly when verification would otherwise widen to 60 km and
+   * start accepting the wrong town.
+   */
+  let pinCoord: GeocodeResult | null = pincodeResult;
+  if (options?.precise !== false) {
+    if (!pinCoord && pin) {
+      const osmPin = await pincodeCentroid(pin, state, district).catch(() => null);
+      if (osmPin) {
+        pinCoord = {
+          lat: osmPin.lat,
+          lng: osmPin.lng,
+          accuracyMeters: osmPin.accuracyMeters,
+          source: osmPin.precision,
+          matchedName: osmPin.matchedName,
+        };
+      }
+    }
+
+    const anchor: VerificationAnchor | null = pinCoord
+      ? { coord: { lat: pinCoord.lat, lng: pinCoord.lng }, kind: 'pincode' }
+      : districtResult
+      ? { coord: { lat: districtResult.lat, lng: districtResult.lng }, kind: 'district' }
+      : null;
+
+    const free = await resolveFreely(
+      { address, name: options?.name, brand: options?.brand, city, district, state, pincode: pin },
+      anchor,
+    ).catch(() => null);
+
+    // Only when it actually beats the anchor we already hold. A locality hit inside a pincode
+    // we already located is not new information, and swapping one for the other every backfill
+    // would churn coordinates — and therefore distances, fees and plans — for no gain.
+    if (free && free.accuracyMeters < (pinCoord?.accuracyMeters ?? Infinity)) {
+      return {
+        lat: free.lat,
+        lng: free.lng,
+        accuracyMeters: free.accuracyMeters,
+        source: free.precision,
+        matchedName: free.matchedName,
+      };
+    }
   }
 
-  // Tier 3: Static district HQ centroid
-  const districtResult = districtCentroidFallback(district, state);
+  // Tier 3: Pincode centroid (India Post, else OSM)
+  if (pinCoord) return pinCoord;
+
+  // Tier 4: Static district HQ centroid
   if (districtResult) return districtResult;
 
-  // Tier 4: Static state centroid (never fails for any Indian state)
+  // Tier 5: Static state centroid (never fails for any Indian state)
   const stateResult = stateCentroidFallback(state);
   if (stateResult) return stateResult;
 

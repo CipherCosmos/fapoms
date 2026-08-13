@@ -9,6 +9,11 @@ import { Injectable } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { REGION_ORDER } from '@fapoms/shared';
+
+/** Every region room a national (unassigned) staff socket joins. */
+const ALL_REGIONS: string[] = REGION_ORDER;
 
 interface AuthenticatedSocket extends Socket {
   user?: {
@@ -48,6 +53,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly regionGuard: RegionGuardService,
   ) {
     this.eventPublisher.onPublish((eventName, payload) => {
       this.broadcastEvent(eventName, payload);
@@ -134,6 +140,26 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         roleNames.length > 0 && roleNames.some((r) => !EXTERNAL_ROLES.includes(r));
       if (isInternalStaff) {
         await client.join('staff');
+
+        /**
+         * Territorial rooms, so a region-assigned operator is not in the national firehose.
+         *
+         * The `staff` room above still exists and still carries events whose region cannot be
+         * determined — those are national by nature (client, zone, billing) or simply carry no
+         * identifier to resolve. Anything that *can* be placed in a region is delivered here
+         * instead, so a West operator's socket never receives the South's branch names, codes
+         * and assignment traffic.
+         *
+         * Regions come from the database rather than the token: tokens issued before region
+         * assignment existed carry no claim, and reading "absent" as "unrestricted" would put
+         * the very accounts this protects straight back into the firehose.
+         */
+        const regions = await this.regionGuard.getUserRegions(userId).catch(() => null);
+        // An unassigned account is national and joins every region room; an assigned one joins
+        // only its own. Failing to read the assignment (the catch above) yields null → national,
+        // which matches how the account behaved before this room existed.
+        const rooms = regions ?? ALL_REGIONS;
+        for (const r of rooms) await client.join(`region:${r}`);
       }
 
       if (!this.userSockets.has(userId)) {
@@ -189,6 +215,20 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @SubscribeMessage('subscribe:feedback')
+  async handleSubscribeFeedback(client: AuthenticatedSocket, threadId: string) {
+    if (client.user?.id) {
+      await client.join(`feedback:${threadId}`);
+    }
+  }
+
+  @SubscribeMessage('unsubscribe:feedback')
+  async handleUnsubscribeFeedback(client: AuthenticatedSocket, threadId: string) {
+    if (client.user?.id) {
+      await client.leave(`feedback:${threadId}`);
+    }
+  }
+
   /**
    * Organisation-wide operational traffic, scoped to people entitled to see it.
    *
@@ -200,14 +240,33 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Delivery is to the event's own organisation where the payload names one, and otherwise to
    * internal staff. Assayers still receive everything genuinely theirs through the
    * `user:` and `assignment:` room emits, which are untouched.
+   *
+   * ## Region routing
+   *
+   * On top of that, an event that can be placed in a region goes to `region:<R>` rather than
+   * the whole staff/org room, so a region-assigned operator does not receive other regions'
+   * branch names, codes and assignment traffic. The region is *resolved* from whatever
+   * identifier the payload carries rather than read from a field, because 75 call sites
+   * publish these events and a publisher that forgot the field would be a silent leak.
+   *
+   * Fire-and-forget: the resolution is a cached, indexed lookup, and a failure degrades to the
+   * previous unrouted behaviour rather than dropping the event.
    */
   private emitOperational(eventName: string, payload: any) {
-    const orgId = payload?.organizationId || payload?.metadata?.organizationId;
-    if (orgId) {
-      this.server.to(`org:${orgId}`).emit(eventName, payload);
-      return;
-    }
-    this.server.to('staff').emit(eventName, payload);
+    void this.regionGuard
+      .resolveEventRegion(payload)
+      .catch(() => null)
+      .then((region) => {
+        const orgId = payload?.organizationId || payload?.metadata?.organizationId;
+        const base = orgId ? `org:${orgId}` : 'staff';
+        if (region) {
+          // Intersection of "this organisation" and "this region" — socket.io treats multiple
+          // `.to()` calls as a union, so the org room is deliberately not added here.
+          this.server.to(`region:${region}`).emit(eventName, payload);
+          return;
+        }
+        this.server.to(base).emit(eventName, payload);
+      });
   }
 
   broadcastEvent(eventName: string, payload: any) {
@@ -318,6 +377,29 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
           this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
         this.emitOperational(eventType, payload);
+        break;
+      }
+
+      /**
+       * Feedback & collaboration channel. The open thread's room gets every event;
+       * the reporter's own room mirrors it so their "my feedback" list stays live —
+       * except internal team notes, which the reporter must never receive. The
+       * product/support team (PRODUCT_SUPPORT + admins) hear it in their role rooms
+       * so their queue and dashboard refresh without a manual reload.
+       */
+      case 'feedback:new':
+      case 'feedback:updated':
+      case 'feedback:message': {
+        if (payload.threadId) {
+          this.server.to(`feedback:${payload.threadId}`).emit(eventType, payload);
+        }
+        const reporterRoom = payload.reporterUserId || payload.reporterAssayerId;
+        if (reporterRoom && !payload.isInternal) {
+          this.server.to(`user:${reporterRoom}`).emit(eventType, payload);
+        }
+        for (const role of ['PRODUCT_SUPPORT', 'ADMINISTRATOR', 'SUPER_ADMINISTRATOR']) {
+          this.server.to(`role:${role}`).emit(eventType, payload);
+        }
         break;
       }
 

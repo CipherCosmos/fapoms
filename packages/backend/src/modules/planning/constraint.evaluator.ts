@@ -7,7 +7,8 @@ import { HolidayService } from '../holiday/holiday.service';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
-import { AssignmentStatus, businessDateKey } from '@fapoms/shared';
+import { AssignmentStatus, businessDateKey, BypassableRule } from '@fapoms/shared';
+import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 export interface ConstraintContext {
   assayer: AssayerEntity;
@@ -19,6 +20,12 @@ export interface ConstraintContext {
 export interface ConstraintResult {
   passed: boolean;
   reason?: string;
+  /**
+   * Set when this check passed only because an administrator has the rule suspended. Callers
+   * that surface outcomes to a person should say so — a plan that is valid only while a bypass
+   * window is open should not read as an ordinary plan.
+   */
+  bypassed?: BypassableRule;
 }
 
 @Injectable()
@@ -29,7 +36,28 @@ export class ConstraintEvaluator {
     @InjectRepository(ScheduleEntity)
     private readonly scheduleRepository: Repository<ScheduleEntity>,
     private readonly holidayService: HolidayService,
+    /**
+     * Rules an administrator has deliberately suspended — see modules/platform/rule-bypass.
+     *
+     * Consulted here rather than at each of the dozen call sites because this class IS the
+     * chokepoint: seven of the twelve suspendable rules are decided in this file, and a bypass
+     * honoured by the planner but not by the assignment write path would be worse than no
+     * bypass at all — the operator would be told the rule is off and still be refused.
+     */
+    private readonly ruleBypass: RuleBypassService,
   ) {}
+
+  /**
+   * Let a suspended rule through, recording that it happened.
+   *
+   * Returns a passing result carrying `bypassed`, so a caller that wants to warn ("assigned
+   * with the certification check suspended") can, while every existing caller that only reads
+   * `passed` keeps working unchanged.
+   */
+  private allowBypassed(rule: BypassableRule, detail: string): ConstraintResult {
+    this.ruleBypass.noteBypass(rule, { detail });
+    return { passed: true, bypassed: rule };
+  }
 
   /**
    * Every rule that decides whether one assayer may work one date, in one place.
@@ -106,6 +134,9 @@ export class ConstraintEvaluator {
     }
 
     if (doubleBooked) {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.DOUBLE_BOOKING)) {
+        return this.allowBypassed(BypassableRule.DOUBLE_BOOKING, `would have collided with ${doubleBooked.assignmentNumber}`);
+      }
       return {
         passed: false,
         reason: `Assayer double booking: already committed to assignment ${doubleBooked.assignmentNumber} on ${scheduledDate.toISOString().split('T')[0]}.`,
@@ -127,6 +158,9 @@ export class ConstraintEvaluator {
         return targetTime >= start && targetTime <= end;
       });
       if (onLeave) {
+        if (this.ruleBypass.isBypassedSync(BypassableRule.ASSAYER_LEAVE)) {
+          return this.allowBypassed(BypassableRule.ASSAYER_LEAVE, 'assayer is on recorded leave');
+        }
         return {
           passed: false,
           reason: `Assayer Unavailable: Assayer is on leave on ${scheduledDate.toISOString().split('T')[0]}.`,
@@ -140,6 +174,19 @@ export class ConstraintEvaluator {
    * Evaluates if the scheduled date lies within the project start and end dates.
    */
   checkProjectTimeline(project: ProjectEntity, scheduledDate: Date): ConstraintResult {
+    // Guarded once at the top rather than at each end of the window — the rule is "the date must
+    // be inside the engagement", and suspending it suspends both bounds.
+    if (this.ruleBypass.isBypassedSync(BypassableRule.PROJECT_TIMELINE)) {
+      const outside =
+        (project.startDate && scheduledDate.getTime() < new Date(project.startDate).getTime()) ||
+        (project.endDate && scheduledDate.getTime() > new Date(project.endDate).getTime());
+      if (outside) {
+        return this.allowBypassed(
+          BypassableRule.PROJECT_TIMELINE,
+          `${scheduledDate.toISOString().slice(0, 10)} is outside ${project.startDate ?? '—'}..${project.endDate ?? '—'}`,
+        );
+      }
+    }
     const scheduledTime = scheduledDate.getTime();
     if (project.startDate) {
       const projectStart = new Date(project.startDate).getTime();
@@ -170,6 +217,9 @@ export class ConstraintEvaluator {
     // workable at all, before any holiday row is consulted.
     const isHoliday = await this.holidayService.isHoliday(scheduledDate, state, clientId);
     if (isHoliday) {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.HOLIDAY_CALENDAR)) {
+        return this.allowBypassed(BypassableRule.HOLIDAY_CALENDAR, `${scheduledDate.toISOString().slice(0, 10)} is a holiday in ${state}`);
+      }
       return {
         passed: false,
         reason: `Holiday Conflict: Target date is a holiday in ${state}.`,
@@ -203,6 +253,9 @@ export class ConstraintEvaluator {
 
     const minDistance = Number(planningPreferences?.minDistanceKm);
     if (Number.isFinite(minDistance) && minDistance > 0 && distance < minDistance) {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.DISTANCE_POLICY)) {
+        return this.allowBypassed(BypassableRule.DISTANCE_POLICY, `${distance.toFixed(1)}km is inside the ${minDistance}km independence floor`);
+      }
       return {
         passed: false,
         reason: `Conflict of interest: ${distance.toFixed(1)}km is within the client's ${minDistance}km minimum-distance rule.`,
@@ -211,6 +264,9 @@ export class ConstraintEvaluator {
 
     const maxDistance = Number(planningPreferences?.maxDistanceKm);
     if (!options?.relaxDistance && Number.isFinite(maxDistance) && maxDistance > 0 && distance > maxDistance) {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.DISTANCE_POLICY)) {
+        return this.allowBypassed(BypassableRule.DISTANCE_POLICY, `${distance.toFixed(1)}km exceeds the ${maxDistance}km service limit`);
+      }
       return {
         passed: false,
         reason: `Out of range: ${distance.toFixed(1)}km exceeds the client's ${maxDistance}km limit.`,
@@ -235,6 +291,9 @@ export class ConstraintEvaluator {
         (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
       );
       if (missingSkills.length > 0) {
+        if (this.ruleBypass.isBypassedSync(BypassableRule.SKILLS_AND_CERTIFICATIONS)) {
+          return this.allowBypassed(BypassableRule.SKILLS_AND_CERTIFICATIONS, `missing skills: ${missingSkills.join(', ')}`);
+        }
         return {
           passed: false,
           reason: `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`,
@@ -261,6 +320,9 @@ export class ConstraintEvaluator {
         (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
       );
       if (missingCerts.length > 0) {
+        if (this.ruleBypass.isBypassedSync(BypassableRule.SKILLS_AND_CERTIFICATIONS)) {
+          return this.allowBypassed(BypassableRule.SKILLS_AND_CERTIFICATIONS, `missing or expired certification: ${missingCerts.join(', ')}`);
+        }
         return {
           passed: false,
           reason: `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,

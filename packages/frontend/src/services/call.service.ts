@@ -1,4 +1,8 @@
-import { Room, RoomEvent, Track, RemoteTrack, ConnectionState } from 'livekit-client';
+// Type-only import: erased at compile time, so it creates NO static dependency and does not pull
+// livekit-client into any bundle. The runtime values are loaded on demand via `import()` inside
+// connectRoom (see below), so the ~900 kB WebRTC library is fetched only when a call actually
+// starts — not parsed at login by every user, most of whom never place a call.
+import type * as LiveKit from 'livekit-client';
 import { api } from './api';
 import { connectSocket, getSocket } from './socket';
 import { userMessage } from './errors';
@@ -113,7 +117,7 @@ class Ringtone {
 class CallManager {
   private state: CallState = idleState();
   private listeners = new Set<(s: CallState) => void>();
-  private room: Room | null = null;
+  private room: LiveKit.Room | null = null;
   private ringtone = new Ringtone();
   private socketBound = false;
   /** <audio> elements for subscribed remote tracks, keyed by track sid. */
@@ -251,13 +255,18 @@ class CallManager {
   // ── internals ─────────────────────────────────────────────────────────────
 
   private async connectRoom(url: string, token: string) {
+    // The one place the LiveKit runtime is needed. Loading it here (rather than at module top)
+    // is what keeps it out of the initial bundle; by the time connectRoom runs, the user has
+    // clicked to place or answer a call, so the fetch is covered by that interaction.
+    const { Room, RoomEvent, Track, ConnectionState } = await import('livekit-client');
+
     if (this.room) {
       try { await this.room.disconnect(); } catch { /* already gone */ }
     }
     const room = new Room();
     this.room = room;
 
-    room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+    room.on(RoomEvent.TrackSubscribed, (track: LiveKit.RemoteTrack) => {
       if (track.kind !== Track.Kind.Audio) return;
       const el = track.attach() as HTMLAudioElement;
       el.autoplay = true;
@@ -271,12 +280,12 @@ class CallManager {
       });
     });
 
-    room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+    room.on(RoomEvent.TrackUnsubscribed, (track: LiveKit.RemoteTrack) => {
       track.detach().forEach((el) => el.remove());
       if (track.sid) this.audioEls.delete(track.sid);
     });
 
-    room.on(RoomEvent.ConnectionStateChanged, (cs: ConnectionState) => {
+    room.on(RoomEvent.ConnectionStateChanged, (cs: LiveKit.ConnectionState) => {
       if (cs === ConnectionState.Disconnected && this.state.status === 'in-call') {
         // Server/network dropped us without a call:ended — don't leave a frozen timer.
         this.teardown('Call disconnected');

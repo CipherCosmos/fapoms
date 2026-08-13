@@ -125,6 +125,21 @@ export class NotificationEntity extends BaseEntity {
   @Column({ name: 'group_key', type: 'varchar', length: 200, nullable: true })
   groupKey: string | null;
 
+  /**
+   * How many events this one row stands for.
+   *
+   * 1 for an ordinary notification. Higher when a burst of the same type reached the same person
+   * inside the type's collapse window and was merged into this row instead of stacking up — one
+   * bulk activation of 25 assayers produced 25 separate "New assayer onboarded" lines in every
+   * operations user's bell, each saying nothing the previous one had not.
+   *
+   * The row keeps the identity of the FIRST event (entityId, link) and its text is rewritten to
+   * the summary form, so what is lost is only the repetition. Individual events remain in the
+   * audit trail, which is where "what exactly happened" is answered.
+   */
+  @Column({ name: 'collapsed_count', type: 'integer', default: 1 })
+  collapsedCount: number;
+
   @ManyToOne(() => UserEntity, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'user_id' })
   user: UserEntity | null;

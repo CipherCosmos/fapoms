@@ -51,10 +51,13 @@ import { ObservabilityModule } from './infrastructure/observability/observabilit
 import { SecurityModule } from './infrastructure/security/security.module';
 import { TenancyModule } from './infrastructure/tenancy/tenancy.module';
 import { ScopeModule } from './infrastructure/scope/scope.module';
+import { RuleBypassModule } from './modules/platform/rule-bypass/rule-bypass.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { CallsModule } from './modules/calls/calls.module';
+import { FeedbackModule } from './modules/feedback/feedback.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { APP_GUARD } from '@nestjs/core';
@@ -139,6 +142,8 @@ import { APP_GUARD } from '@nestjs/core';
     // which held per-request state in a process-wide field.
     TenancyModule,
     ScopeModule,
+    // Global: the rules it governs are enforced across planning, assignment and check-in.
+    RuleBypassModule,
     PersistenceModule,
 
     // Core modules
@@ -170,12 +175,16 @@ import { APP_GUARD } from '@nestjs/core';
     CustomerMasterModule,
     ValidationQueryModule,
     CallsModule,
+    FeedbackModule,
 
     // Background job queue
     QueueModule,
     SlaScannerModule,
 
     ExpenseModule,
+
+    // Reporting / Excel exports
+    ReportsModule,
 
     // Real-time events
     RealtimeModule,

@@ -15,6 +15,7 @@ import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority } from '
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
+import { LocationTrailService } from '../assayer/location-trail.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { AssessmentEntity } from '../project/assessment.entity';
@@ -24,6 +25,7 @@ import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DocumentService } from '../document/document.service';
+import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -63,7 +65,20 @@ describe('AssignmentService', () => {
   const mockAssayerService = {
     findOne: mockAssayerRepo.findOne,
     updateAssayerStats: jest.fn(),
+    // Cached counters are refreshed off the critical path of a transition — the operator's click
+    // must not wait on statistics. Mocked as a no-op because nothing in these tests reads them.
+    scheduleStatsRefresh: jest.fn(),
+    // Accepting work turns location sharing on: the movement trail is what will confirm the travel
+    // being paid for, so the obligation starts with the job.
+    enableLiveTrackingForActiveWork: jest.fn().mockResolvedValue(undefined),
     getActiveCommercialProfile: jest.fn().mockResolvedValue({ baseFee: 1500 }),
+  };
+
+  /** The movement trail a check-in anchors. Asserted on in the check-in tests below. */
+  const mockLocationTrail = {
+    record: jest.fn().mockResolvedValue(undefined),
+    ingest: jest.fn().mockResolvedValue({ accepted: 1, duplicates: 0, rejected: [] }),
+    assessAssignmentTravel: jest.fn().mockResolvedValue(null),
   };
 
   const mockFeePolicyService = {
@@ -110,6 +125,16 @@ const mockNotificationService = {
     findOne: jest.fn(),
   };
 
+  /**
+   * The ACCEPTED transition writes the calendar dispatch packet through
+   * `dataSource.getRepository('schedules')`. It needs its own double: the shared user-repo one
+   * returns a bare `undefined` from findOne, and the service chains `.catch()` onto that call.
+   */
+  const mockScheduleRepoViaDataSource = {
+    findOne: jest.fn().mockResolvedValue(null),
+    save: jest.fn((arg: any) => Promise.resolve(arg)),
+  };
+
   const mockDataSource = {
     transaction: jest.fn((cb) => cb({
       save: jest.fn((arg) => Promise.resolve(arg)),
@@ -119,7 +144,9 @@ const mockNotificationService = {
         create: jest.fn((arg) => arg),
       }),
     })),
-    getRepository: jest.fn().mockReturnValue(mockUserRepoViaDataSource),
+    getRepository: jest.fn((target: any) =>
+      target === 'schedules' ? mockScheduleRepoViaDataSource : mockUserRepoViaDataSource,
+    ),
   };
 
   // The real UnitOfWork releases emitted events through the publisher after commit; this
@@ -156,6 +183,13 @@ const mockNotificationService = {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        {
+          // Rules are enforced unless an administrator suspends them — see
+          // modules/platform/rule-bypass. Nothing is suspended here, which is the state these
+          // tests are actually about.
+          provide: RuleBypassService,
+          useValue: { isBypassedSync: () => false, isBypassed: async () => false, noteBypass: () => undefined },
+        },
         AssignmentService,
         {
           provide: DocumentService,
@@ -171,6 +205,7 @@ const mockNotificationService = {
         { provide: ProjectQueryService, useValue: mockProjectQueryService },
         { provide: ProjectService, useValue: mockProjectService },
         { provide: AssayerService, useValue: mockAssayerService },
+        { provide: LocationTrailService, useValue: mockLocationTrail },
         { provide: HolidayService, useValue: mockHolidayService },
         { provide: NotificationService, useValue: mockNotificationService },
         { provide: NotificationDispatchService, useValue: mockNotificationDispatch },
@@ -250,6 +285,125 @@ const mockNotificationService = {
       const result = await service.create(validDto, 'user-1');
       expect(result.status).toBe(AssignmentStatus.PENDING);
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The phone channel. `acceptOnBehalf` says the agreement already happened out loud, so the
+   * assignment is confirmed as it is raised rather than left as an offer the assayer must accept
+   * in the app — where it would sit until they opened it, and be auto-declined if the response
+   * SLA lapsed first (autoDeclineExpiredOffers).
+   */
+  describe('create with acceptOnBehalf — the desk confirms for the assayer', () => {
+    const dto = {
+      projectBranchId: 'pb-1',
+      assayerId: 'as-1',
+      proposedFee: 500,
+      scheduledDate: '2026-08-01',
+      acceptOnBehalf: true,
+    };
+
+    /** Wires create() and the acceptance that follows it onto the same assignment row. */
+    const arrange = (overrides: Record<string, any> = {}) => {
+      const projectBranch = { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION, isActive: true };
+      const assignment: any = {
+        id: 'asn-1',
+        assignmentNumber: 'ASN-2026-1',
+        assayerId: 'as-1',
+        status: AssignmentStatus.PENDING,
+        proposedFee: 500,
+        agreedFee: null,
+        scheduledDate: new Date('2026-08-01'),
+        autoSchedule: true,
+        projectBranch,
+        ...overrides,
+      };
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1', branch: { name: 'Thrissur Main', state: 'KL' }, project: {},
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', displayName: 'A Kumar', skills: [], certifications: [] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
+      // Keyed on `where.id` so the two pre-flight lookups in create() (existing assignment for
+      // the branch, and same-day travel) stay empty while the acceptance's findOne(id) resolves.
+      // A fresh copy each time, as TypeORM gives: the row create() returned and the row the
+      // transition loads are separate objects, so a failed transition cannot appear to have
+      // mutated the one already handed back.
+      mockAssignmentRepo.findOne.mockImplementation(async (opts: any) =>
+        opts?.where?.id ? { ...assignment, projectBranch: assignment.projectBranch } : null,
+      );
+      mockAssignmentRepo.create.mockReturnValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      return { assignment, projectBranch };
+    };
+
+    it('returns the assignment already ACCEPTED, with the agreed fee settled', async () => {
+      arrange();
+
+      const result = await service.create(dto, 'user-1');
+
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(result.agreedFee).toBe(500);
+    });
+
+    it('confirms the branch too, so the queue does not still show it awaiting a reply', async () => {
+      const { projectBranch } = arrange();
+
+      await service.create(dto, 'user-1');
+
+      expect(projectBranch.status).toBe(ProjectBranchStatus.ASSIGNMENT_CONFIRMED);
+    });
+
+    it('records the acceptance against the operations user, not the assayer', async () => {
+      arrange();
+
+      await service.create(dto, 'user-1');
+
+      // Who committed the assayer stays answerable: an ACCEPTED transition performed by user-1.
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'ASSIGNMENT_ACCEPTED',
+          previousState: AssignmentStatus.PENDING,
+          newState: AssignmentStatus.ACCEPTED,
+          userId: 'user-1',
+        }),
+      );
+    });
+
+    it('sends one accurate notification instead of the offer/accept pair', async () => {
+      arrange();
+
+      await service.create(dto, 'user-1');
+
+      const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+      // "Please accept or decline" would be false — it is already accepted. And telling ops the
+      // assayer accepted it would credit the app for what a colleague did by phone.
+      expect(types).not.toContain('ASSIGNMENT_OFFERED');
+      expect(types).not.toContain('ASSIGNMENT_ACCEPTED');
+      expect(types).toContain('ASSIGNMENT_DESK_CONFIRMED');
+    });
+
+    it('leaves a live PENDING offer, and says so, when the confirmation cannot be applied', async () => {
+      // ProjectBranchStateMachine.confirmAssignment refuses an inactive branch link.
+      arrange({ projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION, isActive: false } });
+
+      const result = await service.create(dto, 'user-1');
+
+      // The assignment itself committed — reporting it as confirmed would be the exact failure
+      // this feature exists to prevent, so it degrades to the offer flow rather than to a lie.
+      expect(result.status).toBe(AssignmentStatus.PENDING);
+      const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+      expect(types).toContain('ASSIGNMENT_OFFERED');
+      expect(types).not.toContain('ASSIGNMENT_DESK_CONFIRMED');
+    });
+
+    it('still leaves an offer when the flag is absent — the default is unchanged', async () => {
+      arrange();
+
+      const result = await service.create({ ...dto, acceptOnBehalf: undefined }, 'user-1');
+
+      expect(result.status).toBe(AssignmentStatus.PENDING);
+      const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+      expect(types).toContain('ASSIGNMENT_OFFERED');
     });
   });
 
@@ -471,6 +625,63 @@ const mockNotificationService = {
         }),
       );
     });
+
+    /**
+     * The scale fix: the overdue filter lives in SQL, so the scan loads only the offers actually
+     * past their deadline — not the whole active-pending pool tested row-by-row in JS (28,571
+     * rows loaded to act on 555 on the 200k-assignment scale DB).
+     */
+    it('pushes the past-due filter into the query and loads the branch relation with it', async () => {
+      mockAssignmentRepo.find.mockResolvedValue([]);
+
+      await service.autoDeclineExpiredOffers();
+
+      const arg = mockAssignmentRepo.find.mock.calls.at(-1)![0] as any;
+      // A LessThan(now) FindOperator, i.e. the date is filtered in Postgres, not in the loop.
+      expect(arg.where.slaDueDate?.type).toBe('lessThan');
+      // Branch joined in the same query, replacing the per-row findOne the notification used to do.
+      expect(arg.relations).toEqual(expect.arrayContaining(['projectBranch', 'projectBranch.branch']));
+    });
+  });
+
+  describe('checkSlaBreaches', () => {
+    it('flags an overdue offer, records the audit event, and notifies once', async () => {
+      const assignment = {
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING,
+        slaStatus: 'COMPLIANT', slaDueDate: new Date(Date.now() - 3600_000), assayerId: 'as-1',
+        createdBy: 'user-1', projectBranch: { branch: { name: 'Thrissur Main' } },
+      };
+      mockAssignmentRepo.find.mockResolvedValue([assignment]);
+      mockAssignmentRepo.save.mockImplementation((a) => Promise.resolve(a));
+
+      const breached = await service.checkSlaBreaches();
+
+      expect(breached).toBe(1);
+      expect(assignment.slaStatus).toBe('BREACHED');
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'ASSIGNMENT_SLA_BREACHED', entityId: 'asn-1' }),
+      );
+      expect(mockNotificationDispatch.emitSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'ASSIGNMENT_SLA_BREACHED',
+          // Read from the relation loaded by the main query — no second findOne per breach.
+          payload: expect.objectContaining({ branchName: 'Thrissur Main', slaType: 'response' }),
+        }),
+      );
+    });
+
+    it('filters overdue in SQL and joins the branch, instead of scanning the whole open pool', async () => {
+      mockAssignmentRepo.find.mockResolvedValue([]);
+
+      await service.checkSlaBreaches();
+
+      const arg = mockAssignmentRepo.find.mock.calls.at(-1)![0] as any;
+      expect(arg.where.slaStatus).toBe('COMPLIANT');
+      expect(arg.where.slaDueDate?.type).toBe('lessThan');
+      expect(arg.relations).toEqual(expect.arrayContaining(['projectBranch', 'projectBranch.branch']));
+      // Nothing overdue -> nothing written.
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('escalate', () => {
@@ -683,6 +894,38 @@ const mockNotificationService = {
       await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'assayer-1');
 
       expect(assignment.checkInDistanceMeters).toBeNull();
+    });
+
+    /**
+     * The check-in is the anchor every travel assessment is measured backwards from — the one
+     * moment the platform knows for certain where the assayer was. Without it in the trail, an
+     * approach journey has no verified end point.
+     */
+    it('anchors the movement trail with the check-in fix', async () => {
+      const assignment = acceptedAssignment({ scheduledDate: new Date().toISOString() });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 15);
+
+      expect(mockLocationTrail.record).toHaveBeenCalledWith(
+        'assayer-1',
+        12.9716,
+        77.5946,
+        expect.objectContaining({ source: 'CHECK_IN', accuracyMeters: 15, assignmentId: 'asn-1' }),
+      );
+    });
+
+    it('still checks in when the trail append fails — evidence must not block the record', async () => {
+      const assignment = acceptedAssignment({ scheduledDate: new Date().toISOString() });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockLocationTrail.record.mockRejectedValueOnce(new Error('trail write failed'));
+
+      // An assayer standing at the branch must not be refused because a supporting write failed.
+      await expect(
+        service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 15),
+      ).resolves.toMatchObject({ success: true });
     });
   });
 

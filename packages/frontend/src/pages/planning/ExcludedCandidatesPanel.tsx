@@ -5,8 +5,11 @@ export interface ExcludedCandidate {
   displayName: string;
   reason: string;
   detail?: string;
-  /** Why-category from the engine. DATE = fine on another day; the rest are structural. */
-  kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS';
+  /**
+   * Why-category from the engine. DATE = fine on another day; ONBOARDING = a real person whose
+   * HR onboarding is unfinished; the rest are structural.
+   */
+  kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING';
   distanceKm?: number | null;
   /** First day after a blocking leave, when the engine could compute it. */
   nextAvailableDate?: string | null;
@@ -14,6 +17,9 @@ export interface ExcludedCandidate {
 
 const KIND_BADGE: Record<NonNullable<ExcludedCandidate['kind']>, { label: string; color: string; bg: string }> = {
   DATE: { label: 'AVAILABLE ANOTHER DAY', color: 'var(--success)', bg: 'var(--status-active-bg)' },
+  // Deliberately not red: nothing is wrong with this person, their onboarding is simply
+  // unfinished — and this is the row that answers "I added them, where are they?".
+  ONBOARDING: { label: 'ONBOARDING INCOMPLETE', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
   ROTATION: { label: 'ROTATION RULE', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
   DISTANCE: { label: 'DISTANCE POLICY', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
   POLICY: { label: 'CLIENT POLICY', color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
@@ -86,6 +92,7 @@ export const ExcludedCandidatesPanel: React.FC<{
             const busy = assigningId === e.assayerId;
             const badge = e.kind ? KIND_BADGE[e.kind] : null;
             const isDate = e.kind === 'DATE';
+            const isOnboarding = e.kind === 'ONBOARDING';
             return (
               <div key={e.assayerId} style={{ padding: '7px 0', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
@@ -109,7 +116,22 @@ export const ExcludedCandidatesPanel: React.FC<{
                     </div>
                     {e.detail && <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '2px' }}>└─ {e.detail}</div>}
                   </div>
-                  {onAssignAnyway && !isOverriding && (
+                  {/* No "assign anyway" for an unfinished onboarding. The other exclusions are
+                      judgement calls an operator can reasonably overrule with a recorded reason;
+                      this one means the person has not cleared document checks, background
+                      verification or training, and dispatching them is the exact thing that
+                      lifecycle exists to prevent. Link to the profile that carries the
+                      transition control instead of offering a bypass. */}
+                  {isOnboarding && (
+                    <a
+                      href={`/assayers/${e.assayerId}`}
+                      className="btn btn-secondary"
+                      style={{ padding: '3px 8px', fontSize: '10px', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', textDecoration: 'none' }}
+                    >
+                      Finish onboarding
+                    </a>
+                  )}
+                  {onAssignAnyway && !isOverriding && !isOnboarding && (
                     <button
                       onClick={() => startOverride(e)}
                       className="btn btn-secondary"

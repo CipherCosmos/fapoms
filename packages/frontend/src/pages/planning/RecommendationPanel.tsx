@@ -29,6 +29,14 @@ export const RecommendationPanel: React.FC<{
    */
   planDate?: string;
   onPlanDateChange?: (v: string) => void;
+  /**
+   * Rank the whole nearby workforce, treating a booking or a leave on `planDate` as advisory
+   * instead of disqualifying. Unlike every other control in this row it changes what the
+   * ENGINE returns, not what this panel shows, so it re-fetches. Candidates kept this way are
+   * labelled with their clash on the row.
+   */
+  ignoreDateAvailability?: boolean;
+  onToggleIgnoreDateAvailability?: (v: boolean) => void;
   onRefresh: () => void;
   onAccept: (assignmentId: string, proposedFee: number) => void;
   onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
@@ -39,6 +47,7 @@ export const RecommendationPanel: React.FC<{
   showAllCandidates, onToggleShowAll, slaEnabled, onToggleSla, slaRadius, onSlaRadiusChange,
   maxRadiusEnabled, onToggleMaxRadius, maxRadius, onMaxRadiusChange,
   planDate, onPlanDateChange,
+  ignoreDateAvailability = false, onToggleIgnoreDateAvailability,
   onRefresh, onAccept, onCounter, onDecline, onViewHistory,
 }) => {
   const isDone = selectedPb && (
@@ -135,6 +144,16 @@ export const RecommendationPanel: React.FC<{
                       aria-label="Audit date candidates are evaluated for"
                       style={{ fontSize: '10.5px', padding: '2px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--accent)', fontWeight: 600, outline: 'none' }}
                     />
+                  </label>
+                )}
+                {/* Sits with the date because it qualifies the date, not the distance filters:
+                    it turns "who is free that day" into "who could cover this branch at all".
+                    Kept candidates still show their clash, so this reveals rather than hides. */}
+                {onToggleIgnoreDateAvailability && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: ignoreDateAvailability ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
+                    title="Rank everyone nearby even if they are booked or on leave that day. Each clash is still shown on the candidate.">
+                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} />
+                    Ignore date availability
                   </label>
                 )}
                 {/* Max radius: "show assayers WITHIN X km" — the intuitive service-radius filter. */}

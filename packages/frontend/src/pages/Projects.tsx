@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 /** Collapses the table+detail split to a single column on narrow viewports. */
@@ -59,6 +59,15 @@ interface ProjectDetail extends ProjectItem {
   organizationId: string | null;
   updatedAt: string;
   client?: { id: string; name: string; clientCode: string; email?: string; phone?: string };
+}
+
+/** What a branch upload did — see the `meta` on POST /projects/:id/branches/upload. */
+interface BranchUploadMeta {
+  totalRows: number;
+  created: number;
+  updated: number;
+  linked: number;
+  skipped: { row: number; branchCode?: string; reason: string }[];
 }
 
 interface FormData {
@@ -240,6 +249,13 @@ export const Projects: React.FC = () => {
 
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
+  // The socket handlers below bind once at mount, so they must read the scope through a ref —
+  // otherwise a live project event refetches with the mount-time scope and repaints the list
+  // with projects from a region the operator has since filtered out.
+  const scopeQueryRef = useRef(scopeQuery);
+  scopeQueryRef.current = scopeQuery;
+  const scopeParamsRef = useRef(scopeParams);
+  scopeParamsRef.current = scopeParams;
 
   // Reloads whenever the header's scope changes. A project is in scope when it has at least one
   // branch there — see ProjectQueryService.findAll.
@@ -285,7 +301,7 @@ export const Projects: React.FC = () => {
     setIsLoading(true);
     setProjectsError(null);
     try {
-      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>(`/projects?page=1&limit=${PAGE_SIZE}&${scopeQuery}`, { method: 'GET', withMeta: true });
+      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>(`/projects?page=1&limit=${PAGE_SIZE}&${scopeQueryRef.current}`, { method: 'GET', withMeta: true });
       setProjects(response.data);
       setTotalProjects(response.meta?.pagination?.total ?? response.data.length);
       setLoadedPage(1);
@@ -301,7 +317,7 @@ export const Projects: React.FC = () => {
     setIsLoadingMore(true);
     try {
       const next = loadedPage + 1;
-      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>(`/projects?page=${next}&limit=${PAGE_SIZE}&${scopeQuery}`, { method: 'GET', withMeta: true });
+      const response = await api.request<{ data: ProjectItem[]; meta: { pagination: { total: number } } }>(`/projects?page=${next}&limit=${PAGE_SIZE}&${scopeQueryRef.current}`, { method: 'GET', withMeta: true });
       const incoming = response.data || [];
       setProjects(prev => {
         const seen = new Set(prev.map(p => p.id));
@@ -327,7 +343,7 @@ export const Projects: React.FC = () => {
 
   const loadClientBranches = async (clientId: string) => {
     try {
-      const response = await api.request<any>(`/branches?${withScope(scopeParams, { clientId, limit: 1000 })}`);
+      const response = await api.request<any>(`/branches?${withScope(scopeParamsRef.current, { clientId, limit: 1000 })}`);
       if (response && Array.isArray(response)) {
         setAllClientBranches(response);
       } else if (response && response.data && Array.isArray(response.data)) {
@@ -522,11 +538,36 @@ export const Projects: React.FC = () => {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      await api.request(`/projects/${detail.id}/branches/upload`, {
+      // withMeta so the counts and the skipped rows come through. This used to report
+      // "Successfully processed Excel sheet" unconditionally — including for a file whose
+      // header row did not match, where every row was dropped and nothing was imported.
+      const res = await api.request<{ meta?: BranchUploadMeta }>(`/projects/${detail.id}/branches/upload`, {
         method: 'POST',
-        body: formData
+        body: formData,
+        withMeta: true,
       });
-      setMessage({ type: 'success', text: `Successfully processed Excel sheet and associated branches!` });
+      const meta = res?.meta;
+      if (meta) {
+        const parts = [
+          `${meta.created} branch${meta.created === 1 ? '' : 'es'} created`,
+          `${meta.updated} updated`,
+          `${meta.linked} newly linked to this project`,
+        ];
+        const skipped = meta.skipped ?? [];
+        if (skipped.length > 0) {
+          // Name the rows. A count alone ("12 skipped") sends ops back to a 400-row sheet
+          // with no idea which rows or why.
+          const detailText = skipped.slice(0, 5).map(s => `row ${s.row}: ${s.reason}`).join('; ');
+          setMessage({
+            type: 'error',
+            text: `${parts.join(', ')}. Skipped ${skipped.length} of ${meta.totalRows} row(s) — ${detailText}${skipped.length > 5 ? '…' : ''}`,
+          });
+        } else {
+          setMessage({ type: 'success', text: `${meta.totalRows} row(s) read: ${parts.join(', ')}.` });
+        }
+      } else {
+        setMessage({ type: 'success', text: 'Branches uploaded.' });
+      }
       loadDetail(detail.id);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to upload branches. ${userMessage(err)}` });

@@ -20,6 +20,30 @@ import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assi
  */
 
 /** Lifecycle order for onboarding. A candidate walks these in sequence. */
+/**
+ * Who counts as being on the workforce, for every panel on this console.
+ *
+ * Deletion here is soft — `remove()` sets `is_active = false` and cascades to the person's
+ * documents, commercial profiles and assignments. Seventeen raw queries in this file select
+ * `FROM assayers`, and the guard had been written into some of them and not others: the
+ * headcount tiles filtered on `is_active`, while the onboarding pipeline, the records-
+ * completeness worklist and two coverage denominators filtered only on exit/termination dates.
+ *
+ * The result was not subtle. With every assayer in this database soft-deleted, the headcount
+ * read 0 while the onboarding pipeline listed all 8 of them as people waiting to be processed —
+ * two panels on one screen disagreeing about whether the workforce exists.
+ *
+ * Stated once, and asserted by hr-workforce-soft-delete.spec.ts, because a rule that has to be
+ * remembered seventeen times is a rule that will drift again.
+ *
+ * Note this is narrower than "not deleted": someone who has resigned or been terminated is also
+ * off the roster, but their record is still live and still readable from their profile.
+ */
+const ON_ROSTER = 'is_active = true AND exit_date IS NULL AND termination_date IS NULL';
+
+/** The same predicate for a query that aliases the table (`FROM assayers a`). */
+const ON_ROSTER_A = 'a.is_active = true AND a.exit_date IS NULL AND a.termination_date IS NULL';
+
 const ONBOARDING_STAGES = [
   { key: 'INVITED', label: 'Invited' },
   { key: 'DOCUMENT_VERIFICATION', label: 'Document check' },
@@ -119,11 +143,11 @@ export class HrWorkforceService {
   private async headcount() {
     const byLifecycle = await this.dataSource.query(`
       SELECT COALESCE(lifecycle_status::text, 'UNKNOWN') AS stage, COUNT(*)::int AS count
-      FROM assayers GROUP BY 1 ORDER BY 2 DESC
+      FROM assayers WHERE is_active = true GROUP BY 1 ORDER BY 2 DESC
     `);
     const byEmployment = await this.dataSource.query(`
       SELECT COALESCE(employment_type, 'UNSPECIFIED') AS type, COUNT(*)::int AS count
-      FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL
+      FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
       GROUP BY 1 ORDER BY 2 DESC
     `);
     const tenure = await this.dataSource.query(`
@@ -133,7 +157,7 @@ export class HrWorkforceService {
         COUNT(*) FILTER (WHERE joining_date <= NOW() - INTERVAL '3 months'
                            AND joining_date > NOW() - INTERVAL '1 year')::int                      AS m3_to_1y,
         COUNT(*) FILTER (WHERE joining_date <= NOW() - INTERVAL '1 year')::int                     AS over_1y
-      FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL
+      FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
     `);
     const totals = await this.dataSource.query(`
       SELECT
@@ -142,7 +166,7 @@ export class HrWorkforceService {
         COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
                            AND exit_date IS NULL AND termination_date IS NULL)::int AS onboarding,
         COUNT(*) FILTER (WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
-      FROM assayers
+      FROM assayers WHERE is_active = true
     `);
 
     return {
@@ -185,7 +209,7 @@ export class HrWorkforceService {
              EXTRACT(DAY FROM NOW() - COALESCE(lm.occurred_at, a.created_at))::int AS "daysInStage"
       FROM assayers a
       LEFT JOIN last_move lm ON lm.assayer_id = a.id
-      WHERE a.exit_date IS NULL AND a.termination_date IS NULL
+      WHERE ${ON_ROSTER_A}
       ORDER BY "daysInStage" DESC
     `,
     );
@@ -232,7 +256,7 @@ export class HrWorkforceService {
       SELECT COUNT(*)::int AS total,
         ${selects}
       FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL
+      WHERE ${ON_ROSTER}
     `);
 
     const total = HrWorkforceService.num(filled.total);
@@ -260,7 +284,7 @@ export class HrWorkforceService {
              state, district, lifecycle_status AS "lifecycleStatus",
              ARRAY_REMOVE(ARRAY[${missingExpr}], NULL) AS "missing"
       FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL
+      WHERE ${ON_ROSTER}
         AND (${criticalCols.map((c) => `${c} IS NULL OR ${c}::text = ''`).join(' OR ')})
       ORDER BY ARRAY_LENGTH(ARRAY_REMOVE(ARRAY[${missingExpr}], NULL), 1) DESC NULLS LAST,
                assayer_code
@@ -274,7 +298,7 @@ export class HrWorkforceService {
 
     const [docCoverage] = await this.dataSource.query(`
       SELECT
-        (SELECT COUNT(*)::int FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL) AS roster,
+        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER}) AS roster,
         (SELECT COUNT(DISTINCT assayer_id)::int FROM assayer_government_documents WHERE is_active = true) AS "withGovDoc",
         (SELECT COUNT(DISTINCT assayer_id)::int FROM assayer_documents WHERE is_active = true) AS "withFile"
     `);
@@ -380,7 +404,7 @@ export class HrWorkforceService {
         (SELECT COUNT(DISTINCT assayer_id)::int FROM workforce_attributes WHERE type='SKILL' AND is_active=true)         AS "withSkill",
         (SELECT COUNT(DISTINCT assayer_id)::int FROM workforce_attributes WHERE type='LANGUAGE' AND is_active=true)      AS "withLanguage",
         (SELECT COUNT(DISTINCT assayer_id)::int FROM workforce_attributes WHERE type='CERTIFICATION' AND is_active=true) AS "withCertification",
-        (SELECT COUNT(*)::int FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL)                        AS roster
+        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER})                        AS roster
     `);
 
     const group = (t: string) => byType.filter((r: any) => r.type === t).slice(0, 20);
@@ -408,7 +432,7 @@ export class HrWorkforceService {
       SELECT state, COUNT(*)::int AS assayers,
              COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int AS active
       FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL
+      WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
       GROUP BY 1
     `);
     const demandRaw = await this.dataSource.query(`
@@ -466,6 +490,7 @@ export class HrWorkforceService {
       FROM assayers a
       WHERE a.lifecycle_status = 'ACTIVE'
         AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND a.is_active = true
         AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)
       ORDER BY a.last_assignment_date ASC NULLS FIRST
       LIMIT 50
@@ -483,7 +508,7 @@ export class HrWorkforceService {
         SUM(cancelled_assignments)::int                                         AS "cancelledAssignments",
         SUM(on_time_completions)::int                                           AS "onTimeCompletions"
       FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL
+      WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
     `);
 
     const completed = HrWorkforceService.num(performance.completedAssignments);
@@ -508,6 +533,7 @@ export class HrWorkforceService {
              ) AS "currentAllocation"
       FROM assayers a
       WHERE a.lifecycle_status = 'ACTIVE' AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND a.is_active = true
       ORDER BY a.display_name ASC
     `);
     const DEFAULT_WEEKLY = 15;
@@ -571,6 +597,10 @@ export class HrWorkforceService {
         COUNT(*) FILTER (WHERE termination_date IS NOT NULL)::int AS terminations,
         COUNT(*) FILTER (WHERE joining_date > CURRENT_DATE - INTERVAL '90 days')::int AS "joins90d"
       FROM assayers
+      -- Attrition counts people who LEFT, which is a different thing from a record that was
+      -- deleted. Resigning or being terminated leaves the row live and dated; deletion clears
+      -- is_active. Without this, a deleted profile inflated both the exit count and joins90d.
+      WHERE is_active = true
     `);
 
     const recent = await this.dataSource.query(`
@@ -579,14 +609,14 @@ export class HrWorkforceService {
              CASE WHEN termination_date IS NOT NULL THEN 'TERMINATED' ELSE 'RESIGNED' END AS mode,
              joining_date AS "joiningDate"
       FROM assayers
-      WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL
+      WHERE is_active = true AND (exit_date IS NOT NULL OR termination_date IS NOT NULL)
       ORDER BY COALESCE(exit_date, termination_date) DESC
       LIMIT 20
     `);
 
     const headcount = await this.dataSource.query(`
       SELECT COUNT(*)::int AS active FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL
+      WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
     `);
 
     const active = HrWorkforceService.num(headcount[0]?.active);

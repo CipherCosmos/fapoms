@@ -7,9 +7,11 @@ import { AssayerGovernmentDocumentEntity } from './assayer-government-document.e
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
+import { AssayerLocationPingEntity } from './assayer-location-ping.entity';
 import { HrController } from './hr.controller';
 import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
+import { LocationTrailService } from './location-trail.service';
 import { AssayerController } from './assayer.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -25,10 +27,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
       AssayerDocumentEntity,
       AssayerRemarkEntity,
       AssayerActivityEntity,
+      AssayerLocationPingEntity,
     ]),
   ],
   controllers: [AssayerController, HrController],
-  providers: [AssayerService, HrWorkforceService],
-  exports: [AssayerService, HrWorkforceService, TypeOrmModule],
+  providers: [AssayerService, HrWorkforceService, LocationTrailService],
+  exports: [AssayerService, HrWorkforceService, LocationTrailService, TypeOrmModule],
 })
 export class AssayerModule {}

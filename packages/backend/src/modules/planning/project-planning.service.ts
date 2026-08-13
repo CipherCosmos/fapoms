@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectQueryService } from '../project/project-query.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { PlanningService, AssayerRecommendation } from './planning.service';
@@ -31,13 +32,21 @@ export class ProjectPlanningService {
   /**
    * Retrieves recommended candidates for all unassigned branches of a project.
    */
-  async getProjectPlanningCandidates(projectId: string): Promise<ProjectPlanningReport> {
+  async getProjectPlanningCandidates(
+    projectId: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<ProjectPlanningReport> {
     const project = await this.projectQueryService.findOne(projectId);
     if (!project) {
       throw new NotFoundException(`Project ${projectId} not found.`);
     }
 
-    const projectBranches = await this.projectQueryService.findProjectBranches(projectId);
+    // Scoped: planning is a territorial desk, and this endpoint returns branch identifiers plus
+    // recommended assayers for every unassigned branch. Unscoped it handed a West operator the
+    // whole national project — the branch list *and* the candidate assayers for each — because a
+    // multi-region project legitimately appears in their project list the moment one of its
+    // branches is in the West.
+    const projectBranches = await this.projectQueryService.findProjectBranches(projectId, scope);
     
     // Filter to unassigned/imported/planning status branches
     const unassignedPBs = projectBranches.filter(

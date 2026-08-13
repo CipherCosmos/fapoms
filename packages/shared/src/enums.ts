@@ -198,6 +198,15 @@ export enum SystemRole {
    */
   FINANCE_MANAGER = 'FINANCE_MANAGER',
   READ_ONLY_AUDITOR = 'READ_ONLY_AUDITOR',
+  /**
+   * The product / support / development team. Owns the two-way feedback channel:
+   * receives bug reports, enhancement requests and process suggestions from every
+   * other user (staff, clients and field assayers), triages them, and replies in
+   * thread. This is a product-facing responsibility, deliberately distinct from
+   * ADMINISTRATOR (system configuration) — though admins also hold the feedback
+   * queue so nothing is ever blocked waiting for this role to be staffed.
+   */
+  PRODUCT_SUPPORT = 'PRODUCT_SUPPORT',
 }
 
 export enum PermissionAction {
@@ -508,6 +517,7 @@ export enum NotificationCategory {
   WORKFORCE = 'WORKFORCE',
   BILLING = 'BILLING',
   SYSTEM = 'SYSTEM',
+  FEEDBACK = 'FEEDBACK',
 }
 
 /**
@@ -539,4 +549,58 @@ export enum NotificationPriority {
   NORMAL = 'NORMAL',
   HIGH = 'HIGH',
   CRITICAL = 'CRITICAL',
+}
+
+/**
+ * The two-way feedback & collaboration channel between every FAPOMS user and the
+ * product/support team. A "thread" is one reported item (a bug, an idea, a
+ * question) plus the back-and-forth about it — modelled after the assayer
+ * clarification thread, but the counterparty here is the PRODUCT_SUPPORT team
+ * rather than the desk.
+ */
+
+/** What kind of thing was reported. AI-suggested on submit, editable by the team. */
+export enum FeedbackCategory {
+  /** Something is broken or behaving wrongly. */
+  BUG = 'BUG',
+  /** A request for a new capability or an improvement to an existing one. */
+  ENHANCEMENT = 'ENHANCEMENT',
+  /** A workflow / process / policy that should change. */
+  PROCESS = 'PROCESS',
+  /** A how-do-I / clarification, not a defect or a request. */
+  QUESTION = 'QUESTION',
+  /** Anything that does not fit the above. */
+  OTHER = 'OTHER',
+}
+
+/** How urgent the item is. AI-suggested from language cues, editable by the team. */
+export enum FeedbackSeverity {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+  CRITICAL = 'CRITICAL',
+}
+
+/** Where a reported item sits in its lifecycle. */
+export enum FeedbackStatus {
+  /** Filed, not yet triaged by the team. */
+  OPEN = 'OPEN',
+  /** The team has seen it and is engaging (replied / triaged). */
+  ACKNOWLEDGED = 'ACKNOWLEDGED',
+  /** Actively being worked. */
+  IN_PROGRESS = 'IN_PROGRESS',
+  /** Addressed — fixed, shipped, or answered. */
+  RESOLVED = 'RESOLVED',
+  /** Closed without further action (won't-fix, duplicate, stale). */
+  CLOSED = 'CLOSED',
+}
+
+/** Which side of a feedback thread a message came from. */
+export enum FeedbackAuthorType {
+  /** The user or field assayer who raised the item. */
+  REPORTER = 'REPORTER',
+  /** A product/support/dev-team member. */
+  TEAM = 'TEAM',
+  /** An automated system line (status change, assignment, triage note). */
+  SYSTEM = 'SYSTEM',
 }

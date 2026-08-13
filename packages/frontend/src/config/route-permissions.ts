@@ -11,6 +11,13 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: Object.values(SystemRole),
   },
   {
+    // The feedback & collaboration channel. Everyone who signs in can raise and follow
+    // their own items; the PRODUCT_SUPPORT team and admins get the triage desk. The page
+    // itself renders the right view per role.
+    path: '/feedback',
+    allowedRoles: Object.values(SystemRole),
+  },
+  {
     path: '/executive-map',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
@@ -188,6 +195,18 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.OPERATIONS_MANAGER,
       SystemRole.OPERATIONS_EXECUTIVE,
       SystemRole.READ_ONLY_AUDITOR,
+    ],
+  },
+  {
+    /**
+     * Suspending the platform's operational controls. Administrators only, and deliberately not
+     * extended to OPERATIONS_MANAGER the way /rules is: configuring a business rule is an
+     * operational decision; switching the controls off for a window is not.
+     */
+    path: '/admin/rule-bypass',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
     ],
   },
   {

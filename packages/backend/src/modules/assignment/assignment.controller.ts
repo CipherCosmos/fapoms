@@ -20,6 +20,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
@@ -57,6 +58,19 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
 
   @IsOptional() @IsBoolean()
   autoSchedule?: boolean;
+
+  /**
+   * Confirm the assignment on the assayer's behalf instead of leaving a PENDING offer.
+   *
+   * Reachable only by the four roles on `POST /assignments` — the same set already permitted to
+   * accept on an assayer's behalf via `POST :id/transition`. This adds no authority; it removes
+   * a second round trip from an authority ops already has.
+   */
+  @IsOptional() @IsBoolean()
+  acceptOnBehalf?: boolean;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  acceptanceReason?: string;
 }
 
 /** Escalation reason is free text and optional; the endpoint applies a default when absent. */
@@ -102,6 +116,7 @@ export class AssignmentController {
   constructor(
     private readonly assignmentService: AssignmentService,
     private readonly operationsInbox: OperationsInboxService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   // Was @Public(), and any non-UUID path segment fell through to findAll() — so
@@ -111,12 +126,20 @@ export class AssignmentController {
   @Get('assayer/:assayerId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get active assignments for a specific assayer (Mobile App API)' })
-  async findByAssayer(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any) {
+  async findByAssayer(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
     const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
     if (!isStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only view your own assignments');
     }
+    // Staff pass the role check above but are still bound by their region assignment: this
+    // returns an assayer's whole book, so a West operator must not be able to read the South's
+    // people by id. Assayers reading their own work carry no assignment and are unaffected.
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const items = await this.assignmentService.findByAssayer(assayerId);
     return { success: true, items };
   }
@@ -187,7 +210,9 @@ export class AssignmentController {
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @ApiOperation({ summary: 'Create a new assignment in CREATED status' })
+  // Read `data.status` rather than assuming: with `acceptOnBehalf` the response is ACCEPTED, and
+  // if the confirmation could not be applied it comes back PENDING as a live offer instead.
+  @ApiOperation({ summary: 'Create an assignment — a PENDING offer, or ACCEPTED when the desk confirms on the assayer behalf' })
   async create(@Body() dto: CreateAssignmentRequestDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const assignment = await this.assignmentService.create(dto, userId);
@@ -247,6 +272,21 @@ export class AssignmentController {
   }
 
   /**
+   * What the movement trail says about the journey this assignment paid travel for.
+   *
+   * Staff-only, and read-only: this is evidence for a person approving a claim, never an automatic
+   * decision. The response distinguishes "not observed" from "observed and short" — see
+   * travel-track.ts — so a reviewer is never handed a shortfall the data did not earn.
+   */
+  @Get(':id/travel-verification')
+  @Roles(...STAFF_ROLES)
+  @ApiOperation({ summary: 'Compare the recorded movement trail against the travel this assignment was quoted' })
+  async travelVerification(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    return { success: true, data: await this.assignmentService.getTravelVerification(id) };
+  }
+
+  /**
    * The desk's queue of problems the field has flagged. Declared before `@Get(':id')` so the
    * literal "field-issues" is never parsed as an assignment id by that route's ParseUUIDPipe.
    */
@@ -281,7 +321,9 @@ export class AssignmentController {
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    // No-op for the mobile app: an ASSAYER principal carries no region assignment.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const assignment = await this.assignmentService.findOne(id);
     return {
       success: true,
@@ -452,7 +494,8 @@ export class AssignmentController {
   @Get(':id/timeline')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get unified activity timeline for an assignment' })
-  async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
+  async getTimeline(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const timeline = await this.assignmentService.getTimeline(id);
     return {
       success: true,

@@ -5,6 +5,7 @@ import { Flag, AlertTriangle, Lock, CalendarClock, HelpCircle, MoreHorizontal, C
 import { assignmentStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
 import { queryKeys } from '../hooks/queryKeys';
+import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useScope, withScope } from '../context/ScopeContext';
 import { StatusBadge } from '../components/ui';
 
@@ -56,12 +57,14 @@ export const FieldIssues: React.FC = () => {
   const navigate = useNavigate();
 
   const { scopeParams, scopeKey } = useScope();
+  const live = useSocketConnection();
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [...queryKeys.assignments.fieldIssues, scopeKey],
     queryFn: () => api.request<FieldIssue[]>(`/assignments/field-issues?${withScope(scopeParams)}`),
-    // Cheap safety net on top of the socket invalidation, since this is a queue people watch.
-    refetchInterval: 60_000,
+    // Socket invalidation keeps this queue current; the poll is a safety net for when the socket
+    // is down, not a steady-state refresh on top of the realtime events.
+    refetchInterval: live ? false : 60_000,
   });
   const issues: FieldIssue[] = (Array.isArray(data) ? data : (data as any)?.data) || [];
   const open = issues.filter((i) => i.open);

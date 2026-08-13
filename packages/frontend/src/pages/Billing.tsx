@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Plus, AlertTriangle, Banknote, FileText, RefreshCw } from 'lucide-react';
+import { Plus, AlertTriangle, Banknote, FileText, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import {
   useBillingDashboard,
   useBillingEntries,
@@ -37,6 +37,7 @@ import { CreatePayableModal, PayableDetailDrawer } from './billing/PayableModals
 import { RaiseConflictModal, ConflictDetailDrawer } from './billing/ConflictModals';
 import { useToast } from '../components/ui';
 import { userMessage } from '../services/errors';
+import { useExcelExport } from '../hooks/useExcelExport';
 import { formatRupees as money } from '@fapoms/shared';
 import { SystemRole } from '@fapoms/shared';
 import { ExpenseReview } from './ExpenseReview';
@@ -199,6 +200,10 @@ export const Billing: React.FC = () => {
   };
 
   const scope = clientId ? { clientId } : {};
+  const { download: downloadExcel } = useExcelExport();
+  const handleExportBilling = () => {
+    void downloadExcel('/reports/billing', { clientId: clientId || undefined });
+  };
   const clients = useBillingClients();
   const dashboard = useBillingDashboard(clientId || undefined);
   const entries = useBillingEntries({ ...scope, ...(level ? { level } : {}) });
@@ -302,6 +307,7 @@ export const Billing: React.FC = () => {
           <button onClick={() => setShowInvoiceModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><FileText size={15} /> Invoice</button>
           <button onClick={() => setShowPayableModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><Banknote size={15} /> Payable</button>
           <button onClick={() => setShowConflictModal(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}><AlertTriangle size={15} /> Conflict</button>
+          <button onClick={handleExportBilling} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, color: 'var(--success)' }}><FileSpreadsheet size={15} /> Export</button>
         </div>
       </div>
       {showEntryModal && <CreateBillingEntryModal onClose={() => setShowEntryModal(false)} />}

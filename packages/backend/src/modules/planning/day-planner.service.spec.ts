@@ -81,6 +81,16 @@ describe('DayPlannerService', () => {
           useValue: overrides.clientRepo ?? {
             findOne: jest.fn().mockResolvedValue({ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }),
             find: jest.fn().mockResolvedValue([{ id: 'client-1', planningPreferences: { minutesPerPacket: 15 } }]),
+            // The client's configuration is loaded through a guarded join now, so that a
+            // soft-deleted configuration cannot supply the radius and working days the plan is
+            // built from. `relations: ['configuration']` would have loaded it regardless.
+            createQueryBuilder: jest.fn(() => ({
+              leftJoinAndSelect: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              getMany: jest.fn().mockResolvedValue([
+                { id: 'client-1', planningPreferences: { minutesPerPacket: 15 } },
+              ]),
+            })),
           },
         },
         { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: { findOne: jest.fn() } },
@@ -256,6 +266,13 @@ describe('DayPlannerService', () => {
       clientRepo: {
         findOne: jest.fn().mockResolvedValue(CLIENT_1),
         find: jest.fn().mockResolvedValue([CLIENT_1, CLIENT_2]),
+        // Matches the guarded join the service uses to load configurations — see the note on
+        // the default mock above.
+        createQueryBuilder: jest.fn(() => ({
+          leftJoinAndSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          getMany: jest.fn().mockResolvedValue([CLIENT_1, CLIENT_2]),
+        })),
       },
     });
 

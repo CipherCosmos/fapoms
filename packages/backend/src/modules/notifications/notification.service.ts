@@ -178,6 +178,17 @@ export class NotificationService {
       .where('(n.userId = :rid OR n.assayerId = :rid)', { rid: recipientId })
       .andWhere('n.isActive = true');
 
+    // Categories this recipient has switched off for in-app. The settings screen tells them
+    // "you will stop seeing these in your notification bell entirely" and nothing enforced it —
+    // rows were written and listed regardless. Filtered on read rather than never written,
+    // because a category muted for in-app may still be on for push, and the push is sent from
+    // the row. Explicitly asking for a muted category still returns it, so the inbox's own
+    // category filter is not silently empty.
+    const mutedCategories = await this.mutedInAppCategories(recipientId);
+    if (mutedCategories.length && !opts.category) {
+      qb.andWhere('n.category NOT IN (:...mutedCategories)', { mutedCategories });
+    }
+
     if (opts.category) qb.andWhere('n.category = :category', { category: opts.category });
     if (opts.unreadOnly) qb.andWhere('n.isRead = false');
 
@@ -192,14 +203,42 @@ export class NotificationService {
     return { items, total, unreadCount };
   }
 
-  /** Cheap enough to poll: used for the bell badge without pulling the whole inbox. */
+  /**
+   * The categories this recipient has turned off for in-app.
+   *
+   * Absence of a row means opted in, so nobody is muted by omission. Fails open on a lookup
+   * error — showing a notification somebody muted is a smaller harm than hiding their inbox.
+   */
+  private async mutedInAppCategories(recipientId: string): Promise<string[]> {
+    try {
+      const rows = await this.preferenceRepository.find({
+        where: [
+          { userId: recipientId, inApp: false },
+          { assayerId: recipientId, inApp: false },
+        ],
+      });
+      return rows.map((r) => r.category);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Cheap enough to poll: used for the bell badge without pulling the whole inbox.
+   *
+   * Counts the same set the bell lists. It did not: muted categories were excluded from
+   * neither, and once they are excluded from the list a badge that still counted them would
+   * show unread items the user cannot open — a number that can never be cleared.
+   */
   async getUnreadCount(recipientId: string): Promise<number> {
-    return this.notificationRepository.count({
-      where: [
-        { userId: recipientId, isActive: true, isRead: false },
-        { assayerId: recipientId, isActive: true, isRead: false },
-      ],
-    });
+    const muted = await this.mutedInAppCategories(recipientId);
+    const qb = this.notificationRepository
+      .createQueryBuilder('n')
+      .where('(n.userId = :rid OR n.assayerId = :rid)', { rid: recipientId })
+      .andWhere('n.isActive = true')
+      .andWhere('n.isRead = false');
+    if (muted.length) qb.andWhere('n.category NOT IN (:...muted)', { muted });
+    return qb.getCount();
   }
 
   async markAsRead(id: string, recipientId: string): Promise<NotificationEntity> {

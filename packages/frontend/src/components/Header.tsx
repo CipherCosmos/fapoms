@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Wifi, WifiOff, Settings as SettingsIcon, LogOut, Filter, ChevronDown, Search, X, Check } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { NotificationDropdown } from './NotificationDropdown';
+import { FeedbackLauncher } from '../pages/feedback/FeedbackLauncher';
 import { MenuToggle } from './ui/MenuToggle';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useScope } from '../context/ScopeContext';
@@ -19,6 +20,7 @@ interface HeaderProps {
 const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/dashboard', category: 'Overview', label: 'Dashboard' },
   { prefix: '/executive-map', category: 'Overview', label: 'Command Room' },
+  { prefix: '/feedback', category: 'Overview', label: 'Feedback' },
   { prefix: '/projects', category: 'Operations', label: 'Projects' },
   { prefix: '/planning', category: 'Operations', label: 'Stage 1: Planning' },
   { prefix: '/scheduling', category: 'Operations', label: 'Stage 2: Schedule Dispatch' },
@@ -451,6 +453,8 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
           {live ? <Wifi size={12} /> : <WifiOff size={12} />}
           {live ? 'Live' : 'Offline'}
         </div>
+        {/* Always-available feedback entry point — any user, any page. */}
+        <FeedbackLauncher />
         <NotificationDropdown />
 
         {/* Profile Avatar Hover Menu */}

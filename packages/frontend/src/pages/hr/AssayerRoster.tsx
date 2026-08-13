@@ -2,14 +2,16 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Search, X, ChevronUp, ChevronDown, ExternalLink, Edit2, Trash2,
-  AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal,
+  AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
 } from 'lucide-react';
 import { AssayerLifecycleStatus, assayerLifecyclePath } from '@fapoms/shared';
 
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
 import { UploadExcelControls } from '../../components/ui';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
+import { useExcelExport } from '../../hooks/useExcelExport';
 import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
@@ -94,7 +96,17 @@ export const AssayerRoster: React.FC = () => {
 
   const [assayers, setAssayers] = useState<Assayer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  /**
+   * `warn` exists for the partial outcome a bulk import produces — some rows landed, some did
+   * not. Reporting that as `ok` hides the failures; reporting it as `err` implies nothing was
+   * saved, and sends someone re-uploading a file that has already half-imported.
+   *
+   * `details` carries the per-row reasons. They belong on screen, not in the network tab.
+   */
+  const [notice, setNotice] = useState<
+    { tone: 'ok' | 'warn' | 'err'; text: string; details?: string[] } | null
+  >(null);
+  const [noticeExpanded, setNoticeExpanded] = useState(false);
 
   const [segment, setSegment] = useState('all');
   const [search, setSearch] = useState('');
@@ -108,6 +120,8 @@ export const AssayerRoster: React.FC = () => {
   const [editing, setEditing] = useState<Assayer | null>(null);
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
+  const { download: downloadExcel } = useExcelExport();
+  const handleExportExcel = () => void downloadExcel('/reports/assayer-roster');
   const [busy, setBusy] = useState(false);
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: string[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
   const RENDER_CHUNK = 200;
@@ -264,15 +278,75 @@ export const AssayerRoster: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  /**
+   * A bulk import reports per-row outcomes in a successful response, not by throwing.
+   *
+   * This awaited the request, discarded the result and said "Roster imported." — so an upload
+   * that imported nothing and returned 73 errors displayed as a green success. The only way to
+   * discover the failure was the browser's network tab, which is not a place operators look.
+   * The result is now read and shown: what landed, what did not, and why.
+   */
   const handleUpload = async (file: File) => {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      await api.request('/assayers/upload', { method: 'POST', body: fd });
-      setNotice({ tone: 'ok', text: 'Roster imported.' });
+      const result = await api.request<{
+        importedCount: number;
+        created?: number;
+        updated?: number;
+        totalRows?: number;
+        sheetName?: string;
+        needingPhone?: string[];
+        errors?: string[];
+      }>('/assayers/upload', { method: 'POST', body: fd });
+      const imported = result?.importedCount ?? 0;
+      const errors = result?.errors ?? [];
+      const created = result?.created ?? 0;
+      const updated = result?.updated ?? 0;
+      const needingPhone = result?.needingPhone ?? [];
+
+      /**
+       * "Imported 25" hid the two things an operator most needs to know: whether those were new
+       * people or an overwrite of the existing roster, and whether any of them can actually be
+       * reached. A re-imported roster reports 25 either way.
+       */
+      const breakdown = created && updated
+        ? `${created} new, ${updated} updated`
+        : created
+          ? `${created} new`
+          : updated
+            ? `${updated} updated`
+            : `${imported}`;
+      const sheetNote = result?.sheetName ? ` from sheet "${result.sheetName}"` : '';
+      const phoneNote = needingPhone.length
+        ? ` ${needingPhone.length} ha${needingPhone.length === 1 ? 's' : 've'} no phone number — they can be planned, but not called until one is added.`
+        : '';
+
+      if (errors.length === 0) {
+        setNotice({
+          tone: needingPhone.length ? 'warn' : 'ok',
+          text: `Roster imported${sheetNote} — ${breakdown}.${phoneNote}`,
+          details: needingPhone.length
+            ? [`No phone number: ${needingPhone.join(', ')}`]
+            : undefined,
+        });
+      } else {
+        // Nothing imported means the file itself was wrong (wrong template, missing column), and
+        // that message is one actionable sentence — show it whole. A partial import is a
+        // per-row problem, so lead with the counts and list the first few rows.
+        setNotice({
+          tone: imported > 0 ? 'warn' : 'err',
+          text: imported === 0 && errors.length === 1
+            ? errors[0]
+            : imported > 0
+            ? `Imported ${breakdown} of ${imported + errors.length}${sheetNote}. ${errors.length} row(s) could not be imported.${phoneNote}`
+            : `Imported ${imported} of ${imported + errors.length}. ${errors.length} row(s) could not be imported.`,
+          details: errors,
+        });
+      }
       load();
     } catch (e) {
-      setNotice({ tone: 'err', text: (e as Error).message });
+      setNotice({ tone: 'err', text: userMessage(e) });
     }
   };
 
@@ -288,17 +362,44 @@ export const AssayerRoster: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      {notice && (
-        <div style={{
-          padding: '10px 14px', borderRadius: '8px', fontSize: '13px',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          background: notice.tone === 'ok' ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
-          color: notice.tone === 'ok' ? 'var(--success)' : 'var(--danger)',
-        }}>
-          <span>{notice.text}</span>
-          <button onClick={() => setNotice(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}><X size={14} /></button>
-        </div>
-      )}
+      {notice && (() => {
+        const tones = {
+          ok: { bg: 'var(--status-active-bg)', fg: 'var(--success)' },
+          warn: { bg: 'var(--status-pending-bg)', fg: 'var(--warning)' },
+          err: { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' },
+        }[notice.tone];
+        const details = notice.details ?? [];
+        // A handful of rows is worth showing outright; a wall of them needs a toggle, or the
+        // message pushes the roster off the screen.
+        const shown = noticeExpanded ? details : details.slice(0, 5);
+        return (
+          <div style={{
+            padding: '10px 14px', borderRadius: '8px', fontSize: '13px',
+            background: tones.bg, color: tones.fg,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+              <span style={{ fontWeight: details.length ? 600 : 400 }}>{notice.text}</span>
+              <button onClick={() => { setNotice(null); setNoticeExpanded(false); }}
+                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', flexShrink: 0 }}>
+                <X size={14} />
+              </button>
+            </div>
+            {details.length > 0 && (
+              <ul style={{ margin: '7px 0 0', paddingLeft: '18px', fontSize: '12px', lineHeight: 1.55, fontWeight: 400 }}>
+                {shown.map((d, i) => <li key={i}>{d}</li>)}
+              </ul>
+            )}
+            {details.length > 5 && (
+              <button
+                onClick={() => setNoticeExpanded((v) => !v)}
+                style={{ marginTop: '6px', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, textDecoration: 'underline', padding: 0 }}
+              >
+                {noticeExpanded ? 'Show fewer' : `Show all ${details.length}`}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Segments: the questions HR ask, as one click each. */}
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -343,6 +444,11 @@ export const AssayerRoster: React.FC = () => {
         <button onClick={exportCsv} className="btn btn-secondary"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}>
           <Download size={13} /> Export {rows.length}
+        </button>
+        <button onClick={handleExportExcel} className="btn btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px', color: 'var(--success)' }}
+          title="Full roster with payroll rate card (roles applied)">
+          <FileSpreadsheet size={13} /> Excel
         </button>
         {canManage && (
           <>

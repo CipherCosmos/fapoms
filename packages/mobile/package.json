@@ -13,7 +13,8 @@
     "build:apk": "eas build --platform android --profile preview",
     "build:aab": "eas build --platform android --profile production",
     "build:ios": "eas build --platform ios --profile production",
-    "build:web": "expo export"
+    "build:web": "expo export",
+    "test": "jest"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",

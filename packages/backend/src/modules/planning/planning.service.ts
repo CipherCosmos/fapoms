@@ -24,7 +24,8 @@ export interface AssayerRecommendation {
   id: string;
   assayerCode: string;
   displayName: string;
-  phone: string;
+  /** Null when the roster carried no number — the desk cannot ring this candidate. */
+  phone: string | null;
   email: string | null;
   status: string;
   state: string;
@@ -41,6 +42,12 @@ export interface AssayerRecommendation {
   pendingOnThisBranch?: boolean;
   /** The assayer's own weekly cap, so downstream planners need not assume a platform default. */
   maxWeeklyWorkload?: number;
+  /**
+   * The diary clash this candidate still has on the planned date, when the caller asked for
+   * date checks to be relaxed. Null means free. Never omit it silently: relaxing a filter is a
+   * request to see past a constraint, not to be kept from knowing it exists.
+   */
+  dateConflict?: string | null;
 }
 
 /** A candidate the filters removed, and why — surfaced so ops isn't left guessing. */
@@ -131,6 +138,13 @@ export class PlanningService {
     branchId: string,
     weights: Record<string, number> = {},
     forDate?: string,
+    /**
+     * `relaxAvailability` turns the date-bound checks (booked, on leave) from disqualifying
+     * into advisory — the whole nearby workforce is ranked and any clash is reported on the
+     * row as `dateConflict`. Ops asked for it because the first question they ask a branch is
+     * "who could cover this at all", which the date filter answers too narrowly.
+     */
+    options?: { relaxAvailability?: boolean; searchRadiusKm?: number },
   ): Promise<AssayerRecommendation[]> {
     const branch = await this.branchQueryService.findOne(branchId);
 
@@ -152,7 +166,7 @@ export class PlanningService {
     }
     // `weights` lets the scenario sandbox pass its overrides all the way into scoring; empty by
     // default, in which case `recommend` resolves the client's own configured weights as before.
-    const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights);
+    const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights, undefined, options);
     const rates = await this.feePolicyService.getRates(branch.clientId ?? null);
 
     const recommendations: AssayerRecommendation[] = [];
@@ -201,6 +215,9 @@ export class PlanningService {
         scoreBreakdown: r.breakdown,
         pendingOnThisBranch: r.pendingOnThisBranch,
         maxWeeklyWorkload: r.assayer.maxWeeklyWorkload ?? undefined,
+        // Present only when the date checks were relaxed and this candidate has a clash on the
+        // planned date. Null/absent means genuinely free.
+        dateConflict: r.dateConflict ?? null,
       });
     }
 

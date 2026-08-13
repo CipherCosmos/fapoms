@@ -6,6 +6,7 @@ import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { api } from './services/api';
+import { clearSession } from './services/session';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 import { CallProvider } from './components/calls/CallProvider';
 
@@ -34,11 +35,13 @@ const ClientBillingSettingsPage = React.lazy(() => import('./pages/billing/Clien
 const AssayerStatementPage = React.lazy(() => import('./pages/billing/AssayerStatementPage').then((m) => ({ default: m.AssayerStatementPage })));
 const Rules = React.lazy(() => import('./pages/Rules'));
 const Notifications = React.lazy(() => import('./pages/Notifications'));
+const FeedbackPage = React.lazy(() => import('./pages/feedback/FeedbackPage').then((m) => ({ default: m.FeedbackPage })));
 const Holidays = React.lazy(() => import('./pages/Holidays'));
 const Zones = React.lazy(() => import('./pages/Zones'));
 const FieldIssues = React.lazy(() => import('./pages/FieldIssues').then((m) => ({ default: m.FieldIssues })));
 const OperationsInbox = React.lazy(() => import('./pages/OperationsInbox').then((m) => ({ default: m.OperationsInbox })));
 const Settings = React.lazy(() => import('./pages/Settings'));
+const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
 const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
@@ -123,6 +126,9 @@ export const App: React.FC = () => {
   const userRoles = currentUser?.roles?.map((r) => r.name) ?? [];
 
   const handleLoginSuccess = (jwtToken: string, refreshToken: string) => {
+    // Belt and braces: a sign-in that follows a crash, a back-button return, or any path that
+    // skipped handleLogout must not start on top of someone else's cached data or scope.
+    clearSession();
     localStorage.setItem('fapoms_token', jwtToken);
     localStorage.setItem('fapoms_refresh_token', refreshToken);
     setToken(jwtToken);
@@ -132,9 +138,10 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('fapoms_token');
-    localStorage.removeItem('fapoms_refresh_token');
-    localStorage.removeItem('fapoms_user_cache');
+    // Clears storage *and* the React Query cache — this navigates rather than reloading, so
+    // without the cache clear the next person to sign in on this machine is served the
+    // previous user's branches, assignments and dashboard.
+    clearSession();
     setToken(null);
     setCurrentUser(null);
     navigate('/login');
@@ -227,12 +234,14 @@ export const App: React.FC = () => {
         <Route path="/billing/ledger" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><LedgerPage /></ProtectedRoute>} />
         <Route path="/billing/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><ClientBillingSettingsPage /></ProtectedRoute>} />
         <Route path="/billing/statement" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerStatementPage /></ProtectedRoute>} />
+        <Route path="/admin/rule-bypass" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><RuleBypassPanel /></ProtectedRoute>} />
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
         <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
         <Route path="/zones" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Zones /></ProtectedRoute>} />
         <Route path="/inbox" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><OperationsInbox /></ProtectedRoute>} />
         <Route path="/field-issues" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FieldIssues /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
+        <Route path="/feedback" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FeedbackPage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Settings /></ProtectedRoute>} />
         
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,0 +1,283 @@
+/**
+ * FAPOMS — bringing existing coordinates up to precision.
+ *
+ * The resolver improves what gets written from now on. It does nothing for the rows already in
+ * the table, and on this database that is most of them: 40 of 82 branches share a coordinate
+ * with another branch because they all fell back to the same city or state centroid, and every
+ * assayer sits on a city centroid. Those are the rows the planner is actually using today.
+ *
+ * Two operations, deliberately separate:
+ *
+ *   - `backfill` re-resolves the coarse rows through the free chain. Rate-limited by the
+ *     providers' usage policies to roughly one row per second, so it runs in the background
+ *     with a bound rather than inside a request.
+ *   - `pinManually` is how a coordinate ever becomes genuinely 5–10 m accurate. No free
+ *     geocoder can promise that; a person who knows where the branch is can. A manual pin is
+ *     final — nothing automated overwrites it.
+ */
+
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, IsNull, Not } from 'typeorm';
+import { BranchEntity } from '../branch/branch.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
+import { AuditService } from '../../core/audit/audit.service';
+import { EventCategory } from '@fapoms/shared';
+import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from './coordinate-resolution';
+import { reverseFreely, PRECISION_METERS, GeoPrecision } from './osm-geocoder';
+import { calculateHaversineDistance } from '@fapoms/shared';
+
+export type GeoTarget = 'branch' | 'assayer';
+
+export interface PrecisionSummary {
+  total: number;
+  /** Rows whose coordinate is a district/state centroid, or missing entirely. */
+  imprecise: number;
+  /** Rows a person has pinned. */
+  manual: number;
+  byTier: Record<string, number>;
+}
+
+export interface BackfillReport {
+  examined: number;
+  improved: number;
+  unchanged: number;
+  /** Rows skipped because someone had pinned them by hand. */
+  protectedManual: number;
+  /** How far each improved row moved — large values are the point, not a warning. */
+  movedKm: { name: string; km: number; from: string; to: string }[];
+}
+
+@Injectable()
+export class GeoPrecisionService {
+  private readonly logger = new Logger(GeoPrecisionService.name);
+
+  constructor(
+    @InjectRepository(BranchEntity)
+    private readonly branchRepository: Repository<BranchEntity>,
+    @InjectRepository(AssayerEntity)
+    private readonly assayerRepository: Repository<AssayerEntity>,
+    private readonly auditService: AuditService,
+  ) {}
+
+  /** What precision the current data actually has — the number that justifies a backfill. */
+  async summary(target: GeoTarget): Promise<PrecisionSummary> {
+    const rows: Array<{ geoSource: string | null; geoAccuracyMeters: number | null }> =
+      target === 'branch'
+        ? await this.branchRepository.find({ where: { isActive: true }, select: ['geoSource', 'geoAccuracyMeters'] })
+        : await this.assayerRepository.find({ where: { isActive: true }, select: ['geoSource', 'geoAccuracyMeters'] });
+
+    const byTier: Record<string, number> = {};
+    let imprecise = 0;
+    let manual = 0;
+    for (const row of rows) {
+      const tier = row.geoSource ?? 'unknown';
+      byTier[tier] = (byTier[tier] ?? 0) + 1;
+      if (row.geoSource === 'manual') manual++;
+      if (needsBetterFix(row.geoSource, row.geoAccuracyMeters)) imprecise++;
+    }
+    return { total: rows.length, imprecise, manual, byTier };
+  }
+
+  /**
+   * Re-resolve the rows whose coordinate is too coarse to plan against.
+   *
+   * `limit` is a real bound, not a page size: the free providers allow about one request per
+   * second, so a thousand-row estate is a twenty-minute job and the caller should be able to
+   * take it in bites. Every row is independent — one failure never stops the run, for the same
+   * reason the import does not.
+   */
+  async backfill(target: GeoTarget, limit = 50): Promise<BackfillReport> {
+    const report: BackfillReport = { examined: 0, improved: 0, unchanged: 0, protectedManual: 0, movedKm: [] };
+
+    const rows: any[] =
+      target === 'branch'
+        ? await this.branchRepository.find({ where: { isActive: true }, take: limit * 4 })
+        : await this.assayerRepository.find({ where: { isActive: true }, take: limit * 4 });
+
+    for (const row of rows) {
+      if (report.examined >= limit) break;
+      if (row.geoSource === 'manual') {
+        report.protectedManual++;
+        continue;
+      }
+      if (!needsBetterFix(row.geoSource, row.geoAccuracyMeters)) continue;
+
+      report.examined++;
+      const before = { lat: Number(row.latitude), lng: Number(row.longitude), tier: row.geoSource ?? 'unknown' };
+
+      let geo: GeoFields | null = null;
+      try {
+        geo = await resolveCoordinates(
+          {
+            address: row.address,
+            city: row.city,
+            district: row.district,
+            state: row.state,
+            pincode: row.pincode,
+            name: target === 'branch' ? row.name : row.displayName,
+            // The client's name is how the branch is tagged in OSM, if it is tagged at all.
+            brand: target === 'branch' ? await this.clientNameFor(row.clientId) : null,
+          },
+          row,
+        );
+      } catch (err: any) {
+        this.logger.warn(`Backfill failed for ${target} ${row.id}: ${err?.message ?? err}`);
+        continue;
+      }
+
+      // No improvement is a perfectly good outcome — many rows genuinely cannot be placed more
+      // precisely from free data, and rewriting them to an equally coarse point would only
+      // churn coordinates that other things have already been planned against.
+      if (!geo || (geo.geoAccuracyMeters ?? Infinity) >= (row.geoAccuracyMeters ?? Infinity)) {
+        report.unchanged++;
+        continue;
+      }
+
+      const km = isPlausibleIndianCoord(before.lat, before.lng)
+        ? calculateHaversineDistance(before.lat, before.lng, geo.latitude!, geo.longitude!)
+        : 0;
+
+      Object.assign(row, geo);
+      if (target === 'branch') await this.branchRepository.save(row);
+      else await this.assayerRepository.save(row);
+
+      report.improved++;
+      report.movedKm.push({
+        name: target === 'branch' ? `${row.name} (${row.branchCode})` : row.displayName,
+        km: Math.round(km * 10) / 10,
+        from: before.tier,
+        to: geo.geoSource!,
+      });
+    }
+
+    if (report.improved > 0) {
+      await this.auditService.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'GEO_PRECISION_BACKFILL',
+        entityType: target === 'branch' ? 'BRANCH' : 'ASSAYER',
+        entityId: null as any,
+        userId: 'system',
+        remarks:
+          `Re-resolved ${report.improved} of ${report.examined} imprecise ${target} coordinate(s); ` +
+          `${report.protectedManual} manual pin(s) left untouched.`,
+        metadata: { moved: report.movedKm.slice(0, 50) },
+      });
+    }
+
+    return report;
+  }
+
+  /**
+   * Pin a record by hand — the only route to genuine 5–10 m accuracy.
+   *
+   * Sanity-checked rather than trusted blindly. A transposed pair (73.85, 18.52 instead of
+   * 18.52, 73.85) is the classic mistake and puts an Indian branch in the Indian Ocean; a
+   * mis-drop on the wrong side of a map puts it in the next state. Both are caught here, at the
+   * moment they are made, instead of by whoever reads the map three weeks later — and both
+   * report what is actually at the coordinate so the person can see their own error.
+   */
+  async pinManually(
+    target: GeoTarget,
+    id: string,
+    lat: number,
+    lng: number,
+    userId: string,
+    note?: string,
+  ): Promise<GeoFields> {
+    if (!isPlausibleIndianCoord(lat, lng)) {
+      throw new BadRequestException(
+        `${lat}, ${lng} is not a coordinate in India. Latitude comes first — check they are not swapped.`,
+      );
+    }
+
+    const repo: Repository<any> = target === 'branch' ? this.branchRepository : this.assayerRepository;
+    const row = await repo.findOne({ where: { id, isActive: true } });
+    if (!row) throw new NotFoundException(`${target} ${id} was not found.`);
+
+    // Best-effort: a reverse lookup that fails must not block someone fixing a bad pin.
+    const actual = await reverseFreely({ lat, lng }).catch(() => null);
+    if (actual?.state && row.state) {
+      const norm = (v: string) => v.toLowerCase().replace(/[^a-z]/g, '');
+      if (norm(actual.state) !== norm(row.state)) {
+        throw new BadRequestException(
+          `That point is in ${actual.state}, but this ${target} is recorded in ${row.state}. ` +
+            `Move the pin, or correct the address first.`,
+        );
+      }
+    }
+
+    const geo: GeoFields = {
+      latitude: lat,
+      longitude: lng,
+      location: { type: 'Point', coordinates: [lng, lat] },
+      geoSource: 'manual' satisfies GeoPrecision,
+      geoAccuracyMeters: PRECISION_METERS.manual,
+      geoMatchedName: note?.trim() || actual?.display || 'Placed by hand',
+      geoResolvedAt: new Date(),
+    };
+
+    const previous = { lat: Number(row.latitude), lng: Number(row.longitude), tier: row.geoSource };
+    Object.assign(row, geo);
+    row.updatedBy = userId;
+    await repo.save(row);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: target === 'branch' ? 'BRANCH_PINNED_MANUALLY' : 'ASSAYER_PINNED_MANUALLY',
+      entityType: target === 'branch' ? 'BRANCH' : 'ASSAYER',
+      entityId: id,
+      userId,
+      remarks:
+        `Coordinate pinned by hand to ${lat}, ${lng}` +
+        (isPlausibleIndianCoord(previous.lat, previous.lng)
+          ? `, ${calculateHaversineDistance(previous.lat, previous.lng, lat, lng).toFixed(1)} km from the previous ${previous.tier ?? 'unknown'} position.`
+          : '.'),
+      metadata: { previous, note: note ?? null },
+    });
+
+    return geo;
+  }
+
+  /** Rows still too coarse to plan against — the worklist for manual pinning. */
+  async imprecise(target: GeoTarget, limit = 100): Promise<any[]> {
+    const repo: Repository<any> = target === 'branch' ? this.branchRepository : this.assayerRepository;
+    const rows = await repo.find({
+      where: [
+        { isActive: true, geoSource: IsNull() },
+        { isActive: true, geoAccuracyMeters: Not(IsNull()) },
+      ],
+      take: limit * 4,
+    });
+    return rows
+      .filter((r) => needsBetterFix(r.geoSource, r.geoAccuracyMeters))
+      .slice(0, limit)
+      .map((r) => ({
+        id: r.id,
+        name: target === 'branch' ? r.name : r.displayName,
+        code: target === 'branch' ? r.branchCode : r.assayerCode,
+        address: r.address,
+        city: r.city,
+        district: r.district,
+        state: r.state,
+        pincode: r.pincode,
+        latitude: r.latitude,
+        longitude: r.longitude,
+        geoSource: r.geoSource,
+        geoAccuracyMeters: r.geoAccuracyMeters,
+        geoMatchedName: r.geoMatchedName,
+      }));
+  }
+
+  private clientNames = new Map<string, string | null>();
+  private async clientNameFor(clientId: string | null): Promise<string | null> {
+    if (!clientId) return null;
+    if (this.clientNames.has(clientId)) return this.clientNames.get(clientId)!;
+    const row = await this.branchRepository.manager
+      .query('SELECT name FROM clients WHERE id = $1 LIMIT 1', [clientId])
+      .catch(() => null);
+    const name = row?.[0]?.name ?? null;
+    this.clientNames.set(clientId, name);
+    return name;
+  }
+}

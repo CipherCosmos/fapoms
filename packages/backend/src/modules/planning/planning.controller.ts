@@ -39,6 +39,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions }
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 export class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
   @IsString() @IsNotEmpty()
@@ -249,6 +250,7 @@ export class PlanningController {
     private readonly executionService: OperationsExecutionService,
     private readonly fieldService: FieldOperationsService,
     private readonly dayPlannerService: DayPlannerService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   @Post('field/visits')
@@ -474,8 +476,11 @@ export class PlanningController {
   @Get('projects/:projectId/coverage-plan')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Generate detailed coverage planning statistics, capacity analysis, and cluster plans' })
-  async getProjectCoveragePlan(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId);
+  async getProjectCoveragePlan(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId, scope);
     return {
       success: true,
       data: plan,
@@ -542,8 +547,11 @@ export class PlanningController {
   @Get('projects/:projectId/candidates')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Retrieve candidates for all unassigned branches of a project' })
-  async getProjectCandidates(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    const report = await this.projectPlanningService.getProjectPlanningCandidates(projectId);
+  async getProjectCandidates(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const report = await this.projectPlanningService.getProjectPlanningCandidates(projectId, scope);
     return {
       success: true,
       data: report,
@@ -594,7 +602,11 @@ export class PlanningController {
   @Get('suggest-date')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Suggest the first workable audit date for a branch (skips Sundays, holidays, off Saturdays)' })
-  async suggestAuditDate(@Query('branchId', ParseUUIDPipe) branchId: string) {
+  async suggestAuditDate(
+    @Query('branchId', ParseUUIDPipe) branchId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertBranchInScope(branchId, scope);
     return { success: true, data: await this.planningService.suggestAuditDate(branchId) };
   }
 
@@ -606,8 +618,29 @@ export class PlanningController {
     // The audit date availability is evaluated against (YYYY-MM-DD). Ops plans ahead, so the UI
     // sends its date picker; omitted, today is assumed (legacy callers).
     @Query('date') date?: string,
+    // Rank the whole nearby workforce, treating "booked that day" and "on leave" as advisory
+    // rather than disqualifying — each such candidate comes back carrying `dateConflict`. Ops
+    // uses this on a first pass, when the question is who can cover the branch at all rather
+    // than who is free on one particular day. Onboarding and active-status checks still apply.
+    @Query('includeUnavailable') includeUnavailable?: string,
+    /**
+     * How far to look for candidates, in km — the operator's own radius control.
+     *
+     * Omitted, the engine keeps its default search area. Supplied, it widens (never narrows
+     * below the client's configured serviceability radius), so the assayers the planning map
+     * draws inside the operator's radius are the same ones the engine actually considers.
+     */
+    @Query('radiusKm') radiusKm?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const recommendations = await this.planningService.getRecommendedCandidates(branchId, {}, date);
+    // Ranked candidate assayers for an arbitrary branch id — the same data the scoped
+    // candidates report returns, so it takes the same ceiling.
+    await this.regionGuard.assertBranchInScope(branchId, scope);
+    const parsedRadius = Number(radiusKm);
+    const recommendations = await this.planningService.getRecommendedCandidates(branchId, {}, date, {
+      relaxAvailability: includeUnavailable === 'true' || includeUnavailable === '1',
+      searchRadiusKm: Number.isFinite(parsedRadius) && parsedRadius > 0 ? parsedRadius : undefined,
+    });
     return {
       success: true,
       data: recommendations,

@@ -17,6 +17,7 @@ import { AssessmentEntity } from './assessment.entity';
 import { ProjectQueryService } from './project-query.service';
 import { ZoneEntity } from '../zone/zone.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import * as xlsx from 'xlsx';
 
 describe('ProjectService', () => {
   let service: ProjectService;
@@ -53,6 +54,7 @@ describe('ProjectService', () => {
   const mockBranchService = {
     registerImportedBranch: jest.fn(),
     findOrCreateZone: jest.fn(),
+    update: jest.fn(),
   };
 
   const mockBranchQueryService = {
@@ -99,7 +101,7 @@ describe('ProjectService', () => {
         },
         {
           provide: getRepositoryToken(AssessmentEntity),
-          useValue: { findOne: jest.fn(), save: jest.fn() },
+          useValue: { findOne: jest.fn(), save: jest.fn(), create: jest.fn((dto: any) => dto) },
         },
         {
           provide: getRepositoryToken(ClientEntity),
@@ -225,6 +227,199 @@ describe('ProjectService', () => {
 
       expect(mockProjectBranchRepo.save).toHaveBeenCalled();
       expect(pb.isActive).toBe(false);
+    });
+  });
+
+  /**
+   * The branch import operators actually use: Projects › upload Excel.
+   *
+   * Coordinates are always supplied in these fixtures so nothing reaches the geocoder — the
+   * behaviour under test is parsing, region canonicalisation and reporting, not geocoding.
+   */
+  describe('uploadBranchesFromExcel', () => {
+    const sheetBuffer = (rows: Record<string, any>[]): Buffer => {
+      const ws = xlsx.utils.json_to_sheet(rows);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, 'Branch');
+      return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    };
+
+    /** One well-formed row, in the column names the downloadable template uses. */
+    const templateRow = (over: Record<string, any> = {}) => ({
+      BRANCH: 'BR-1',
+      BRANCH_NAME: 'Thenkurissi',
+      DISTRICT: 'Palakkad',
+      STATE: 'Kerala',
+      'Branch Address': '1 Main Road, Palakkad 678001',
+      Packets: 40,
+      Latitude: 10.7867,
+      Longitude: 76.6548,
+      ...over,
+    });
+
+    beforeEach(() => {
+      mockProjectQueryService.findOne.mockResolvedValue({
+        id: 'p-1', clientId: 'c-1', organizationId: 'o-1', status: ProjectStatus.PLANNING,
+      });
+      mockProjectQueryService.findProjectBranches.mockResolvedValue([]);
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', planningPreferences: {} });
+      mockBranchQueryService.findOneByCode.mockResolvedValue(null);
+      mockBranchService.findOrCreateZone.mockResolvedValue({ id: 'z-1' });
+      mockBranchService.registerImportedBranch.mockImplementation(async (dto: any) => ({
+        id: 'b-new', zoneId: dto.zoneId, ...dto,
+      }));
+      mockProjectBranchRepo.findOne.mockResolvedValue(null);
+      mockProjectBranchRepo.create.mockImplementation((dto: any) => dto);
+      mockProjectBranchRepo.save.mockImplementation(async (pb: any) => ({ id: 'pb-1', ...pb }));
+    });
+
+    /**
+     * The single most damaging bug here: the importer wrote `region: state`, so every branch it
+     * ever created carried "Kerala" in a column the whole platform filters as an enum. Each
+     * import silently re-broke the column the region migration had just normalised, and the
+     * branches were invisible to the operator who owns that territory.
+     */
+    it('canonicalises the region from the state instead of storing the state name', async () => {
+      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+
+      expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ region: 'SOUTH', state: 'Kerala' }),
+        'user-1',
+      );
+    });
+
+    /**
+     * `sheet_to_json` keys rows by the header text verbatim, so an exact `row['Branch Name']`
+     * lookup missed `Branch Name ` (trailing space, invisible in Excel) and every other real
+     * spelling — dropping every row while still reporting success.
+     */
+    it('reads columns whatever their casing, spacing or punctuation', async () => {
+      const buffer = sheetBuffer([{
+        'Branch Code': 'BR-9',
+        'branch name ': 'Aundh',
+        District: 'Pune',
+        State: 'Maharashtra',
+        Address: '12 Aundh Road',
+        Lat: 18.56,
+        Lng: 73.81,
+      }]);
+
+      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      expect(report.skipped).toHaveLength(0);
+      expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branchCode: 'BR-9', name: 'Aundh', region: 'WEST' }),
+        'user-1',
+      );
+    });
+
+    it('reports the rows it could not use, with their spreadsheet row numbers', async () => {
+      const buffer = sheetBuffer([
+        templateRow(),
+        templateRow({ BRANCH: '', BRANCH_NAME: 'Nameless code' }),
+        templateRow({ BRANCH: 'BR-3', STATE: '' }),
+      ]);
+
+      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      expect(report.totalRows).toBe(3);
+      expect(report.created).toBe(1);
+      // Rows 3 and 4 of the sheet — header is row 1.
+      expect(report.skipped.map(s => s.row)).toEqual([3, 4]);
+      expect(report.skipped[1].reason).toContain('state');
+    });
+
+    /**
+     * Branch codes are the client's own numbering and collide constantly — every bank has a
+     * branch "1". Resolving one without saying whose it is attached another client's branch,
+     * with its address and coordinates, to this project.
+     */
+    it('resolves an existing branch code within this project\'s client', async () => {
+      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+
+      expect(mockBranchQueryService.findOneByCode).toHaveBeenCalledWith('BR-1', 'c-1');
+    });
+
+    /**
+     * The template prefills existing branches precisely so a corrected sheet can be sent back,
+     * but the only field this path wrote was estimatedDurationHours — a fixed address or a
+     * missing region was read and thrown away.
+     */
+    it('corrects an existing branch from the sheet', async () => {
+      mockBranchQueryService.findOneByCode.mockResolvedValue({
+        id: 'b-old', name: 'Old Name', address: 'Old address', state: 'Kerala',
+        district: 'PALAKKAD', region: null, latitude: null, longitude: null,
+      });
+      mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
+
+      const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+
+      expect(report.updated).toBe(1);
+      expect(mockBranchService.update).toHaveBeenCalledWith(
+        'b-old',
+        expect.objectContaining({
+          name: 'Thenkurissi',
+          address: '1 Main Road, Palakkad 678001',
+          // Backfills a branch that predates region canonicalisation.
+          region: 'SOUTH',
+          latitude: 10.7867,
+        }),
+        'user-1',
+      );
+    });
+
+    it('does not blank fields a sparse correction sheet omits', async () => {
+      mockBranchQueryService.findOneByCode.mockResolvedValue({
+        id: 'b-old', name: 'Thenkurissi', address: 'Keep me', state: 'Kerala',
+        district: 'PALAKKAD', region: 'SOUTH', latitude: 10.7867, longitude: 76.6548,
+      });
+      mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
+
+      // Only the code and name — everything else absent.
+      const buffer = sheetBuffer([{ BRANCH: 'BR-1', BRANCH_NAME: 'Thenkurissi', STATE: 'Kerala' }]);
+      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      // Nothing differs, so nothing is written at all.
+      expect(report.updated).toBe(0);
+      expect(mockBranchService.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * `BranchService.update` re-runs geography validation, which throws when it cannot verify a
+     * place — and the curated reference tables cover eight states. Unguarded, one such row threw
+     * out of the endpoint as a 500: rows already imported stayed, the rest never ran, and the
+     * operator saw a crash with no way to tell how far it got.
+     */
+    it('keeps importing after a row throws, and names the row that failed', async () => {
+      mockBranchService.registerImportedBranch
+        .mockRejectedValueOnce(new BadRequestException("Could not verify 'Nowhere' as a real place."))
+        .mockImplementation(async (dto: any) => ({ id: 'b-ok', zoneId: dto.zoneId, ...dto }));
+
+      const buffer = sheetBuffer([
+        templateRow({ BRANCH: 'BR-BAD', DISTRICT: 'Nowhere' }),
+        templateRow({ BRANCH: 'BR-GOOD' }),
+      ]);
+
+      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      expect(report.created).toBe(1);
+      expect(report.skipped).toEqual([
+        { row: 2, branchCode: 'BR-BAD', reason: expect.stringContaining('Nowhere') },
+      ]);
+    });
+
+    it('refuses a file whose first sheet has no data rows', async () => {
+      await expect(service.uploadBranchesFromExcel('p-1', sheetBuffer([]), 'user-1'))
+        .rejects.toThrow(BadRequestException);
+    });
+
+    it('ignores the blank trailing rows Excel leaves behind', async () => {
+      const buffer = sheetBuffer([templateRow(), { BRANCH: '', BRANCH_NAME: '' }]);
+
+      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      expect(report.created).toBe(1);
+      expect(report.skipped).toHaveLength(0);
     });
   });
 });

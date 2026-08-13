@@ -3,6 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } from '../components/ui';
 import { api } from '../services/api';
+import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
+import { PinCoordinateControl } from '../components/PinCoordinateControl';
 import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel } from '@fapoms/shared';
 import { useScope, withScope } from '../context/ScopeContext';
 import { connectSocket } from '../services/socket';
@@ -43,6 +45,10 @@ interface Branch {
   complexity: string;
   estimatedDurationHours: number;
   requiredCompetencies: string[] | null;
+  /** How the coordinate above was obtained, and what it matched — see GeoPrecisionBadge. */
+  geoSource: string | null;
+  geoAccuracyMeters: number | null;
+  geoMatchedName: string | null;
   client?: ClientOption;
 }
 
@@ -152,6 +158,11 @@ export const Branches: React.FC = () => {
   // through a ref — capturing selectedClientId in the closure would freeze it at its initial '' and a
   // live event would never refresh the branches of whatever client is actually selected.
   const selectedClientIdRef = useRef(selectedClientId);
+  // The global scope needs the same treatment, and for a sharper reason: a socket refresh that
+  // fired after the operator changed region would refetch with the mount-time scope and repaint
+  // the table with another region's branches — a live event silently undoing the filter.
+  const scopeParamsRef = useRef(scopeParams);
+  scopeParamsRef.current = scopeParams;
 
   useEffect(() => {
     loadClients();
@@ -194,9 +205,12 @@ export const Branches: React.FC = () => {
       // Region, zone and state come from the header's global scope and are applied by the
       // server. They cannot be applied here: the list is capped at BRANCH_PAGE_LIMIT rows, so
       // filtering what already arrived would show "12 of 4000" and quietly hide the remainder.
-      const url = `/branches?${withScope(scopeParams, {
+      // Read through the ref, never the render closure: this is called from the socket handler
+      // too, which was bound once at mount.
+      const currentScope = scopeParamsRef.current;
+      const url = `/branches?${withScope(currentScope, {
         // The global client scope wins when set; otherwise the page's own picker decides.
-        clientId: scopeParams.clientId ?? clientId,
+        clientId: currentScope.clientId ?? clientId,
         limit: BRANCH_PAGE_LIMIT,
       })}`;
       // withMeta so we learn the true total and can warn when the list is capped, instead of
@@ -432,15 +446,35 @@ export const Branches: React.FC = () => {
                 <InfoRow label="Last Audit" value={branchDetail.lastAuditDate ? new Date(branchDetail.lastAuditDate).toLocaleDateString() : '-'} />
                 <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-muted)' }}>Address</span><div style={{ fontWeight: 600, marginTop: '2px' }}>{branchDetail.address}, {branchDetail.city}, {branchDetail.state} - {branchDetail.pincode || 'N/A'}</div></div>
                 {branchDetail.latitude && branchDetail.longitude && (
-                  <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--text-muted)' }}>Coordinates</span>
-                    <div style={{ fontWeight: 600, fontFamily: 'monospace', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span>{Number(branchDetail.latitude).toFixed(4)}, {Number(branchDetail.longitude).toFixed(4)}</span>
-                      <a href={`https://www.google.com/maps/search/?api=1&query=${branchDetail.latitude},${branchDetail.longitude}`}
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Coordinates</span>
+                    <div style={{ fontWeight: 600, fontFamily: 'monospace', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span>{Number(branchDetail.latitude).toFixed(6)}, {Number(branchDetail.longitude).toFixed(6)}</span>
+                      {/* The number of decimals implies a precision the value may not have; the
+                          badge is what stops six decimal places reading as six decimal places
+                          of confidence. */}
+                      <GeoPrecisionBadge source={branchDetail.geoSource} matchedName={branchDetail.geoMatchedName} />
+                      <a href={`https://www.openstreetmap.org/?mlat=${branchDetail.latitude}&mlon=${branchDetail.longitude}#map=17/${branchDetail.latitude}/${branchDetail.longitude}`}
                         target="_blank" rel="noopener noreferrer"
                         style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
-                        <Map size={14} /> Verify on Google Maps
+                        <Map size={14} /> Check on the map
                       </a>
                     </div>
+                    {branchDetail.geoMatchedName && (
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                        Matched: {branchDetail.geoMatchedName}
+                      </div>
+                    )}
+                    {/* Shown only where it is actionable: a placeholder coordinate is the one
+                        case where a person standing at the branch beats every geocoder, and
+                        this is the moment they are looking at the record. */}
+                    {geoNeedsFixing(branchDetail.geoSource) && canManage && (
+                      <PinCoordinateControl
+                        target="branch"
+                        id={branchDetail.id}
+                        onPinned={() => { loadBranchDetail(branchDetail); loadBranches(selectedClientId); }}
+                      />
+                    )}
                   </div>
                 )}
                 {branchDetail.requiredCompetencies && branchDetail.requiredCompetencies.length > 0 && (
@@ -634,9 +668,13 @@ const BranchFormModal: React.FC<{
         {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
 
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
-        {field('Address *', 'address', { required: true, full: true })}
-        {field('City *', 'city', { required: true })}
-        {field('District *', 'district', { required: true })}
+        {/* State is the only mandatory one: it sets the region, zone and holiday calendar this
+            branch is planned against. Address, city and district were marked required here while
+            the branch importer accepted rows without them — so a branch that imported cleanly
+            could not be typed in by hand, and the workaround was to invent a town. */}
+        {field('Address', 'address', { full: true })}
+        {field('City', 'city')}
+        {field('District', 'district')}
         {field('State *', 'state', { required: true, options: INDIAN_STATES })}
         {field('Pincode', 'pincode', { placeholder: 'e.g. 400001' })}
         {/* A closed list, not free text. Leaving it blank is fine and usually best — the

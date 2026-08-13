@@ -1094,6 +1094,32 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * Upload a batch of recorded positions to the movement trail.
+   *
+   * Separate from `updateLiveLocation`, which answers "where are they now" and overwrites. This
+   * one appends history, and it takes a batch because the fixes worth having are the ones taken
+   * where there was no signal to send them — they are queued on the device and flushed when the
+   * network returns. Re-sending a batch is safe: the server dedupes on (assayer, recordedAt), so a
+   * retry cannot inflate the distance the trail is later measured for.
+   *
+   * Returns true only when the server has durably accepted the batch, because the caller keeps the
+   * fixes queued on anything else.
+   */
+  static async uploadLocationPings(pings: unknown[]): Promise<boolean> {
+    const id = this.currentUserId;
+    if (!id || pings.length === 0) return false;
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/location-pings`, {
+        method: 'POST',
+        body: JSON.stringify({ pings }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   /** Turns live-location sharing on/off for the current assayer (default OFF). */
   static async setLiveTracking(enabled: boolean): Promise<boolean> {
     const id = this.currentUserId;
@@ -1316,6 +1342,67 @@ export class MobileApiService {
       return data.data || data.items || [];
     } catch {
       return [];
+    }
+  }
+
+  // ── Feedback & collaboration channel ────────────────────────────────────────
+  // The assayer's side of the two-way feedback channel with the product team. The
+  // server scopes /feedback/mine to the caller's assayer id from the token, so no id
+  // is passed. Mirrors the validation-query methods above.
+
+  /** The feedback threads this assayer has raised, newest activity first. */
+  static async getMyFeedback(): Promise<any[]> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/feedback/mine`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      return data.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  static async getFeedbackThread(id: string): Promise<any | null> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/feedback/${id}`);
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data.data || null;
+    } catch {
+      return null;
+    }
+  }
+
+  static async getFeedbackMessages(id: string): Promise<any[]> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/feedback/${id}/messages`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      return data.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  static async createFeedback(input: { title?: string; body: string; category?: string; appContext?: Record<string, unknown> }): Promise<{ success: boolean; id?: string; error?: string }> {
+    try {
+      const res = await this.fetchWithAuth(`${API_BASE_URL}/feedback`, { method: 'POST', body: JSON.stringify(input) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success) return { success: true, id: data?.data?.id };
+      return { success: false, error: data?.message || 'The feedback could not be sent.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error sending feedback.' };
+    }
+  }
+
+  static async postFeedbackMessage(id: string, body: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await this.fetchWithAuth(`${API_BASE_URL}/feedback/${id}/messages`, { method: 'POST', body: JSON.stringify({ body }) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success) return { success: true };
+      return { success: false, error: data?.message || 'The message could not be sent.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error sending the message.' };
     }
   }
 

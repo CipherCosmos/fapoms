@@ -1,6 +1,6 @@
-import { Inject, forwardRef, Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, Not, EntityManager } from 'typeorm';
+import { DataSource, Repository, In, Not, LessThan, EntityManager } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
@@ -19,6 +19,8 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 import { ValidationCaseEntity } from '../validation/validation-case.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssayerService } from '../assayer/assayer.service';
+import { LocationTrailService } from '../assayer/location-trail.service';
+import { LocationPingSource } from '../assayer/assayer-location-ping.entity';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
@@ -27,13 +29,14 @@ import { ProjectBranchStateMachine } from '../project/project.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { ProjectEntity } from '../project/project.entity';
 import { COMMITTED_ASSIGNMENT_STATUSES } from './assignment-workload';
 import { RoutingService } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
@@ -63,6 +66,26 @@ export interface CreateAssignmentDto {
   scheduledDate?: string;
   remarks?: string;
   autoSchedule?: boolean;
+  /**
+   * The desk records the assayer's acceptance at the moment the assignment is raised, instead
+   * of leaving a PENDING offer for the assayer to accept in the app.
+   *
+   * This exists for the phone channel ("Call & Assign"), where the agreement — person, branch,
+   * date, fee — has already happened out loud before this record exists. Asking the assayer to
+   * then re-accept in the app adds nothing to decide and everything to wait for: the branch
+   * sits in PLANNING until they open the app, and an offer past `slaDueDate` is auto-declined
+   * (autoDeclineExpiredOffers) — so a job the assayer verbally took can silently come back
+   * unstaffed.
+   *
+   * It is NOT a way to skip validation. The assignment is created through the same path and
+   * the same constraint checks, then transitioned PENDING -> ACCEPTED through the same state
+   * machine a desk acceptance from the Operations Inbox uses. The audit trail therefore records
+   * an ACCEPTED transition performed by the operations user, not by the assayer — who committed
+   * the assayer, and when, stays answerable.
+   */
+  acceptOnBehalf?: boolean;
+  /** Free-text note stored on the acceptance audit event, e.g. who was spoken to. */
+  acceptanceReason?: string;
 }
 
 export interface UpdateAssignmentDetailsDto {
@@ -82,6 +105,8 @@ export interface TransitionAssignmentDto {
 
 @Injectable()
 export class AssignmentService {
+  private static readonly logger = new Logger(AssignmentService.name);
+
   constructor(
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
@@ -90,6 +115,7 @@ export class AssignmentService {
     private readonly projectQueryService: ProjectQueryService,
     private readonly projectService: ProjectService,
     private readonly assayerService: AssayerService,
+    private readonly locationTrail: LocationTrailService,
     private readonly notificationService: NotificationService,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly pushNotificationService: PushNotificationService,
@@ -97,6 +123,7 @@ export class AssignmentService {
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly constraintEvaluator: ConstraintEvaluator,
+    private readonly ruleBypass: RuleBypassService,
     private readonly operationsInbox: OperationsInboxService,
     private readonly routingService: RoutingService,
     private readonly validationService: ValidationService,
@@ -410,9 +437,13 @@ export class AssignmentService {
         entityType: 'ASSIGNMENT',
         entityId: savedAssignment.id,
         userId,
+        // The resolved fee and date, not the raw dto: both are optional on the request and the
+        // server computes them when omitted, so reading dto here wrote "Fee: ₹undefined,
+        // Date: undefined" into the audit record for every assignment that did not name its own
+        // — which is most of them, including every one the coverage plan deploys.
         remarks: isReassignment
-          ? `Reassigned branch ${projectBranch.branch.name} to assayer ${assayer.displayName}. Proposed fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`
-          : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${dto.proposedFee}, Date: ${dto.scheduledDate}.`,
+          ? `Reassigned branch ${projectBranch.branch.name} to assayer ${assayer.displayName}. Proposed fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`
+          : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`,
       });
 
       // Through the outbox rather than a post-commit publish: the event now commits with the
@@ -430,6 +461,12 @@ export class AssignmentService {
 
       return savedAssignment;
     }).then(async (saved) => {
+      const branchName = projectBranch.branch?.name ?? 'the branch';
+      // `targetDateStr`, not `dto.scheduledDate`: the date is optional on the request and falls
+      // back to the branch's own scheduled date. An offer that read "on a date to be confirmed"
+      // when a real date had been resolved gave the assayer nothing to plan around.
+      const scheduledDateLabel = targetDateStr;
+
       // The offer notification.
       //
       // This previously tried to find a `users` row matching the assayer's
@@ -443,7 +480,7 @@ export class AssignmentService {
       // Stays outside the transaction on purpose: NotificationDispatchService is Bull-backed
       // and has its own durability, and a notification is a side effect of the offer, not part
       // of its atomic write.
-      this.notificationDispatch.emitSafe({
+      const notifyOffered = () => this.notificationDispatch.emitSafe({
         type: 'ASSIGNMENT_OFFERED',
         entityType: 'ASSIGNMENT',
         entityId: saved.id,
@@ -454,13 +491,70 @@ export class AssignmentService {
         payload: {
           assignmentId: saved.id,
           assignmentNumber: saved.assignmentNumber,
-          branchName: projectBranch.branch?.name ?? 'the branch',
-          scheduledDate: dto.scheduledDate ?? 'a date to be confirmed',
-          proposedFee: dto.proposedFee,
+          branchName,
+          scheduledDate: scheduledDateLabel,
+          proposedFee: resolvedProposedFee,
         },
       });
 
-      return saved;
+      if (!dto.acceptOnBehalf) {
+        notifyOffered();
+        return saved;
+      }
+
+      // Desk-confirmed (phone channel): the assayer agreed on the call, so there is no offer
+      // for them to weigh up. Run the real ACCEPTED transition rather than writing the status
+      // directly — that is what sets the agreed fee, moves the branch to ASSIGNMENT_CONFIRMED,
+      // creates the calendar dispatch packet when autoSchedule is on, and writes the audit
+      // event. Duplicating any of that here is how the two would drift apart.
+      try {
+        const { saved: accepted } = await this.executeAssignmentTransition(
+          saved.id,
+          AssignmentStatus.ACCEPTED,
+          userId,
+          dto.acceptanceReason?.trim() ||
+            'Assayer agreed on the call — acceptance recorded by the desk at the time of assignment.',
+          resolvedProposedFee ?? undefined,
+          // One notification for this, not the offer/accept pair: ASSIGNMENT_OFFERED would tell
+          // the assayer to "accept or decline" something already accepted, and ASSIGNMENT_ACCEPTED
+          // would tell the rest of ops that the assayer accepted it in the app. Neither is true.
+          { suppressNotification: true },
+        );
+
+        this.notificationDispatch.emitSafe({
+          type: 'ASSIGNMENT_DESK_CONFIRMED',
+          entityType: 'ASSIGNMENT',
+          entityId: accepted.id,
+          actorUserId: userId,
+          assayerId: assayer.id,
+          ownerUserId: userId,
+          dedupeKey: `ASSIGNMENT_DESK_CONFIRMED:${accepted.id}`,
+          payload: {
+            assignmentId: accepted.id,
+            assignmentNumber: accepted.assignmentNumber,
+            assayerName: assayer.displayName ?? 'The assayer',
+            branchName,
+            scheduledDate: scheduledDateLabel,
+            agreedFee: accepted.agreedFee ?? resolvedProposedFee,
+          },
+        });
+
+        return accepted;
+      } catch (err) {
+        // The assignment itself committed; only the confirmation on top of it failed. Leaving it
+        // PENDING is the honest outcome — it is a live offer that the desk can accept from the
+        // Operations Inbox — so notify the assayer as one and let the caller see the real status
+        // rather than reporting a confirmation that did not happen.
+        AssignmentService.logger.error(
+          `Assignment ${saved.assignmentNumber} was created but could not be desk-confirmed; it remains a PENDING offer. ` +
+            `Reason: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        notifyOffered();
+        // Re-read rather than returning `saved`: a failed transition may have mutated its own
+        // in-memory copy to ACCEPTED before throwing, and the caller decides what to tell the
+        // operator from this status. It must be what committed, not what was attempted.
+        return this.findOne(saved.id).catch(() => saved);
+      }
     });
   }
 
@@ -549,6 +643,12 @@ export class AssignmentService {
     userId: string,
     reason?: string,
     fee?: number,
+    /**
+     * `suppressNotification` withholds only the lifecycle notification — the state change, the
+     * audit event and the domain event all still happen. Used by the desk-confirmed create path,
+     * which sends one accurate notification of its own in place of the offer/accept pair.
+     */
+    options?: { suppressNotification?: boolean },
   ): Promise<{ saved: AssignmentEntity; event: any }> {
     const assignment = await this.findOne(id);
     const prevStatus = assignment.status;
@@ -699,7 +799,7 @@ export class AssignmentService {
       : targetStatus === AssignmentStatus.CANCELLED ? 'ASSIGNMENT_CANCELLED'
       : null;
 
-    if (notifyType) {
+    if (notifyType && !options?.suppressNotification) {
       this.notificationDispatch.emitSafe({
         type: notifyType,
         entityType: 'ASSIGNMENT',
@@ -742,11 +842,27 @@ export class AssignmentService {
       }
     }
 
-    try {
-      await this.assayerService.updateAssayerStats(saved.assayerId);
-    } catch (err) {
-      console.error('Failed to update assayer stats', err);
+    /**
+     * Taking on work turns location sharing on.
+     *
+     * The obligation and the job begin together: from here until the assignment completes, the
+     * movement trail is what will confirm the travel this assayer is paid for, and sharing they
+     * could leave off for the journey they are about to claim for would make that unverifiable.
+     * `setLiveTracking` enforces the other half — they cannot switch it back off while the work is
+     * still open — and both ends stop at completion, so nothing follows anyone into their own time.
+     *
+     * Best-effort inside the service: losing an acceptance because a flag would not flip is a far
+     * worse outcome than a trail that starts late, and a late start is visible in the assessment.
+     */
+    if (targetStatus === AssignmentStatus.ACCEPTED) {
+      await this.assayerService.enableLiveTrackingForActiveWork(saved.assayerId, userId);
     }
+
+    // Off the critical path. These are cached counters for roster listings and reports — nothing
+    // in this response reads them — and awaiting the recompute here made every accept, reject,
+    // cancel and complete wait on a fan of statistics queries before returning. `getProfile`
+    // recomputes on read, so a momentarily stale counter corrects itself where it is looked at.
+    this.assayerService.scheduleStatsRefresh(saved.assayerId);
 
     return { saved, event };
   }
@@ -1044,17 +1160,21 @@ export class AssignmentService {
    * forget.
    */
   async listFieldIssues(scope?: Partial<GlobalScope>, limit = 100): Promise<any[]> {
-    const { events } = await this.auditService.getByEventType('ASSIGNMENT_ISSUE_REPORTED', limit);
+    const issueBranchWhere = branchScopeWhere(scope);
+    const isScoped = Boolean(issueBranchWhere || scope?.projectId);
+
+    // The audit log itself carries no region, so it is read org-wide and narrowed afterwards
+    // by the assignments it points at. Under a scope most of that window will be discarded, so
+    // widen the fetch — otherwise a West operator's 100 newest events might contain three of
+    // their own and their issue list would look empty while the desk is busy.
+    const fetchLimit = isScoped ? Math.min(limit * 10, 1000) : limit;
+    const { events } = await this.auditService.getByEventType('ASSIGNMENT_ISSUE_REPORTED', fetchLimit);
     if (events.length === 0) return [];
 
     // Batch-load the referenced assignments so the current status/branch/assayer is fresh,
     // rather than trusting the point-in-time metadata — and without a query per event.
     const ids = Array.from(new Set(events.map((e) => e.entityId).filter(Boolean)));
-    // Scoped here rather than after the fact: an issue whose assignment falls outside the
-    // operator's region simply drops out of `byId`, and the mapping below already skips events
-    // with no matching assignment.
     const issueWhere: Record<string, unknown> = { id: In(ids) };
-    const issueBranchWhere = branchScopeWhere(scope);
     if (issueBranchWhere) issueWhere.projectBranch = { branch: issueBranchWhere };
     if (scope?.projectId) issueWhere.projectId = scope.projectId;
 
@@ -1064,7 +1184,21 @@ export class AssignmentService {
     });
     const byId = new Map(assignments.map((a) => [a.id, a]));
 
-    return events.map((e) => {
+    /**
+     * Under a scope, an event whose assignment did not survive the scoped re-fetch is dropped
+     * outright.
+     *
+     * This filter is the whole enforcement. Scoping only the re-fetch is not enough, because
+     * the projection below deliberately falls back to the event's own point-in-time metadata
+     * (`meta.branchName`, `meta.note`, `e.userDisplayName`) when the assignment is missing —
+     * so without this line an out-of-scope issue still emitted the branch name, the assayer's
+     * name, the issue category and the reporter's free-text note. The fallback exists for
+     * assignments that have since been deleted, which is a different situation from ones the
+     * caller is not entitled to see.
+     */
+    const visible = isScoped ? events.filter((e) => byId.has(e.entityId)) : events;
+
+    return visible.slice(0, limit).map((e) => {
       const a = byId.get(e.entityId);
       const meta = (e.metadata ?? {}) as Record<string, any>;
       const open = !!a && !isAssignmentTerminal(a.status);
@@ -1180,7 +1314,7 @@ export class AssignmentService {
     priority?: string,
     scope?: Partial<GlobalScope>,
   ): Promise<{ assignments: AssignmentEntity[]; total: number }> {
-    const where: any = {};
+    const where: any = { isActive: true };
     if (status) {
       const statuses = status.split(',').map((s) => s.trim()).filter(Boolean);
       if (statuses.length === 1) {
@@ -1244,6 +1378,7 @@ export class AssignmentService {
     const assignments = await this.assignmentRepository.find({
       where: {
         assayerId,
+        isActive: true,
         status: In([
           AssignmentStatus.PENDING,
           AssignmentStatus.ACCEPTED,
@@ -1427,6 +1562,19 @@ export class AssignmentService {
 
   async checkSlaBreaches(): Promise<number> {
     const now = new Date();
+
+    // The overdue filter runs in SQL, not in JavaScript over the whole book.
+    //
+    // This used to load every active COMPLIANT PENDING/ACCEPTED assignment and test slaDueDate in
+    // the loop. On a realistic book that is tens of thousands of rows shipped and hydrated into
+    // entity instances every 15 minutes, to flag the handful actually past due (measured on the
+    // 200k-assignment scale DB: 57,143 rows loaded to touch 1,189). `slaDueDate < now` in the
+    // WHERE clause returns only the rows that breach, so the scan's memory and CPU cost track the
+    // breach rate, not the size of the whole open-offer pool.
+    //
+    // The branch relation is loaded here too: it is needed for the notification, and now that the
+    // query returns only breaching rows the join is cheap — replacing the per-row findOne this
+    // used to issue (one extra query per breach).
     const overdueAssignments = await this.assignmentRepository.find({
       where: {
         slaStatus: 'COMPLIANT',
@@ -1435,51 +1583,45 @@ export class AssignmentService {
           AssignmentStatus.ACCEPTED,
         ]),
         isActive: true,
+        slaDueDate: LessThan(now),
       },
+      relations: ['projectBranch', 'projectBranch.branch'],
     });
 
     let breachedCount = 0;
     for (const assignment of overdueAssignments) {
-      if (assignment.slaDueDate && assignment.slaDueDate < now) {
-        assignment.slaStatus = 'BREACHED';
-        await this.assignmentRepository.save(assignment);
+      assignment.slaStatus = 'BREACHED';
+      await this.assignmentRepository.save(assignment);
 
-        await this.auditService.recordEvent({
-          category: EventCategory.SYSTEM,
-          eventType: 'ASSIGNMENT_SLA_BREACHED',
-          entityType: 'ASSIGNMENT',
-          entityId: assignment.id,
-          remarks: `SLA breach detected: Assignment ${assignment.assignmentNumber} exceeded response time deadline of ${assignment.slaDueDate}.`,
-        });
+      await this.auditService.recordEvent({
+        category: EventCategory.SYSTEM,
+        eventType: 'ASSIGNMENT_SLA_BREACHED',
+        entityType: 'ASSIGNMENT',
+        entityId: assignment.id,
+        remarks: `SLA breach detected: Assignment ${assignment.assignmentNumber} exceeded response time deadline of ${assignment.slaDueDate}.`,
+      });
 
-        // Only rows still COMPLIANT reach this branch (see the query above) and they are saved
-        // as BREACHED first, so a row is notified on the flip and never again on later scans;
-        // the per-assignment dedupe key is the second guard if a scan is retried mid-run.
-        // Branch is looked up here rather than joined into the scan query so the extra read is
-        // paid only for the handful of rows that actually breach.
-        const withBranch = await this.assignmentRepository
-          .findOne({ where: { id: assignment.id }, relations: ['projectBranch', 'projectBranch.branch'] })
-          .catch(() => null);
+      // Only rows still COMPLIANT reach this loop (see the query) and they are saved as BREACHED
+      // first, so a row is notified on the flip and never again on later scans; the per-assignment
+      // dedupe key is the second guard if a scan is retried mid-run.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_SLA_BREACHED',
+        entityType: 'ASSIGNMENT',
+        entityId: assignment.id,
+        assayerId: assignment.assayerId,
+        ownerUserId: assignment.createdBy ?? null,
+        dedupeKey: `ASSIGNMENT_SLA_BREACHED:${assignment.id}`,
+        payload: {
+          assignmentId: assignment.id,
+          assignmentNumber: assignment.assignmentNumber,
+          branchName: assignment.projectBranch?.branch?.name ?? assignment.assignmentNumber,
+          // No slaType column exists; the status the clock ran out in is what distinguishes
+          // an unanswered offer from an accepted job that never got done.
+          slaType: assignment.status === AssignmentStatus.PENDING ? 'response' : 'completion',
+        },
+      });
 
-        this.notificationDispatch.emitSafe({
-          type: 'ASSIGNMENT_SLA_BREACHED',
-          entityType: 'ASSIGNMENT',
-          entityId: assignment.id,
-          assayerId: assignment.assayerId,
-          ownerUserId: assignment.createdBy ?? null,
-          dedupeKey: `ASSIGNMENT_SLA_BREACHED:${assignment.id}`,
-          payload: {
-            assignmentId: assignment.id,
-            assignmentNumber: assignment.assignmentNumber,
-            branchName: withBranch?.projectBranch?.branch?.name ?? assignment.assignmentNumber,
-            // No slaType column exists; the status the clock ran out in is what distinguishes
-            // an unanswered offer from an accepted job that never got done.
-            slaType: assignment.status === AssignmentStatus.PENDING ? 'response' : 'completion',
-          },
-        });
-
-        breachedCount++;
-      }
+      breachedCount++;
     }
 
     return breachedCount;
@@ -1494,17 +1636,25 @@ export class AssignmentService {
    */
   async autoDeclineExpiredOffers(): Promise<number> {
     const now = new Date();
+
+    // Past-due is filtered in SQL (the idx_assignments_open_offers partial index is shaped for
+    // exactly this predicate), not by loading every active PENDING offer and testing the date in
+    // the loop — 28,571 rows loaded to act on 555 on the scale DB. The branch relation rides the
+    // same query, since the result set is now the handful being declined rather than the whole
+    // pending pool; this replaces the per-row findOne the notification used to make.
     const pendingOffers = await this.assignmentRepository.find({
       where: {
         status: AssignmentStatus.PENDING,
         isActive: true,
+        slaDueDate: LessThan(now),
       },
+      relations: ['projectBranch', 'projectBranch.branch'],
     });
 
     // Channel-aware: PHONE-channel assayers may never see an in-app offer, so "no in-app answer
     // in 24h" is not a decline — it is the desk's call task still in progress. Auto-declining
     // them killed offers mid-negotiation. Their offers only leave PENDING by a human recording
-    // the call outcome in the Operations Inbox.
+    // the call outcome in the Operations Inbox. Resolved only for the overdue set, not the pool.
     const channels = await this.operationsInbox.resolveChannels(
       [...new Set(pendingOffers.map((a) => a.assayerId))],
     );
@@ -1512,76 +1662,155 @@ export class AssignmentService {
     let declinedCount = 0;
     for (const assignment of pendingOffers) {
       if (channels.get(assignment.assayerId) === 'PHONE') continue;
-      if (assignment.slaDueDate && assignment.slaDueDate < now) {
-        try {
-          await this.rejectOffer(assignment.id, 'SYSTEM', 'AUTO_DECLINED_SLA_EXPIRED');
-          declinedCount++;
+      // Backstop for the SQL predicate: a decline is irreversible, so a stray row (a mock, a
+      // clock skew) must never be declined early. Real DB rows already satisfy this.
+      if (!assignment.slaDueDate || assignment.slaDueDate >= now) continue;
+      try {
+        await this.rejectOffer(assignment.id, 'SYSTEM', 'AUTO_DECLINED_SLA_EXPIRED');
+        declinedCount++;
 
-          // Reusing rejectOffer means ops was told the assayer *declined* — the same message
-          // a real refusal produces. Operationally those are different situations: a decline
-          // is an answer, a timeout means nobody responded at all and the assayer may not even
-          // know they were offered the work. `ASSIGNMENT_AUTO_DECLINED` exists in the catalogue
-          // for exactly this and had no code path able to emit it.
-          const withBranch = await this.assignmentRepository
-            .findOne({ where: { id: assignment.id }, relations: ['projectBranch', 'projectBranch.branch'] })
-            .catch(() => null);
-
-          this.notificationDispatch.emitSafe({
-            type: 'ASSIGNMENT_AUTO_DECLINED',
-            entityType: 'ASSIGNMENT',
-            entityId: assignment.id,
-            assayerId: assignment.assayerId,
-            ownerUserId: assignment.createdBy ?? null,
-            dedupeKey: `ASSIGNMENT_AUTO_DECLINED:${assignment.id}`,
-            payload: {
-              assignmentId: assignment.id,
-              assignmentNumber: assignment.assignmentNumber,
-              branchName: withBranch?.projectBranch?.branch?.name ?? 'A branch',
-            },
-          });
-        } catch (err) {
-          console.error(`Failed to auto-decline expired assignment ${assignment.id}:`, err);
-        }
+        // Reusing rejectOffer means ops was told the assayer *declined* — the same message
+        // a real refusal produces. Operationally those are different situations: a decline
+        // is an answer, a timeout means nobody responded at all and the assayer may not even
+        // know they were offered the work. `ASSIGNMENT_AUTO_DECLINED` exists in the catalogue
+        // for exactly this and had no code path able to emit it.
+        this.notificationDispatch.emitSafe({
+          type: 'ASSIGNMENT_AUTO_DECLINED',
+          entityType: 'ASSIGNMENT',
+          entityId: assignment.id,
+          assayerId: assignment.assayerId,
+          ownerUserId: assignment.createdBy ?? null,
+          dedupeKey: `ASSIGNMENT_AUTO_DECLINED:${assignment.id}`,
+          payload: {
+            assignmentId: assignment.id,
+            assignmentNumber: assignment.assignmentNumber,
+            branchName: assignment.projectBranch?.branch?.name ?? 'A branch',
+          },
+        });
+      } catch (err) {
+        console.error(`Failed to auto-decline expired assignment ${assignment.id}:`, err);
       }
     }
 
     return declinedCount;
   }
 
+  /**
+   * What the movement trail says about the journey this assignment was paid travel for.
+   *
+   * Assembled here rather than in LocationTrailService because the *claimed* side of the comparison
+   * lives in this module: the travel allowance is quoted from the assayer's home to the branch, and
+   * that distance is not persisted anywhere (see FeePolicyService.quote), so it has to be
+   * recomputed the same way the quote computed it. `expectedIsRecomputed` says so plainly on the
+   * response — the assayer's registered home may have changed since, and a reviewer comparing
+   * numbers deserves to know the baseline was reconstructed rather than recorded.
+   */
+  async getTravelVerification(assignmentId: string): Promise<{
+    assignmentId: string;
+    assignmentNumber: string;
+    checkedInAt: Date | null;
+    trackingEnabled: boolean;
+    expectedDistanceKm: number | null;
+    expectedIsRecomputed: boolean;
+    assessment: Awaited<ReturnType<LocationTrailService['assessAssignmentTravel']>>;
+    /** Why no assessment could be produced, when that is the case. */
+    unavailableReason: string | null;
+  }> {
+    const assignment = await this.findOne(assignmentId);
+    const assayer = assignment.assayer;
+    const branch = assignment.projectBranch?.branch;
+
+    const base = {
+      assignmentId: assignment.id,
+      assignmentNumber: assignment.assignmentNumber,
+      checkedInAt: assignment.checkedInAt ?? null,
+      trackingEnabled: Boolean(assayer?.isLiveEnabled),
+      expectedDistanceKm: null as number | null,
+      expectedIsRecomputed: true,
+      assessment: null,
+      unavailableReason: null as string | null,
+    };
+
+    if (!assignment.checkedInAt) {
+      return {
+        ...base,
+        unavailableReason:
+          'This assignment has no check-in, so there is no confirmed arrival to measure a journey against.',
+      };
+    }
+
+    // The quote's basis: home to branch. Routed where possible, straight-line otherwise — the same
+    // order of preference the fee calculation itself uses.
+    let expectedDistanceKm: number | null = null;
+    if (branch?.latitude != null && branch?.longitude != null &&
+        assayer?.homeLatitude != null && assayer?.homeLongitude != null) {
+      try {
+        const route = await this.routingService.calculateRoute(
+          { latitude: Number(branch.latitude), longitude: Number(branch.longitude) },
+          { latitude: Number(assayer.homeLatitude), longitude: Number(assayer.homeLongitude) },
+        );
+        expectedDistanceKm = route?.distanceKm ?? null;
+      } catch {
+        expectedDistanceKm = calculateHaversineDistance(
+          Number(branch.latitude), Number(branch.longitude),
+          Number(assayer.homeLatitude), Number(assayer.homeLongitude),
+        );
+      }
+    }
+
+    const assessment = await this.locationTrail.assessAssignmentTravel({
+      assayerId: assignment.assayerId,
+      checkedInAt: assignment.checkedInAt,
+      expectedDistanceKm,
+      trackingEnabled: Boolean(assayer?.isLiveEnabled),
+    });
+
+    return { ...base, expectedDistanceKm, assessment, unavailableReason: null };
+  }
+
   async getDashboardSummary(scope?: Partial<GlobalScope>): Promise<any> {
     // These KPI tiles sit above the assignment list. Leaving them unscoped while the list below
     // is scoped is worse than not scoping either: the operator reads "42 in progress", counts 6
     // rows, and has no way to tell which number is lying.
-    const countBy = (column: string, label: string) => {
-      const qb = this.assignmentRepository
-        .createQueryBuilder('assignment')
-        .select(column, label)
-        .addSelect('COUNT(assignment.id)', 'count')
-        .where('assignment.isActive = :isActive', { isActive: true })
-        .groupBy(column);
+    /**
+     * Both breakdowns from one pass over the table.
+     *
+     * These were two `getRawMany()` calls awaited one after the other — the same rows, the same
+     * filters and the same joins, read twice, sequentially, to group by two different columns.
+     * Over a 200,000-row assignment book that was ~29 ms of full scan each, and it grows linearly
+     * with the history: the tiles sit above the assignment list on a screen every operator opens.
+     *
+     * Grouping by both columns at once is one scan. The result is a cross-tab of at most
+     * (statuses × SLA states) rows — a couple of dozen — which folds into the two totals below in
+     * memory. Nothing about the numbers changes.
+     */
+    const qb = this.assignmentRepository
+      .createQueryBuilder('assignment')
+      .select('assignment.status', 'status')
+      .addSelect('assignment.slaStatus', 'slaStatus')
+      .addSelect('COUNT(assignment.id)', 'count')
+      .where('assignment.isActive = :isActive', { isActive: true })
+      .groupBy('assignment.status')
+      .addGroupBy('assignment.slaStatus');
 
-      if (needsBranchJoin(scope)) {
-        // innerJoin, not innerJoinAndSelect: the branch is only here to be filtered on.
-        qb.innerJoin('assignment.projectBranch', 'spb').innerJoin('spb.branch', 'sbranch');
-        applyBranchScope(qb, scope, { branch: 'sbranch', project: 'spb' });
-      }
-      if (scope?.projectId) {
-        qb.andWhere('assignment.project_id = :scopeProjectId', { scopeProjectId: scope.projectId });
-      }
-      return qb.getRawMany();
-    };
-
-    const counts = await countBy('assignment.status', 'status');
-    const slaCounts = await countBy('assignment.slaStatus', 'slaStatus');
-
-    const summary: Record<string, number> = {};
-    for (const c of counts) {
-      summary[c.status] = Number(c.count);
+    if (needsBranchJoin(scope)) {
+      // innerJoin, not innerJoinAndSelect: the branch is only here to be filtered on.
+      qb.innerJoin('assignment.projectBranch', 'spb').innerJoin('spb.branch', 'sbranch');
+      applyBranchScope(qb, scope, { branch: 'sbranch', project: 'spb' });
+    }
+    if (scope?.projectId) {
+      qb.andWhere('assignment.project_id = :scopeProjectId', { scopeProjectId: scope.projectId });
     }
 
+    const rows = await qb.getRawMany();
+
+    const summary: Record<string, number> = {};
     const slaSummary: Record<string, number> = {};
-    for (const s of slaCounts) {
-      slaSummary[s.slaStatus] = Number(s.count);
+    for (const row of rows) {
+      const n = Number(row.count);
+      // A null SLA status is still an assignment; it just contributes to the status total only.
+      if (row.status != null) summary[row.status] = (summary[row.status] ?? 0) + n;
+      if (row.slaStatus != null) slaSummary[row.slaStatus] = (slaSummary[row.slaStatus] ?? 0) + n;
     }
 
     return {
@@ -1694,7 +1923,17 @@ export class AssignmentService {
           new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
         const today = istDay(new Date());
         const scheduled = istDay(scheduledIso);
-        if (today !== scheduled) {
+        const dayRuleSuspended = today !== scheduled
+          && (await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_SCHEDULED_DAY));
+        if (dayRuleSuspended) {
+          this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_SCHEDULED_DAY, {
+            entityType: 'ASSIGNMENT',
+            entityId: assignment.id,
+            userId,
+            detail: `checked in on ${today}, scheduled for ${scheduled}`,
+          });
+        }
+        if (today !== scheduled && !dayRuleSuspended) {
           const early = today < scheduled;
           return {
             success: false,
@@ -1716,7 +1955,22 @@ export class AssignmentService {
       const GEOFENCE_METERS = 2000;
       if (distanceMeters != null) {
         const allowance = GEOFENCE_METERS + Math.max(0, accuracyMeters ?? 0);
-        if (distanceMeters > allowance) {
+        if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
+          /**
+           * Let it through, and make sure the record says so.
+           *
+           * The distance is stored on the row either way (see below), so the check-in is still
+           * visibly out of geofence to anyone who looks. This adds the reason it was accepted —
+           * without it, an out-of-range check-in in the data is indistinguishable from a GPS
+           * failure, and the one question worth answering later is which of the two it was.
+           */
+          this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
+            entityType: 'ASSIGNMENT',
+            entityId: assignment.id,
+            userId,
+            detail: `check-in accepted ${(distanceMeters / 1000).toFixed(1)} km from the branch`,
+          });
+        } else if (distanceMeters > allowance) {
           const km = (distanceMeters / 1000).toFixed(1);
           return {
             success: false,
@@ -1769,6 +2023,32 @@ export class AssignmentService {
       }
       return manager.save(assignment);
     });
+
+    /**
+     * The check-in also lands in the movement trail.
+     *
+     * This is the anchor of every travel assessment: the one moment the platform knows for certain
+     * where an assayer was, verified against the branch geofence and captured under a human
+     * action. A journey is judged backwards from it (LocationTrailService.assessAssignmentTravel),
+     * so without this fix in the trail the approach has no end point to be measured against.
+     *
+     * Appended after the transaction and best-effort inside `record()`: supporting evidence must
+     * never be able to fail the check-in it accompanies.
+     */
+    await this.locationTrail
+      .record(saved.assayerId, lat, lng, {
+        source: LocationPingSource.CHECK_IN,
+        accuracyMeters: accuracyMeters ?? null,
+        assignmentId: saved.id,
+        recordedAt: now,
+        recordedBy: userId || saved.assayerId,
+      })
+      // Guarded here as well as inside `record()`. An assayer standing at the branch must not be
+      // refused because a supporting write failed, and that promise is too important to hold only
+      // in a collaborator's implementation — it has to be true at the call site regardless.
+      .catch((err) =>
+        console.error(`Check-in recorded but its trail fix was not stored (${saved.id}):`, err),
+      );
 
     // Record Audit Event for real-time operations control tracking
     try {

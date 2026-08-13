@@ -177,6 +177,10 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     queryKey: queryKeys.scope.options,
     queryFn: () =>
       api.request<{ data: ScopeOptions }>('/scope/options', { method: 'GET', withMeta: true }),
+    // Gated on a token. This provider mounts above the router, so without the gate it fires on
+    // the login page and 401s on every cold visit; the request re-enables on the re-render that
+    // follows a successful sign-in.
+    enabled: Boolean(localStorage.getItem('fapoms_token')),
     staleTime: 5 * 60_000,
     retry: 1,
   });

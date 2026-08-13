@@ -1,3 +1,4 @@
+import * as xlsx from 'xlsx';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
@@ -80,6 +81,9 @@ describe('AssayerService', () => {
     publish: jest.fn(),
   };
 
+  /** Raw-SQL seam. `hasActiveAssignment` reads through this, so tests drive it from here. */
+  const mockDataSource = { query: jest.fn().mockResolvedValue([]) };
+
   const mockWorkflowEngine = {
     registerWorkflow: jest.fn(),
     executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
@@ -100,7 +104,7 @@ describe('AssayerService', () => {
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
-        { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
+        { provide: getDataSourceToken(), useValue: mockDataSource },
       ],
     }).compile();
   }
@@ -152,6 +156,112 @@ describe('AssayerService', () => {
 
       const [row] = await service.getRosterCommercialProfiles(onDate);
       expect(row.profile).toBeNull();
+    });
+  });
+
+  /**
+   * Sharing has to stay on for the duration of a job, because the movement trail is what confirms
+   * the travel that job is paid for — and a control someone can switch off for the very journey
+   * they are about to claim for is not a control.
+   *
+   * The scope of that obligation is the point of these tests: it starts when work is accepted and
+   * ends when the work does. Between assignments it is an ordinary setting, which is the line
+   * between verifying work and following a person around.
+   */
+  describe('setLiveTracking — the obligation while holding work', () => {
+    beforeEach(() => {
+      // Reset rather than clear: a queued `mockResolvedValueOnce` survives clearAllMocks, and a
+      // test whose code path short-circuits before querying would leak its value into the next.
+      mockDataSource.query.mockReset();
+      mockDataSource.query.mockResolvedValue([]); // default: no active work
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: true });
+      mockAssayerRepo.update.mockResolvedValue({ affected: 1 });
+      mockActivityRepo.create.mockImplementation((v: any) => v);
+      mockActivityRepo.save.mockResolvedValue({});
+    });
+
+    it('refuses to switch sharing off while an assignment is open', async () => {
+      mockDataSource.query.mockResolvedValue([{ '?column?': 1 }]); // holds active work
+
+      await expect(service.setLiveTracking('asr-1', false, 'asr-1')).rejects.toThrow(BadRequestException);
+      expect(mockAssayerRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('explains why, and when they can turn it off', async () => {
+      mockDataSource.query.mockResolvedValue([{ '?column?': 1 }]);
+
+      await expect(service.setLiveTracking('asr-1', false, 'asr-1')).rejects.toThrow(
+        /confirms your travel .* switch it off once the job is completed/s,
+      );
+    });
+
+    it('lets them switch it off once no work is open', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: true });
+
+      await service.setLiveTracking('asr-1', false, 'asr-1');
+
+      expect(mockAssayerRepo.update).toHaveBeenCalledWith('asr-1', expect.objectContaining({ isLiveEnabled: false }));
+    });
+
+    it('never blocks switching sharing on', async () => {
+      mockDataSource.query.mockResolvedValue([{ '?column?': 1 }]); // even while holding work
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: false });
+
+      await service.setLiveTracking('asr-1', true, 'asr-1');
+
+      expect(mockAssayerRepo.update).toHaveBeenCalledWith('asr-1', expect.objectContaining({ isLiveEnabled: true }));
+      // The obligation only ever restricts turning it off, so the check is not even reached.
+      expect(mockDataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('records the change, so a gap in the trail can be told from a lost signal', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: true });
+
+      await service.setLiveTracking('asr-1', false, 'asr-1');
+
+      expect(mockActivityRepo.save).toHaveBeenCalled();
+      expect(mockActivityRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'LOCATION_SHARING_DISABLED' }),
+      );
+    });
+
+    it('does not record an activity when nothing actually changed', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: false });
+
+      await service.setLiveTracking('asr-1', false, 'asr-1');
+
+      expect(mockActivityRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('enableLiveTrackingForActiveWork', () => {
+    it('turns sharing on when an assayer takes on work', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: false });
+      mockAssayerRepo.update.mockResolvedValue({ affected: 1 });
+      mockActivityRepo.create.mockImplementation((v: any) => v);
+      mockActivityRepo.save.mockResolvedValue({});
+
+      await service.enableLiveTrackingForActiveWork('asr-1', 'user-1');
+
+      expect(mockAssayerRepo.update).toHaveBeenCalledWith('asr-1', expect.objectContaining({ isLiveEnabled: true }));
+    });
+
+    it('does nothing when sharing is already on', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isLiveEnabled: true });
+
+      await service.enableLiveTrackingForActiveWork('asr-1', 'user-1');
+
+      expect(mockAssayerRepo.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Losing an acceptance because a flag would not flip is a far worse outcome than a trail that
+     * starts late — and a late start is visible in the assessment anyway.
+     */
+    it('never throws, so it cannot fail the acceptance it accompanies', async () => {
+      mockAssayerRepo.findOne.mockRejectedValue(new Error('db down'));
+
+      await expect(service.enableLiveTrackingForActiveWork('asr-1', 'user-1')).resolves.toBeUndefined();
     });
   });
 
@@ -248,6 +358,43 @@ describe('AssayerService', () => {
         assayerCode: 'AS-01', firstName: 'J', lastName: 'D',
         phone: '9999999999', address: 'Addr', state: 'MH', district: 'Pune', city: 'Pune',
       }, 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    /**
+     * Admission asks who this is and where they work. The client rosters this product is fed have
+     * seven columns — name, code, residence address, location, district, state, zone — and no
+     * phone at all, so requiring one to create the record meant a real roster admitted nobody.
+     */
+    it('admits an assayer with no phone number, storing null rather than refusing', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation((v: any) => Promise.resolve({ id: 'asr-2', ...v }));
+
+      const result = await service.create({
+        assayerCode: 'AS-02', firstName: 'Shinil', lastName: 'T',
+        state: 'Kerala', district: 'Calicut', city: 'Kunnamangalam', address: 'Thykkattu',
+      }, 'user-1');
+
+      expect(result.phone).toBeNull();
+      // Still INVITED/INACTIVE, so the recommendation engine's deployability filter keeps an
+      // unreachable person off plans until someone completes and activates the record.
+      expect(result.lifecycleStatus).toBe(AssayerLifecycleStatus.INVITED);
+    });
+
+    it('admits an assayer with no address, city or district — the columns stay non-null', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation((v: any) => Promise.resolve({ id: 'asr-3', ...v }));
+
+      const result = await service.create({
+        assayerCode: 'AS-03', firstName: 'A', lastName: 'K', state: 'Kerala',
+      }, 'user-1');
+
+      // Empty, not null: these are NOT NULL columns, and blank is what `missingCriticalFields`
+      // reads as missing — so the gap still shows on the record instead of failing the insert.
+      expect(result.address).toBe('');
+      expect(result.city).toBe('');
+      expect(result.district).toBe('');
     });
   });
 
@@ -578,6 +725,91 @@ describe('AssayerService', () => {
     it('rejects a non-finite coordinate rather than storing it', async () => {
       await expect(service.updateLiveLocation('a-1', NaN, 72.87)).rejects.toThrow();
       expect(mockAssayerRepo.update).not.toHaveBeenCalled();
+    });
+  });
+  /**
+   * The roster import, as the client's real file exercises it.
+   *
+   * Reported as "assayer/roster imports are not working", and it was two things at once: the
+   * reader only ever looked at sheet 1 of the workbook (the client's file puts Branch first and
+   * the roster second), and a phone number was required to admit anyone (the roster has no phone
+   * column). Either alone imported zero people.
+   */
+  describe('uploadFromExcel — the real client roster', () => {
+    /** The client's workbook: branch list first, roster second, trailing space in the name. */
+    function clientWorkbook(): Buffer {
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
+        ['BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets'],
+        ['BR-1', 'THENKURISSI', 'PALAKKAD', 'Kerala', 'Main Road', 120],
+      ]), 'Branch');
+      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
+        ['Assayer Name', 'Assayer code', 'Residence Address', 'Location', 'District', 'State', 'Zone'],
+        ['Shinil T', 'AS0643', 'Thykkattu, Kunnamangalam, kerala-673571', 'Kunnamangalam', 'Calicut', 'Kerala', 'South'],
+        ['R Jeganathan', 'AS0361', 'Anna Nagar, Chennai-600040', 'Chennai', 'Chennai', 'Tamil Nadu', 'South'],
+      ]), 'Assayer ');
+      return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    }
+
+    beforeEach(() => {
+      // No existing roster: every row is a create.
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation((v: any) => Promise.resolve({ id: `asr-${v.assayerCode}`, ...v }));
+    });
+
+    it('reads the roster from the second sheet of the client workbook', async () => {
+      const report = await service.uploadFromExcel(clientWorkbook(), 'user-1');
+
+      expect(report.sheetName).toBe('Assayer ');
+      expect(report.errors).toEqual([]);
+      expect(report.importedCount).toBe(2);
+      expect(report.created).toBe(2);
+    });
+
+    it('admits people the roster has no phone number for, and names them', async () => {
+      const report = await service.uploadFromExcel(clientWorkbook(), 'user-1');
+
+      // Previously every one of these was a rejection: "Phone is required".
+      expect(report.needingPhone).toEqual(['AS0643', 'AS0361']);
+      expect(report.importedCount).toBe(2);
+    });
+
+    it('still refuses a row with no state — it sets the region, zone and holidays', async () => {
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
+        ['Assayer code', 'Assayer Name', 'District', 'State'],
+        ['AS-01', 'Has State', 'Calicut', 'Kerala'],
+        ['AS-02', 'No State', 'Calicut', ''],
+      ]), 'Roster');
+      const report = await service.uploadFromExcel(
+        Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })), 'user-1',
+      );
+
+      expect(report.importedCount).toBe(1);
+      expect(report.errors).toHaveLength(1);
+      expect(report.errors[0]).toContain('AS-02');
+      expect(report.errors[0]).toContain('State');
+    });
+
+    /**
+     * Searching every sheet must not weaken the wrong-file guard: a workbook that is only a
+     * branch list, uploaded here, still has to be sent to the right screen rather than read
+     * as a roster of 72 people named after branches.
+     */
+    it('still rejects a branch-only workbook as the wrong file', async () => {
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
+        ['BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets'],
+        ['BR-1', 'THENKURISSI', 'PALAKKAD', 'Kerala', 'Main Road', 120],
+      ]), 'Branch');
+      const report = await service.uploadFromExcel(
+        Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })), 'user-1',
+      );
+
+      expect(report.importedCount).toBe(0);
+      expect(report.errors[0]).toContain('branch list');
+      expect(mockAssayerRepo.save).not.toHaveBeenCalled();
     });
   });
 });

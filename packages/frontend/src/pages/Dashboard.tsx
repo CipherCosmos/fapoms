@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AlertTriangle, ArrowRight, Map, RefreshCw, Users, IndianRupee,
+  AlertTriangle, ArrowRight, Map, RefreshCw,
   CheckCircle2, Inbox, Layers,
 } from 'lucide-react';
 import { api } from '../services/api';
@@ -11,6 +11,7 @@ import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { formatRupees as money } from '@fapoms/shared';
+import { HBarChart, DonutChart, StackedColumnChart, type HBarDatum, type ColumnDatum } from '../components/charts';
 
 interface Attention {
   key: string; severity: 'critical' | 'high' | 'medium';
@@ -85,12 +86,76 @@ export const Dashboard: React.FC = () => {
     staleTime: 30_000,
   });
 
-  const funnelMax = Math.max(1, ...(data?.funnel ?? []).map((f) => f.count));
   const dueSoon = (data?.due ?? []).filter((d) => d.daysAway >= 0).slice(0, 8);
   // Only the roles that /executive-map actually admits (see config/route-permissions.ts) get the
   // button — linking anyone else there just round-trips them back here through ProtectedRoute.
   const canSeeCommandCenter = !!data?.roles.some((r) =>
     ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR', 'OPERATIONS_MANAGER', 'READ_ONLY_AUDITOR'].includes(r));
+
+  // ── Chart data, derived from the same snapshot the old stat tiles read ─────
+
+  const funnelBars: HBarDatum[] = (data?.funnel ?? [])
+    .filter((f) => f.count > 0)
+    .map((f) => ({
+      key: f.key, label: f.label, value: f.count, color: 'var(--accent-primary)',
+      sublabel: `${f.packets.toLocaleString('en-IN')} packets`,
+    }));
+
+  // Every entry in `due` (not just the 8-row preview below), bucketed by day-out so the
+  // week's shape is accurate even when the list is truncated. All 8 buckets render — an
+  // empty day is itself the useful signal, not a row worth hiding.
+  const today = new Date();
+  const dueByDay: ColumnDatum[] = Array.from({ length: 8 }, (_, i) => {
+    const items = (data?.due ?? []).filter((d) => d.daysAway === i);
+    const date = new Date(today);
+    date.setDate(date.getDate() + i);
+    return {
+      key: String(i),
+      label: i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : date.toLocaleDateString(undefined, { weekday: 'short' }),
+      segments: [
+        { key: 'ready', label: 'Ready', value: items.filter((d) => !d.blocker).length, color: 'var(--success)' },
+        { key: 'blocked', label: 'Not ready', value: items.filter((d) => !!d.blocker).length, color: 'var(--warning)' },
+      ],
+    };
+  });
+
+  const validationSegments = data?.validation ? [
+    { key: 'pending', label: 'Pending', value: data.validation.pending, color: 'var(--accent-secondary)' },
+    { key: 'inReview', label: 'In review', value: data.validation.inReview, color: 'var(--accent-primary)' },
+    { key: 'needsCorrection', label: 'Needs correction', value: data.validation.needsCorrection, color: 'var(--warning)' },
+  ] : [];
+
+  const capacitySegments = data?.capacity ? [
+    { key: 'loaded', label: 'Loaded', value: Math.max(data.capacity.assayers - data.capacity.idle, 0), color: 'var(--success)' },
+    { key: 'idle', label: 'Idle', value: data.capacity.idle, color: 'var(--text-muted)' },
+  ] : [];
+
+  const documentBars: HBarDatum[] = data?.documents ? [
+    { key: 'unsent', label: 'Packets unsent', value: data.documents.packetsUnsent, color: 'var(--warning)' },
+    { key: 'withAssayers', label: 'With assayers', value: data.documents.awaitingReturn, color: 'var(--accent-primary)' },
+    { key: 'awaitingOcr', label: 'Awaiting OCR', value: data.documents.awaitingOcr, color: 'var(--accent-secondary)' },
+    { key: 'inOcr', label: 'In OCR', value: data.documents.inOcr, color: 'var(--success)' },
+  ] : [];
+
+  const moneyBars: HBarDatum[] = data?.money ? [
+    { key: 'unbilled', label: 'Unbilled', value: data.money.unbilled, color: 'var(--warning)', formattedValue: money(data.money.unbilled) },
+    { key: 'outstanding', label: 'Outstanding', value: data.money.outstanding, color: 'var(--accent-secondary)', formattedValue: money(data.money.outstanding) },
+    { key: 'collected', label: 'Collected', value: data.money.collected, color: 'var(--success)', formattedValue: money(data.money.collected) },
+  ] : [];
+
+  // Worst progress first — the projects worth looking at are the ones lagging, not the
+  // ones already done. Capped at 8 rows; the full list with client and blocker detail
+  // still follows underneath.
+  const projectBars: HBarDatum[] = (data?.projects ?? [])
+    .slice()
+    .sort((a, b) => a.progressPct - b.progressPct)
+    .slice(0, 8)
+    .map((p) => ({
+      key: p.id, label: p.name, value: p.progressPct,
+      color: p.progressPct < 34 ? 'var(--warning)' : 'var(--accent-primary)',
+      formattedValue: `${p.progressPct}%`, sublabel: p.clientName,
+      onClick: () => navigate(`/planning?projectId=${p.id}`),
+    }));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -163,7 +228,11 @@ export const Dashboard: React.FC = () => {
             {data.due && (
             <div>
               <SectionLabel>Audits due — next 7 days</SectionLabel>
-              <div className="glass-card" style={{ padding: 14 }}>
+              <div className="glass-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <StackedColumnChart data={dueByDay} legend={[
+                  { key: 'ready', label: 'Ready', color: 'var(--success)' },
+                  { key: 'blocked', label: 'Not ready', color: 'var(--warning)' },
+                ]} />
                 {dueSoon.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No audits scheduled in the next week.</div>
                 ) : dueSoon.map((d) => (
@@ -200,67 +269,73 @@ export const Dashboard: React.FC = () => {
             <div>
               <SectionLabel>Where the book stands</SectionLabel>
               <div className="glass-card" style={{ padding: 14 }}>
-                {data.funnel.filter((f) => f.count > 0).map((f) => (
-                  <div key={f.key} style={{ marginBottom: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, marginBottom: 3 }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>{f.label}</span>
-                      <span style={{ color: 'var(--text-muted)' }}>
-                        <strong style={{ color: 'var(--text-primary)' }}>{f.count}</strong> branches · {f.packets.toLocaleString('en-IN')} pkt
-                      </span>
-                    </div>
-                    <div style={{ height: 6, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ width: `${(f.count / funnelMax) * 100}%`, height: '100%', background: 'var(--accent-primary)' }} />
-                    </div>
-                  </div>
-                ))}
-                {data.funnel.every((f) => f.count === 0) && (
+                {funnelBars.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No branches loaded yet.</div>
+                ) : (
+                  <HBarChart data={funnelBars} valueColumnWidth={72} />
                 )}
               </div>
             </div>
             )}
           </div>
 
-          {/* Validation — only for the roles that work that queue. */}
+          {/* Validation — only for the roles that work that queue. Composition as a donut
+              (pending / in review / needs correction all belong to one whole); assigned-to-you
+              and overdue clarifications are cross-cutting, not slices of that whole, so they
+              stay as their own callouts beside it. */}
           {data.validation && (
             <div>
               <SectionLabel>Validation queue</SectionLabel>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-                <Stat icon={<Inbox size={15} />} label="Assigned to you" value={String(data.validation.assignedToMe)}
-                      sub="cases where you are the reviewer" color="var(--accent)" onClick={() => navigate('/validation')} />
-                <Stat icon={<Layers size={15} />} label="Awaiting review" value={String(data.validation.pending + data.validation.inReview)}
-                      sub={`${data.validation.pending} pending · ${data.validation.inReview} in review`} color="var(--accent)" onClick={() => navigate('/validation')} />
-                <Stat icon={<AlertTriangle size={15} />} label="Needs correction" value={String(data.validation.needsCorrection)}
-                      sub="sent back for rework" color={data.validation.needsCorrection ? 'var(--warning)' : 'var(--text-muted)'} onClick={() => navigate('/validation')} />
-                <Stat icon={<AlertTriangle size={15} />} label="Open clarifications" value={String(data.validation.openQueries)}
-                      sub={data.validation.overdueQueries > 0 ? `${data.validation.overdueQueries} past deadline` : 'none overdue'}
-                      color={data.validation.overdueQueries ? 'var(--danger)' : 'var(--success)'} onClick={() => navigate('/validation')} />
+              <div className="glass-card" style={{ padding: 16, display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
+                {validationSegments.every((s) => s.value === 0) ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Nothing in the queue.</div>
+                ) : (
+                  <DonutChart
+                    segments={validationSegments.map((s) => ({ ...s, onClick: () => navigate('/validation') }))}
+                    centerLabel="Open cases" centerValue={String(data.validation.pending + data.validation.inReview + data.validation.needsCorrection)}
+                  />
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minWidth: 180 }}>
+                  <Stat icon={<Inbox size={15} />} label="Assigned to you" value={String(data.validation.assignedToMe)}
+                        sub="cases where you are the reviewer" color="var(--accent)" onClick={() => navigate('/validation')} />
+                  <Stat icon={<AlertTriangle size={15} />} label="Open clarifications" value={String(data.validation.openQueries)}
+                        sub={data.validation.overdueQueries > 0 ? `${data.validation.overdueQueries} past deadline` : 'none overdue'}
+                        color={data.validation.overdueQueries ? 'var(--danger)' : 'var(--success)'} onClick={() => navigate('/validation')} />
+                </div>
               </div>
             </div>
           )}
 
-          {/* 4. Standing position — checked occasionally, not hourly. */}
+          {/* 4. Standing position — checked occasionally, not hourly. Each is the composition
+              or breakdown that used to be flattened into one stat tile. */}
           {(data.capacity || data.documents || data.money) && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
               {data.capacity && (
-                <Stat icon={<Users size={15} />} label="Assayer capacity" value={`${data.capacity.dailyCapacity}/day`}
-                      sub={`${data.capacity.assayers} active · ${data.capacity.idle} idle`} color="var(--success)"
-                      onClick={() => navigate('/assayers')} />
+                <div>
+                  <SectionLabel>Assayer capacity</SectionLabel>
+                  <div className="glass-card" style={{ padding: 16, display: 'flex', justifyContent: 'center' }}>
+                    <DonutChart
+                      segments={capacitySegments.map((s) => ({ ...s, onClick: () => navigate('/assayers') }))}
+                      centerLabel="capacity / day" centerValue={String(data.capacity.dailyCapacity)}
+                    />
+                  </div>
+                </div>
               )}
               {data.documents && (
-                <Stat icon={<Inbox size={15} />} label="Paperwork in flight"
-                      value={String(data.documents.awaitingReturn + data.documents.awaitingOcr + data.documents.inOcr)}
-                      sub={`${data.documents.awaitingReturn} with assayers · ${data.documents.awaitingOcr} at data entry`}
-                      color="var(--accent)" onClick={() => navigate('/documents')} />
+                <div>
+                  <SectionLabel>Paperwork in flight</SectionLabel>
+                  <div className="glass-card" style={{ padding: 16 }}>
+                    <HBarChart data={documentBars} valueColumnWidth={56} />
+                  </div>
+                </div>
               )}
               {data.money && (
-                <>
-                  <Stat icon={<IndianRupee size={15} />} label="Unbilled" value={money(data.money.unbilled)}
-                        sub={data.money.outstanding > 0 ? `${money(data.money.outstanding)} awaiting payment` : 'nothing outstanding'}
-                        color="var(--warning)" onClick={() => navigate('/billing')} />
-                  <Stat icon={<IndianRupee size={15} />} label="Collected" value={money(data.money.collected)}
-                        sub="received from clients" color="var(--success)" onClick={() => navigate('/billing')} />
-                </>
+                <div>
+                  <SectionLabel>Revenue position</SectionLabel>
+                  <div className="glass-card" style={{ padding: 16 }}>
+                    <HBarChart data={moneyBars} valueColumnWidth={104} />
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -269,6 +344,14 @@ export const Dashboard: React.FC = () => {
           {data.projects && (
           <div>
             <SectionLabel>Projects</SectionLabel>
+            {projectBars.length > 0 && (
+              <div className="glass-card" style={{ padding: 16, marginBottom: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 12 }}>
+                  Progress by project{data.projects.length > projectBars.length ? ` (lowest ${projectBars.length} of ${data.projects.length})` : ''}
+                </div>
+                <HBarChart data={projectBars} maxValue={100} valueColumnWidth={48} />
+              </div>
+            )}
             <div className="glass-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
               {data.projects.length === 0 && <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No active projects.</div>}
               {data.projects.map((p) => (

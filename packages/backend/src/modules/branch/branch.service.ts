@@ -15,6 +15,7 @@ import { EventCategory, resolveRegion } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia } from '../geo/india-autocomplete.helper';
 import { geocodeIndia } from '../geo/india-geocoder';
+import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string, pincode?: string | null): Promise<{ lat: number; lng: number } | null> {
   const res = await geocodeIndia(address, city, district, state, pincode);
@@ -25,10 +26,11 @@ export interface CreateBranchDto {
   branchCode: string;
   solId?: string;
   name: string;
-  address: string;
+  address?: string;
+  /** The one geography field a branch cannot be planned without: region, zone and holidays. */
   state: string;
-  district: string;
-  city: string;
+  district?: string;
+  city?: string;
   pincode?: string;
   region?: string;
   territory?: string;
@@ -147,25 +149,40 @@ export class BranchService {
       }
     }
 
-    let lat = dto.latitude;
-    let lng = dto.longitude;
-    if (!lat || !lng) {
-      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
-      if (coords) {
-        lat = coords.lat;
-        lng = coords.lng;
-      }
-    }
-    const location = { type: 'Point', coordinates: [lng, lat] };
+    /**
+     * Resolved through the shared chain, which reaches the free OSM tiers and — crucially —
+     * records how precise the answer is. This used to call a Google-only helper that returns
+     * null without an API key, silently leaving `latitude`/`longitude` undefined and writing a
+     * `{type:'Point', coordinates:[undefined, undefined]}` geometry. `precise` is on: this is
+     * one interactive save, so a second of rate-limited lookup is the right trade for a
+     * coordinate that is actually near the branch.
+     */
+    const geo = await resolveCoordinates({
+      address: dto.address,
+      city: dto.city,
+      district: dto.district,
+      state: dto.state,
+      pincode: dto.pincode,
+      name: dto.name,
+      brand: dto.clientId ? (await this.clientService.findOne(dto.clientId).catch(() => null))?.name : null,
+      suppliedLat: dto.latitude,
+      suppliedLng: dto.longitude,
+      // A coordinate typed into the Add Branch form was put there by a person on purpose.
+      suppliedIsManual: dto.latitude != null && dto.longitude != null,
+    });
 
+    const geoFields: Partial<GeoFields> = geo ?? {};
     const branch = this.branchRepository.create({
       branchCode: dto.branchCode,
       solId: dto.solId ?? null,
       name: dto.name,
-      address: dto.address,
+      // NOT NULL columns that are optional on admission — empty is what the importer already
+      // stores for an unknown field, and it reads as blank everywhere rather than crashing the
+      // insert. See CreateBranchDto for why state is the only geography field that is mandatory.
+      address: dto.address ?? '',
       state: dto.state,
-      district: dto.district,
-      city: dto.city,
+      district: dto.district ?? '',
+      city: dto.city ?? '',
       pincode: dto.pincode ?? null,
       // Canonicalised on write, state first. Letting a caller store an arbitrary string here
       // is what made the column unfilterable in the first place; the migration that cleaned it
@@ -180,9 +197,7 @@ export class BranchService {
       openingDate: dto.openingDate ?? null,
       lastAuditDate: dto.lastAuditDate ?? null,
       operatingHours: dto.operatingHours ?? null,
-      latitude: lat,
-      longitude: lng,
-      location,
+      ...geoFields,
       clientId: dto.clientId ?? null,
       riskScore: dto.riskScore ?? 0,
       riskCategory: dto.riskCategory ?? null,
@@ -255,36 +270,37 @@ export class BranchService {
       if (!zone) throw new BadRequestException(`Zone ${dto.zoneId} not found.`);
     }
 
-    let lat = dto.latitude !== undefined ? dto.latitude : branch.latitude;
-    let lng = dto.longitude !== undefined ? dto.longitude : branch.longitude;
-
     const addressChanged = dto.address !== undefined && dto.address !== branch.address;
     const cityChanged = dto.city !== undefined && dto.city !== branch.city;
     const districtChanged = dto.district !== undefined && dto.district !== branch.district;
     const stateChanged = dto.state !== undefined && dto.state !== branch.state;
+    const coordsSupplied = dto.latitude !== undefined && dto.longitude !== undefined;
 
-    if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
-      const coords = await geocodeAddress(
-        dto.address ?? branch.address,
-        dto.city ?? branch.city,
-        dto.district ?? branch.district,
-        dto.state ?? branch.state,
-        dto.pincode ?? branch.pincode,
+    /**
+     * Re-resolve only when the address actually moved, or the caller supplied a pin.
+     *
+     * `resolveCoordinates` returns null to mean "leave this alone", which is how a hand-placed
+     * pin survives an edit to the branch's phone number — or to its address. Someone who has
+     * stood at the branch knows better than any geocoder, and a correction they made is exactly
+     * the data an automated re-resolve would destroy most quietly.
+     */
+    if (addressChanged || cityChanged || districtChanged || stateChanged || coordsSupplied) {
+      const geo = await resolveCoordinates(
+        {
+          address: dto.address ?? branch.address,
+          city: dto.city ?? branch.city,
+          district: dto.district ?? branch.district,
+          state: dto.state ?? branch.state,
+          pincode: dto.pincode ?? branch.pincode,
+          name: dto.name ?? branch.name,
+          suppliedLat: dto.latitude,
+          suppliedLng: dto.longitude,
+          suppliedIsManual: coordsSupplied,
+        },
+        branch,
       );
-      if (coords) {
-        lat = coords.lat;
-        lng = coords.lng;
-      }
+      if (geo) Object.assign(branch, geo);
     }
-
-    let location = branch.location;
-    if (lat && lng) {
-      location = { type: 'Point', coordinates: [lng, lat] };
-    }
-
-    // Set updated lat/lng on the entity
-    branch.latitude = lat;
-    branch.longitude = lng;
 
     if (dto.branchCode !== undefined) branch.branchCode = dto.branchCode;
     if (dto.solId !== undefined) branch.solId = dto.solId;
@@ -310,15 +326,14 @@ export class BranchService {
     if (dto.openingDate !== undefined) branch.openingDate = dto.openingDate;
     if (dto.lastAuditDate !== undefined) branch.lastAuditDate = dto.lastAuditDate;
     if (dto.operatingHours !== undefined) branch.operatingHours = dto.operatingHours;
-    if (dto.latitude !== undefined) branch.latitude = dto.latitude;
-    if (dto.longitude !== undefined) branch.longitude = dto.longitude;
+    // Coordinates are set above by resolveCoordinates, which also records their precision.
+    // Assigning them again here would strip that provenance back off.
     if (dto.clientId !== undefined) branch.clientId = dto.clientId;
     if (dto.riskScore !== undefined) branch.riskScore = dto.riskScore;
     if (dto.riskCategory !== undefined) branch.riskCategory = dto.riskCategory;
     if (dto.complexity !== undefined) branch.complexity = dto.complexity;
     if (dto.estimatedDurationHours !== undefined) branch.estimatedDurationHours = dto.estimatedDurationHours;
     if (dto.requiredCompetencies !== undefined) branch.requiredCompetencies = dto.requiredCompetencies;
-    branch.location = location;
     branch.updatedBy = userId;
 
     const saved = await this.branchRepository.save(branch);
@@ -373,13 +388,26 @@ export class BranchService {
       [userId, id],
     );
 
+    /**
+     * And the assessments raised against it.
+     *
+     * An assessment is created alongside every project-branch link, so leaving them live is the
+     * same defect the project-branch line above already fixes: the branch disappears from the
+     * branch list while its work item stays in the validation and data-entry queues, pointing at
+     * a record nobody can open.
+     */
+    await this.dataSource.query(
+      `UPDATE assessments SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'BRANCH_DELETED',
       entityType: 'BRANCH',
       entityId: id,
       userId,
-      remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, and project branches`,
+      remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, project branches, and assessments`,
     });
   }
 
@@ -640,7 +668,28 @@ export class BranchService {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private async validateGeography(state: string, district: string, city: string): Promise<void> {
+  /**
+   * Verify only what the caller actually supplied.
+   *
+   * District and city are optional on admission, and this used to pass them straight into a
+   * reference lookup and then into `autocompleteIndia(undefined)` — which cannot verify a place
+   * that was never claimed, and would refuse a branch for failing to confirm a blank. A state on
+   * its own is still checked; the finer geography is checked only when it is given.
+   */
+  private async validateGeography(state: string, district?: string, city?: string): Promise<void> {
+    if (!district?.trim() || !city?.trim()) {
+      // Nothing to cross-check the state against, so confirm the state alone is real.
+      const stateKnown = await this.stateRepository.findOne({ where: { name: state } });
+      if (stateKnown) return;
+      const stateLive = await autocompleteIndia(state);
+      if (!stateLive.some((p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase())) {
+        throw new BadRequestException(
+          `Could not verify '${state}' as a real state. Check the spelling — it sets the region, zone and holiday calendar for this branch.`,
+        );
+      }
+      return;
+    }
+
     const stateEntity = await this.stateRepository.findOne({ where: { name: state } });
     const districtEntity = stateEntity
       ? await this.districtRepository.findOne({ where: { name: district, stateId: stateEntity.id } })

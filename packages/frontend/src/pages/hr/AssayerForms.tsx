@@ -58,17 +58,27 @@ const PERFORMANCE_RATINGS: { value: string; label: string }[] = [
 
 interface FieldDef { key: string; label: string; required?: boolean; type?: string; full?: boolean; placeholder?: string; options?: { value: string; label: string }[] }
 
+/**
+ * Admission asks for who this is and where they work, and nothing else.
+ *
+ * This form used to make eight fields mandatory — phone, address, district and city among them —
+ * which is more than a real intake has on day one and more than the roster files this product is
+ * fed even contain. The rest are not gone: they are collected here when known, and whatever is
+ * still blank is listed on the record as a gap (CRITICAL_FIELDS) with what it blocks, so the
+ * record gets completed rather than never created. State stays mandatory because it is what
+ * makes an assayer plannable at all — it sets their region, zone and holiday calendar.
+ */
 const CREATE_FIELDS: FieldDef[] = [
   { key: 'assayerCode', label: 'Assayer Code', required: true },
   { key: 'firstName', label: 'First Name', required: true },
   { key: 'lastName', label: 'Last Name', required: true },
   { key: 'email', label: 'Email', type: 'email' },
-  { key: 'phone', label: 'Phone', required: true },
+  { key: 'phone', label: 'Phone' },
   { key: 'alternatePhone', label: 'Alternate Phone' },
-  { key: 'address', label: 'Address', required: true, full: true },
+  { key: 'address', label: 'Address', full: true },
   { key: 'state', label: 'State', required: true, options: INDIAN_STATES },
-  { key: 'district', label: 'District', required: true },
-  { key: 'city', label: 'City', required: true },
+  { key: 'district', label: 'District' },
+  { key: 'city', label: 'City' },
   { key: 'pincode', label: 'Pincode' },
   { key: 'region', label: 'Region' },
   { key: 'employeeId', label: 'Employee ID' },
@@ -100,7 +110,9 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'firstName', label: 'First Name', required: true },
   { key: 'lastName', label: 'Last Name', required: true },
   { key: 'email', label: 'Email', type: 'email' },
-  { key: 'phone', label: 'Phone', required: true },
+  // Not required here either: this is the form the gap list sends people to via "Fill them in",
+  // and a form that refuses to save without a phone cannot be used to fill in anything else.
+  { key: 'phone', label: 'Phone' },
   { key: 'alternatePhone', label: 'Alternate Phone' },
   { key: 'address', label: 'Address', full: true },
   { key: 'state', label: 'State', options: INDIAN_STATES },

@@ -13,6 +13,31 @@ export const queryKeys = {
     detail: (id: string) => ['assignments', 'detail', id] as const,
     timeline: (id: string) => ['assignments', 'timeline', id] as const,
   },
+  /**
+   * Screens that answer "what needs a decision right now", keyed outside `assignments` because
+   * they are their own endpoints.
+   *
+   * Registered here, and wired into `useSocketInvalidation`, because being absent from both is
+   * what made them stale: the Operations Inbox is the negotiation queue — open counter-offers,
+   * declines needing a replacement, offers gone quiet — and its literal `['operations-inbox']`
+   * key matched no entry in the socket map. An assayer countering on their phone therefore took
+   * up to the 60-second poll to appear on the desk, on every round of a negotiation, while the
+   * event that would have shown it instantly was already arriving on the socket.
+   *
+   * Anything added here must also be added to the socket map, or it inherits the same problem.
+   */
+  desk: {
+    /** The Operations Inbox queue (scoped per region/zone selection). */
+    inbox: ['operations-inbox'] as const,
+    /** Candidate suggestions rendered inside an inbox card. */
+    inboxRecommendations: ['inbox-recommendations'] as const,
+    /** Detail panel for an assignment not present in the loaded list page. */
+    assignmentDetail: ['assignment-detail'] as const,
+    /** Field-issue queue, keyed by scope. */
+    assignmentFieldIssues: ['assignment-field-issues'] as const,
+    /** Per-branch coverage history shown in the planning drawer. */
+    branchHistory: ['branch-history'] as const,
+  },
   schedules: {
     all: ['schedules'] as const,
     list: ['schedules', 'list'] as const,

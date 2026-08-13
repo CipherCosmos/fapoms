@@ -37,6 +37,20 @@ interface InteractivePlanningMapProps {
    * the figure the assignment would be billed at.
    */
   travelRates?: { travelFeePerKm: number; freeTravelAllowanceKm: number } | null;
+  /**
+   * The search radius, owned by the parent so one number governs the whole screen.
+   *
+   * It used to live only in here, as private state persisted to localStorage. That made the
+   * map's own slider the only thing it affected: the recommendation engine searched a fixed
+   * 200 km regardless, so setting 350 km drew pins for assayers the engine had already
+   * discarded — an empty candidate list beside a map full of markers, with nothing linking the
+   * two. Lifting it lets the same value bound the engine's search and draw the circle.
+   *
+   * Optional so the map still works standalone (Executive Map has no candidate list to sync
+   * with); absent, it falls back to its own persisted state exactly as before.
+   */
+  searchRadiusKm?: number;
+  onSearchRadiusChange?: (km: number) => void;
 }
 
 export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = React.memo(({
@@ -51,6 +65,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   rankedCandidates,
   excludedCandidates,
   travelRates,
+  searchRadiusKm: searchRadiusProp,
+  onSearchRadiusChange,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -109,12 +125,25 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       ? DARK_THEMES.includes(appTheme) ? 'dark' : 'voyager'
       : mapStyle;
 
-  // Radius search filter config (persisted in localStorage)
-  const [radiusKm, setRadiusKm] = useState<number>(() => {
+  /**
+   * Radius search filter. The parent's value wins when it supplies one — see `searchRadiusKm`.
+   *
+   * The local state remains for standalone use (Executive Map), so behaviour there is
+   * unchanged. When a parent is controlling it, writes go up rather than staying here, which is
+   * what keeps the map's circle and the engine's search area from drifting apart.
+   */
+  const [ownRadiusKm, setOwnRadiusKm] = useState<number>(() => {
     const saved = localStorage.getItem('map_radiusKm');
     return saved ? Number(saved) : 300;
   });
+  const isRadiusControlled = searchRadiusProp != null;
+  const radiusKm = isRadiusControlled ? searchRadiusProp : ownRadiusKm;
+  const setRadiusKm = (km: number) => {
+    if (onSearchRadiusChange) onSearchRadiusChange(km);
+    if (!isRadiusControlled) setOwnRadiusKm(km);
+  };
 
+  // Persisted either way, so the operator's choice survives a reload on both screens.
   useEffect(() => localStorage.setItem('map_radiusKm', String(radiusKm)), [radiusKm]);
 
   // Filter states (persisted)

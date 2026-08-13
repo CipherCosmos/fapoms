@@ -90,6 +90,11 @@ export function canDeleteZones(roles: SystemRole[]): boolean {
   return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
 }
 
+/** Suspending operational rules is administrator-only — matches the backend's @Roles gate. */
+export function canManageRuleBypass(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
 export function canManageRules(roles: SystemRole[]): boolean {
   return roles.some((r) =>
     [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),

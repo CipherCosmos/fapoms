@@ -68,7 +68,7 @@ export class CommandCenterService {
     if (filters.clientId) { params.push(filters.clientId); where.push(`p.client_id = $${params.length}`); }
     // `state` was accepted by the controller and folded into the cache key, but never actually
     // applied to the query — the filter silently did nothing. It does now.
-    if (filters.state) { params.push(filters.state); where.push(`b.state = $${params.length}`); }
+    if (filters.state) { params.push(filters.state); where.push(`UPPER(b.state) = UPPER($${params.length})`); }
     if (filters.zoneId) { params.push(filters.zoneId); where.push(`b.zone_id = $${params.length}`); }
     if (filters.projectId) { params.push(filters.projectId); where.push(`p.id = $${params.length}`); }
     // Held so the assayer sub-selects inside this same query can reuse the placeholder.

@@ -80,9 +80,26 @@ export const suggestAuditDate = (branchId: string) =>
  * `date` (YYYY-MM-DD) is the audit date availability/fees are evaluated against —
  * omitted, the backend assumes today, which is rarely the day being planned.
  */
-export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(branchId: string, date?: string) =>
+export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(
+  branchId: string,
+  date?: string,
+  /**
+   * Rank the whole nearby workforce, treating a booking or a leave on `date` as advisory
+   * instead of disqualifying. Such candidates come back with `dateConflict` set, so the clash
+   * is shown on the row rather than hidden.
+   */
+  includeUnavailable?: boolean,
+  /**
+   * How far from the branch to search, in km — the operator's radius control.
+   *
+   * Omitted, the engine uses its own default search area. That default is invisible in the UI,
+   * so an operator who widened the map's radius saw assayers the engine had already discarded:
+   * pins on the map, nothing in the list, and no way to reach them.
+   */
+  radiusKm?: number,
+) =>
   api.request<{ data: TCandidate[]; meta?: { excluded?: TExcluded[] } }>(
-    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}`,
+    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}${includeUnavailable ? '&includeUnavailable=true' : ''}${radiusKm ? `&radiusKm=${Math.round(radiusKm)}` : ''}`,
     // withMeta so the caller receives `meta.excluded` (filtered-out candidates + reasons),
     // not just the unwrapped data array.
     { method: 'GET', withMeta: true },

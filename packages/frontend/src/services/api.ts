@@ -1,4 +1,5 @@
 import { fromNetwork, fromResponse } from './errors';
+import { clearSession } from './session';
 
 export type NotificationCategory =
   | 'ASSIGNMENT' | 'VALIDATION' | 'DOCUMENT' | 'PLANNING' | 'WORKFORCE' | 'BILLING' | 'SYSTEM';
@@ -91,9 +92,8 @@ class ApiClient {
       }
 
       if (response.status === 401) {
-        localStorage.removeItem('fapoms_token');
-        localStorage.removeItem('fapoms_refresh_token');
-        localStorage.removeItem('fapoms_user_cache');
+        // Same teardown as an explicit logout, so the two paths cannot drift apart again.
+        clearSession();
         if (window.location.pathname !== '/login') {
           window.location.replace('/login');
         }

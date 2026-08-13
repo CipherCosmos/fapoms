@@ -73,6 +73,10 @@ export const STATUS_COLORS: Record<string, string> = {
  * copy-paste had already begun to drift ("payouts" vs "Payouts").
  */
 export const CRITICAL_FIELDS: { key: keyof Assayer; label: string; why: string }[] = [
+  // Phone stopped being a barrier to *admission* — client rosters arrive without a phone column,
+  // and requiring one meant importing nobody. It is a gap in the record instead, listed here so
+  // it is worked rather than discovered on the day someone tries to ring this person.
+  { key: 'phone', label: 'Phone', why: 'calling and phone-channel dispatch' },
   { key: 'panNumber', label: 'PAN', why: 'TDS and statutory filing' },
   { key: 'bankAccountNumber', label: 'Bank account', why: 'payouts' },
   { key: 'ifscCode', label: 'IFSC', why: 'payouts' },

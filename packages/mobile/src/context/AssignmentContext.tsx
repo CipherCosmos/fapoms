@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
+import { flushQueue } from '../services/location-queue';
 import { connectMobileSocket } from '../services/socket';
 import { scheduleLocalNotification } from '../services/notification.service';
 import { useAuth } from './AuthContext';
@@ -30,7 +31,22 @@ interface AssignmentContextType {
 
 const CACHE_KEY = 'assignments';
 
+/**
+ * Drop assignments the desk has soft-deleted (`isActive === false`) before anything is
+ * rendered or cached. Soft-deleted rows carry an `isActive: false` while their status can
+ * still be an open one (PENDING / ACCEPTED / CHECKED_IN / IN_PROGRESS), so a status-only
+ * filter would keep showing them as current work. Legacy cached rows without the flag are
+ * treated as active.
+ */
+const onlyActive = (items: AssayerAssignment[]) =>
+  (items ?? []).filter((a) => a.isActive !== false);
+
 const AssignmentContext = createContext<AssignmentContextType | undefined>(undefined);
+
+/** Stable identity so the listener can be removed again on cleanup. */
+const flushLocationQueueOnReconnect = () => {
+  void flushQueue((batch) => MobileApiService.uploadLocationPings(batch)).catch(() => undefined);
+};
 
 export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, user } = useAuth();
@@ -48,7 +64,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
     setLoading(true);
     try {
-      const items = await MobileApiService.getAssayerAssignments(user?.id);
+      const items = onlyActive(await MobileApiService.getAssayerAssignments(user?.id));
       setAssignments(items);
       setStale(false);
       setLastSyncedAt(new Date().toISOString());
@@ -79,7 +95,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     let cancelled = false;
     readCache<{ items: AssayerAssignment[]; at: string }>(CACHE_KEY).then((cached) => {
       if (cancelled || !cached?.items?.length) return;
-      setAssignments((current) => (current.length > 0 ? current : cached.items));
+      setAssignments((current) => (current.length > 0 ? current : onlyActive(cached.items)));
       setLastSyncedAt(cached.at);
     });
     return () => { cancelled = true; };
@@ -166,6 +182,10 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
      * successful (re)connection, which is exactly the moment a refetch is needed.
      */
     socket.on('connect', reloadSoon);
+    // The same moment is when queued position fixes can finally be delivered. The trail is
+    // what a travel claim is checked against, and the fixes worth most are the ones taken
+    // where there was no signal to send them.
+    socket.on('connect', flushLocationQueueOnReconnect);
 
     return () => {
       if (timer) clearTimeout(timer);
@@ -174,6 +194,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       socket.off('assignment:created', handleNewAssignment);
       QUIET_EVENTS.forEach((e) => socket.off(e, reloadSoon));
       socket.off('connect', reloadSoon);
+      socket.off('connect', flushLocationQueueOnReconnect);
     };
   }, [isAuthenticated, loadAssignments]);
 

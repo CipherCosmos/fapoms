@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar';
 import { SearchOverlay } from './SearchOverlay';
 import { Header } from './Header';
 import { MenuToggle } from './ui/MenuToggle';
+import { RuleBypassBanner } from './RuleBypassBanner';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -43,6 +44,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
       </div>
 
       <div className="main-area" style={{ display: 'flex', flexDirection: 'column', padding: 0 }}>
+        {/* Above the header, and outside the scrolling content, so a suspended control is the
+            first thing on every screen and cannot be scrolled away from. */}
+        <RuleBypassBanner />
         <Header
           user={user}
           onLogout={onLogout}

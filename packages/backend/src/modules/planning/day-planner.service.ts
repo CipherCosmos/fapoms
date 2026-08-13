@@ -50,7 +50,8 @@ export interface DayPlanCandidate {
   assayerName: string;
   assayerCode: string;
   assayerCity: string;
-  assayerPhone: string;
+  /** Null when the roster carried no number — the desk cannot ring this candidate. */
+  assayerPhone: string | null;
   overallScore: number;
   totalBranches: number;
   totalAuditHours: number;
@@ -272,8 +273,15 @@ export class DayPlannerService {
     const project = projects[0];
 
     const clientIds = [...new Set(projects.map((p) => p.clientId).filter(Boolean))] as string[];
+    // Guarded join rather than `relations: ['configuration']`, which loads soft-deleted rows.
+    // This configuration supplies the serviceability radius, working days and SLA rules the
+    // whole day plan is built from, so a superseded one silently plans against retired terms.
     const clients = clientIds.length
-      ? await this.clientRepository.find({ where: { id: In(clientIds) }, relations: ['configuration'] })
+      ? await this.clientRepository
+          .createQueryBuilder('client')
+          .leftJoinAndSelect('client.configuration', 'configuration', 'configuration.isActive = true')
+          .where('client.id IN (:...clientIds)', { clientIds })
+          .getMany()
       : [];
 
     const clientById = new Map(clients.map((c) => [c.id, c]));

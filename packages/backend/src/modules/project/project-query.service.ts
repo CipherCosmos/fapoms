@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
+import { applyBranchScope, branchScopeWhere, needsGeographicScope } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
@@ -39,7 +39,12 @@ export class ProjectQueryService {
     // therefore means "projects with at least one branch in the West", resolved here as a
     // separate id lookup rather than a join: joining project_branches would multiply each
     // project row by its branch count and corrupt both the page size and the total.
-    if (needsBranchJoin(scope)) {
+    //
+    // Only the *geographic* dimensions trigger this. `clientId` deliberately does not: it is
+    // already applied directly to `projects.client_id` above, and routing it through branch
+    // membership as well would drop a newly created project that has no branches imported yet —
+    // exactly the project a planner is most likely to be looking for.
+    if (needsGeographicScope(scope)) {
       const idQuery = this.projectBranchRepository
         .createQueryBuilder('pb2')
         .select('DISTINCT pb2.project_id', 'projectId')
@@ -74,7 +79,7 @@ export class ProjectQueryService {
     // list had no measure of how far a project had actually got, so a project with
     // no branches looked identical to one that was fully scheduled.
     if (projects.length > 0) {
-      const counts = await this.projectBranchRepository
+      const countQuery = this.projectBranchRepository
         .createQueryBuilder('pb')
         .select('pb.project_id', 'projectId')
         .addSelect('COUNT(*)::int', 'total')
@@ -103,8 +108,18 @@ export class ProjectQueryService {
         )
         .where('pb.project_id IN (:...ids)', { ids: projects.map((p) => p.id) })
         .andWhere('pb.is_active = true')
-        .groupBy('pb.project_id')
-        .getRawMany();
+        .groupBy('pb.project_id');
+
+      // The progress bar has to count the same branches the rest of the scoped view shows.
+      // Left national, a West operator saw "72 branches, 8 audited" on a project where only 10
+      // branches are theirs — a completion figure they cannot act on and cannot reconcile with
+      // any other screen. The join is added only when geography is actually constraining.
+      if (needsGeographicScope(scope)) {
+        countQuery.innerJoin('pb.branch', 'pbb');
+        applyBranchScope(countQuery, { regions: scope?.regions, state: scope?.state, zoneId: scope?.zoneId }, { branch: 'pbb' });
+      }
+
+      const counts = await countQuery.getRawMany();
 
       const byId = new Map(counts.map((c: any) => [c.projectId, c]));
       for (const project of projects) {

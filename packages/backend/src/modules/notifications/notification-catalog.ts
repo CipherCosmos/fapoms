@@ -45,6 +45,41 @@ export interface NotificationTypeDef {
    * ignore the bell.
    */
   skipActor?: boolean;
+
+  /**
+   * Merge a burst of this type to the same recipient into one notification.
+   *
+   * Declared per type because only some events arrive in bursts, and only some read sensibly
+   * when summarised. The ones that do share a shape: a single operator action, or a single
+   * scheduled sweep, produces N of them at once. Activating 25 assayers through the bulk
+   * lifecycle endpoint put 25 identical "New assayer onboarded" lines in every operations user's
+   * bell; offering one assayer 40 branches from the planning queue sent them 40 pushes in a row.
+   * Neither the second line nor the fortieth push carried information the first did not.
+   *
+   * `dedupeKey` does not solve this — it collapses *the same event re-fired*, which is a
+   * different thing from *different events of the same kind arriving together*.
+   *
+   * Set only where a summary is genuinely as useful as the individual lines. A per-record
+   * decision an operator must act on separately (a rejected assignment, a raised query) is not a
+   * candidate no matter how many arrive.
+   */
+  collapse?: {
+    /**
+     * How long after the first of a burst later ones still merge into it. Long enough to cover
+     * one operator action or one sweep; short enough that two unrelated events an hour apart
+     * stay two notifications.
+     */
+    windowSeconds: number;
+    /** Summary title. `${count}` is the number of merged events, including the first. */
+    title: string;
+    /** Summary body. `${count}` available; other placeholders come from the FIRST event. */
+    body: string;
+    /**
+     * Where the merged row points. Defaults to the type's own `link`, which is usually wrong
+     * for a summary — it names one record out of several — so give a list route.
+     */
+    link?: string;
+  };
 }
 
 const OPS = ['OPERATIONS_MANAGER', 'OPERATIONS_EXECUTIVE'];
@@ -77,6 +112,53 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     body: 'You have been offered ${branchName} on ${scheduledDate}. Please accept or decline.',
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
+    /**
+     * Bulk assign offers one assayer every ticked branch — as many as forty — as that many
+     * separate POSTs. Each was its own push, so the assayer's phone buzzed forty times for one
+     * operator action, and the fortieth told them nothing the first had not. The summary sends
+     * them to the list, where they can work through the offers properly.
+     *
+     * Short window: these are individual offers a person must act on, so two genuinely separate
+     * offers half an hour apart must stay two notifications.
+     */
+    collapse: {
+      windowSeconds: 180,
+      title: '${count} new assignments offered',
+      body: 'You have ${count} new assignments waiting. Open them to accept or decline.',
+      link: '/assignments',
+    },
+  },
+  /**
+   * Raised by the phone channel, where the desk confirms the assignment on the assayer's behalf
+   * at the moment it is created (see CreateAssignmentDto.acceptOnBehalf).
+   *
+   * It replaces the ASSIGNMENT_OFFERED + ASSIGNMENT_ACCEPTED pair rather than joining them,
+   * because on this path both would be untrue: the offer would ask the assayer to "accept or
+   * decline" work already committed, and the acceptance would tell the rest of ops that the
+   * assayer accepted it in the app when a colleague did it by phone.
+   *
+   * Deliberately reaches the assayer AND ops from one definition: the assayer needs it on push
+   * (this is the only signal the job exists — nothing will appear in their offers list to
+   * accept), and ops needs the desk's commitment on the record where an in-app acceptance
+   * would have been.
+   */
+  ASSIGNMENT_DESK_CONFIRMED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: OPS,
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Assignment confirmed',
+    body: '${branchName} on ${scheduledDate} is confirmed for ${assayerName} at ₹${agreedFee}, agreed by phone. No acceptance needed.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+    // Reached by the same bulk-assign path as ASSIGNMENT_OFFERED, so it bursts the same way.
+    collapse: {
+      windowSeconds: 180,
+      title: '${count} assignments confirmed',
+      body: '${count} assignments are confirmed for ${assayerName}, agreed by phone. No acceptance needed.',
+      link: '/assignments',
+    },
   },
   ASSIGNMENT_ACCEPTED: {
     category: NotificationCategory.ASSIGNMENT,
@@ -533,6 +615,97 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     body: '${assayerName} is now active and available for assignment.',
     link: '/hr',
     skipActor: true,
+    // The measured case: one bulk lifecycle transition activating 25 assayers wrote 25 of these
+    // into every operations user's bell, 50 rows in a single minute. Who exactly was activated
+    // is a roster question, and the roster is one click away.
+    collapse: {
+      windowSeconds: 900,
+      title: '${count} new assayers onboarded',
+      body: '${count} assayers are now active and available for assignment.',
+      link: '/hr',
+    },
+  },
+
+  // ── Feedback & collaboration channel ────────────────────────────────────────
+  // The two-way channel between every user and the product/support team. The team
+  // (PRODUCT_SUPPORT + admins) hears about new items and reporter replies; the
+  // reporter hears about team replies and status changes. RECORD_OWNER carries a
+  // user reporter/assignee, ASSIGNED_ASSAYER carries a field-assayer reporter —
+  // only the id that was set on the emit resolves.
+  FEEDBACK_SUBMITTED: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.NORMAL,
+    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    channels: IN_APP,
+    title: 'New feedback',
+    body: '${reporterName} reported a ${category}: "${title}".',
+    link: '/feedback?id=${threadId}',
+    skipActor: true,
+  },
+  FEEDBACK_TEAM_REPLY: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
+    channels: IN_APP,
+    title: 'Reply on your feedback',
+    body: 'The product team replied on "${title}".',
+    link: '/feedback?id=${threadId}',
+    skipActor: true,
+  },
+  FEEDBACK_REPORTER_REPLY: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.NORMAL,
+    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'New reply on feedback',
+    body: '${reporterName} replied on "${title}".',
+    link: '/feedback?id=${threadId}',
+    skipActor: true,
+  },
+  FEEDBACK_STATUS_CHANGED: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
+    channels: IN_APP,
+    title: 'Feedback updated',
+    body: 'Your feedback "${title}" is now ${status}.',
+    link: '/feedback?id=${threadId}',
+    skipActor: true,
+  },
+  FEEDBACK_ASSIGNED: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Feedback assigned to you',
+    body: 'You now own "${title}" (${category}).',
+    link: '/feedback?id=${threadId}',
+    skipActor: true,
+  },
+  // Response-time SLA breaches, raised by the 15-minute scanner (FeedbackEscalationService).
+  // One per breached item per day; the team must unstick these.
+  FEEDBACK_SLA_FIRST_RESPONSE_BREACH: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.HIGH,
+    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    channels: IN_APP,
+    title: 'Feedback awaiting first response',
+    body: '"${title}" has waited ${hours}h with no reply from the team.',
+    link: '/feedback?id=${threadId}',
+  },
+  FEEDBACK_SLA_RESOLUTION_BREACH: {
+    category: NotificationCategory.FEEDBACK,
+    priority: NotificationPriority.HIGH,
+    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Feedback past its resolution SLA',
+    body: '${severity} item "${title}" has been open ${hours}h, past its resolution target.',
+    link: '/feedback?id=${threadId}',
   },
 };
 

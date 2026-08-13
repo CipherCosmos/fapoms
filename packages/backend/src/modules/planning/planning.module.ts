@@ -49,6 +49,7 @@ import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import {
+  DeployabilityFilter,
   AvailabilityFilter,
   ConsecutiveBranchAuditFilter,
   ClientRestrictionFilter,
@@ -132,6 +133,7 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
     { provide: 'AssayerAvailabilityProvider', useClass: PlanningAntiCorruptionLayer },
     { provide: 'WorkloadProvider', useClass: PlanningAntiCorruptionLayer },
     { provide: 'OperationsControlServiceInterface', useClass: OperationsPlanningService },
+    DeployabilityFilter,
     AvailabilityFilter,
     ConsecutiveBranchAuditFilter,
     ClientRestrictionFilter,
@@ -156,7 +158,7 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
     RiskScoreCalculator,
     RecommendationEngine,
   ],
-  exports: [PlanningService, PlanningOrchestratorService, ProjectPlanningService, OptimizationEngine, ScenarioPlanningService, ClusterManager, CoveragePlanningEngine, OperationsPlanningService, 'OperationsControlServiceInterface', OperationsControlCenterService, OperationsExecutionService, FieldOperationsService, RecommendationEngine, ConstraintEvaluator, DayPlannerService],
+  exports: [PlanningService, PlanningOrchestratorService, ProjectPlanningService, OptimizationEngine, ScenarioPlanningService, ClusterManager, CoveragePlanningEngine, OperationsPlanningService, 'OperationsControlServiceInterface', OperationsControlCenterService, OperationsExecutionService, FieldOperationsService, RecommendationEngine, ConstraintEvaluator, DayPlannerService, CommandCenterService],
 })
 export class PlanningModule {}
 

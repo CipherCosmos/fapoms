@@ -16,9 +16,11 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
+import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
+import { resolveCoordinates, needsBetterFix, GeoFields } from '../geo/coordinate-resolution';
 
 /**
  * Resolves an assayer's home coordinates using ONLY the shared Google geocoder.
@@ -122,6 +124,32 @@ function mapLifecycleToOperationalStatus(lifecycle: string): string {
   return 'INACTIVE';
 }
 
+/**
+ * What a roster upload actually did.
+ *
+ * A bare `{ importedCount, errors }` could not distinguish the outcomes an operator needs to tell
+ * apart: 25 new people vs 25 rows that overwrote the existing roster, and "imported" vs "imported
+ * but unreachable". `sheetName` matters because the importer now searches every sheet in the
+ * workbook — the operator should be able to see it read the one they meant.
+ */
+export interface AssayerUploadReport {
+  /** Rows that produced a record, whether created or updated. */
+  importedCount: number;
+  created: number;
+  updated: number;
+  /** Data rows found in the chosen sheet, so `totalRows - importedCount` is what did not land. */
+  totalRows: number;
+  /** Which sheet of the workbook was read. */
+  sheetName: string;
+  /**
+   * Assayer codes whose *record* has no phone number after the import — reachable in the app,
+   * not by phone. Read from the saved record rather than the sheet, so re-importing a
+   * phone-less roster over people who already have numbers does not report them as unreachable.
+   */
+  needingPhone: string[];
+  errors: string[];
+}
+
 export interface CreateAssayerDto {
   assayerCode: string;
   employeeId?: string;
@@ -129,12 +157,18 @@ export interface CreateAssayerDto {
   firstName: string;
   lastName: string;
   email?: string;
-  phone: string;
+  /**
+   * Optional on admission. Rosters arrive without a phone column; a missing number blocks ringing
+   * this assayer (Call & Assign, phone-channel dispatch), not recording them. See the column
+   * comment on AssayerEntity.phone for why this is not the login identifier it was taken to be.
+   */
+  phone?: string;
   alternatePhone?: string;
-  address: string;
+  address?: string;
+  /** The one geography field that stays mandatory: it drives region, zone and holidays. */
   state: string;
-  district: string;
-  city: string;
+  district?: string;
+  city?: string;
   pincode?: string;
   latitude?: number;
   longitude?: number;
@@ -466,40 +500,54 @@ export class AssayerService implements OnModuleInit {
 
     await assertAddressConsistent(dto);
 
-    let lat = dto.latitude;
-    let lng = dto.longitude;
-    if (!lat || !lng) {
-      const coords = await geocodeAddress(dto.address, dto.city, dto.district, dto.state, dto.pincode);
-      // Left null when nothing resolves. This used to fall back to a hardcoded
-      // Mumbai coordinate, which is worse than no location at all: the assayer
-      // appears on the map somewhere they have never been, and every distance
-      // filter and travel-cost calculation silently uses that fiction. An unknown
-      // location is visible and fixable; a plausible wrong one is neither.
-      lat = coords?.lat ?? undefined;
-      lng = coords?.lng ?? undefined;
-      if (coords && coords.accuracyMeters > 0) {
-        this.logger.log(
-          `Assayer ${dto.assayerCode}: pinned at ±${coords.accuracyMeters}m ` +
-          `(${lat}, ${lng}) from "${dto.address}"`,
-        );
-      }
-      if (!coords) {
-        this.logger.warn(
-          `Assayer ${dto.assayerCode}: could not resolve coordinates from "${dto.address}" ` +
-          `(${dto.city}, ${dto.district}, ${dto.state}). Saved without a location — ` +
-          `they will not appear on the map and distance-based matching will skip them.`,
-        );
-      }
+    /**
+     * Resolved through the shared chain, so an assayer's home is placed by the same rules — and
+     * carries the same precision record — as a branch. That symmetry is the point: the
+     * conflict-of-interest floor and the serviceability radius are distances *between* the two,
+     * and a comparison between a 10 m pin and a 100 km centroid is not a distance.
+     *
+     * Never falls back to a hardcoded coordinate. That is worse than no location: the assayer
+     * appears on the map somewhere they have never been, and every distance filter silently
+     * uses the fiction. An unknown location is visible and fixable; a plausible wrong one is
+     * neither — which is exactly what `geoAccuracyMeters` now makes legible.
+     */
+    const geo = await resolveCoordinates({
+      address: dto.address,
+      city: dto.city,
+      district: dto.district,
+      state: dto.state,
+      pincode: dto.pincode,
+      suppliedLat: dto.latitude,
+      suppliedLng: dto.longitude,
+      suppliedIsManual: dto.latitude != null && dto.longitude != null,
+    });
+    if (geo && needsBetterFix(geo.geoSource, geo.geoAccuracyMeters)) {
+      this.logger.warn(
+        `Assayer ${dto.assayerCode}: could only place them to ±${geo.geoAccuracyMeters}m ` +
+        `(${geo.geoSource}) from "${dto.address}" (${dto.city}, ${dto.district}, ${dto.state}). ` +
+        `Distance-based matching will be unreliable until someone pins them precisely.`,
+      );
     }
-    const location = { type: 'Point', coordinates: [lng, lat] };
 
+    const geoFields: Partial<GeoFields> = geo ?? {};
     const assayer = this.assayerRepository.create({
       ...dto,
+      ...geoFields,
+      // Address, city and district became optional on admission but remain NOT NULL columns, and
+      // spreading an absent one would insert NULL and fail. Empty is the same thing the branch
+      // importer stores for an unknown field, and `missingCriticalFields` reads blank as missing —
+      // so the gap still surfaces on the record instead of being hidden behind a constraint error.
+      address: dto.address ?? '',
+      city: dto.city ?? '',
+      district: dto.district ?? '',
+      phone: dto.phone || null,
+      // Canonicalised from the state, exactly as branches are. Left to the caller this column
+      // arrives null (the seed never sets it) or as a free-text zone name from an Excel import,
+      // and either way `region IN ('WEST')` matches nobody — a region-scoped operator would
+      // open the map, the roster and the capacity tile and find their workforce empty.
+      region: resolveRegion(dto.region) ?? resolveRegion(dto.state) ?? null,
       joiningDate: dto.joiningDate ? new Date(dto.joiningDate) : null,
       displayName: `${dto.firstName} ${dto.lastName}`,
-      latitude: lat,
-      longitude: lng,
-      location,
       lifecycleStatus: AssayerLifecycleStatus.INVITED,
       status: AssayerStatus.INACTIVE,
       organizationId: organizationId ?? null,
@@ -544,12 +592,16 @@ export class AssayerService implements OnModuleInit {
     if (dto.firstName || dto.lastName) {
       assayer.displayName = `${dto.firstName ?? assayer.firstName} ${dto.lastName ?? assayer.lastName}`;
     }
+    // Region follows the state unless named explicitly, and is canonicalised either way —
+    // the same rule create() applies, so an edit cannot un-canonicalise the column.
+    if (dto.region !== undefined) {
+      assayer.region = resolveRegion(dto.region) ?? resolveRegion(assayer.state) ?? null;
+    } else if (dto.state !== undefined) {
+      assayer.region = resolveRegion(dto.state) ?? assayer.region;
+    }
     if (dto.joiningDate) assayer.joiningDate = new Date(dto.joiningDate);
     if (dto.exitDate) assayer.exitDate = new Date(dto.exitDate);
     if (dto.terminationDate) assayer.terminationDate = new Date(dto.terminationDate);
-    let lat = dto.latitude !== undefined ? dto.latitude : assayer.latitude;
-    let lng = dto.longitude !== undefined ? dto.longitude : assayer.longitude;
-
     const addressChanged = dto.address !== undefined && dto.address !== orig.address;
     const cityChanged = dto.city !== undefined && dto.city !== orig.city;
     const districtChanged = dto.district !== undefined && dto.district !== orig.district;
@@ -565,28 +617,30 @@ export class AssayerService implements OnModuleInit {
       });
     }
 
-    if ((addressChanged || cityChanged || districtChanged || stateChanged) && dto.latitude === undefined && dto.longitude === undefined) {
-      const coords = await geocodeAddress(
-        dto.address ?? orig.address,
-        dto.city ?? orig.city,
-        dto.district ?? orig.district,
-        dto.state ?? orig.state,
-        dto.pincode ?? orig.pincode,
+    const coordsSupplied = dto.latitude !== undefined && dto.longitude !== undefined;
+    if (addressChanged || cityChanged || districtChanged || stateChanged || coordsSupplied) {
+      // Returns null when this assayer's home was pinned by hand — see resolveCoordinates.
+      const geo = await resolveCoordinates(
+        {
+          address: dto.address ?? orig.address,
+          city: dto.city ?? orig.city,
+          district: dto.district ?? orig.district,
+          state: dto.state ?? orig.state,
+          pincode: dto.pincode ?? orig.pincode,
+          suppliedLat: dto.latitude,
+          suppliedLng: dto.longitude,
+          suppliedIsManual: coordsSupplied,
+        },
+        assayer,
       );
-      if (coords) {
-        lat = coords.lat;
-        lng = coords.lng;
-        if (coords.accuracyMeters > 0) {
-          this.logger.log(`Assayer ${assayer.assayerCode}: re-pinned at ±${coords.accuracyMeters}m`);
-        }
+      if (geo) {
+        Object.assign(assayer, geo);
+        this.logger.log(
+          `Assayer ${assayer.assayerCode}: re-pinned at ±${geo.geoAccuracyMeters}m (${geo.geoSource})`,
+        );
       }
     }
 
-    if (lat && lng) {
-      assayer.latitude = lat;
-      assayer.longitude = lng;
-      (assayer as any).location = { type: 'Point', coordinates: [lng, lat] };
-    }
     assayer.updatedBy = userId;
     const saved = await this.assayerRepository.save(assayer);
     await this.syncWorkforceAttributes(saved.id, dto, userId);
@@ -648,15 +702,100 @@ export class AssayerService implements OnModuleInit {
    * Turns live sharing on/off for an assayer. Off by default; turning it off
    * keeps any last live coordinate but the engine no longer uses it.
    */
-  async setLiveTracking(id: string, enabled: boolean, userId?: string): Promise<AssayerEntity> {
-    await this.findOne(id); // existence check
+  /**
+   * Assignment states in which an assayer is actively holding work: they have committed to a job
+   * and have not finished it. COMPLETED is excluded on purpose — the obligation ends with the job.
+   */
+  private static readonly HOLDS_ACTIVE_WORK: AssignmentStatus[] = [
+    AssignmentStatus.ACCEPTED,
+    AssignmentStatus.CHECKED_IN,
+    AssignmentStatus.IN_PROGRESS,
+  ];
+
+  /** Does this assayer currently hold work they have accepted and not yet completed? */
+  async hasActiveAssignment(assayerId: string): Promise<boolean> {
+    const [row] = await this.dataSource.query(
+      `SELECT 1 FROM assignments
+        WHERE assayer_id = $1 AND is_active = true AND status::text = ANY($2)
+        LIMIT 1`,
+      [assayerId, AssayerService.HOLDS_ACTIVE_WORK.map(String)],
+    );
+    return Boolean(row);
+  }
+
+  /**
+   * Turn live sharing on or off.
+   *
+   * **Sharing cannot be switched off while the assayer holds accepted work.** The movement trail is
+   * what a travel allowance is checked against, and a control someone can simply disable for the
+   * journey they are about to claim for is not a control at all.
+   *
+   * The obligation is deliberately scoped to the job and no further. Between assignments — evenings,
+   * days off, leave — an assayer turns it off like any other setting, and nothing here follows them
+   * around. That boundary is the difference between verifying work and surveilling a person, and it
+   * is why this checks for active work rather than simply pinning the flag on.
+   *
+   * `actorIsStaff` bypasses the restriction and exists for system-initiated changes — today only
+   * `enableLiveTrackingForActiveWork`, which turns sharing *on*. The HTTP route is self-only (it
+   * refuses when the caller is not the assayer), so there is currently no way for anyone else to
+   * switch someone's sharing off; if that is ever wanted for a lost handset, this is the seam.
+   * Every change is audited either way.
+   */
+  async setLiveTracking(
+    id: string,
+    enabled: boolean,
+    userId?: string,
+    opts: { actorIsStaff?: boolean } = {},
+  ): Promise<AssayerEntity> {
+    const before = await this.findOne(id); // existence check
+
+    if (!enabled && !opts.actorIsStaff && (await this.hasActiveAssignment(id))) {
+      throw new BadRequestException(
+        'Location sharing has to stay on while you are on an assignment — it is what confirms your ' +
+          'travel when you claim for it. You can switch it off once the job is completed.',
+      );
+    }
+
     // Same reasoning as updateLiveLocation: touch only the column being changed.
     await this.assayerRepository.update(id, {
       isLiveEnabled: !!enabled,
       updatedBy: userId ?? id,
     });
 
+    if (before.isLiveEnabled !== !!enabled) {
+      // Recorded because it changes what the movement trail can later establish: a window with
+      // sharing off is a gap somebody chose, and a dispute about a travel claim needs to be able
+      // to tell that apart from a handset that simply lost signal.
+      await this.recordActivity(
+        id,
+        enabled ? 'LOCATION_SHARING_ENABLED' : 'LOCATION_SHARING_DISABLED',
+        String(before.isLiveEnabled),
+        String(!!enabled),
+        userId ?? id,
+        enabled ? 'Live location sharing turned on' : 'Live location sharing turned off',
+      );
+    }
+
     return this.findOne(id);
+  }
+
+  /**
+   * Turn sharing on because the assayer has just taken on work.
+   *
+   * Called when an offer is accepted. Best-effort and never throws: failing to enable tracking must
+   * not be able to fail an acceptance — losing the assignment would be a far worse outcome than a
+   * trail that starts late, and the gap is visible in the assessment either way.
+   */
+  async enableLiveTrackingForActiveWork(assayerId: string, userId?: string): Promise<void> {
+    try {
+      const assayer = await this.assayerRepository.findOne({ where: { id: assayerId } });
+      if (!assayer || assayer.isLiveEnabled) return;
+      await this.setLiveTracking(assayerId, true, userId, { actorIsStaff: true });
+    } catch (err) {
+      this.logger.warn(
+        `Could not enable location sharing for assayer ${assayerId} on acceptance: ${(err as Error)?.message}`,
+      );
+    }
   }
 
   async remove(id: string, userId: string): Promise<void> {
@@ -686,6 +825,20 @@ export class AssayerService implements OnModuleInit {
     // Deactivate active assignments for this assayer
     await this.dataSource.query(
       `UPDATE assignments SET is_active = false, cancel_reason = 'Assayer profile soft deleted', updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
+    /**
+     * And the scheduled visits those assignments carry.
+     *
+     * The cascade stopped at the assignment, so a deleted assayer's schedules stayed active —
+     * two of them in this database, both ACCEPTED, both for a profile that no longer exists.
+     * A schedule is what the calendar, the day plan and the dispatch view read, so the effect
+     * is a deleted person still holding dated slots that operations plans around.
+     */
+    await this.dataSource.query(
+      `UPDATE schedules SET is_active = false, updated_by = $1
+        WHERE is_active = true AND assignment_id IN (SELECT id FROM assignments WHERE assayer_id = $2)`,
       [userId, id],
     );
 
@@ -1182,70 +1335,86 @@ export class AssayerService implements OnModuleInit {
     await this.assayerRepository.update(assayerId, { averageRating: avg });
   }
 
+  /**
+   * Recompute the derived counters cached on the assayer row.
+   *
+   * Nine independent reads and two writes. They used to run strictly one after another, each
+   * waiting on the previous for no reason — none of them takes an input from another. On the
+   * critical path of every assignment transition (accept, reject, cancel, complete), that was a
+   * chain of round-trips the operator sat through before their click returned, and it grows with
+   * the assayer's history rather than staying constant.
+   *
+   * Now issued together. Nothing else about the computation changes; the queries and the values
+   * they produce are identical.
+   */
   async updateAssayerStats(assayerId: string): Promise<void> {
     const mgr = this.assayerRepository.manager;
-
-    const total = await mgr.count('assignments', { where: { assayerId, isActive: true } });
 
     // NOTE: 'AUDIT_COMPLETED'/'VALIDATION_COMPLETED'/'CLOSED' are ProjectBranchStatus values,
     // not AssignmentStatus values — they belong only in the pb.status clause. Putting them in
     // a.status IN (...) makes Postgres reject the whole query (invalid enum value for
     // assignments_status_enum), which silently no-ops every call via the caller's catch block.
-    const completedResult = await mgr.query(
-      `SELECT COUNT(*) as cnt FROM assignments a
-       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
-       WHERE a.assayer_id = $1 AND a.is_active = true
-       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`,
-      [assayerId],
-    );
+    const [
+      total,
+      completedResult,
+      cancelled,
+      onTimeResult,
+      finRes,
+      totalEarnedFromAssignments,
+      lastAssignment,
+    ] = await Promise.all([
+      mgr.count('assignments', { where: { assayerId, isActive: true } }),
+      mgr.query(
+        `SELECT COUNT(*) as cnt FROM assignments a
+         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+         WHERE a.assayer_id = $1 AND a.is_active = true
+         AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))`,
+        [assayerId],
+      ),
+      mgr.count('assignments', {
+        where: { assayerId, status: AssignmentStatus.CANCELLED, isActive: true },
+      }),
+      mgr.query(
+        `SELECT COUNT(*) as cnt FROM assignments a
+         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+         WHERE a.assayer_id = $1 AND a.is_active = true
+         AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
+         AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`,
+        [assayerId],
+      ),
+      // Earnings come from the billing engine's payables — the record finance
+      // actually pays against — rather than being re-derived from assignment fees.
+      mgr.query(
+        `SELECT 
+           COALESCE(SUM(total_amount), 0)                                     AS total_earned,
+           COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
+           COALESCE(SUM(paid_amount), 0)                                      AS paid,
+           COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
+         FROM assayer_payables
+         WHERE assayer_id = $1 AND is_active = true
+           AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
+        [assayerId],
+      ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]),
+      // The fallback for an assayer with no payables raised yet. Computed unconditionally so it
+      // can share the round-trip; which of the two is used is decided below, as before.
+      mgr.query(
+        `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
+           FROM assignments a
+          WHERE a.assayer_id = $1 AND a.is_active = true
+            AND a.status IN ('ACCEPTED', 'COMPLETED')`,
+        [assayerId],
+      ).then((r: any) => Number(r[0]?.total ?? 0)).catch(() => 0),
+      mgr.query(
+        `SELECT updated_at FROM assignments a
+         WHERE a.assayer_id = $1 AND a.is_active = true
+         ORDER BY a.updated_at DESC LIMIT 1`,
+        [assayerId],
+      ),
+    ]);
+
     const completed = Number(completedResult[0]?.cnt ?? 0);
-
-    const cancelled = await mgr.count('assignments', {
-      where: { assayerId, status: AssignmentStatus.CANCELLED, isActive: true },
-    });
-
-    const onTimeResult = await mgr.query(
-      `SELECT COUNT(*) as cnt FROM assignments a
-       LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
-       WHERE a.assayer_id = $1 AND a.is_active = true
-       AND (a.status = 'COMPLETED' OR pb.status IN ('AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'))
-       AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`,
-      [assayerId],
-    );
-
-    // Earnings come from the billing engine's payables — the record finance
-    // actually pays against — rather than being re-derived from assignment fees.
-    // Summing earnings & running balance from authoritative payables table
-    const finRes = await mgr.query(
-      `SELECT 
-         COALESCE(SUM(total_amount), 0)                                     AS total_earned,
-         COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
-         COALESCE(SUM(paid_amount), 0)                                      AS paid,
-         COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
-       FROM assayer_payables
-       WHERE assayer_id = $1 AND is_active = true
-         AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
-      [assayerId],
-    ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
-
     const totalEarnedFromPayables = Number(finRes[0]?.total_earned ?? 0);
-    const totalEarnedFromAssignments = await mgr.query(
-      `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
-         FROM assignments a
-        WHERE a.assayer_id = $1 AND a.is_active = true
-          AND a.status IN ('ACCEPTED', 'COMPLETED')`,
-      [assayerId],
-    ).then(r => Number(r[0]?.total ?? 0)).catch(() => 0);
-
     const realTotalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
-    const realRunningBalance = totalEarnedFromPayables > 0 ? Number(finRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
-
-    const lastAssignment = await mgr.query(
-      `SELECT updated_at FROM assignments a
-       WHERE a.assayer_id = $1 AND a.is_active = true
-       ORDER BY a.updated_at DESC LIMIT 1`,
-      [assayerId],
-    );
 
     await this.assayerRepository.update(assayerId, {
       totalAssignments: total,
@@ -1256,6 +1425,23 @@ export class AssayerService implements OnModuleInit {
       lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
     });
     await this.recomputeAverageRating(assayerId);
+  }
+
+  /**
+   * Refresh the cached counters without making the caller wait.
+   *
+   * These are derived values — assignment counts, earnings, rating — read by roster listings and
+   * reports, never by the response of the action that changes them. Awaiting the recompute inside
+   * an assignment transition put a fan of queries between the operator's click and its
+   * confirmation, for numbers nobody was about to look at. `getProfile` recomputes on read, so a
+   * momentarily stale counter self-corrects the instant it matters.
+   *
+   * Failures are logged, never propagated: statistics must not be able to fail an acceptance.
+   */
+  scheduleStatsRefresh(assayerId: string): void {
+    void this.updateAssayerStats(assayerId).catch((err) =>
+      this.logger.warn(`Could not refresh cached stats for assayer ${assayerId}: ${err?.message}`),
+    );
   }
 
   async getProfile(assayerId: string): Promise<AssayerEntity> {
@@ -1474,7 +1660,7 @@ export class AssayerService implements OnModuleInit {
    */
   async getRosterCommercialProfiles(onDate: Date = new Date()):
     Promise<Array<{ assayerId: string; profile: AssayerCommercialProfileEntity | null; hasFutureProfile: boolean }>> {
-    const assayers = await this.assayerRepository.find({ select: { id: true } });
+    const assayers = await this.assayerRepository.find({ where: { isActive: true }, select: { id: true } });
     const all = await this.commercialRepository.find({
       where: { isActive: true },
       order: { effectiveStartDate: 'DESC' },
@@ -1651,26 +1837,60 @@ export class AssayerService implements OnModuleInit {
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
-  async uploadFromExcel(fileBuffer: Buffer, userId: string): Promise<{ importedCount: number; errors: string[] }> {
-    const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const rows: any[] = xlsx.utils.sheet_to_json(worksheet);
+  async uploadFromExcel(fileBuffer: Buffer, userId: string): Promise<AssayerUploadReport> {
+    /**
+     * Columns are matched ignoring case, spaces and punctuation — see core/excel/sheet-reader.
+     *
+     * This used to read `row['Assayer Code'] || row['Assayer code']` exactly, so a roster whose
+     * column said `ASSAYER CODE`, `Assayer_Code`, or `Assayer Code ` with a trailing space
+     * failed every single row with "Assayer Code is required" — 72 identical lines about a
+     * column the operator could see in front of them. Passing the required columns also lets
+     * the parser find a header row that is not the first, which is what a client file with a
+     * merged title row above the table looks like.
+     */
+    const sheet = parseSheet(fileBuffer, ['Assayer Code', 'Assayer Name', 'Phone']);
+    const rows = sheet.rows;
 
     const errors: string[] = [];
     let importedCount = 0;
+    let createdCount = 0;
+    let updatedCount = 0;
+    /** Admitted, but not yet reachable by phone — reported so the gap is worked, not discovered. */
+    const needingPhone: string[] = [];
+
+    const CODE_ALIASES = ['Assayer Code', 'Assayer code', 'AssayerCode', 'Code', 'Employee Code', 'Emp Code'];
+
+    /**
+     * If not one row carries a code, the column is missing — not seventy-two bad rows.
+     *
+     * Reported once, naming the headers actually found, because the per-row form of this
+     * message is unactionable: it tells the operator a column they are looking at is absent and
+     * gives them no way to see that the file says something slightly different.
+     */
+    if (rows.length > 0 && !rows.some((r: Record<string, any>) => rowReader(r)(...CODE_ALIASES))) {
+      return {
+        importedCount: 0,
+        created: 0,
+        updated: 0,
+        totalRows: rows.length,
+        sheetName: sheet.sheetName,
+        needingPhone: [],
+        errors: [describeMissingColumn('Assayer Code', CODE_ALIASES, sheet, 'assayer-roster')],
+      };
+    }
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const rowNum = i + 2;
+      // +1 for the header row itself, plus however many rows preceded it.
+      const rowNum = i + sheet.headerRow + 1;
+      const get = rowReader(row);
 
       try {
-        // Accepts both the canonical header and the spelling used in the client's
-        // own roster ("Assayer code"), so a file exported from their system imports
-        // without being hand-edited first.
-        const assayerCode = (row['Assayer Code'] || row['Assayer code'] || '').toString().trim();
+        const assayerCode = get(...CODE_ALIASES);
         if (!assayerCode) {
-          errors.push(`Row ${rowNum}: Assayer Code is required`);
+          // A genuinely blank trailing row, not a header problem — that was ruled out above.
+          if (Object.values(row).every((v) => v === null || v === undefined || String(v).trim() === '')) continue;
+          errors.push(`Row ${rowNum}: no assayer code in this row`);
           continue;
         }
 
@@ -1678,9 +1898,9 @@ export class AssayerService implements OnModuleInit {
         // separately. Split on whitespace, treating the final token as the surname
         // and everything before it as the given name, so "R Jeganathan" and
         // "Shinil T" both resolve sensibly.
-        let firstName = (row['First Name'] || '').toString().trim();
-        let lastName = (row['Last Name'] || '').toString().trim();
-        const combinedName = (row['Assayer Name'] || row['Name'] || '').toString().trim();
+        let firstName = get('First Name', 'FirstName', 'Given Name');
+        let lastName = get('Last Name', 'LastName', 'Surname');
+        const combinedName = get('Assayer Name', 'Name', 'Full Name', 'Employee Name');
         if ((!firstName || !lastName) && combinedName) {
           const parts = combinedName.split(/\s+/).filter(Boolean);
           if (parts.length === 1) {
@@ -1697,11 +1917,26 @@ export class AssayerService implements OnModuleInit {
         }
         if (!lastName) lastName = firstName;
 
-        // Phone is the assayer's login identifier and the channel dispatch
-        // notifications go to, so a record without one cannot actually be used.
-        const phone = (row['Phone'] || row['Mobile'] || row['Contact Number'] || '').toString().trim();
-        if (!phone) {
-          errors.push(`Row ${rowNum} (${assayerCode}): Phone is required — it is the login identifier and how dispatch notifications reach this assayer`);
+        /**
+         * A missing phone is a gap in the record, not a reason to refuse it.
+         *
+         * This used to reject the row. The client rosters this importer is actually fed have no
+         * phone column at all — seven columns: name, code, residence address, location, district,
+         * state, zone — so a real roster imported nobody, and the only way past it was for an
+         * operator to invent numbers into a payroll-adjacent record.
+         *
+         * The record is admitted without one and counted as incomplete, which is reported back
+         * and shown on the HR record as "Phone — blocks calling and dispatch". The assayer opens
+         * at INVITED and the recommendation engine will not deploy them until ACTIVE, so an
+         * unreachable person cannot quietly end up on a plan.
+         */
+        const phone = get('Phone', 'Mobile', 'Contact Number', 'Mobile Number', 'Phone Number', 'Contact');
+
+        // State drives region, zone and the public-holiday calendar, so it is the one field an
+        // assayer cannot be planned without — the same line the branch importer draws.
+        const state = get('State');
+        if (!state) {
+          errors.push(`Row ${rowNum} (${assayerCode}): no State — it sets the region, zone and holiday calendar this assayer is planned against`);
           continue;
         }
 
@@ -1709,57 +1944,56 @@ export class AssayerService implements OnModuleInit {
           assayerCode,
           firstName,
           lastName,
-          displayName: (row['Display Name'] || '').toString().trim() || `${firstName} ${lastName}`,
-          email: (row['Email'] || '').toString().trim() || undefined,
-          phone,
-          alternatePhone: (row['Alternate Phone'] || '').toString().trim() || undefined,
-          address: (row['Address'] || row['Residence Address'] || '').toString().trim(),
-          state: (row['State'] || '').toString().trim(),
-          district: (row['District'] || '').toString().trim(),
+          displayName: get('Display Name') || `${firstName} ${lastName}`,
+          email: get('Email') || undefined,
+          phone: phone || undefined,
+          alternatePhone: get('Alternate Phone') || undefined,
+          address: get('Address', 'Residence Address'),
+          state,
+          district: get('District'),
           // Rosters name the town/locality "Location"; it maps to city.
-          city: (row['City'] || row['Location'] || '').toString().trim(),
+          city: get('City', 'Location'),
           // Rosters rarely carry a separate pincode column — it is embedded in the
           // residence address, so recover it rather than dropping it.
-          pincode: (row['Pincode'] || '').toString().trim()
-            || (String(row['Residence Address'] || '').match(/\b\d{6}\b/)?.[0] ?? undefined),
+          pincode: get('Pincode')
+            || (get('Residence Address').match(/\b\d{6}\b/)?.[0] ?? undefined),
           // Zone is the operating region on a roster. Normalised because the same
           // zone appears with inconsistent casing ("North" vs "north"), which would
           // otherwise create two distinct regions.
-          region: ((row['Region'] || row['Zone'] || '').toString().trim() || undefined)
-            && (row['Region'] || row['Zone']).toString().trim().replace(/\b\w/g, (c: string) => c.toUpperCase()),
-          employeeId: (row['Employee ID'] || '').toString().trim() || undefined,
-          employeeCode: (row['Employee Code'] || '').toString().trim() || undefined,
-          employmentType: (row['Employment Type'] || '').toString().trim() || undefined,
-          department: (row['Department'] || '').toString().trim() || undefined,
-          joiningDate: (row['Joining Date'] || '').toString().trim() || undefined,
-          panNumber: (row['PAN Number'] || '').toString().trim() || undefined,
-          bankAccountNumber: (row['Bank Account Number'] || '').toString().trim() || undefined,
-          ifscCode: (row['IFSC Code'] || '').toString().trim() || undefined,
-          experienceYears: parseInt(row['Experience (Years)'], 10) || undefined,
-          performanceRating: parseFloat(row['Performance Rating']) || undefined,
-          maxDailyWorkload: parseInt(row['Max Daily Workload'], 10) || undefined,
-          maxWeeklyWorkload: parseInt(row['Max Weekly Workload'], 10) || undefined,
-          emergencyContactName: (row['Emergency Contact Name'] || '').toString().trim() || undefined,
-          emergencyContactPhone: (row['Emergency Contact Phone'] || '').toString().trim() || undefined,
-          emergencyContactRelation: (row['Emergency Contact Relation'] || '').toString().trim() || undefined,
+          region: get('Region', 'Zone').replace(/\b\w/g, (c: string) => c.toUpperCase()) || undefined,
+          employeeId: get('Employee ID') || undefined,
+          employeeCode: get('Employee Code') || undefined,
+          employmentType: get('Employment Type') || undefined,
+          department: get('Department') || undefined,
+          joiningDate: get('Joining Date') || undefined,
+          panNumber: get('PAN Number') || undefined,
+          bankAccountNumber: get('Bank Account Number') || undefined,
+          ifscCode: get('IFSC Code') || undefined,
+          experienceYears: parseInt(get('Experience (Years)'), 10) || undefined,
+          performanceRating: parseFloat(get('Performance Rating')) || undefined,
+          maxDailyWorkload: parseInt(get('Max Daily Workload'), 10) || undefined,
+          maxWeeklyWorkload: parseInt(get('Max Weekly Workload'), 10) || undefined,
+          emergencyContactName: get('Emergency Contact Name') || undefined,
+          emergencyContactPhone: get('Emergency Contact Phone') || undefined,
+          emergencyContactRelation: get('Emergency Contact Relation') || undefined,
           workingHours: undefined,
         };
 
         // Parse array fields
-        const skills = (row['Skills (comma-separated)'] || row['Skills'] || '').toString().trim();
+        const skills = get('Skills (comma-separated)', 'Skills');
         if (skills) dto.skills = skills.split(',').map((s: string) => s.trim()).filter(Boolean);
 
-        const languages = (row['Languages (comma-separated)'] || row['Languages'] || '').toString().trim();
+        const languages = get('Languages (comma-separated)', 'Languages');
         if (languages) dto.languages = languages.split(',').map((s: string) => s.trim()).filter(Boolean);
 
-        const prefs = (row['Preferred Regions (comma-separated)'] || row['Preferred Regions'] || '').toString().trim();
+        const prefs = get('Preferred Regions (comma-separated)', 'Preferred Regions');
         if (prefs) dto.preferredRegions = prefs.split(',').map((s: string) => s.trim()).filter(Boolean);
 
-        const specializations = (row['Specializations (comma-separated)'] || row['Specializations'] || '').toString().trim();
+        const specializations = get('Specializations (comma-separated)', 'Specializations');
         if (specializations) dto.specializations = specializations.split(',').map((s: string) => s.trim()).filter(Boolean);
 
         // Parse certifications: "Name|YYYY-MM-DD;Name2|YYYY-MM-DD"
-        const certs = (row['Certifications (semicolon-separated: Name|YYYY-MM-DD)'] || row['Certifications'] || '').toString().trim();
+        const certs = get('Certifications (semicolon-separated: Name|YYYY-MM-DD)', 'Certifications');
         if (certs) {
           dto.certifications = certs.split(';').map((c: string) => {
             const [name, expiryDate] = c.split('|').map((p: string) => p.trim());
@@ -1768,8 +2002,8 @@ export class AssayerService implements OnModuleInit {
         }
 
         // Parse working hours
-        const whStart = (row['Working Hours Start'] || '').toString().trim();
-        const whEnd = (row['Working Hours End'] || '').toString().trim();
+        const whStart = get('Working Hours Start');
+        const whEnd = get('Working Hours End');
         if (whStart && whEnd) {
           dto.workingHours = { start: whStart, end: whEnd };
         }
@@ -1779,6 +2013,17 @@ export class AssayerService implements OnModuleInit {
         const saved = existing
           ? await this.update(existing.id, dto, userId)
           : await this.create(dto, userId);
+        if (existing) updatedCount++; else createdCount++;
+
+        /**
+         * Reported from the saved record, not from the spreadsheet cell.
+         *
+         * A roster without a phone column re-imported over people who already have numbers must
+         * not report 25 unreachable assayers — they are reachable, the sheet simply did not carry
+         * the number, and `update` leaves an absent field alone. What the operator needs to act
+         * on is who cannot be rung, which is a fact about the record.
+         */
+        if (!saved.phone || !String(saved.phone).trim()) needingPhone.push(assayerCode);
 
         // A bulk-imported assayer had no password, so every one of them could be
         // created successfully and then never sign in — the import looked like it
@@ -1787,7 +2032,7 @@ export class AssayerService implements OnModuleInit {
         // default) so an imported assayer can actually log in. Never overwrite an
         // existing password: re-importing a roster must not reset live credentials.
         if (!existing) {
-          const supplied = (row['Initial Password'] || row['Password'] || '').toString().trim();
+          const supplied = get('Initial Password', 'Password');
           const initial = supplied || 'assayer123';
           await this.assayerRepository.update(saved.id, {
             passwordHash: await bcrypt.hash(initial, 12),
@@ -1803,12 +2048,12 @@ export class AssayerService implements OnModuleInit {
           return Number.isFinite(n) ? n : undefined;
         };
         const rates = {
-          baseFee: num(row['Base Fee']),
-          dailyRate: num(row['Daily Rate']),
-          hourlyRate: num(row['Hourly Rate']),
-          travelReimbursement: num(row['Travel Reimbursement']),
-          accommodationAllowance: num(row['Accommodation Allowance']),
-          mealAllowance: num(row['Meal Allowance']),
+          baseFee: num(get('Base Fee')),
+          dailyRate: num(get('Daily Rate')),
+          hourlyRate: num(get('Hourly Rate')),
+          travelReimbursement: num(get('Travel Reimbursement')),
+          accommodationAllowance: num(get('Accommodation Allowance')),
+          mealAllowance: num(get('Meal Allowance')),
         };
         if (Object.values(rates).some((v) => v !== undefined)) {
           const activeProfile = await this.commercialRepository.findOne({
@@ -1842,7 +2087,15 @@ export class AssayerService implements OnModuleInit {
       }
     }
 
-    return { importedCount, errors };
+    return {
+      importedCount,
+      created: createdCount,
+      updated: updatedCount,
+      totalRows: rows.length,
+      sheetName: sheet.sheetName,
+      needingPhone,
+      errors,
+    };
   }
 
   /**

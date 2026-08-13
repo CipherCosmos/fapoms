@@ -3,15 +3,31 @@ import { queryClient } from '../queryClient';
 import { connectSocket } from '../services/socket';
 import { queryKeys } from './queryKeys';
 
+/**
+ * The desk views every assignment event has to refresh.
+ *
+ * Kept as one list because the failure was per-screen: `queryKeys.assignments.all` covered the
+ * assignment list and missed the Operations Inbox, which is where negotiations are actually
+ * worked. Naming them together makes "did we refresh the queue too?" a single decision instead of
+ * one that has to be remembered at each of the six event rows below.
+ */
+const DESK_QUEUES = [
+  queryKeys.desk.inbox,
+  queryKeys.desk.inboxRecommendations,
+  queryKeys.desk.assignmentDetail,
+  queryKeys.desk.assignmentFieldIssues,
+  queryKeys.desk.branchHistory,
+];
+
 const EVENT_KEYS: [string, ...any[]][] = [
-  ['assignment:status-changed', queryKeys.assignments.all, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
-  ['assignment:counter-offered', queryKeys.assignments.all, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
-  ['assignment:created', queryKeys.assignments.all, queryKeys.dashboard.metrics, queryKeys.projects.all],
-  ['assignment:fee-updated', queryKeys.assignments.all],
+  ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
+  ['assignment:counter-offered', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
+  ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.metrics, queryKeys.projects.all],
+  ['assignment:fee-updated', queryKeys.assignments.all, ...DESK_QUEUES],
   // An assayer flagged a problem from the field — refresh the Field Issues queue and the
   // assignment views so the flag shows without a manual reload.
-  ['assignment:issue-reported', queryKeys.assignments.fieldIssues, queryKeys.assignments.all, queryKeys.dashboard.all],
-  ['assignment:escalated', queryKeys.assignments.all, queryKeys.dashboard.all],
+  ['assignment:issue-reported', queryKeys.assignments.fieldIssues, queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all],
+  ['assignment:escalated', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all],
   ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
   ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
   ['ProjectCompleted', queryKeys.projects.all, queryKeys.dashboard.all],

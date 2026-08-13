@@ -2,13 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bull';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   EventCategory,
   NotificationChannel,
   NotificationStatus,
 } from '@fapoms/shared';
 import { NotificationEntity } from './notification.entity';
+import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { UserEntity } from '../user/user.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
@@ -66,6 +67,8 @@ export class NotificationDispatchService {
     private readonly notificationRepository: Repository<NotificationEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
+    @InjectRepository(NotificationPreferenceEntity)
+    private readonly preferenceRepository: Repository<NotificationPreferenceEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     @InjectQueue(NOTIFICATION_QUEUE)
@@ -88,6 +91,116 @@ export class NotificationDispatchService {
       .andWhere('u.is_active = true')
       .andWhere('u.status = :status', { status: 'ACTIVE' })
       .getMany();
+  }
+
+  /**
+   * Recipients for whom every channel this notification travels on is switched off.
+   *
+   * Absence of a preference row means opted in — nobody who has never opened the settings screen
+   * is muted by omission. Only an explicit `false` counts, and only when it covers every channel
+   * the type actually uses: muting push on an in-app-only type changes nothing, and muting in-app
+   * on a type that also pushes leaves the push (and the row it is sent from) intact.
+   *
+   * One query for the whole audience rather than one per recipient: a fan-out to every operations
+   * user already resolves N users, and this must not turn that into N round-trips.
+   */
+  private async fullyMutedRecipients(
+    category: string,
+    channels: NotificationChannel[],
+    userIds: string[],
+    assayerIds: string[],
+  ): Promise<{ userIds: Set<string>; assayerIds: Set<string> }> {
+    const empty = { userIds: new Set<string>(), assayerIds: new Set<string>() };
+    if (!userIds.length && !assayerIds.length) return empty;
+
+    const usesInApp = channels.includes(NotificationChannel.IN_APP);
+    const usesPush = channels.includes(NotificationChannel.PUSH);
+
+    const prefs = await this.preferenceRepository.find({
+      where: [
+        ...(userIds.length ? [{ userId: In(userIds), category: category as any }] : []),
+        ...(assayerIds.length ? [{ assayerId: In(assayerIds), category: category as any }] : []),
+      ],
+    }).catch((err: any) => {
+      // Fail open. A preferences lookup that errors must not silence an escalation; the worst
+      // case here is one notification somebody had muted, not a missing one.
+      this.logger.warn(`Could not read notification preferences: ${err?.message}`);
+      return [] as NotificationPreferenceEntity[];
+    });
+
+    const result = { userIds: new Set<string>(), assayerIds: new Set<string>() };
+    for (const pref of prefs) {
+      const silent = (!usesInApp || pref.inApp === false) && (!usesPush || pref.push === false);
+      if (!silent) continue;
+      if (pref.userId) result.userIds.add(pref.userId);
+      if (pref.assayerId) result.assayerIds.add(pref.assayerId);
+    }
+    return result;
+  }
+
+  /**
+   * Fold one event into a recipient's still-open notification of the same type, if there is one.
+   *
+   * "Still open" means unread, not deleted, and created inside the type's collapse window. Unread
+   * is the important half: once somebody has read "New assayer onboarded", the next one is news
+   * again and deserves its own line — merging into a read row would silently resurrect it.
+   *
+   * The surviving row keeps the first event's identity (`entityId`, and the payload the summary
+   * renders from). Its text becomes the summary, its link the summary link, and its count goes
+   * up. Returns true when the event was absorbed.
+   *
+   * Concurrency: bursts arrive from one bulk request in sequence, and a lost update here costs an
+   * extra notification, never a missing one — so this is deliberately a read-then-write rather
+   * than a lock. `collapsed_count` is incremented in SQL so parallel merges still add up.
+   */
+  private async mergeIntoOpenBurst(
+    row: Partial<NotificationEntity>,
+    def: (typeof NOTIFICATION_CATALOG)[string],
+    payload: Record<string, any>,
+  ): Promise<boolean> {
+    const collapse = def.collapse!;
+    const since = new Date(Date.now() - collapse.windowSeconds * 1000);
+
+    try {
+      const open = await this.notificationRepository
+        .createQueryBuilder('n')
+        .where('n.type = :type', { type: row.type })
+        .andWhere(row.userId ? 'n.userId = :rid' : 'n.assayerId = :rid', {
+          rid: row.userId ?? row.assayerId,
+        })
+        .andWhere('n.isRead = false')
+        .andWhere('n.isActive = true')
+        .andWhere('n.createdAt >= :since', { since })
+        .orderBy('n.createdAt', 'DESC')
+        .getOne();
+
+      if (!open) return false;
+
+      const count = (open.collapsedCount ?? 1) + 1;
+      // Rendered from the FIRST event's payload plus the running count: a summary describes the
+      // burst, and naming only the latest of 25 would be arbitrary and misleading.
+      const summaryPayload = { ...(open.payload ?? {}), ...payload, count };
+
+      await this.notificationRepository
+        .createQueryBuilder()
+        .update(NotificationEntity)
+        .set({
+          collapsedCount: () => '"collapsed_count" + 1',
+          title: renderTemplate(collapse.title, summaryPayload),
+          message: renderTemplate(collapse.body, summaryPayload),
+          link: collapse.link
+            ? renderTemplate(collapse.link, summaryPayload)
+            : open.link,
+        })
+        .where('id = :id', { id: open.id })
+        .execute();
+
+      return true;
+    } catch (err: any) {
+      // Fail open: an error here must cost a tidier inbox, never the notification itself.
+      this.logger.warn(`Could not collapse "${row.type}" into an open burst: ${err?.message}`);
+      return false;
+    }
   }
 
   async emit(opts: EmitOptions): Promise<EmitResult> {
@@ -117,6 +230,23 @@ export class NotificationDispatchService {
     if (def.special?.includes('ASSIGNED_ASSAYER') && opts.assayerId) {
       assayerIds.push(opts.assayerId);
     }
+
+    /**
+     * Drop anyone who has muted every channel this type travels on.
+     *
+     * Preferences were half-enforced: the delivery worker honoured `push`, and nothing anywhere
+     * honoured `inApp`. So a user who turned a category off — through a confirmation dialog that
+     * promises "you will stop seeing these in your notification bell entirely" — kept receiving
+     * every one of them. The setting existed, was saved, and did nothing.
+     *
+     * Only a recipient with NO channel left is dropped here. In-app off but push on still needs
+     * the row, because the row is what the push is sent from; that recipient's bell filtering
+     * happens on read (NotificationService.findByUser), which is where "don't show me this"
+     * belongs.
+     */
+    const muted = await this.fullyMutedRecipients(def.category, def.channels, [...userIds], assayerIds);
+    for (const id of muted.userIds) userIds.delete(id);
+    const audienceAssayerIds = assayerIds.filter((id) => !muted.assayerIds.has(id));
 
     const title = renderTemplate(def.title, opts.payload);
     const message = renderTemplate(def.body, opts.payload);
@@ -168,7 +298,7 @@ export class NotificationDispatchService {
         // but the same event re-fired reaches each of them only once.
         dedupeKey: dedupeKey ? `${dedupeKey}:u:${userId}` : null,
       })),
-      ...assayerIds.map((assayerId) => ({
+      ...audienceAssayerIds.map((assayerId) => ({
         ...base,
         userId: null,
         assayerId,
@@ -179,6 +309,35 @@ export class NotificationDispatchService {
     if (!rows.length) {
       this.logger.warn(`"${opts.type}" resolved to zero recipients — check the catalog roles.`);
       return { groupKey, created: 0, suppressed: 0, recipients: { userIds: [], assayerIds: [] } };
+    }
+
+    /**
+     * Merge into a recipient's open notification of this type when one is still inside the
+     * collapse window, instead of adding another line saying the same thing.
+     *
+     * Runs before the insert so a merged event never becomes a row at all — which is what keeps
+     * the push count down too, since pushes are enqueued from inserted rows.
+     */
+    let merged = 0;
+    if (def.collapse) {
+      const remaining: Partial<NotificationEntity>[] = [];
+      for (const row of rows) {
+        const mergedInto = await this.mergeIntoOpenBurst(row, def, opts.payload);
+        if (mergedInto) merged++;
+        else remaining.push(row);
+      }
+      rows.length = 0;
+      rows.push(...remaining);
+
+      if (!rows.length) {
+        // Everything merged: a real outcome, not a no-op, so it is reported as such.
+        return {
+          groupKey,
+          created: 0,
+          suppressed: merged,
+          recipients: { userIds: [...userIds], assayerIds: audienceAssayerIds },
+        };
+      }
     }
 
     // `orIgnore` lets the partial unique index on `dedupe_key` absorb repeats

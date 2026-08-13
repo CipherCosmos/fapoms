@@ -117,6 +117,13 @@ export interface AssayerAssignment {
   // API layer already passed it through, so a cancelled job fell through every status map and
   // rendered as a raw uppercase string — or worse, was offered as the assayer's next job.
   status: 'PENDING' | 'ACCEPTED' | 'CHECKED_IN' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
+  /**
+   * Soft-delete flag from the server. Assignments with `isActive === false` were removed by
+   * the desk and must never be offered, shown as current work, or counted as earnings — even
+   * when a cached copy still carries an open (PENDING/ACCEPTED/CHECKED_IN) status. Absent on
+   * legacy cached rows, which we treat as active.
+   */
+  isActive?: boolean;
   proposedFee: number;
   standardBaseFee?: number;
   agreedBaseFee: number;

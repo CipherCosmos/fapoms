@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { SystemRole } from '@fapoms/shared';
 import {
+  ShieldOff,
   LayoutDashboard,
   FolderKanban,
   GitMerge,
@@ -14,7 +15,7 @@ import {
   Sliders,
   Building2,
   Receipt,
-  UserCog, Inbox, Flag } from 'lucide-react';
+  UserCog, Inbox, Flag, MessageSquare } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { BrandLogo } from './BrandLogo';
@@ -34,6 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       items: [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
         { name: 'Command Room', path: '/executive-map', icon: Map },
+        { name: 'Feedback', path: '/feedback', icon: MessageSquare },
       ],
     },
     {
@@ -64,6 +66,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
         { name: 'Territorial Zones', path: '/zones', icon: Map },
         { name: 'Rule Engine', path: '/rules', icon: Sliders },
+        // Administrators only — filtered by canAccessRoute against route-permissions, same as
+        // every other item here.
+        { name: 'Rule Bypass (Testing)', path: '/admin/rule-bypass', icon: ShieldOff },
         { name: 'User Management', path: '/users', icon: Users },
       ],
     },

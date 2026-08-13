@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame } from 'lucide-react';
+import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
 import { StatusBadge, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
 import { ProjectBranchStatus, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
@@ -11,6 +11,8 @@ import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
+import { useSocketConnection } from '../hooks/useSocketConnection';
+import { useExcelExport } from '../hooks/useExcelExport';
 
 interface Assignment {
   id: string;
@@ -154,6 +156,10 @@ function WorkflowBreadcrumb({ onNavigate }: { onNavigate: (path: string) => void
 
 export const Assignments: React.FC = () => {
   const navigate = useNavigate();
+  // When the realtime socket is up, useSocketInvalidation keeps these queries fresh on every
+  // assignment event, so the 60s poll below is pure redundant load — one endpoint × every open
+  // tab × every user. Poll only as a fallback while the socket is down.
+  const live = useSocketConnection();
   // FINANCE_MANAGER and READ_ONLY_AUDITOR reach this page as viewers, but the backend only lets
   // operations drive the lifecycle — so the write actions are hidden from everyone else rather than
   // offered as buttons that 403 after a confirm dialog.
@@ -278,6 +284,20 @@ export const Assignments: React.FC = () => {
     ? ''
     : `projectBranchStatus=${statusFilter}`;
 
+  // Export mirrors whatever the current view is filtered to (same status/priority axis),
+  // so what lands in the spreadsheet matches the rows on screen.
+  const { download: downloadExcel } = useExcelExport();
+  const handleExport = () => {
+    const params: Record<string, string> = { ...scopeParams };
+    if (queryString) {
+      for (const pair of queryString.split('&')) {
+        const [k, v] = pair.split('=');
+        if (k) params[k] = v;
+      }
+    }
+    void downloadExcel('/reports/assignments', params);
+  };
+
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
 
@@ -336,7 +356,7 @@ export const Assignments: React.FC = () => {
     queryKey: ['assignment-field-issues', scopeKey],
     queryFn: () => api.request<FieldIssue[]>(`/assignments/field-issues?${scopeQuery}`),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: live ? false : 60_000,
   });
   // One row per affected assignment, newest report first, with a ×N badge for repeats — two
   // reports about the same branch are one problem to solve, not two queue entries.
@@ -564,6 +584,13 @@ export const Assignments: React.FC = () => {
           style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
           <RefreshCw size={16} /> Refresh
+        </button>
+        <button
+          onClick={handleExport}
+          className="btn btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)' }}
+        >
+          <FileSpreadsheet size={16} /> Export
         </button>
       </div>
 

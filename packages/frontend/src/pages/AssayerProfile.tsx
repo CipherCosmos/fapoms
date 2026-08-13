@@ -8,6 +8,8 @@ import {
 import { nextAssayerLifecycleStates } from '@fapoms/shared';
 
 import { api } from '../services/api';
+import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
+import { PinCoordinateControl } from '../components/PinCoordinateControl';
 import { connectSocket, getSocket } from '../services/socket';
 import { useCurrentRoles, canManageAssayers } from '../hooks/useCurrentRoles';
 import { EditAssayerModal } from './hr/AssayerForms';
@@ -34,6 +36,10 @@ import { userMessage } from '../services/errors';
  */
 
 interface ProfileData extends Assayer {
+  /** How the home coordinate was obtained — see GeoPrecisionBadge. */
+  geoSource?: string | null;
+  geoAccuracyMeters?: number | null;
+  geoMatchedName?: string | null;
   averageRating: string | number;
   totalEarnings: string | number;
   earningsPaid: number;
@@ -199,7 +205,14 @@ export const AssayerProfile: React.FC = () => {
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Briefcase size={11} /> {p.employmentType ?? '—'}</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Star size={11} /> {p.experienceYears ?? 0} yrs</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><MapPin size={11} /> {[p.city, p.state].filter(Boolean).join(', ') || '—'}</span>
+                {/* The home coordinate is what the conflict-of-interest floor and the
+                    serviceability radius are both measured from, so how precise it is decides
+                    which branches this person can be matched to at all. */}
+                <GeoPrecisionBadge source={p.geoSource} matchedName={p.geoMatchedName} compact />
               </div>
+              {geoNeedsFixing(p.geoSource) && canManage && (
+                <PinCoordinateControl target="assayer" id={p.id} onPinned={() => loadProfile()} />
+              )}
             </div>
           </div>
 

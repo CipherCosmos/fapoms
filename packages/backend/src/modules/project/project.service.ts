@@ -14,41 +14,49 @@ import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ZoneEntity } from '../zone/zone.entity';
 import { ProjectStateMachine, ProjectBranchStateMachine } from './project.state-machine';
-import { BranchService } from '../branch/branch.service';
+import { BranchService, UpdateBranchDto } from '../branch/branch.service';
 import { ProjectQueryService } from './project-query.service';
 import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, resolveRegion } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
+// One implementation of "read a spreadsheet column", shared with the assayer roster upload —
+// the exact-header bug that dropped every row has now been hit by both importers.
+import { parseSheet, rowReader, identifyTemplate } from '../../core/excel/sheet-reader';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 
-/** Geocode a branch address with multi-tier fallback. Never throws — worst case
- *  returns a state/country centroid with source='none'. Callers should check
- *  `result.source` and `result.accuracyMeters` for quality. */
+/**
+ * Geocode a branch address for a bulk import. Never throws — worst case returns a
+ * state/country centroid with source='none'.
+ *
+ * `precise: false` on purpose, and it is the one interesting decision here. The free OSM tiers
+ * are rate-limited by their providers to roughly one lookup per second, so resolving a 400-row
+ * client file precisely would take seven minutes with the HTTP request held open the whole
+ * time. The import therefore takes the fast tiers — pincode and centroid, mostly served from
+ * cache — and the precision backfill upgrades those rows afterwards, out of the request path.
+ * The tier is recorded either way, so nothing pretends a centroid is a location in the meantime.
+ */
 async function getRealCoordinates(
   address: string, name: string, district: string, state: string,
-): Promise<{ lat: number; lng: number; geoSource: string; geoAccuracyMeters: number }> {
+): Promise<{ lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null }> {
   const pinMatch = address.match(/\b\d{6}\b/);
   const result: GeocodeResult = await geocodeIndiaRobust(
     address, name, district, state, pinMatch ? pinMatch[0] : null,
+    { precise: false, name },
   );
 
-  if (result.source !== 'geocoder') {
-    const tag = result.source === 'pincode' ? 'pincode-level'
-      : result.source === 'locality' ? 'district-centroid'
-      : 'state/country-centroid';
-    console.warn(
-      `[Geocoding] Fallback (${tag}) used for "${name}" at "${address}" `
-      + `(District: ${district}, State: ${state}). Accuracy: ~${result.accuracyMeters}m`,
-    );
-  }
-
-  return { lat: result.lat, lng: result.lng, geoSource: result.source, geoAccuracyMeters: result.accuracyMeters };
+  return {
+    lat: result.lat,
+    lng: result.lng,
+    geoSource: result.source,
+    geoAccuracyMeters: Math.round(result.accuracyMeters),
+    geoMatchedName: result.matchedName ?? null,
+  };
 }
 
 function getStateZone(stateName: string): string {
@@ -63,6 +71,27 @@ function getStateZone(stateName: string): string {
     return 'North Zone';
   }
   return 'East Zone';
+}
+
+/**
+ * What a branch upload actually did.
+ *
+ * The endpoint used to return the project's branch list and nothing else, which cannot express
+ * "your header row was wrong and all 400 rows were dropped" — the operator saw a success
+ * message and a list that had not changed. The counts and the `skipped` rows are the answer to
+ * "did that work?", so they travel with the result.
+ */
+export interface BranchUploadReport {
+  branches: ProjectBranchEntity[];
+  /** Data rows found in the first sheet. */
+  totalRows: number;
+  /** Branches created in the branch master. */
+  created: number;
+  /** Existing branches corrected from the sheet. */
+  updated: number;
+  /** Branches newly attached to this project (an already-attached branch is not counted). */
+  linked: number;
+  skipped: { row: number; branchCode?: string; reason: string }[];
 }
 
 /** Partial edit of a project. Lifecycle moves go through transition(). */
@@ -386,9 +415,22 @@ export class ProjectService implements OnModuleInit {
       [userId, id]
     );
 
+    /**
+     * The scheduled visits those assignments carry.
+     *
+     * The cascade reached the assignment and stopped, so closing a project left its dated slots
+     * live on the calendar and the day plan — the same gap the assayer deletion had, and with
+     * the same symptom: work that operations still plans around for a project that is gone.
+     */
+    await this.dataSource.query(
+      `UPDATE schedules SET is_active = false, updated_by = $1
+       WHERE is_active = true AND assignment_id IN (SELECT id FROM assignments WHERE project_id = $2)`,
+      [userId, id]
+    );
+
     // Deactivate documents associated with the project's assessments
     await this.dataSource.query(
-      `UPDATE documents SET is_active = false, updated_by = $1 
+      `UPDATE documents SET is_active = false, updated_by = $1
        WHERE assessment_id IN (SELECT id FROM assessments WHERE project_id = $2) AND is_active = true`,
       [userId, id]
     );
@@ -574,7 +616,11 @@ export class ProjectService implements OnModuleInit {
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
-  async uploadBranchesFromExcel(projectId: string, fileBuffer: Buffer, userId: string): Promise<ProjectBranchEntity[]> {
+  async uploadBranchesFromExcel(
+    projectId: string,
+    fileBuffer: Buffer,
+    userId: string,
+  ): Promise<BranchUploadReport> {
     const project = await this.findOne(projectId);
 
     // Read client planning preferences for hours-per-packet rate
@@ -584,139 +630,278 @@ export class ProjectService implements OnModuleInit {
     const planningPrefs = client?.planningPreferences || {};
     const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15; // default 15min per packet
 
-    const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const rows = xlsx.utils.sheet_to_json<any>(worksheet);
+    // Finds the header row rather than assuming row 1 — client branch lists routinely open with
+    // a merged title and a blank line, which otherwise makes every column `__EMPTY` and drops
+    // the whole file. See core/excel/sheet-reader.
+    const sheet = parseSheet(fileBuffer, ['BRANCH', 'BRANCH_NAME', 'STATE']);
+    const sheetName = sheet.sheetName;
+    const rows = sheet.rows;
+
+    if (rows.length === 0) {
+      throw new BadRequestException(
+        `The first sheet of this file ("${sheetName ?? 'none'}") has no data rows. ` +
+          `Download the template, fill in the Branch sheet, and upload that.`,
+      );
+    }
+
+    /**
+     * Refuse the other importer's file outright.
+     *
+     * The mirror of the check on the assayer upload, and the more dangerous direction: an
+     * assayer roster has a name column and an address column, so this importer would not reject
+     * it — it would cheerfully create a "branch" per person, geocode their home, and attach
+     * them to the project. Rejecting on the file's identity catches that before the first write.
+     */
+    const identified = identifyTemplate(sheet);
+    if (identified && identified.id !== 'branch-import') {
+      throw new BadRequestException(
+        `This file is a ${identified.label}, not a branch list. ` +
+          `Upload it under ${identified.where} instead — importing it here would create branches out of the wrong data.`,
+      );
+    }
 
     const addedBranches: ProjectBranchEntity[] = [];
+    /**
+     * Rows the importer could not use, and why.
+     *
+     * These were `continue` with no record kept. A file whose header row says `Branch` instead
+     * of `BRANCH_NAME` dropped every single row, and the endpoint still returned 200 with the
+     * project's existing branch list — so the operator was told the upload succeeded while
+     * nothing had been imported. Anything skipped is now named, with its spreadsheet row number.
+     */
+    const skipped: { row: number; branchCode?: string; reason: string }[] = [];
+    let createdCount = 0;
+    let updatedCount = 0;
 
-    for (const row of rows) {
-      const branchName = (row['Branch Name'] || row.BRANCH_NAME || '').toString().trim();
-      if (!branchName) continue;
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      // The header row itself, plus however many rows preceded it.
+      const rowNumber = index + sheet.headerRow + 1;
+      const get = rowReader(row);
 
-      const branchCode = (row.BRANCH || row['Branch Code'] || '').toString().trim();
-      if (!branchCode) continue;
-
-      const district = (row.DISTRICT || '').toString().trim().toUpperCase();
-      const state = (row.STATE || '').toString().trim();
-      const address = (row['Branch Address'] || row.Address || '').toString().trim();
-      const pincodeStr = (row.Pincode || '').toString().trim();
-
-      // Read packet count and calculate estimated duration
-      const packetCount = parseInt(String(row.Packets ?? row.packet_count ?? ''), 10);
-      const calculatedHours = !isNaN(packetCount) && packetCount > 0
-        ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
-        : null;
-
-      // Client-supplied coordinates win over geocoding: they are exact, and they
-      // avoid a network lookup per branch that is rate-limited to ~1/second and
-      // throws when it cannot resolve an address.
-      const latRaw = parseFloat(String(row.Latitude ?? row.latitude ?? ''));
-      const lngRaw = parseFloat(String(row.Longitude ?? row.longitude ?? ''));
-      const suppliedCoords = Number.isFinite(latRaw) && Number.isFinite(lngRaw)
-        ? { lat: latRaw, lng: lngRaw }
-        : null;
-
-      let branch = await this.branchQueryService.findOneByCode(branchCode);
-      if (!branch) {
-        const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
-        const zoneName = await this.resolveZoneName(state, project.clientId);
-        
-        const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
-
-        const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
-        const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
-        // Was a random name from a hardcoded list and a random phone number, which
-        // put fabricated contact details in front of an assayer about to visit the
-        // branch. Use what the client supplied; leave blank when they supplied nothing.
-        const managerName = (row['Branch Manager'] || '').toString().trim() || null;
-        const phone = (row['Branch Phone'] || '').toString().trim() || null;
-
-        branch = await this.branchService.registerImportedBranch({
-          branchCode,
-          solId: branchCode,
-          name: branchName,
-          address,
-          state,
-          district,
-          city: district,
-          pincode,
-          branchType,
-          latitude: coords.lat,
-          longitude: coords.lng,
-          location: { type: 'Point', coordinates: [coords.lng, coords.lat] },
-          organizationId: project.organizationId,
-          clientId: project.clientId,
-          zoneId: zone ? zone.id : null,
-          region: state,
-          territory: `${district} Area`,
-          managerName,
-          phone,
-          email: (row['Branch Email'] || '').toString().trim() || null,
-          // Taken from the sheet when the client supplies it, otherwise derived from the risk
-          // category they did supply. This was the literal 2.0 for every branch ever imported,
-          // which is why all 72 branches in the database score identically and the map's
-          // "high risk" highlight (>= 7) could never fire for anybody.
-          riskScore: parseFloat(String(row['Risk Score'] ?? '')) || riskScoreFromCategory(
-            (row['Risk Category'] || '').toString().trim().toUpperCase(),
-          ),
-          // Optional operational attributes: taken from the sheet when the client
-          // supplies them, otherwise sensible defaults. These feed assayer matching,
-          // so a real value here produces a better-matched assayer than the default.
-          riskCategory: (row['Risk Category'] || '').toString().trim().toUpperCase() || 'LOW',
-          complexity: (row.Complexity || '').toString().trim().toUpperCase() || 'STANDARD',
-          estimatedDurationHours:
-            parseFloat(String(row['Estimated Hours'] ?? '')) || calculatedHours || 6.0,
-          createdBy: userId,
-          updatedBy: userId,
-        }, userId);
-      } else if (calculatedHours !== null) {
-        // Update existing branch with calculated hours
-        await this.branchService.update(branch.id, { estimatedDurationHours: calculatedHours }, userId);
+      // Every column is read through the alias list rather than one exact header, so the
+      // client's own export, our template, and a hand-edited copy of either all import.
+      const branchName = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
+      const branchCode = get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId');
+      if (!branchName && !branchCode) {
+        // A wholly blank row — the trailing rows Excel leaves behind. Not worth reporting.
+        continue;
+      }
+      if (!branchName) {
+        skipped.push({ row: rowNumber, branchCode, reason: 'No branch name in this row.' });
+        continue;
+      }
+      if (!branchCode) {
+        skipped.push({ row: rowNumber, reason: `No branch code for "${branchName}".` });
+        continue;
       }
 
-      let pb = await this.projectBranchRepository.findOne({
-        where: { projectId: project.id, branchId: branch.id, isActive: true },
-      });
+      /**
+       * One bad row must not cost the operator the other 399.
+       *
+       * Nothing here was guarded, so a single failure — a geography check that cannot verify a
+       * district, a geocoder timeout, a constraint violation — threw straight out of the
+       * endpoint as a 500. Rows already imported stayed in the database, the rest never ran,
+       * and the operator was shown a crash with no way to tell how far it got. Each row now
+       * either lands or is reported by number.
+       */
+      try {
+        const district = get('DISTRICT', 'District', 'DistrictName').toUpperCase();
+        const state = get('STATE', 'State', 'StateName');
+        const address = get('Branch Address', 'Address', 'BranchAddress');
+        const pincodeStr = get('Pincode', 'Pin', 'Pin Code', 'Postal Code', 'Zip');
 
-      if (!pb) {
-        pb = this.projectBranchRepository.create({
-          projectId: project.id,
-          branchId: branch.id,
-          zoneId: branch.zoneId,
-          status: ProjectBranchStatus.IMPORTED,
-          packetCount: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
-          createdBy: userId,
-          updatedBy: userId,
-        });
-        const savedPb = await this.projectBranchRepository.save(pb);
-        addedBranches.push(savedPb);
+        if (!state) {
+          // State drives the region, the zone and the public-holiday calendar. A branch without
+          // one is unplannable, so it is refused loudly rather than imported into limbo.
+          skipped.push({ row: rowNumber, branchCode, reason: `No state for "${branchName}".` });
+          continue;
+        }
 
-        const existingAsmt = await this.assessmentRepository.findOne({
+        // Read packet count and calculate estimated duration
+        const packetCount = parseInt(get('Packets', 'packet_count', 'Packet Count'), 10);
+        const calculatedHours = !isNaN(packetCount) && packetCount > 0
+          ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
+          : null;
+
+        // Client-supplied coordinates win over geocoding: they are exact, and they
+        // avoid a network lookup per branch that is rate-limited to ~1/second and
+        // throws when it cannot resolve an address.
+        const latRaw = parseFloat(get('Latitude', 'Lat'));
+        const lngRaw = parseFloat(get('Longitude', 'Lng', 'Long'));
+        // Normalised to the same shape a geocode returns, so the two paths cannot diverge in
+        // what they record. A coordinate the client put in their own sheet is authoritative for
+        // that branch, so it is kept as-is and marked accordingly rather than re-derived.
+        const suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null =
+          Number.isFinite(latRaw) && Number.isFinite(lngRaw)
+            ? { lat: latRaw, lng: lngRaw, geoSource: 'geocoder', geoAccuracyMeters: 60, geoMatchedName: 'Supplied in the import sheet' }
+            : null;
+
+        /**
+         * Canonicalised, never the raw state string.
+         *
+         * This wrote `region: state`, so an import filled the column with "Kerala", "MAHARASHTRA"
+         * and so on. Region scoping matches `region IN ('SOUTH', …)`, so every branch that ever
+         * arrived through this importer was invisible to the operator who owns its territory —
+         * and each import silently re-broke the column the normalisation migration had just fixed.
+         */
+        const region = resolveRegion(state);
+
+        // Scoped to this project's client. Branch codes are the client's own numbering and
+        // collide across clients constantly, so an unscoped lookup attached another client's
+        // branch — with its address, coordinates and region — to this project.
+        let branch = await this.branchQueryService.findOneByCode(branchCode, project.clientId);
+        if (!branch) {
+          const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
+          const zoneName = await this.resolveZoneName(state, project.clientId);
+
+          const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
+
+          const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
+          const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
+          // Was a random name from a hardcoded list and a random phone number, which
+          // put fabricated contact details in front of an assayer about to visit the
+          // branch. Use what the client supplied; leave blank when they supplied nothing.
+          const managerName = get('Branch Manager', 'Manager', 'Manager Name') || null;
+          const phone = get('Branch Phone', 'Phone', 'Contact Number') || null;
+
+          branch = await this.branchService.registerImportedBranch({
+            branchCode,
+            solId: get('SOL ID', 'SolId') || branchCode,
+            name: branchName,
+            address,
+            state,
+            district,
+            // The sheet's own city when it has one. This was hardcoded to the district, so every
+            // imported branch claimed to be in a city named after its district — which is what
+            // the assayer sees on their job card and what the city-tier fee multiplier reads.
+            city: get('CITY', 'City', 'CityName') || district,
+            pincode,
+            branchType,
+            latitude: coords.lat,
+            longitude: coords.lng,
+            location: { type: 'Point', coordinates: [coords.lng, coords.lat] },
+            // Recorded, so a branch sitting on its district's centroid is visibly a placeholder
+            // rather than silently indistinguishable from one pinned at its front door — and so
+            // the precision backfill knows which rows are worth re-resolving.
+            geoSource: coords.geoSource,
+            geoAccuracyMeters: coords.geoAccuracyMeters,
+            geoMatchedName: coords.geoMatchedName,
+            geoResolvedAt: new Date(),
+            organizationId: project.organizationId,
+            clientId: project.clientId,
+            zoneId: zone ? zone.id : null,
+            region,
+            territory: `${district} Area`,
+            managerName,
+            phone,
+            email: get('Branch Email', 'Email') || null,
+            // Taken from the sheet when the client supplies it, otherwise derived from the risk
+            // category they did supply. This was the literal 2.0 for every branch ever imported,
+            // which is why all 72 branches in the database score identically and the map's
+            // "high risk" highlight (>= 7) could never fire for anybody.
+            riskScore: parseFloat(get('Risk Score')) || riskScoreFromCategory(
+              get('Risk Category').toUpperCase(),
+            ),
+            // Optional operational attributes: taken from the sheet when the client
+            // supplies them, otherwise sensible defaults. These feed assayer matching,
+            // so a real value here produces a better-matched assayer than the default.
+            riskCategory: get('Risk Category').toUpperCase() || 'LOW',
+            complexity: get('Complexity').toUpperCase() || 'STANDARD',
+            estimatedDurationHours:
+              parseFloat(get('Estimated Hours')) || calculatedHours || 6.0,
+            createdBy: userId,
+            updatedBy: userId,
+          }, userId);
+          createdCount++;
+        } else {
+          /**
+           * Re-importing a branch corrects it, rather than only touching its hours.
+           *
+           * The template prefills existing branches precisely so a corrected sheet can be sent
+           * back, but the only field this path wrote was `estimatedDurationHours` — a fixed
+           * address, a supplied coordinate pair or a missing region were all read and thrown
+           * away, and the operator had no way to tell that from a successful import.
+           *
+           * Only fields the sheet actually carries are written, so a sparse correction sheet
+           * cannot blank out data it simply did not mention.
+           */
+          const patch: UpdateBranchDto = {};
+          if (branchName && branchName !== branch.name) patch.name = branchName;
+          if (address && address !== branch.address) patch.address = address;
+          if (state && state !== branch.state) patch.state = state;
+          if (district && district !== branch.district) patch.district = district;
+          if (pincodeStr && pincodeStr !== branch.pincode) patch.pincode = pincodeStr;
+          if (suppliedCoords) {
+            if (Number(branch.latitude) !== suppliedCoords.lat) patch.latitude = suppliedCoords.lat;
+            if (Number(branch.longitude) !== suppliedCoords.lng) patch.longitude = suppliedCoords.lng;
+          }
+          // Backfills the branches that predate region canonicalisation, and repairs any whose
+          // state changed. `update` canonicalises again, so a raw state name cannot get back in.
+          if (region && branch.region !== region) patch.region = region;
+          if (calculatedHours !== null) patch.estimatedDurationHours = calculatedHours;
+
+          if (Object.keys(patch).length > 0) {
+            branch = await this.branchService.update(branch.id, patch, userId);
+            updatedCount++;
+          }
+        }
+
+        let pb = await this.projectBranchRepository.findOne({
           where: { projectId: project.id, branchId: branch.id, isActive: true },
         });
-        if (!existingAsmt) {
-          const asmt = this.assessmentRepository.create({
+
+        if (!pb) {
+          pb = this.projectBranchRepository.create({
             projectId: project.id,
             branchId: branch.id,
             zoneId: branch.zoneId,
-            status: AssessmentStatus.PENDING_PLANNING,
-            packetSize: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
+            status: ProjectBranchStatus.IMPORTED,
+            packetCount: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
             createdBy: userId,
             updatedBy: userId,
           });
-          await this.assessmentRepository.save(asmt);
+          const savedPb = await this.projectBranchRepository.save(pb);
+          addedBranches.push(savedPb);
+
+          const existingAsmt = await this.assessmentRepository.findOne({
+            where: { projectId: project.id, branchId: branch.id, isActive: true },
+          });
+          if (!existingAsmt) {
+            const asmt = this.assessmentRepository.create({
+              projectId: project.id,
+              branchId: branch.id,
+              zoneId: branch.zoneId,
+              status: AssessmentStatus.PENDING_PLANNING,
+              packetSize: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
+              createdBy: userId,
+              updatedBy: userId,
+            });
+            await this.assessmentRepository.save(asmt);
+          }
+        } else if (!isNaN(packetCount) && packetCount > 0) {
+          // Update packet count on existing project-branch
+          pb.packetCount = packetCount;
+          pb.updatedBy = userId;
+          await this.projectBranchRepository.save(pb);
         }
-      } else if (!isNaN(packetCount) && packetCount > 0) {
-        // Update packet count on existing project-branch
-        pb.packetCount = packetCount;
-        pb.updatedBy = userId;
-        await this.projectBranchRepository.save(pb);
+      } catch (err: any) {
+        skipped.push({
+          row: rowNumber,
+          branchCode,
+          reason: err?.message || 'Unexpected error importing this row.',
+        });
       }
     }
 
-    return this.findProjectBranches(project.id);
+    return {
+      branches: await this.findProjectBranches(project.id),
+      totalRows: rows.length,
+      created: createdCount,
+      updated: updatedCount,
+      linked: addedBranches.length,
+      skipped,
+    };
   }
 
   async removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]> {

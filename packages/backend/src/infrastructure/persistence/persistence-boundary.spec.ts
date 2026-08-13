@@ -31,6 +31,26 @@ const SRC = path.resolve(__dirname, '../..');
  */
 const IMPORTS_TYPEORM = [
   'core/audit/unified-audit.service.ts',
+  // The region ceiling on detail routes. Read-only, and single-column region lookups by id
+  // across five tables (branch, project_branch, assignment, assayer, schedule) — it exists
+  // precisely because those aggregates have different paths to a region, so routing it through
+  // five repositories would mean five injections to answer one question. No writes.
+  'infrastructure/scope/region-guard.service.ts',
+  // Coordinate precision. It reads and rewrites only the geo columns of branches and assayers,
+  // and it exists in the geo module rather than in both feature modules because the rule it
+  // enforces — a hand-placed pin is never overwritten — must have exactly one implementation.
+  'modules/geo/geo-precision.service.ts',
+  // The administrator rule-bypass window. It owns exactly one table, which exists only to
+  // record when the platform's controls were suspended and what that window was used for —
+  // there is no domain aggregate for it to sit behind, and routing an audit record through
+  // another service is how such records end up incomplete.
+  'modules/platform/rule-bypass/rule-bypass.service.ts',
+  // The assayer movement trail. It owns one append-only table of raw GPS fixes and nothing else:
+  // the evidence a travel claim is checked against. It stays a persistence-owning service on
+  // purpose — what the fixes *mean* is decided by the pure functions in travel-track.ts, so the
+  // judgement can be tested and re-run over history without a database, and this service is only
+  // the narrow read/write boundary underneath it.
+  'modules/assayer/location-trail.service.ts',
   'infrastructure/ocr/ocr-processing.service.ts',
   'modules/assayer/assayer.service.ts',
   'modules/assayer/hr-workforce.service.ts',
@@ -48,6 +68,11 @@ const IMPORTS_TYPEORM = [
   'modules/customer-master/customer-master.service.ts',
   // Read-only SLA breach detector for the data-entry desk; aggregate queries only, no writes.
   'modules/validation/desk-escalation.service.ts',
+  // Feedback & collaboration channel: repository-only access (Repository/InjectRepository), no DataSource.
+  'modules/feedback/feedback.service.ts',
+  'modules/feedback/feedback-thread.service.ts',
+  // Read-only SLA breach detector for the feedback desk; aggregate queries only, no writes.
+  'modules/feedback/feedback-escalation.service.ts',
   'modules/document/document.service.ts',
   'modules/expense/expense.service.ts',
   'modules/geo/geo-seed.service.ts',
@@ -70,6 +95,8 @@ const IMPORTS_TYPEORM = [
   'modules/project/call-log.service.ts',
   'modules/project/project-query.service.ts',
   'modules/project/project.service.ts',
+  // Read-only cross-aggregate Excel report aggregator; queries only, no writes.
+  'modules/reports/reports.service.ts',
   'modules/scheduling/scheduling.service.ts',
   'modules/search/search.service.ts',
   'modules/user/operations-snapshot.service.ts',
@@ -89,6 +116,8 @@ const IMPORTS_TYPEORM = [
  * from inside the transaction, so a subscriber sees state that can still roll back.
  */
 const OPENS_ITS_OWN_TRANSACTIONS = [
+  // Takes a DataSource for read-only region lookups only; opens no transaction.
+  'infrastructure/scope/region-guard.service.ts',
   'core/audit/unified-audit.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',

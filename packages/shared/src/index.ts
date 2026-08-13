@@ -26,3 +26,4 @@ export * from './labels';
 // Shared utilities
 export * from './utils';
 export * from './assayer-lifecycle';
+export * from './rule-bypass';

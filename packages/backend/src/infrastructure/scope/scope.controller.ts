@@ -61,13 +61,18 @@ export class ScopeController {
         .groupBy('branch.region')
         .getRawMany<{ value: string; count: string }>(),
 
+      // Grouped case-insensitively. This column holds 'Maharashtra' and 'MAHARASHTRA' side by
+      // side, from different import sources; grouping on the raw value would offer both as
+      // rival options, each showing part of the state's branches, with nothing on screen to
+      // say why. One option per real state, labelled with the most common spelling.
       facetQuery()
-        .select('branch.state', 'value')
+        .select('UPPER(branch.state)', 'key')
+        .addSelect('MODE() WITHIN GROUP (ORDER BY branch.state)', 'value')
         .addSelect('MIN(branch.region)', 'region')
         .addSelect('COUNT(*)', 'count')
         .andWhere('branch.state IS NOT NULL')
-        .groupBy('branch.state')
-        .orderBy('branch.state', 'ASC')
+        .groupBy('UPPER(branch.state)')
+        .orderBy('MODE() WITHIN GROUP (ORDER BY branch.state)', 'ASC')
         .getRawMany<{ value: string; region: string | null; count: string }>(),
 
       // Zones are offered only where the caller can actually see branches in them.

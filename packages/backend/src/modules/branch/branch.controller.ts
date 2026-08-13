@@ -17,6 +17,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { Region } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
@@ -29,10 +30,19 @@ class CreateBranchRequestDto implements CreateBranchDto {
   @IsString() @IsNotEmpty() branchCode: string;
   @IsOptional() @IsString() solId?: string;
   @IsString() @IsNotEmpty() name: string;
-  @IsString() @IsNotEmpty() address: string;
+  /**
+   * Address, district and city are optional on admission; state is not.
+   *
+   * The branch importer has always drawn the line here — it refuses a row only for a missing
+   * name, code or state, because state is what sets the region, zone and public-holiday calendar
+   * a branch is planned against. Requiring three more fields on the manual form meant a branch
+   * that imports cleanly could not be typed in by hand, and the operator's workaround for a
+   * client list that omits the town is to invent one.
+   */
+  @IsOptional() @IsString() address?: string;
   @IsString() @IsNotEmpty() state: string;
-  @IsString() @IsNotEmpty() district: string;
-  @IsString() @IsNotEmpty() city: string;
+  @IsOptional() @IsString() district?: string;
+  @IsOptional() @IsString() city?: string;
   @IsOptional() @IsString() pincode?: string;
   @IsOptional() @IsString() region?: string;
   @IsOptional() @IsString() territory?: string;
@@ -119,7 +129,10 @@ class CreateDocumentRequestDto implements CreateDocumentDto {
 @Roles(...STAFF_ROLES)
 @Controller('branches')
 export class BranchController {
-  constructor(private readonly branchService: BranchService) {}
+  constructor(
+    private readonly branchService: BranchService,
+    private readonly regionGuard: RegionGuardService,
+  ) {}
 
   // -----------------------------------------------------------------------
   // Profile
@@ -162,8 +175,11 @@ export class BranchController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get branch with contacts and documents' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     const branch = await this.branchService.findOne(id);
+    // The list is narrowed; this is the ceiling. Branch ids travel in payloads and bookmarks,
+    // so without it the narrowing is discovery-only and any known id reads the record.
+    this.regionGuard.assertRegionAllowed(branch.region, scope);
     return { success: true, data: branch };
   }
 

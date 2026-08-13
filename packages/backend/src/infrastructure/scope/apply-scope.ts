@@ -14,7 +14,7 @@
  * Callers whose query has no branch join must add one before calling.
  */
 
-import { In, SelectQueryBuilder } from 'typeorm';
+import { ILike, In, SelectQueryBuilder } from 'typeorm';
 import { GlobalScope } from './global-scope';
 
 /**
@@ -31,7 +31,9 @@ export function branchScopeWhere(
 
   const where: Record<string, unknown> = {};
   if (scope.regions && scope.regions.length > 0) where.region = In(scope.regions);
-  if (scope.state) where.state = scope.state;
+  // ILike with no wildcards is an exact but case-insensitive match — see the note in
+  // applyBranchScope about the mixed casing in this column.
+  if (scope.state) where.state = ILike(scope.state);
   if (scope.zoneId) where.zoneId = scope.zoneId;
   if (scope.clientId) where.clientId = scope.clientId;
 
@@ -45,13 +47,28 @@ let counter = 0;
  * True when the scope constrains something that only exists on a branch.
  *
  * Callers use this to decide whether to add a join at all — `projectId` alone is usually
- * available without one, and joining for nothing costs a query plan.
+ * available without one, and joining for nothing costs a query plan. `clientId` counts here
+ * because `branches.client_id` is the column `applyBranchScope` filters on.
  */
 export function needsBranchJoin(scope: Partial<GlobalScope> | undefined): boolean {
   if (!scope) return false;
   return Boolean(
     (scope.regions && scope.regions.length > 0) || scope.state || scope.zoneId || scope.clientId,
   );
+}
+
+/**
+ * True when the scope constrains *geography* — region, state or zone.
+ *
+ * Distinct from `needsBranchJoin` for callers that can satisfy `clientId` some other way. A
+ * project, for instance, carries its own `client_id`, so resolving a client scope through
+ * branch membership would additionally require the project to *have* branches — silently
+ * hiding a project whose branch list has not been imported yet. Geography has no such
+ * shortcut: it exists only on the branch.
+ */
+export function needsGeographicScope(scope: Partial<GlobalScope> | undefined): boolean {
+  if (!scope) return false;
+  return Boolean((scope.regions && scope.regions.length > 0) || scope.state || scope.zoneId);
 }
 
 export interface BranchScopeAliases {
@@ -88,7 +105,11 @@ export function applyBranchScope<T extends object>(
     qb.andWhere(`${branch}.region IN (:...scopeRegions${n})`, { [`scopeRegions${n}`]: scope.regions });
   }
   if (scope.state) {
-    qb.andWhere(`${branch}.state = :scopeState${n}`, { [`scopeState${n}`]: scope.state });
+    // Case-insensitive on purpose. `branches.state` holds the same state in more than one
+    // casing — 'Maharashtra' and 'MAHARASHTRA' both exist, from different import sources — so
+    // an `=` comparison silently returns half the branches and the operator has no way to tell
+    // which half. Matching on UPPER() is the smallest fix that cannot hide rows.
+    qb.andWhere(`UPPER(${branch}.state) = UPPER(:scopeState${n})`, { [`scopeState${n}`]: scope.state });
   }
   if (scope.zoneId) {
     qb.andWhere(`${branch}.zone_id = :scopeZone${n}`, { [`scopeZone${n}`]: scope.zoneId });

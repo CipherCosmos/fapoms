@@ -12,10 +12,15 @@ export class BranchQueryService {
   ) {}
 
   async findOne(id: string): Promise<BranchEntity> {
-    const branch = await this.branchRepository.findOne({
-      where: { id, isActive: true },
-      relations: ['contacts', 'documents'],
-    });
+    // Filters is_active on the branch and on its soft-deletable contacts/documents. A plain
+    // `relations` load would surface soft-deleted children in the detail view.
+    const branch = await this.branchRepository
+      .createQueryBuilder('branch')
+      .leftJoinAndSelect('branch.contacts', 'contacts', 'contacts.isActive = true')
+      .leftJoinAndSelect('branch.documents', 'documents', 'documents.isActive = true')
+      .where('branch.id = :id', { id })
+      .andWhere('branch.isActive = true')
+      .getOne();
     if (!branch) {
       throw new NotFoundException(`Branch ${id} not found.`);
     }
@@ -38,12 +43,12 @@ export class BranchQueryService {
     const { clientId, zoneId, state, regions } = scope;
 
     const query = this.branchRepository.createQueryBuilder('branch')
-      .leftJoinAndSelect('branch.contacts', 'contacts')
+      .leftJoinAndSelect('branch.contacts', 'contacts', 'contacts.isActive = true')
       .where('branch.is_active = :isActive', { isActive: true });
 
     if (clientId) query.andWhere('branch.client_id = :clientId', { clientId });
     if (zoneId) query.andWhere('branch.zone_id = :zoneId', { zoneId });
-    if (state) query.andWhere('branch.state = :state', { state });
+    if (state) query.andWhere('UPPER(branch.state) = UPPER(:state)', { state });
     if (regions && regions.length > 0) {
       query.andWhere('branch.region IN (:...regions)', { regions });
     }
@@ -86,13 +91,14 @@ export class BranchQueryService {
       .groupBy('branch.region')
       .getRawMany<{ value: string; count: string }>();
 
+    // Case-insensitive grouping — see the matching note in ScopeController.options.
     const stateRows = await base()
-      .select('branch.state', 'value')
+      .select('MODE() WITHIN GROUP (ORDER BY branch.state)', 'value')
       .addSelect('MIN(branch.region)', 'region')
       .addSelect('COUNT(*)', 'count')
       .andWhere('branch.state IS NOT NULL')
-      .groupBy('branch.state')
-      .orderBy('branch.state', 'ASC')
+      .groupBy('UPPER(branch.state)')
+      .orderBy('MODE() WITHIN GROUP (ORDER BY branch.state)', 'ASC')
       .getRawMany<{ value: string; region: string | null; count: string }>();
 
     return {
@@ -101,7 +107,19 @@ export class BranchQueryService {
     };
   }
 
-  async findOneByCode(branchCode: string): Promise<BranchEntity | null> {
-    return this.branchRepository.findOne({ where: { branchCode, isActive: true } });
+  /**
+   * A branch by its client-supplied code.
+   *
+   * `clientId` is not optional in practice, it is optional in the signature: branch codes are
+   * the *client's* numbering, not ours, and they collide constantly across clients — every bank
+   * has a branch "1". Resolving a code without saying whose it is silently returns some other
+   * client's branch, and the import path that did exactly that then attached that branch (with
+   * its address, coordinates and region) to this client's project. Pass the client whenever the
+   * caller knows it.
+   */
+  async findOneByCode(branchCode: string, clientId?: string | null): Promise<BranchEntity | null> {
+    return this.branchRepository.findOne({
+      where: { branchCode, isActive: true, ...(clientId ? { clientId } : {}) },
+    });
   }
 }

@@ -55,3 +55,47 @@ export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   FOOD: 'Food',
   OTHER: 'Other',
 };
+
+// ── Travel verification ──────────────────────────────────────────────────────────
+/**
+ * What the recorded movement trail says about the journey an assignment was paid travel for.
+ *
+ * Read-only evidence for whoever is approving a claim. The verdict vocabulary deliberately
+ * separates "we did not observe enough to say" from "we observed, and it was short" — see the
+ * backend's travel-track module — so a reviewer is never shown a shortfall the data cannot support.
+ */
+export type TravelVerdict =
+  | 'NO_DATA'
+  | 'INSUFFICIENT_COVERAGE'
+  | 'CONSISTENT'
+  | 'SHORTFALL'
+  | 'IMPLAUSIBLE';
+
+export interface TravelVerification {
+  assignmentId: string;
+  assignmentNumber: string;
+  checkedInAt: string | null;
+  /** Whether the assayer had location sharing on — changes what an empty trail means. */
+  trackingEnabled: boolean;
+  expectedDistanceKm: number | null;
+  /** The quoted distance is not stored, so it is reconstructed from the assayer's current home. */
+  expectedIsRecomputed: boolean;
+  assessment: {
+    verdict: TravelVerdict;
+    summary: string;
+    expectedDistanceKm: number | null;
+    observedRatio: number | null;
+    track: {
+      observedDistanceKm: number;
+      coverage: number;
+      longestGapMinutes: number;
+      fixCount: number;
+      mockedFixCount: number;
+      segmentsImplausible: number;
+    };
+  } | null;
+  unavailableReason: string | null;
+}
+
+export const getTravelVerification = (assignmentId: string) =>
+  api.request<TravelVerification>(`/assignments/${assignmentId}/travel-verification`);

@@ -4,12 +4,13 @@ import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { TerritoryTable, POSTURE } from './executive/TerritoryTable';
 import type { Territory } from './executive/TerritoryTable';
 import {
-  ShieldAlert, RefreshCw, AlertTriangle, Users, Building2, Clock, IndianRupee, MapPin,
+  ShieldAlert, RefreshCw, AlertTriangle, Users, Building2, Clock, IndianRupee, MapPin, FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { useScope, withScope } from '../context/ScopeContext';
 import { formatRupees as money } from '@fapoms/shared';
+import { useExcelExport } from '../hooks/useExcelExport';
 
 interface BranchPoint {
   id: string; projectBranchId: string; name: string; branchCode: string | null;
@@ -62,6 +63,11 @@ export const ExecutiveMap: React.FC = () => {
   const { scopeParams, scopeKey } = useScope();
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [lens, setLens] = useState<'ALL' | 'GAPS' | 'UNASSIGNED'>('ALL');
+
+  const { download: downloadExcel } = useExcelExport();
+  const handleExport = () => {
+    void downloadExcel('/reports/command-center', { ...scopeParams, clientId: clientId || undefined });
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -132,6 +138,9 @@ export const ExecutiveMap: React.FC = () => {
           </select>
           <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
+          </button>
+          <button onClick={handleExport} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--success)' }}>
+            <FileSpreadsheet size={14} /> Export
           </button>
         </div>
       </div>

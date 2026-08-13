@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, X, Receipt, RefreshCw } from 'lucide-react';
+import { Check, X, Receipt, RefreshCw, MapPin } from 'lucide-react';
 import { formatRupees } from '@fapoms/shared';
 import { DataTable, Column, Modal, useToast } from '../components/ui';
 import {
@@ -8,6 +8,7 @@ import {
   EXPENSE_CATEGORY_LABELS,
   ExpenseClaim,
 } from '../services/expenses';
+import { TravelEvidence } from '../components/TravelEvidence';
 
 /**
  * Expense Review — the finance/ops queue for assayer reimbursement claims.
@@ -22,6 +23,8 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<ExpenseClaim | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  // A travel claim whose movement trail the reviewer has opened.
+  const [inspecting, setInspecting] = useState<ExpenseClaim | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -134,6 +137,18 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
       align: 'right',
       render: (c) => (
         <div style={{ display: 'inline-flex', gap: 8 }}>
+          {/* Only travel claims have a journey a trail can speak to; showing this on a food
+              receipt would imply the platform can verify something it cannot. */}
+          {c.category === 'TRAVEL_KM' && c.assignmentId && (
+            <button
+              type="button"
+              onClick={() => setInspecting(c)}
+              title="Check the recorded movement trail"
+              style={btnStyle('var(--accent, #2563eb)')}
+            >
+              <MapPin size={15} /> Trail
+            </button>
+          )}
           <button
             type="button"
             onClick={() => approve(c)}
@@ -210,6 +225,11 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
         <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-muted)' }}>
           {rejecting ? `${rejecting.assayer?.displayName ?? 'Assayer'} — ${formatRupees(Number(rejecting.amount || 0))} (${EXPENSE_CATEGORY_LABELS[rejecting.category] ?? rejecting.category})` : ''}
         </p>
+        {rejecting?.category === 'TRAVEL_KM' && rejecting.assignmentId && (
+          <div style={{ marginBottom: 12 }}>
+            <TravelEvidence assignmentId={rejecting.assignmentId} />
+          </div>
+        )}
         <label style={{ fontSize: 13, fontWeight: 600 }}>Reason (required)</label>
         <textarea
           value={rejectReason}
@@ -221,6 +241,26 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
             border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 13,
           }}
         />
+      </Modal>
+
+      <Modal
+        open={!!inspecting}
+        onClose={() => setInspecting(null)}
+        title="Recorded movement trail"
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button type="button" onClick={() => setInspecting(null)} style={btnStyle('var(--text-muted)')}>
+              Close
+            </button>
+          </div>
+        }
+      >
+        <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-muted)' }}>
+          {inspecting
+            ? `${inspecting.assayer?.displayName ?? 'Assayer'} — ${formatRupees(Number(inspecting.amount || 0))} claimed on ${inspecting.assignment?.assignmentNumber ?? 'this assignment'}`
+            : ''}
+        </p>
+        {inspecting?.assignmentId && <TravelEvidence assignmentId={inspecting.assignmentId} />}
       </Modal>
     </div>
   );

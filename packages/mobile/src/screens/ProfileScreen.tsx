@@ -71,6 +71,7 @@ interface ProfileScreenProps {
   onUpdateProfileField: (field: keyof ProfileDataState, value: any) => void;
   onSaveProfile: () => void;
   onLogout?: () => void;
+  onOpenFeedback?: () => void;
   /** Opens the self-service time-off calendar. */
   onOpenAvailability?: () => void;
 }
@@ -299,6 +300,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onUpdateProfileField,
   onSaveProfile,
   onLogout,
+  onOpenFeedback,
   onOpenAvailability,
 }) => {
   const t = useTheme();
@@ -838,6 +840,24 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           size="lg"
           full
         />
+      )}
+
+      {/* Help & Feedback: the assayer's two-way channel to the product team — report a
+          bug, ask for something, or ask a question, and follow the replies in thread. */}
+      {onOpenFeedback && (
+        <Section title="Help & Feedback">
+          <Card level={1}>
+            <SettingRow
+              icon="chatbox-ellipses-outline"
+              tone="primary"
+              label="Send feedback"
+              hint="Report a bug, suggest an improvement, or ask the product team a question"
+              onPress={onOpenFeedback}
+              accessibilityLabel="Open feedback and support"
+              chevron
+            />
+          </Card>
+        </Section>
       )}
 
       {/* Session: the destructive action lives alone at the very bottom, in danger tone,

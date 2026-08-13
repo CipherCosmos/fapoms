@@ -26,7 +26,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, MinLength, MaxLength, ValidateNested, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, MinLength, MaxLength, ValidateNested, ArrayMaxSize, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -53,9 +53,12 @@ class WorkingHoursDto {
 }
 
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
+import { LocationTrailService } from './location-trail.service';
+import { LocationPingSource } from './assayer-location-ping.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
@@ -121,23 +124,28 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsEmail()
   email?: string;
 
-  @IsString() @IsNotEmpty()
-  phone: string;
+  // Optional on admission: rosters arrive without a phone column, and a missing number blocks
+  // ringing this person, not recording them. See the column comment on AssayerEntity.phone.
+  @IsOptional() @IsString()
+  phone?: string;
 
   @IsOptional() @IsString()
   alternatePhone?: string;
 
-  @IsString() @IsNotEmpty()
-  address: string;
+  // Address, district and city complete a record; state is what makes it plannable (it drives
+  // region, zone and the public-holiday calendar), so state is the one that stays mandatory.
+  // This mirrors the branch importer, which refuses a row for a missing state and nothing else.
+  @IsOptional() @IsString()
+  address?: string;
 
   @IsString() @IsNotEmpty()
   state: string;
 
-  @IsString() @IsNotEmpty()
-  district: string;
+  @IsOptional() @IsString()
+  district?: string;
 
-  @IsString() @IsNotEmpty()
-  city: string;
+  @IsOptional() @IsString()
+  city?: string;
 
   @IsOptional() @IsString()
   pincode?: string;
@@ -361,6 +369,40 @@ export class UpdateLiveLocationDto {
 
   @IsNumber()
   longitude: number;
+}
+
+/** One position in an uploaded batch. Coordinate sanity is enforced again in the service. */
+export class LocationPingDto {
+  @IsNumber()
+  latitude: number;
+
+  @IsNumber()
+  longitude: number;
+
+  @IsOptional() @IsNumber()
+  accuracyMeters?: number;
+
+  @IsOptional() @IsNumber()
+  speedMps?: number;
+
+  /** Device clock at the moment of the fix. */
+  @IsDateString()
+  recordedAt: string;
+
+  @IsOptional() @IsUUID()
+  assignmentId?: string;
+
+  /** The OS reported this fix as coming from a mock provider — recorded, never silently dropped. */
+  @IsOptional() @IsBoolean()
+  isMocked?: boolean;
+}
+
+export class UploadLocationPingsDto {
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => LocationPingDto)
+  pings: LocationPingDto[];
 }
 
 export class UpdateLiveTrackingDto {
@@ -624,7 +666,11 @@ class ResetAssayerPasswordRequestDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('assayers')
 export class AssayerController {
-  constructor(private readonly assayerService: AssayerService) {}
+  constructor(
+    private readonly assayerService: AssayerService,
+    private readonly regionGuard: RegionGuardService,
+    private readonly locationTrail: LocationTrailService,
+  ) {}
 
   @Post()
   @HttpCode(201)
@@ -701,7 +747,11 @@ export class AssayerController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER)
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a single assayer by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // Field redaction (scopeAssayerForRoles) decides WHICH fields a role sees; this decides
+    // WHETHER a region-assigned account may open the record at all. HR and the other national
+    // desks hold no assignment, so this is a no-op for them.
+    await this.regionGuard.assertAssayerInScope(id, scope);
     const assayer = await this.assayerService.findOne(id);
     return {
       success: true,
@@ -736,7 +786,8 @@ export class AssayerController {
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.ASSAYER)
   @Get(':assayerId/profile')
   @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
-  async getProfile(@Param('assayerId') assayerId: string, @Req() req: any) {
+  async getProfile(@Param('assayerId') assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.getProfile(assayerId);
     return {
       success: true,
@@ -805,7 +856,49 @@ export class AssayerController {
     const assayer = await this.assayerService.updateLiveLocation(
       id, dto.latitude, dto.longitude, req.user?.id ?? id,
     );
+    /**
+     * The same fix is also appended to the movement trail.
+     *
+     * `assayers.live_location` is a single column overwritten by every push — it answers "where
+     * are they now?" and destroys the history that a travel allowance is actually paid against.
+     * Appending here means a trail accumulates from the existing app immediately, without waiting
+     * for a mobile release to adopt the batch endpoint below.
+     */
+    await this.locationTrail
+      .record(id, dto.latitude, dto.longitude, {
+        source: LocationPingSource.APP_TRACKING,
+        recordedBy: req.user?.id ?? id,
+      })
+      // The live position has already been saved by the time this runs; failing the request now
+      // would report an error for an update that succeeded, and make the app retry a push it
+      // already delivered.
+      .catch(() => undefined);
     return { success: true, data: assayer };
+  }
+
+  /**
+   * Upload a batch of positions recorded on the device.
+   *
+   * The batch shape is what makes tracking work where the work happens: an assayer in a rural area
+   * or a bank basement has no signal for long stretches, and a one-fix-per-request design simply
+   * loses that time. The app queues fixes and flushes them when it reconnects; duplicates from a
+   * retried flush are ignored on a unique index rather than double-counted, because inflating a
+   * distance is precisely the failure this record exists to prevent.
+   */
+  @Post(':id/location-pings')
+  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Upload a batch of recorded positions for the authenticated assayer' })
+  async uploadLocationPings(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UploadLocationPingsDto,
+    @Req() req: any,
+  ) {
+    // An assayer may only write their own trail: a movement record another field user can write
+    // into is not evidence of anything. HR/admin retain access for attributed corrections, and
+    // `createdBy` on each row records who actually submitted it.
+    assertSelfOrPrivileged(req.user, id, 'upload positions');
+    const result = await this.locationTrail.ingest(id, dto.pings, req.user?.id ?? id);
+    return { success: true, data: result };
   }
 
   /**

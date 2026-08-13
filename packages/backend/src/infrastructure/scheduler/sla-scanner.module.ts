@@ -6,6 +6,7 @@ import { AssignmentModule } from '../../modules/assignment/assignment.module';
 import { AssayerModule } from '../../modules/assayer/assayer.module';
 import { NotificationsModule } from '../../modules/notifications/notifications.module';
 import { ValidationModule } from '../../modules/validation/validation.module';
+import { FeedbackModule } from '../../modules/feedback/feedback.module';
 
 @Module({
   imports: [
@@ -16,6 +17,8 @@ import { ValidationModule } from '../../modules/validation/validation.module';
     NotificationsModule,
     // And chases the data-entry desk's stalled stages — see DeskEscalationService.
     ValidationModule,
+    // And the feedback desk's response-time SLAs — see FeedbackEscalationService.
+    FeedbackModule,
   ],
   providers: [SlaScannerWorker],
   exports: [SlaScannerWorker],
@@ -49,6 +52,14 @@ export class SlaScannerModule implements OnModuleInit {
           repeat: { cron: SlaScannerModule.CRON },
           removeOnComplete: true,
           removeOnFail: false,
+          // Without this, Bull's default is a single attempt: any throw loses the whole tick until
+          // the next cron 15 minutes later. Every phase is idempotent (dedupe keys, guarded
+          // writes), so a transient DB blip is safe to retry — three tries with exponential
+          // backoff recover within the tick instead of leaving escalations 15 minutes stale.
+          // Changing `attempts` does not fork the schedule: Bull keys repeatables by cron string,
+          // and the loop above already removes any stale cron.
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 30_000 },
         },
       );
       this.logger.log('SLA scanner repeatable job registered (every 15 minutes)');

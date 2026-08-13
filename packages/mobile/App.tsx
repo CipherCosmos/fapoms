@@ -48,6 +48,7 @@ import { RejectionModal } from './src/components/RejectionModal';
 import { ExpenseModal } from './src/components/ExpenseModal';
 import { NegotiateModal } from './src/components/NegotiateModal';
 import { ReportIssueModal } from './src/components/ReportIssueModal';
+import { FeedbackModal } from './src/components/FeedbackModal';
 import { AvailabilityModal, LeavePeriod } from './src/components/AvailabilityModal';
 
 /**
@@ -130,6 +131,7 @@ function AppMain() {
   // Availability (self-service time off). Held separately from the profile form because it is
   // its own calendar UI, not a text field.
   const [availabilityVisible, setAvailabilityVisible] = useState(false);
+  const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
   const [availabilityLeaves, setAvailabilityLeaves] = useState<LeavePeriod[]>([]);
 
   // Notification modal state
@@ -946,6 +948,7 @@ function AppMain() {
             onUpdateProfileField={handleUpdateProfileField}
             onSaveProfile={handleSaveProfile}
             onOpenAvailability={() => setAvailabilityVisible(true)}
+            onOpenFeedback={() => setFeedbackModalVisible(true)}
             onLogout={logout}
           />
         )}
@@ -1150,6 +1153,8 @@ function AppMain() {
           }}
         />
       )}
+
+      <FeedbackModal visible={feedbackModalVisible} onClose={() => setFeedbackModalVisible(false)} />
 
       {issueAssignment && (
         <ReportIssueModal

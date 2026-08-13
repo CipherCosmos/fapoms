@@ -69,8 +69,22 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'varchar', length: 255, nullable: true })
   email: string | null;
 
-  @Column({ length: 20 })
-  phone: string;
+  /**
+   * Nullable because a roster is not a contact list.
+   *
+   * Client rosters arrive with code, name, address and district and no phone column at all — the
+   * real one this product is fed has exactly those seven columns. Requiring a phone to *admit* an
+   * assayer meant such a roster imported zero of its 25 people, each with its own "Phone is
+   * required" line, and the operator's only route in was to invent numbers.
+   *
+   * Phone is not the login identifier it was described as: `AuthService` accepts assayer code,
+   * phone or email. What a missing phone genuinely costs is the ability to ring this person — so
+   * it blocks Call & Assign and phone-channel dispatch, and is surfaced as a gap on the record
+   * (CRITICAL_FIELDS) rather than as a barrier to entry. An imported assayer opens at INVITED and
+   * cannot be recommended until they reach ACTIVE regardless, so nothing undeployable escapes.
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  phone: string | null;
 
   @Column({ name: 'alternate_phone', type: 'varchar', length: 20, nullable: true })
   alternatePhone: string | null;
@@ -99,6 +113,29 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true })
   @Index({ spatial: true })
   location: any | null;
+
+  /**
+   * How the home coordinate above was obtained, and how far off it may be — the same contract
+   * as on branches, and it matters at least as much here.
+   *
+   * The conflict-of-interest floor (`minDistanceKm`) and the serviceability radius are both
+   * measured from this point, so an assayer sitting on their city's centroid can be excluded
+   * from a branch on their own street, or admitted to one 40 km away, with nothing on screen
+   * indicating why. `'manual'` means a person placed it, and re-geocoding leaves it alone.
+   */
+  @Column({ name: 'geo_source', type: 'varchar', length: 20, nullable: true })
+  geoSource: string | null;
+
+  /** Radius in metres the home coordinate is trusted within. */
+  @Column({ name: 'geo_accuracy_meters', type: 'integer', nullable: true })
+  geoAccuracyMeters: number | null;
+
+  /** What the geocoder matched, so ops can check the pin rather than trust it. */
+  @Column({ name: 'geo_matched_name', type: 'varchar', length: 500, nullable: true })
+  geoMatchedName: string | null;
+
+  @Column({ name: 'geo_resolved_at', type: 'timestamptz', nullable: true })
+  geoResolvedAt: Date | null;
 
   // ── Live location (opt-in) ────────────────────────────────────────────────
   // Home coordinates are `latitude`/`longitude` above. When the assayer opts in

@@ -34,6 +34,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, 
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { UserEntity } from '../user/user.entity';
 
 export class CreateProjectRequestDto implements CreateProjectDto {
@@ -105,6 +106,7 @@ export class ProjectController {
     private readonly projectService: ProjectService,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   @Post()
@@ -205,7 +207,13 @@ export class ProjectController {
   // planning, validation and audit all legitimately need to answer.
   @Get('branches/:projectBranchId/history')
   @ApiOperation({ summary: 'Full timeline for one project branch: status, assignments, documents, validation' })
-  async getBranchHistory(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
+  async getBranchHistory(
+    @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Full history of one branch — status, assignments, fees, negotiation. Region-ceilinged
+    // like every other detail read: the coverage list is narrowed, so this must be too.
+    await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
     return { success: true, data: await this.projectService.getBranchHistory(projectBranchId) };
   }
 
@@ -339,10 +347,20 @@ export class ProjectController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
-    const list = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
+    const report = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
     return {
       success: true,
-      data: list,
+      data: report.branches,
+      // What the import actually did, including the rows it could not use. `data` alone is the
+      // project's branch list, which looks identical whether 400 branches were imported or none
+      // were — the caller cannot tell success from a silently mismatched header row.
+      meta: {
+        totalRows: report.totalRows,
+        created: report.created,
+        updated: report.updated,
+        linked: report.linked,
+        skipped: report.skipped,
+      },
     };
   }
 

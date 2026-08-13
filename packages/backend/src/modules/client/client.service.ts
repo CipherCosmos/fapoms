@@ -308,10 +308,19 @@ export class ClientService implements OnModuleInit {
   }
 
   async findOne(id: string): Promise<ClientEntity> {
-    const client = await this.clientRepository.findOne({
-      where: { id, isActive: true },
-      relations: ['configuration', 'contacts', 'contracts', 'billing'],
-    });
+    // Filters `is_active` on the client AND on every soft-deletable relation loaded below
+    // (configuration, contacts, contracts, billing). A plain `relations` option would load
+    // the whole set including soft-deleted rows, so they surface in the detail view even
+    // though the dedicated findContacts/findContracts/findBilling methods hide them.
+    const client = await this.clientRepository
+      .createQueryBuilder('client')
+      .leftJoinAndSelect('client.configuration', 'configuration', 'configuration.isActive = true')
+      .leftJoinAndSelect('client.contacts', 'contacts', 'contacts.isActive = true')
+      .leftJoinAndSelect('client.contracts', 'contracts', 'contracts.isActive = true')
+      .leftJoinAndSelect('client.billing', 'billing', 'billing.isActive = true')
+      .where('client.id = :id', { id })
+      .andWhere('client.isActive = true')
+      .getOne();
     if (!client) {
       throw new NotFoundException(`Client ${id} not found.`);
     }
@@ -352,13 +361,24 @@ export class ClientService implements OnModuleInit {
     const sortBy: string = sortable.has(filters.sortBy ?? '') ? (filters.sortBy ?? 'name') : 'name';
     const sortOrder: 'ASC' | 'DESC' = filters.sortOrder === 'DESC' ? 'DESC' : 'ASC';
 
-    const [clients, total] = await this.clientRepository.findAndCount({
-      where,
-      relations: ['configuration'],
-      take: limit,
-      skip: (page - 1) * limit,
-      order: { [sortBy]: sortOrder },
-    });
+    /**
+     * The same guarded join `findOne` uses, for the same reason its comment gives: a plain
+     * `relations: ['configuration']` loads soft-deleted rows.
+     *
+     * The two had drifted, so one client showed a configuration in the list and none in the
+     * detail view — and the configuration the list showed was a deleted one, carrying a rate
+     * card and a serviceability radius that no longer apply. Two clients in this database are
+     * soft-deleted with their configurations, which is exactly the case that surfaced it.
+     */
+    const query = this.clientRepository
+      .createQueryBuilder('client')
+      .leftJoinAndSelect('client.configuration', 'configuration', 'configuration.isActive = true')
+      .where(where)
+      .take(limit)
+      .skip((page - 1) * limit)
+      .orderBy(`client.${sortBy}`, sortOrder);
+
+    const [clients, total] = await query.getManyAndCount();
     return { clients, total };
   }
 
@@ -463,6 +483,49 @@ export class ClientService implements OnModuleInit {
       [userId, id]
     );
 
+    /**
+     * Branches, and everything hanging off them.
+     *
+     * This used to deactivate the branch row and stop, one level deep — but `BranchService.remove`
+     * exists precisely because a branch has its own children (contacts, documents, project
+     * links), and deleting a client through this path bypassed all of it. The result on this
+     * database: SBI was deleted, its 10 branches went inactive, and 11 branch contacts stayed
+     * live under them, still reachable by anything that queries contacts without re-checking
+     * the branch.
+     *
+     * Written set-based against the same client_id rather than by calling BranchService per
+     * branch: a client can have thousands of branches, and this is one statement each.
+     */
+    const branchesOfClient = `SELECT id FROM branches WHERE client_id = $2`;
+
+    await this.dataSource.query(
+      `UPDATE branch_contacts SET is_active = false, updated_by = $1
+        WHERE is_active = true AND branch_id IN (${branchesOfClient})`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE branch_documents SET is_active = false, updated_by = $1
+        WHERE is_active = true AND branch_id IN (${branchesOfClient})`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE project_branches SET is_active = false, updated_by = $1
+        WHERE is_active = true AND branch_id IN (${branchesOfClient})`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE assessments SET is_active = false, updated_by = $1
+        WHERE is_active = true AND branch_id IN (${branchesOfClient})`,
+      [userId, id],
+    );
+
+    // Zones belong to a client. Scoped to `client_id = $2` so the shared zones that carry a
+    // NULL client — used across every engagement — are untouched.
+    await this.dataSource.query(
+      `UPDATE zones SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
     // Deactivate associated branches
     await this.dataSource.query(
       `UPDATE branches SET is_active = false, updated_by = $1 WHERE client_id = $2 AND is_active = true`,
@@ -475,7 +538,9 @@ export class ClientService implements OnModuleInit {
       entityType: 'CLIENT',
       entityId: id,
       userId,
-      remarks: `Soft deleted client ${client.name} and cascaded deactivation to configurations, contacts, contracts, billings, and branches`,
+      remarks:
+        `Soft deleted client ${client.name} and cascaded deactivation to configurations, contacts, ` +
+        `contracts, billings, branches, and each branch's contacts, documents, project links and assessments`,
     });
   }
 

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as Location from 'expo-location';
+import { queueFix, flushQueue } from '../services/location-queue';
 import { MobileApiService } from '../services/api.service';
 import { calculateHaversineDistance } from '@fapoms/shared';
 
@@ -52,6 +53,13 @@ const LocationContext = createContext<LocationContextType | undefined>(undefined
  * and tell the user, rather than being handed a confident lie.
  */
 
+/**
+ * Drain the queued fixes to the server. Safe to call often — it no-ops when the queue is empty and
+ * guards against overlapping drains internally, so a timer tick and a reconnect cannot race.
+ */
+const flushLocationQueue = () =>
+  flushQueue((batch) => MobileApiService.uploadLocationPings(batch)).catch(() => undefined);
+
 export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [location, setLocation] = useState<LocationCoords | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
@@ -92,7 +100,24 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
    * background and a transient signal drop is normal; it is a *sustained* failure that
    * matters, which is what the counter makes visible.
    */
-  const pushLiveLocation = useCallback((lat: number, lng: number) => {
+  const pushLiveLocation = useCallback((lat: number, lng: number, accuracyMeters?: number | null) => {
+    /**
+     * Two different jobs, deliberately not merged.
+     *
+     * The PUT answers "where is this assayer now" and is disposable — if it fails, the next one
+     * thirty seconds later replaces it and nothing is lost. The queued fix is *evidence*: it
+     * becomes part of the movement trail a travel claim is later checked against, and a fix taken
+     * where there was no signal is exactly the one worth keeping. So it is written to the device
+     * first and uploaded whenever the network allows, rather than being fired at the server and
+     * forgotten.
+     */
+    void queueFix({
+      latitude: lat,
+      longitude: lng,
+      accuracyMeters: accuracyMeters ?? null,
+      recordedAt: new Date().toISOString(),
+    }).then(() => flushLocationQueue());
+
     MobileApiService.updateLiveLocation(lat, lng)
       .then(() => setLiveTrackingFailures(0))
       .catch((err: any) => {
@@ -145,7 +170,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
         setLocation(coords);
         setLoadingLocation(false);
-        pushLiveLocation(coords.latitude, coords.longitude);
+        pushLiveLocation(coords.latitude, coords.longitude, coords.accuracy);
         return coords;
       } else {
         // Permission refused. Say so plainly and report no position at all.

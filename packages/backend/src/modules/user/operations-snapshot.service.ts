@@ -121,16 +121,19 @@ export class OperationsSnapshotService {
     ];
     const STAGES = STAGE_ORDER.map((key) => ({ key, label: branchStatusLabel(key) }));
 
-    // ── Scope predicates for the te    // One params array shared by the four territorial queries; each query includes only the
+    // ── Scope predicates for the territorial queries ───────────────────────
+    // One params array shared by the branch-based territorial queries; each includes only the
     // fragments whose aliases it actually has. Placeholder indexes are allocated once, so a
-    // fragment means the same thing in every query that uses it.
+    // fragment means the same thing in every query that uses it. The capacity query queries
+    // `assayers` rather than `branches` and so binds its own array, below.
     const sp: any[] = [];
     const frag = { region: '', state: '', zone: '', client: '', project: '' };
     if (scope?.regions?.length) {
       sp.push(scope.regions);
       frag.region = ` AND b.region = ANY($${sp.length})`;
     }
-    if (scope?.state) { sp.push(scope.state); frag.state = ` AND b.state = $${sp.length}`; }
+    // UPPER() both sides: this column holds the same state in multiple casings (see apply-scope).
+    if (scope?.state) { sp.push(scope.state); frag.state = ` AND UPPER(b.state) = UPPER($${sp.length})`; }
     if (scope?.zoneId) { sp.push(scope.zoneId); frag.zone = ` AND b.zone_id = $${sp.length}`; }
     if (scope?.clientId) { sp.push(scope.clientId); frag.client = ` AND p.client_id = $${sp.length}`; }
     if (scope?.projectId) { sp.push(scope.projectId); frag.project = ` AND p.id = $${sp.length}`; }

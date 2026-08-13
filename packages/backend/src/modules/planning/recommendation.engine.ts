@@ -6,7 +6,8 @@ import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { AssignmentStatus, AssayerStatus, calculateHaversineDistance, businessDateKey } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, calculateHaversineDistance, businessDateKey, BypassableRule } from '@fapoms/shared';
+import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RuleEngine } from '../platform/rules/rule.engine';
@@ -20,7 +21,8 @@ import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assig
  * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
  */
 const EXCLUSION_REASONS: Record<string, string> = {
-  availability: 'Unavailable on this date (already booked, on leave, or inactive)',
+  deployable: 'Onboarding not finished — not yet assignable',
+  availability: 'Unavailable on this date (already booked or on leave)',
   consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
   clientRestriction: 'Restricted by this client',
   clientEligibility: 'Not approved to work for this client',
@@ -33,8 +35,11 @@ const EXCLUSION_REASONS: Record<string, string> = {
  * What KIND of exclusion each filter produces — because they are not equally final.
  * A DATE exclusion (booked that day, on leave) is a perfectly good candidate for another
  * date and should be offered as such, not buried; SKILLS/POLICY exclusions are structural.
+ * ONBOARDING is neither: the person is real and near the branch, they simply have not been
+ * walked to the end of the HR onboarding path yet, and the fix is a click on the roster.
  */
-const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS'> = {
+const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING'> = {
+  deployable: 'ONBOARDING',
   availability: 'DATE',
   consecutiveBranchAudit: 'ROTATION',
   distancePolicy: 'DISTANCE',
@@ -44,11 +49,51 @@ const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY
   requiredSkills: 'SKILLS',
 };
 
+/**
+ * Lifecycle stages an assayer passes through before they are assignable.
+ *
+ * `AssayerService.create` opens every new profile at INVITED / status INACTIVE, and each
+ * planning query then asked for `status = ACTIVE` — so a just-added assayer was not merely
+ * ineligible, they never entered the candidate pool at all and no exclusion reason was recorded
+ * for them. Ops saw "No assayers found in range for this date" for someone they had added
+ * minutes earlier and who was plainly visible on the HR roster.
+ *
+ * Candidates in these stages are pulled into the pool deliberately, so the engine can say what
+ * is actually wrong and where to fix it. They are still excluded from the eligible list —
+ * dispatching unverified, untrained people is the control this lifecycle exists to enforce.
+ */
+const ONBOARDING_LIFECYCLE_STATES: string[] = [
+  AssayerLifecycleStatus.INVITED,
+  AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+  AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+  AssayerLifecycleStatus.TRAINING,
+];
+
+/** Human-readable next step per onboarding stage, so the exclusion is actionable. */
+const ONBOARDING_NEXT_STEP: Record<string, string> = {
+  [AssayerLifecycleStatus.INVITED]: 'invited — start document verification on the HR roster',
+  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'in document verification — complete it on the HR roster',
+  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'in background verification — complete it on the HR roster',
+  [AssayerLifecycleStatus.TRAINING]: 'in training — mark training complete on the HR roster to activate',
+};
+
 export interface PlanningContext {
   branch: BranchEntity;
   client: ClientEntity | null;
   scheduledDate: Date;
   weights: Record<string, number>;
+  /**
+   * Treat the date-bound checks (already booked, on leave) as advisory rather than
+   * disqualifying, so the operator sees the whole nearby workforce and decides for themselves.
+   *
+   * Ops asked for this because the date filter answers a narrower question than the one they
+   * are usually asking: on a first pass they want to know *who could do this branch at all*,
+   * and a diary clash on one candidate date is something they resolve by moving the date, not
+   * by removing the person. Candidates kept this way carry `dateConflict` so the clash is still
+   * stated on the row — relaxed, not hidden. Deployability (onboarding, active status) is NOT
+   * relaxed by this: that is a control, not a preference.
+   */
+  relaxAvailability?: boolean;
   /**
    * Facts about the branch itself, resolved once per recommendation rather than once per
    * candidate.
@@ -114,6 +159,51 @@ export interface ScoreCalculator {
   calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number>;
 }
 
+/**
+ * Is this person assignable at all, on any date?
+ *
+ * Split out of AvailabilityFilter because the two answer different questions and the operator
+ * needs to tell them apart. "Booked on Tuesday" and "has not finished background verification"
+ * were both reported as *Unavailable on this date*, which sent ops looking for another date for
+ * someone who has no dates at all. This runs first so an onboarding candidate is reported as
+ * such, and — unlike the date checks — it is never relaxed.
+ */
+@Injectable()
+export class DeployabilityFilter implements CandidateFilter {
+  name = 'deployable';
+
+  constructor(private readonly ruleBypass: RuleBypassService) {}
+
+  async evaluate(assayer: AssayerEntity): Promise<boolean> {
+    if (assayer.isActive && assayer.status === AssayerStatus.ACTIVE) return true;
+    /**
+     * A deleted profile is never selectable, bypass or not. Suspending onboarding is a
+     * statement about vetting being incomplete; it is not a statement that a record somebody
+     * removed from the workforce should come back.
+     */
+    if (!assayer.isActive) return false;
+    if (await this.ruleBypass.isBypassed(BypassableRule.ASSAYER_ONBOARDING)) {
+      this.ruleBypass.noteBypass(BypassableRule.ASSAYER_ONBOARDING, {
+        entityType: 'ASSAYER',
+        entityId: assayer.id,
+        detail: `offered as a candidate at lifecycle ${assayer.lifecycleStatus}`,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /** Why they are not assignable, and what to do about it. */
+  explain(assayer: AssayerEntity): string {
+    if (!assayer.isActive) {
+      return 'Profile has been deleted from the workforce — restore it on the HR roster to use them.';
+    }
+    const step = ONBOARDING_NEXT_STEP[assayer.lifecycleStatus];
+    if (step) return `Onboarding not finished: ${step}.`;
+    return `Not assignable — profile status is ${assayer.status} (${assayer.lifecycleStatus}).`;
+  }
+}
+
 @Injectable()
 export class AvailabilityFilter implements CandidateFilter {
   name = 'availability';
@@ -123,9 +213,25 @@ export class AvailabilityFilter implements CandidateFilter {
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
-    if (assayer.status !== 'ACTIVE' || !assayer.isActive) {
-      return false;
-    }
+    /**
+     * Deployability is not re-judged here.
+     *
+     * This used to reject anyone whose status was not ACTIVE, described as a backstop for
+     * standalone callers — there are none; DeployabilityFilter is registered ahead of this one in
+     * the only pipeline that runs it. What the duplicate actually did was silently undo the
+     * administrator's ASSAYER_ONBOARDING bypass: deployability let an onboarding assayer through
+     * as instructed, and this line rejected them one step later under a reason that is a
+     * statement about a particular day — "already booked or on leave" — for someone with no
+     * bookings and no leave. The bypass looked broken and the exclusion panel lied about why.
+     *
+     * One filter owns one question. Whether this person can be sent anywhere at all is
+     * DeployabilityFilter's; whether they are free on this date is this one's.
+     */
+
+    // Both checks below are about one specific day. When the operator has asked to see the
+    // whole workforce regardless of that day, they stop disqualifying and are reported on the
+    // candidate row instead — see PlanningContext.relaxAvailability.
+    if (context.relaxAvailability) return true;
 
     // 1. Check double booking
     // Resolved for the whole pool in one query when recommend() supplied the facts; the
@@ -154,6 +260,7 @@ export class ConsecutiveBranchAuditFilter implements CandidateFilter {
   constructor(
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly ruleBypass: RuleBypassService,
   ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
@@ -181,6 +288,13 @@ export class ConsecutiveBranchAuditFilter implements CandidateFilter {
     // assayer from still showing up as a recommendable backup candidate.
     const locksOutCandidate = [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED].includes(lastAssignment.status);
     if (lastAssignment.assayerId === assayer.id && locksOutCandidate) {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.REPEAT_AUDITOR_ROTATION)) {
+        this.ruleBypass.noteBypass(BypassableRule.REPEAT_AUDITOR_ROTATION, {
+          entityType: 'BRANCH', entityId: context.branch.id,
+          detail: `${assayer.displayName} audited this branch most recently`,
+        });
+        return true;
+      }
       return false;
     }
 
@@ -245,10 +359,20 @@ export class DistancePolicyFilter implements CandidateFilter {
 export class ClientRestrictionFilter implements CandidateFilter {
   name = 'clientRestriction';
 
+  constructor(private readonly ruleBypass: RuleBypassService) {}
+
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     if (!context.client) return true;
     const restricted = context.client.restrictedAssayers || [];
-    return !restricted.includes(assayer.id);
+    if (!restricted.includes(assayer.id)) return true;
+    if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
+      this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
+        entityType: 'ASSAYER', entityId: assayer.id,
+        detail: `barred by ${context.client.clientCode ?? context.client.name}`,
+      });
+      return true;
+    }
+    return false;
   }
 }
 
@@ -256,13 +380,23 @@ export class ClientRestrictionFilter implements CandidateFilter {
 export class ClientEligibilityFilter implements CandidateFilter {
   name = 'clientEligibility';
 
+  constructor(private readonly ruleBypass: RuleBypassService) {}
+
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     if (!context.client) return true;
     const eligible = assayer.eligibleClients || [];
     if (eligible.length === 0 || eligible.includes('*') || eligible.includes('ANY') || eligible.includes('ALL')) {
       return true;
     }
-    return eligible.includes(context.client.clientCode) || eligible.includes(context.client.id);
+    if (eligible.includes(context.client.clientCode) || eligible.includes(context.client.id)) return true;
+    if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
+      this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
+        entityType: 'ASSAYER', entityId: assayer.id,
+        detail: `not on ${context.client.clientCode ?? context.client.name}'s approved list`,
+      });
+      return true;
+    }
+    return false;
   }
 }
 
@@ -274,6 +408,7 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
     private readonly ruleEngine: RuleEngine,
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
+    private readonly ruleBypass: RuleBypassService,
   ) {}
 
   async evaluate(assayerEntity: AssayerEntity, context: PlanningContext): Promise<boolean> {
@@ -310,7 +445,15 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       restrictedAssayers: context.client?.restrictedAssayers,
     });
     // If any active rule block action fails, return false
-    return !results.some((r) => !r.passed && r.actionType === 'BLOCK');
+    const blocked = results.some((r) => !r.passed && r.actionType === 'BLOCK');
+    if (blocked && this.ruleBypass.isBypassedSync(BypassableRule.BUSINESS_RULE_ENGINE)) {
+      this.ruleBypass.noteBypass(BypassableRule.BUSINESS_RULE_ENGINE, {
+        entityType: 'ASSAYER', entityId: assayer.id,
+        detail: results.filter((r) => !r.passed && r.actionType === 'BLOCK').map((r) => r.message).join('; '),
+      });
+      return true;
+    }
+    return !blocked;
   }
 
   /**
@@ -945,6 +1088,24 @@ export interface RecommendationPreload {
   assayers: AssayerEntity[];
 }
 
+export interface RecommendOptions {
+  /** See PlanningContext.relaxAvailability. */
+  relaxAvailability?: boolean;
+  /**
+   * How far from the branch to look for candidates, in km. The operator's own choice.
+   *
+   * Without this the search area was a fixed 200 km that nothing on screen mentioned, while the
+   * planning map let an operator set their own radius and drew every assayer inside it. Setting
+   * 350 km therefore produced pins the engine had already discarded — assayers who were free,
+   * qualified and plainly visible, with no candidate row and no way to reach one.
+   *
+   * Bounded by MAX_SEARCH_RADIUS_KM. The bound is not a policy about how far someone may
+   * travel — the distance filters and the client's own serviceability radius decide that — it
+   * is only there to stop one request scanning a national workforce.
+   */
+  searchRadiusKm?: number;
+}
+
 /**
  * Coarse geographic pre-filter for the candidate pool.
  *
@@ -969,6 +1130,27 @@ export interface RecommendationPreload {
  */
 const CANDIDATE_PREFILTER_RADIUS_KM = 200;
 
+/**
+ * How far out to bother naming the assayers the pre-filter dropped.
+ *
+ * Comfortably wider than the pre-filter itself, and wider than the planning map's own search
+ * radius, so an operator who widens the map and asks "why isn't that one a candidate?" gets an
+ * answer instead of silence.
+ */
+const PRUNED_EXPLANATION_RADIUS_KM = 500;
+
+/** At most this many, nearest first — an explanation, not a national roster dump. */
+const MAX_PRUNED_REPORTED = 10;
+
+/**
+ * The widest search an operator may ask for in one request.
+ *
+ * India is roughly 3,000 km corner to corner, so this is generous enough that no legitimate
+ * "look further afield" is refused, while still stopping a single recommendation from scoring,
+ * routing and rule-checking every assayer in the country.
+ */
+const MAX_SEARCH_RADIUS_KM = 1000;
+
 @Injectable()
 export class RecommendationEngine {
   private static readonly logger = new Logger(RecommendationEngine.name);
@@ -976,6 +1158,7 @@ export class RecommendationEngine {
   private calculators: ScoreCalculator[] = [];
 
   constructor(
+    private readonly deployabilityFilter: DeployabilityFilter,
     private readonly availabilityFilter: AvailabilityFilter,
     private readonly consecutiveBranchAuditFilter: ConsecutiveBranchAuditFilter,
     private readonly clientRestrictionFilter: ClientRestrictionFilter,
@@ -1018,6 +1201,8 @@ export class RecommendationEngine {
     private readonly assayerService: AssayerService,
   ) {
     this.filters.push(
+      // First: "can this person be sent anywhere at all?" — see DeployabilityFilter.
+      this.deployabilityFilter,
       this.availabilityFilter,
       this.consecutiveBranchAuditFilter,
       this.clientRestrictionFilter,
@@ -1074,6 +1259,15 @@ export class RecommendationEngine {
       ? await this.clientRepository.findOne({ where: { id: clientId, isActive: true } })
       : null;
 
+    /**
+     * Deployable workforce only — deliberately narrower than the interactive path, which also
+     * pulls in still-onboarding profiles so it can explain them.
+     *
+     * A coverage plan is a proposal to actually staff a project. Listing people who cannot be
+     * dispatched would either inflate the coverage figure quoted to the client or bury the plan
+     * in exclusions nobody asked for. The interactive candidate list is answering a different
+     * question — "why isn't this person here?" — and that is where the explanation belongs.
+     */
     const assayers = await this.assayerRepository.find({
       where: { isActive: true, status: AssayerStatus.ACTIVE },
     });
@@ -1095,13 +1289,42 @@ export class RecommendationEngine {
    * opted-in mobile auditor whose home is far away is never dropped by a stale home coordinate —
    * their effective (live) position is what the scorers actually route from.
    *
-   * ST_DistanceSphere on ST_SetSRID(ST_MakePoint(lng, lat), 4326) mirrors the existing spatial
-   * queries in RoutingService and CommandCenterService (metres, computed from the lat/long columns
-   * rather than the optional `location` geometry, which some rows may not have populated).
+   * Assayers with NO coordinates are kept too. Geocoding an address can fail — `AssayerService`
+   * saves the profile without a location and logs it — and this predicate dropped exactly those
+   * people whenever anyone else was in range, so a newly added assayer whose address did not
+   * resolve was doubly invisible: absent from the candidate list and absent from the excluded
+   * list that explains it. An unknown location is a data gap to surface, not a disqualification.
+   *
+   * Bounded with `ST_DWithin` against the stored `location` geometry, falling back to the lat/long
+   * pair for any row whose geometry was never written.
+   *
+   * It used to compute `ST_DistanceSphere(ST_MakePoint(a.longitude, a.latitude), …)` inline, which
+   * measures the exact distance to *every* assayer on *every* planning request and cannot use the
+   * GiST index the table already carries — the point being compared did not exist until the query
+   * ran. Over a 5,000-strong workforce that was a 53 ms sequential scan on the most frequently hit
+   * planning path; `ST_DWithin` bounds the search first and comes in under a millisecond.
+   *
+   * `use_spheroid = false` is not an optimisation, it is what keeps the answer identical.
+   * `ST_DistanceSphere` measures on a sphere and geography defaults to the WGS84 spheroid, so the
+   * default would quietly move the boundary — measured on a 5,000-assayer set, 322 candidates
+   * instead of 321. Passing false selects the same spherical maths, and the same candidates.
    */
   private async findNearbyActiveAssayerIds(
     branch: BranchEntity,
     radiusKm: number,
+    /**
+     * Filled with the assayers this pre-filter pruned, nearest first.
+     *
+     * The pre-filter runs before every eligibility rule, so anyone it drops produces no
+     * exclusion reason at all — they are simply absent. That silently defeats the excluded-
+     * candidates panel, whose entire job is to answer "why isn't this person in the list?".
+     *
+     * It shows up as a direct contradiction on screen: the planning map draws assayers by the
+     * operator's own search radius (350 km, say), while this prunes at 200 km, so five pins
+     * appear around a branch whose candidate list is empty and whose "excluded" panel is empty
+     * too. Reporting them as a distance exclusion turns that into a sentence somebody can act on.
+     */
+    prunedOut?: Array<{ id: string; displayName: string; distanceKm: number }>,
   ): Promise<Set<string> | null> {
     if (branch.latitude == null || branch.longitude == null) return null;
 
@@ -1111,24 +1334,113 @@ export class RecommendationEngine {
         `SELECT a.id AS id
            FROM assayers a
           WHERE a.is_active = true
-            AND a.status = $1
+            -- ::text on both sides. Both columns are Postgres enum types, and comparing an
+            -- enum to a text[] parameter is a hard error ("operator does not exist"), not a
+            -- coercion. It would have been invisible: the caller catches and falls back to the
+            -- unbounded pool, so the pre-filter would simply have stopped working.
+            AND (a.status::text = $1 OR a.lifecycle_status::text = ANY($5))
             AND (
               a.is_live_enabled = true
-              OR (
-                a.latitude IS NOT NULL AND a.longitude IS NOT NULL
-                AND ST_DistanceSphere(
-                  ST_SetSRID(ST_MakePoint(a.longitude, a.latitude), 4326),
-                  ST_SetSRID(ST_MakePoint($2, $3), 4326)
-                ) <= $4
-              )
+              -- Unknown position — kept, so it reaches the excluded panel with a reason rather
+              -- than vanishing. The location geometry and latitude/longitude are written by
+              -- resolveCoordinates, so this is the same set the lat/long null-check selected;
+              -- were a row ever to carry coordinates without the geometry, keeping it is the
+              -- safe direction: an extra candidate is visible and explainable, a dropped one
+              -- is neither.
+              OR a.location IS NULL
+              -- Tested against the bare column so it matches the functional index on
+              -- ("location"::geography); wrapping the column in COALESCE or anything else makes
+              -- the expression unrecognisable to the planner and the index unusable.
+              OR ST_DWithin(a.location::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4, false)
             )`,
-        [AssayerStatus.ACTIVE, Number(branch.longitude), Number(branch.latitude), radiusMeters],
+        [
+          AssayerStatus.ACTIVE,
+          Number(branch.longitude),
+          Number(branch.latitude),
+          radiusMeters,
+          // Still-onboarding profiles are kept in the pool so the engine can say why they are
+          // not selectable — see ONBOARDING_LIFECYCLE_STATES.
+          ONBOARDING_LIFECYCLE_STATES,
+        ],
       )
-      .catch(() => null);
+      .catch((err) => {
+        // Falling back is right — a broken pre-filter must not empty the candidate list — but
+        // doing it silently is not. A malformed predicate here (an enum compared to text[], a
+        // renamed column) degrades every recommendation to a national scan and shows no symptom
+        // at all except latency, which is exactly the kind of failure nobody goes looking for.
+        RecommendationEngine.logger.error(
+          `Candidate pre-filter query failed for branch ${branch.id}; falling back to the full ` +
+            `active pool. Recommendations are still correct but unbounded. ${err?.message ?? err}`,
+        );
+        return null;
+      });
 
     if (!rows) return null; // query failed — fall back to the full pool
     if (rows.length === 0) return null; // nobody in range — fall back rather than return empty
-    return new Set(rows.map((r) => r.id));
+    const kept = new Set(rows.map((r) => r.id));
+
+    /**
+     * Who was dropped, and how far away they are.
+     *
+     * Bounded twice over: only assayers inside `PRUNED_EXPLANATION_RADIUS_KM` are looked up, and
+     * only the nearest few are reported. The point is to explain the pins an operator can
+     * actually see next to this branch, not to enumerate a national workforce — a list of every
+     * assayer in the country would bury the reasons that matter under noise.
+     */
+    if (prunedOut) {
+      const pruned: Array<{ id: string; displayName: string; distanceKm: string }> = await this.assayerRepository
+        .query(
+          `SELECT a.id, a.display_name AS "displayName",
+                  ST_DistanceSphere(
+                    ST_SetSRID(ST_MakePoint(a.longitude, a.latitude), 4326),
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326)
+                  ) / 1000 AS "distanceKm"
+             FROM assayers a
+            WHERE a.is_active = true
+              AND (a.status::text = $3 OR a.lifecycle_status::text = ANY($4))
+              AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL
+              AND NOT (a.id = ANY($5))
+              AND ST_DistanceSphere(
+                    ST_SetSRID(ST_MakePoint(a.longitude, a.latitude), 4326),
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326)
+                  ) <= $6
+            ORDER BY "distanceKm" ASC
+            LIMIT ${MAX_PRUNED_REPORTED}`,
+          [
+            Number(branch.longitude),
+            Number(branch.latitude),
+            AssayerStatus.ACTIVE,
+            ONBOARDING_LIFECYCLE_STATES,
+            [...kept],
+            PRUNED_EXPLANATION_RADIUS_KM * 1000,
+          ],
+        )
+        .catch(() => []);
+
+      for (const p of pruned) {
+        prunedOut.push({ id: p.id, displayName: p.displayName, distanceKm: Number(p.distanceKm) });
+      }
+    }
+
+    return kept;
+  }
+
+  /**
+   * The date clash a relaxed candidate still carries, phrased for the operator, or null when
+   * they are genuinely free that day. Reads only facts already resolved for the whole pool.
+   */
+  private describeDateConflict(assayer: AssayerEntity, context: PlanningContext): string | null {
+    const booking = context.branchFacts?.doubleBookedByAssayer[assayer.id];
+    if (booking) return `Already booked that day on ${booking}.`;
+
+    const dateKey = businessDateKey(context.scheduledDate);
+    const leave = ((assayer as any).leaves ?? []).find(
+      (l: { startDate?: string; endDate?: string }) =>
+        l?.startDate && l?.endDate && l.startDate <= dateKey && dateKey <= l.endDate,
+    );
+    if (leave) return `On leave ${leave.startDate} to ${leave.endDate}.`;
+
+    return null;
   }
 
   async recommend(
@@ -1140,6 +1452,8 @@ export class RecommendationEngine {
      * Omitted, this method behaves exactly as before and loads them itself.
      */
     preloaded?: RecommendationPreload,
+    /** See PlanningContext.relaxAvailability. */
+    options?: RecommendOptions,
   ) {
     const client = preloaded
       ? preloaded.client
@@ -1154,6 +1468,7 @@ export class RecommendationEngine {
       client,
       scheduledDate,
       weights: resolvedConfig.weights,
+      relaxAvailability: options?.relaxAvailability === true,
     };
 
     // Bound the candidate pool by geography before any scoring — see CANDIDATE_PREFILTER_RADIUS_KM.
@@ -1161,11 +1476,25 @@ export class RecommendationEngine {
     // pre-filter can only ever be wider than what scoring already tolerates. `nearbyIds` is null
     // when there is no usable pre-filter (no branch coordinates, nobody in range, or the query
     // failed), in which case the full active pool is kept exactly as before.
-    const prefilterRadiusKm = Math.max(
-      CANDIDATE_PREFILTER_RADIUS_KM,
-      Number(resolvedConfig.defaultRadius) || 0,
+    /**
+     * The operator's radius wins when they set one; otherwise the default floor.
+     *
+     * Still a `max` against the client's configured serviceability radius, so a client who
+     * services 400 km is never searched at 200 — but an explicit request now widens it too,
+     * which is what makes the map's radius control and the candidate list agree.
+     */
+    const requestedRadius = Number(options?.searchRadiusKm);
+    const prefilterRadiusKm = Math.min(
+      MAX_SEARCH_RADIUS_KM,
+      Math.max(
+        Number.isFinite(requestedRadius) && requestedRadius > 0 ? requestedRadius : CANDIDATE_PREFILTER_RADIUS_KM,
+        Number(resolvedConfig.defaultRadius) || 0,
+      ),
     );
-    const nearbyIds = await this.findNearbyActiveAssayerIds(branch, prefilterRadiusKm);
+    // Collected so the pre-filter can explain itself rather than dropping people silently —
+    // see the note on findNearbyActiveAssayerIds' `prunedOut`.
+    const prunedByDistance: Array<{ id: string; displayName: string; distanceKm: number }> = [];
+    const nearbyIds = await this.findNearbyActiveAssayerIds(branch, prefilterRadiusKm, prunedByDistance);
 
     // Reused from the preload when a batch caller supplied one; hydration is idempotent and
     // the scorers only read these, so sharing one list across branches is safe.
@@ -1182,13 +1511,15 @@ export class RecommendationEngine {
       // full active pool. The isActive/status predicate is identical to before in both branches;
       // `nearbyIds` was itself resolved under the same predicate, so the set is unchanged apart
       // from the geographic bound.
+      // The status predicate matches findNearbyActiveAssayerIds: assignable today, OR still
+      // working through onboarding so the exclusion list can explain them.
+      const deployableOrOnboarding = (extra: Record<string, unknown>) => [
+        { ...extra, isActive: true, status: AssayerStatus.ACTIVE },
+        { ...extra, isActive: true, lifecycleStatus: In(ONBOARDING_LIFECYCLE_STATES) },
+      ];
       assayers = nearbyIds
-        ? await this.assayerRepository.find({
-            where: { id: In([...nearbyIds]), isActive: true, status: AssayerStatus.ACTIVE },
-          })
-        : await this.assayerRepository.find({
-            where: { isActive: true, status: AssayerStatus.ACTIVE },
-          });
+        ? await this.assayerRepository.find({ where: deployableOrOnboarding({ id: In([...nearbyIds]) }) })
+        : await this.assayerRepository.find({ where: deployableOrOnboarding({}) });
       await this.assayerService.hydrateAllWorkforceAttributes(assayers);
     }
 
@@ -1408,7 +1739,7 @@ export class RecommendationEngine {
       displayName: string;
       reason: string;
       detail?: string;
-      kind: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS';
+      kind: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING';
       distanceKm: number | null;
       nextAvailableDate: string | null;
     }[] = [];
@@ -1426,6 +1757,9 @@ export class RecommendationEngine {
         let detail: string | undefined;
         if (blockedBy === this.ruleEngineEligibilityFilter.name) {
           detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
+        } else if (blockedBy === this.deployabilityFilter.name) {
+          // Which onboarding stage they are stuck at, and the click that unsticks them.
+          detail = this.deployabilityFilter.explain(assayer);
         }
 
         // DATE-kind exclusions are candidates for ANOTHER day, and ops needs enough to act on
@@ -1479,6 +1813,32 @@ export class RecommendationEngine {
         score: parseFloat(finalScore.toFixed(2)),
         breakdown: scoreBreakdown,
         pendingOnThisBranch: pendingOffer?.assayerId === assayer.id,
+        // Only set when the date checks were relaxed and this candidate would otherwise have
+        // been dropped. Relaxing the filter must not quietly hide the clash — the operator
+        // asked to see past it, not to be kept from knowing about it.
+        dateConflict: context.relaxAvailability
+          ? this.describeDateConflict(assayer, context)
+          : null,
+      });
+    }
+
+    /**
+     * The assayers the geographic pre-filter removed before any rule ran.
+     *
+     * Appended last so the rule-based exclusions — the ones an operator can actually act on —
+     * stay at the top of the panel. These are reported purely so nobody is invisible: an
+     * assayer whose pin is on the map but who appears in neither list is the exact question
+     * this panel exists to answer.
+     */
+    for (const p of prunedByDistance) {
+      excluded.push({
+        assayerId: p.id,
+        displayName: p.displayName,
+        reason: `Outside the ${Math.round(prefilterRadiusKm)} km candidate search area for this branch`,
+        detail: `${p.distanceKm.toFixed(0)} km away. Widen the client's serviceability radius to consider them.`,
+        kind: 'DISTANCE',
+        distanceKm: p.distanceKm,
+        nextAvailableDate: null,
       });
     }
 

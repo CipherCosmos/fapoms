@@ -72,6 +72,13 @@ interface Candidate {
   /** Backend already computes these; the UI previously discarded them. */
   readableReasons?: { label: string; detail?: string; sentiment?: string }[];
   scoreBreakdown?: Record<string, number>;
+  /**
+   * Set only when "Ignore date availability" is on and this candidate has a clash on the
+   * planned date ("Already booked that day on ASG-0042.", "On leave 2026-08-10 to 2026-08-14.").
+   * Null means genuinely free. Relaxing the filter reveals the person; it must not conceal the
+   * clash, or the operator dispatches into a double-booking believing the list was clean.
+   */
+  dateConflict?: string | null;
 }
 
 /** A candidate the engine filtered out, and why. */
@@ -80,7 +87,7 @@ interface ExcludedCandidate {
   displayName: string;
   reason: string;
   detail?: string;
-  kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS';
+  kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING';
   distanceKm?: number | null;
   nextAvailableDate?: string | null;
 }
@@ -298,6 +305,10 @@ export const PlanningWorkspace: React.FC = () => {
   // dimensions are taken from the header here.
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
+  // Socket refreshes and other long-lived callbacks reload the coverage queue; they must read
+  // the current scope, not the one captured when they were bound.
+  const scopeQueryRef = useRef(scopeQuery);
+  scopeQueryRef.current = scopeQuery;
 
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
@@ -349,6 +360,26 @@ export const PlanningWorkspace: React.FC = () => {
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
+  /**
+   * Whether the desk confirms the assignment itself instead of leaving the assayer an offer
+   * to accept.
+   *
+   * Defaults ON for this screen, because both flows that use it are phone calls: Call & Assign
+   * exists to reach agreement out loud (a call that ends any other way is recorded through
+   * "Log call outcome…" instead), and bulk assign offers a run of branches to one assayer the
+   * operator has just spoken to. Leaving an offer for someone who already said yes only delays
+   * the branch — and an unanswered offer past its SLA is auto-declined, so it can silently
+   * come back unstaffed.
+   *
+   * Sticky per operator: whoever works the phones differently should not have to re-tick it on
+   * every call.
+   */
+  const [assignDirectly, setAssignDirectly] = useState<boolean>(
+    () => localStorage.getItem('planning_assignDirectly') !== 'false',
+  );
+  useEffect(() => {
+    localStorage.setItem('planning_assignDirectly', String(assignDirectly));
+  }, [assignDirectly]);
   const [scheduledAuditDate, setScheduledAuditDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -369,8 +400,34 @@ export const PlanningWorkspace: React.FC = () => {
   const [detailRemarks, setDetailRemarks] = useState<Remark[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
+  /**
+   * Rank the whole nearby workforce, treating a booking or leave on the planned date as
+   * advisory rather than disqualifying.
+   *
+   * Off by default, because the ranked list should normally mean "these people can actually do
+   * it that day". It exists because the date filter answers a narrower question than the one
+   * ops asks first — "who could cover this branch at all?" — and a diary clash is usually
+   * resolved by moving the date, not by removing the person. Candidates kept this way come back
+   * with `dateConflict` set and are labelled on the row, so nothing is hidden.
+   */
+  const [ignoreDateAvailability, setIgnoreDateAvailability] = useState(false);
   const [slaEnabled, setSlaEnabled] = useState(true);
   const [slaRadius, setSlaRadius] = useState(50);
+  /**
+   * The map's search radius, owned here so one number governs the whole screen.
+   *
+   * This is the control the operator actually reaches for ("Search Radius (350km)" on the map),
+   * and until now it only decided which pins were drawn — the engine searched a fixed 200 km
+   * that nothing on screen mentioned. Setting 350 km therefore produced markers for assayers
+   * who were never candidates, with an empty list beside them and no way to connect the two.
+   *
+   * Seeded from the key the map itself persisted, so an operator's existing choice carries over
+   * rather than silently resetting the first time they open this page after the change.
+   */
+  const [searchRadiusKm, setSearchRadiusKm] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('map_radiusKm'));
+    return Number.isFinite(saved) && saved > 0 ? saved : 300;
+  });
   // Max-radius ("show assayers WITHIN X km") — the intuitive service-radius filter, independent of
   // the min-radius independence floor. Replaces the old fixed 700km cap + "Show Distant" toggle.
   const [maxRadiusEnabled, setMaxRadiusEnabled] = useState(false);
@@ -471,7 +528,12 @@ export const PlanningWorkspace: React.FC = () => {
     }
     // scheduledAuditDate is a dep on purpose: recommendations are evaluated FOR that date, so
     // changing the planned date must re-rank (availability and fees can both differ by day).
-  }, [selectedBranchId, branches, scheduledAuditDate]);
+    // ignoreDateAvailability likewise — it changes which candidates the engine returns, so the
+    // toggle has to refetch rather than re-slice a list that never contained them.
+    // The radius controls are now in the same category: they widen the engine's search area,
+    // so they must refetch. Re-slicing would silently cap them at whatever the last request
+    // found, which is precisely how the map came to show assayers the list could never contain.
+  }, [selectedBranchId, branches, scheduledAuditDate, ignoreDateAvailability, maxRadiusEnabled, maxRadius, searchRadiusKm]);
 
   // Auto date mode: on branch selection, ask the backend for the first workable audit date for
   // THIS branch (its state's holidays, working Saturdays) and seed the picker. Skipped once ops
@@ -573,7 +635,7 @@ export const PlanningWorkspace: React.FC = () => {
     setIsLoadingQueue(true);
     setMessage(null);
     try {
-      const data = await getProjectBranches<ProjectBranch>(projectId, scopeQuery);
+      const data = await getProjectBranches<ProjectBranch>(projectId, scopeQueryRef.current);
       setBranches(data);
       setSelectedBranchId(data.length > 0 ? data[0].id : null);
     } catch { console.error('Failed to fetch project branches queue'); }
@@ -751,6 +813,10 @@ export const PlanningWorkspace: React.FC = () => {
     setBulkFailures([]);
     const failures: Array<{ branchId: string; branchName: string; error: string }> = [];
     let succeeded = 0;
+    // Counted separately from `succeeded`: with "assign directly" on, a branch can be created
+    // successfully and still come back as a PENDING offer if the confirmation could not be
+    // applied. Reporting all of them as confirmed would hide exactly that.
+    let confirmed = 0;
 
     // Bounded-concurrency instead of one serial POST per branch: a 40-branch bulk offer was 40
     // sequential round-trips. Five at a time keeps it fast without flooding the API, and each
@@ -761,24 +827,32 @@ export const PlanningWorkspace: React.FC = () => {
       const chunkResults = await Promise.all(
         chunk.map(async (pb) => {
           try {
-            await api.request('/assignments', {
+            const created = await api.request<{ status?: string }>('/assignments', {
               method: 'POST',
               body: JSON.stringify({
                 projectBranchId: pb.id,
                 assayerId,
                 scheduledDate: bulkScheduledDate || undefined,
                 remarks: `Bulk-assigned to ${assayerName} from the planning queue`,
+                acceptOnBehalf: assignDirectly,
+                acceptanceReason: assignDirectly
+                  ? `Agreed by phone — bulk-assigned to ${assayerName} from the planning queue.`
+                  : undefined,
               }),
             });
-            return { ok: true as const, branchId: pb.id, branchName: pb.branch?.name || pb.id };
+            return { ok: true as const, branchId: pb.id, branchName: pb.branch?.name || pb.id, confirmed: created?.status === 'ACCEPTED' };
           } catch (err: any) {
             return { ok: false as const, branchId: pb.id, branchName: pb.branch?.name || pb.id, error: err?.message || 'Failed' };
           }
         }),
       );
       for (const r of chunkResults) {
-        if (r.ok) succeeded += 1;
-        else failures.push({ branchId: r.branchId, branchName: r.branchName, error: r.error || 'Failed' });
+        if (r.ok) {
+          succeeded += 1;
+          if (r.confirmed) confirmed += 1;
+        } else {
+          failures.push({ branchId: r.branchId, branchName: r.branchName, error: r.error || 'Failed' });
+        }
       }
     }
 
@@ -788,10 +862,16 @@ export const PlanningWorkspace: React.FC = () => {
     // exactly what remains to be dealt with.
     setBulkSelectedIds(new Set(failures.map((f) => f.branchId)));
 
+    // "Confirmed" and "offered" are different outcomes for the branch and for whoever reads this
+    // next, so the summary names whichever actually happened rather than one word for both.
+    const verb = confirmed === succeeded && succeeded > 0 ? 'confirmed for' : 'offered to';
+    const partial = confirmed > 0 && confirmed < succeeded
+      ? ` ${confirmed} confirmed directly, ${succeeded - confirmed} left pending acceptance.`
+      : '';
     setMessage(
       failures.length === 0
-        ? { type: 'success', text: `Offered all ${succeeded} branch(es) to ${assayerName}.` }
-        : { type: 'error', text: `${succeeded}/${targets.length} offered to ${assayerName}. ${failures.length} failed — still selected for retry.` },
+        ? { type: 'success', text: `All ${succeeded} branch(es) ${verb} ${assayerName}.${partial}` }
+        : { type: 'error', text: `${succeeded}/${targets.length} ${verb} ${assayerName}.${partial} ${failures.length} failed — still selected for retry.` },
     );
     if (selectedProjectId) loadProjectBranches(selectedProjectId);
   };
@@ -861,7 +941,27 @@ export const PlanningWorkspace: React.FC = () => {
       // Evaluated FOR the planned audit date, not for "today": availability, double-booking and
       // fee quotes all describe scheduledAuditDate — the same date the assignment will be created
       // with. (The backend used to assume today, so a candidate free tomorrow showed "on leave".)
-      const response = await getRecommendations<Candidate, ExcludedCandidate>(branchId, scheduledAuditDate);
+      /**
+       * The "Within X km" control drives the ENGINE's search, not just this list's display.
+       *
+       * It used to be display-only, filtering a list the engine had already bounded at a fixed
+       * 200 km. Widening it past that changed nothing — the assayers beyond 200 km were never
+       * candidates to reveal — while the map happily drew them, so the screen contradicted
+       * itself: five pins, an empty list, and nothing connecting the two.
+       */
+      /**
+       * The engine searches the radius the operator set on the map.
+       *
+       * Widened by the panel's "Within X km" when that is set further out, so neither control
+       * can promise a distance the engine did not actually look at — the failure that produced
+       * pins with no matching candidate row.
+       */
+      const response = await getRecommendations<Candidate, ExcludedCandidate>(
+        branchId,
+        scheduledAuditDate,
+        ignoreDateAvailability,
+        Math.max(searchRadiusKm, maxRadiusEnabled ? maxRadius : 0),
+      );
       setCandidates(response.data || []);
       setExcludedCandidates(response.meta?.excluded || []);
     } catch (err: any) {
@@ -894,7 +994,7 @@ export const PlanningWorkspace: React.FC = () => {
     setMessage(null);
     setShowNegotiationModal(false);
     try {
-      await api.request('/assignments', {
+      const created = await api.request<{ status?: string }>('/assignments', {
         method: 'POST',
         body: JSON.stringify({
           projectBranchId: selectedBranchId,
@@ -902,6 +1002,10 @@ export const PlanningWorkspace: React.FC = () => {
           proposedFee: Number(negotiatingFee),
           scheduledDate: scheduledAuditDate,
           autoSchedule: autoDispatch,
+          acceptOnBehalf: assignDirectly,
+          acceptanceReason: assignDirectly
+            ? `Agreed at ₹${Number(negotiatingFee).toLocaleString('en-IN')} during Call & Assign.`
+            : undefined,
         })
       });
       // The call that produced this agreement is the record of who committed to what fee, and
@@ -910,7 +1014,16 @@ export const PlanningWorkspace: React.FC = () => {
       // after the assignment so a logging failure can never cost the assignment itself.
       recordCall(selectedCandidate.id, 'AGREED', Number(negotiatingFee), 'Agreed during Call & Assign');
 
-      setMessage({ type: 'success', text: `Assigned ${selectedCandidate.displayName} to branch. Assayer will receive the offer on their mobile app.` });
+      // Reports what the server actually did, not what was asked for. Direct assignment can fall
+      // back to a PENDING offer if the confirmation could not be applied, and telling ops the job
+      // is locked when it is still waiting on someone is the failure this whole change is about.
+      const confirmed = created?.status === 'ACCEPTED';
+      setMessage({
+        type: 'success',
+        text: confirmed
+          ? `${selectedCandidate.displayName} is confirmed for this branch — no acceptance needed. They have been notified on the mobile app.`
+          : `Offered this branch to ${selectedCandidate.displayName}. It stays pending until they accept on the mobile app${assignDirectly ? ', or you accept it from the Operations Inbox' : ''}.`,
+      });
       loadProjectBranches(selectedProjectId);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
@@ -1152,13 +1265,47 @@ export const PlanningWorkspace: React.FC = () => {
       // returned nobody sent ops chasing a filter that wasn't the problem — while the real
       // story ("your only nearby assayer is blocked by the rotation rule") sat hidden, even
       // though that assayer's marker was visible on the map.
-      const msg = candidates.length > 0
-        ? (slaEnabled
-            ? `All ${candidates.length} candidate${candidates.length > 1 ? 's are' : ' is'} hidden by the radius filters below.`
-            : 'All candidates are hidden by the distance filters.')
-        : excludedCandidates.length > 0
-          ? `No assayer is eligible for this date — ${excludedCandidates.length} nearby ${excludedCandidates.length > 1 ? 'were' : 'was'} excluded (reasons below).`
-          : 'No assayers found in range for this date.';
+      // Onboarding exclusions get their own sentence. "No assayer is eligible for this date"
+      // is actively misleading for someone whose profile was created an hour ago and has no
+      // eligible dates at all — ops re-picked the date over and over instead of finishing the
+      // three-step onboarding that would have fixed it.
+      const onboardingCount = excludedCandidates.filter(e => e.kind === 'ONBOARDING').length;
+
+      /**
+       * When a filter emptied the list, name the bound and the distance that did it.
+       *
+       * "Hidden by the radius filters below" is true but unactionable: it does not say which of
+       * the two bounds fired, or by how much. The case that actually happens is a branch whose
+       * only candidate lives 18 km away against a 50 km independence floor — and the operator,
+       * seeing assayer pins on the map beside an empty list, reasonably concludes the engine is
+       * broken rather than that one number needs changing.
+       */
+      const withDistance = candidates.filter(c => c.distanceKm != null) as (Candidate & { distanceKm: number })[];
+      const tooClose = slaEnabled ? withDistance.filter(c => c.distanceKm < slaRadius) : [];
+      const tooFar = !showAllCandidates && maxRadiusEnabled ? withDistance.filter(c => c.distanceKm > maxRadius) : [];
+      const nearest = withDistance.length ? Math.min(...withDistance.map(c => c.distanceKm)) : null;
+
+      const filterMsg = (() => {
+        if (candidates.length === 0) return null;
+        if (tooClose.length === candidates.length && nearest != null) {
+          return `${candidates.length === 1 ? 'The only candidate is' : `All ${candidates.length} candidates are`} ` +
+            `closer than your ${slaRadius} km minimum — the nearest is ${nearest.toFixed(1)} km away. ` +
+            `Lower the minimum, or turn it off, to consider them.`;
+        }
+        if (tooFar.length === candidates.length) {
+          return `${candidates.length === 1 ? 'The only candidate is' : `All ${candidates.length} candidates are`} ` +
+            `beyond your ${maxRadius} km limit. Raise it, or tick “Show all distances”.`;
+        }
+        return `All ${candidates.length} candidate${candidates.length > 1 ? 's are' : ' is'} hidden by the radius filters below.`;
+      })();
+
+      const msg = filterMsg
+        ? filterMsg
+        : onboardingCount > 0 && onboardingCount === excludedCandidates.length
+          ? `${onboardingCount} assayer${onboardingCount > 1 ? 's are' : ' is'} near this branch but ${onboardingCount > 1 ? 'have' : 'has'} not finished onboarding — no date will make ${onboardingCount > 1 ? 'them' : 'them'} assignable until that is done (below).`
+          : excludedCandidates.length > 0
+            ? `No assayer is eligible for this date — ${excludedCandidates.length} nearby ${excludedCandidates.length > 1 ? 'were' : 'was'} excluded (reasons below).`
+            : 'No assayers found in range for this date.';
       return (
         <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
           <AlertTriangle size={20} style={{ color: 'var(--accent-secondary)' }} />
@@ -1285,6 +1432,15 @@ export const PlanningWorkspace: React.FC = () => {
                   {conf != null ? `${conf}% Match` : 'Match n/a'}
                 </span>
               </div>
+
+              {/* Only ever set when the date filter was relaxed. The candidate is on the list
+                  because ops asked to see past the clash — so the clash is stated here, on the
+                  row they will click, rather than left to be discovered after dispatch. */}
+              {c.dateConflict && (
+                <div style={{ fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                  ⚠ Not free on {scheduledAuditDate} — {c.dateConflict} Pick another date before offering.
+                </div>
+              )}
 
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'var(--bg-surface-2)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span>📞 {c.phone}</span>
@@ -1633,18 +1789,30 @@ export const PlanningWorkspace: React.FC = () => {
             />
           </label>
 
+          {/* Shares the Call & Assign preference — one setting, so what the button does here
+              never contradicts what it does in the modal. Shown rather than inherited silently:
+              committing fourteen branches for someone must not be a hidden default. */}
+          <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer', userSelect: 'none' }}
+            title={assignDirectly
+              ? 'Confirmed on the assayer behalf — no acceptance needed. Untick to send these as offers.'
+              : 'Sent as offers the assayer must accept in the app.'}>
+            <input type="checkbox" checked={assignDirectly} onChange={(e) => setAssignDirectly(e.target.checked)}
+              style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+            Assign directly
+          </label>
+
           <button
             onClick={() => selectedCandidate && handleBulkAssign(selectedCandidate.id, selectedCandidate.displayName)}
             disabled={!selectedCandidate || bulkAssigning}
             className="btn btn-primary"
             style={{ padding: '5px 11px', fontSize: '11px', fontWeight: 700 }}
             title={selectedCandidate
-              ? `Offer the selected branches to ${selectedCandidate.displayName}`
+              ? `${assignDirectly ? 'Confirm the selected branches for' : 'Offer the selected branches to'} ${selectedCandidate.displayName}`
               : 'Pick an assayer from the candidate list first'}>
             {bulkAssigning
-              ? 'Offering…'
+              ? (assignDirectly ? 'Assigning…' : 'Offering…')
               : selectedCandidate
-                ? `Offer all to ${selectedCandidate.displayName}`
+                ? `${assignDirectly ? 'Assign all to' : 'Offer all to'} ${selectedCandidate.displayName}`
                 : 'Pick an assayer to offer to'}
           </button>
 
@@ -1715,6 +1883,8 @@ export const PlanningWorkspace: React.FC = () => {
               onMaxRadiusChange={setMaxRadius}
               planDate={scheduledAuditDate}
               onPlanDateChange={pinPlanDate}
+              ignoreDateAvailability={ignoreDateAvailability}
+              onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
               onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -1752,6 +1922,8 @@ export const PlanningWorkspace: React.FC = () => {
               slaRadius={slaRadius}
               rankedCandidates={displayCandidates}
               excludedCandidates={excludedCandidates}
+              searchRadiusKm={searchRadiusKm}
+              onSearchRadiusChange={setSearchRadiusKm}
             travelRates={travelRates}
             />
           </div>
@@ -1785,6 +1957,8 @@ export const PlanningWorkspace: React.FC = () => {
               slaRadius={slaRadius}
               rankedCandidates={displayCandidates}
               excludedCandidates={excludedCandidates}
+              searchRadiusKm={searchRadiusKm}
+              onSearchRadiusChange={setSearchRadiusKm}
             travelRates={travelRates}
             />
             <div ref={drawerRef} style={{
@@ -1814,6 +1988,8 @@ export const PlanningWorkspace: React.FC = () => {
               onMaxRadiusChange={setMaxRadius}
               planDate={scheduledAuditDate}
               onPlanDateChange={pinPlanDate}
+              ignoreDateAvailability={ignoreDateAvailability}
+              onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
                     onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
                     onAccept={handleAcceptCounterOffer}
                     onCounter={handleOpenCounterProposal}
@@ -1855,6 +2031,8 @@ export const PlanningWorkspace: React.FC = () => {
               slaRadius={slaRadius}
               rankedCandidates={displayCandidates}
               excludedCandidates={excludedCandidates}
+              searchRadiusKm={searchRadiusKm}
+              onSearchRadiusChange={setSearchRadiusKm}
             travelRates={travelRates}
             />
           </div>
@@ -1877,6 +2055,8 @@ export const PlanningWorkspace: React.FC = () => {
               onMaxRadiusChange={setMaxRadius}
               planDate={scheduledAuditDate}
               onPlanDateChange={pinPlanDate}
+              ignoreDateAvailability={ignoreDateAvailability}
+              onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
             onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -2005,18 +2185,37 @@ export const PlanningWorkspace: React.FC = () => {
               </div>
             )}
 
-            {/* Auto-Dispatch Toggle Option — only for a fresh assignment, not a fee counter. */}
+            {/* Assign-directly + auto-dispatch — only for a fresh assignment, not a fee counter. */}
             {!counterOfferAssignmentId && (
-            <div style={{ padding: '10px 12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <input type="checkbox" id="autoDispatchToggle" checked={autoDispatch} onChange={e => setAutoDispatch(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-              <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
-                <span style={{ fontWeight: 700, color: autoDispatch ? 'var(--success)' : 'var(--warning)' }}>
-                  {autoDispatch ? '⚡ Fast-Track Direct Lock: ' : '📋 Send to Unscheduled Queue: '}
-                </span>
-                <span style={{ color: 'var(--text-secondary)' }}>
-                  {autoDispatch ? 'Auto-creates calendar dispatch packet on acceptance' : 'Acceptance moves offer to Unscheduled Queue for manual dispatching'}
-                </span>
-              </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Ticked, the desk confirms on the assayer's behalf: the call already settled it,
+                  so there is nothing left for them to accept. Unticked restores the offer flow. */}
+              <div style={{ padding: '10px 12px', background: assignDirectly ? 'var(--status-active-bg)' : 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: `1px solid ${assignDirectly ? 'var(--success)' : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <input type="checkbox" id="assignDirectlyToggle" checked={assignDirectly} onChange={e => setAssignDirectly(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                <label htmlFor="assignDirectlyToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
+                  <span style={{ fontWeight: 700, color: assignDirectly ? 'var(--success)' : 'var(--warning)' }}>
+                    {assignDirectly ? '✅ Assign directly — agreed on this call: ' : '📨 Send as an offer: '}
+                  </span>
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {assignDirectly
+                      ? 'Confirmed immediately, no acceptance needed. Recorded against you as accepted on their behalf.'
+                      : 'Stays pending until the assayer accepts in the app. Auto-declines if the response SLA lapses.'}
+                  </span>
+                </label>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <input type="checkbox" id="autoDispatchToggle" checked={autoDispatch} onChange={e => setAutoDispatch(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
+                  <span style={{ fontWeight: 700, color: autoDispatch ? 'var(--success)' : 'var(--warning)' }}>
+                    {autoDispatch ? '⚡ Fast-Track Direct Lock: ' : '📋 Send to Unscheduled Queue: '}
+                  </span>
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {autoDispatch
+                      ? `Auto-creates calendar dispatch packet on acceptance${assignDirectly ? ' — immediately, since this is confirmed now' : ''}`
+                      : 'Acceptance moves offer to Unscheduled Queue for manual dispatching'}
+                  </span>
+                </label>
+              </div>
             </div>
             )}
           </Modal>

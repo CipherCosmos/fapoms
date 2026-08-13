@@ -3,6 +3,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { MobileApiService } from '../services/api.service';
 import { clearCache } from '../services/token-store';
+import { clearQueue } from '../services/location-queue';
 import { getPreference } from '../services/preferences';
 
 /**
@@ -260,6 +261,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // One assayer's cached schedule must not survive into the next person's session on a
     // shared handset.
     void clearCache();
+    // Explicit as well as implicit: clearCache() drops the whole cache file on native, but its
+    // web branch returns early, and one assayer's movements must never upload under another's login.
+    void clearQueue();
     setIsAuthenticated(false);
     setUser(null);
     // Or the next sign-in lands straight on the lock screen.

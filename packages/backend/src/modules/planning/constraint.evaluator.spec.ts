@@ -4,6 +4,7 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { HolidayService } from '../holiday/holiday.service';
+import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 /**
  * ConstraintEvaluator holds the rules that more than one screen depends on. Each of these was
@@ -22,6 +23,13 @@ describe('ConstraintEvaluator', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        {
+          // Rules are enforced unless an administrator suspends them — see
+          // modules/platform/rule-bypass. Nothing is suspended here, which is the state these
+          // tests are actually about.
+          provide: RuleBypassService,
+          useValue: { isBypassedSync: () => false, isBypassed: async () => false, noteBypass: () => undefined },
+        },
         ConstraintEvaluator,
         { provide: getRepositoryToken(AssignmentEntity), useValue: mockAssignmentRepo },
         { provide: getRepositoryToken(ScheduleEntity), useValue: mockScheduleRepo },

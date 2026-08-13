@@ -5,6 +5,7 @@ import { SchedulingService, CreateScheduleDto, UpdateScheduleDto } from './sched
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 class CreateScheduleRequestDto implements CreateScheduleDto {
@@ -40,7 +41,10 @@ class TransitionScheduleRequestDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('schedules')
 export class SchedulingController {
-  constructor(private readonly schedulingService: SchedulingService) {}
+  constructor(
+    private readonly schedulingService: SchedulingService,
+    private readonly regionGuard: RegionGuardService,
+  ) {}
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
@@ -95,10 +99,13 @@ export class SchedulingController {
   async getAssayerWorkload(
     @Query('assayerId') assayerId: string,
     @Query('date') date: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     if (!assayerId || !date) {
       return { success: true, data: { count: 0, schedules: [] } };
     }
+    // Reveals where an arbitrary assayer is booked; gated on that assayer's own region.
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const dt = new Date(date);
     const weekStart = new Date(dt);
     weekStart.setDate(dt.getDate() - dt.getDay());
@@ -111,7 +118,8 @@ export class SchedulingController {
   @Get(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR)
   @ApiOperation({ summary: 'Get details for a single schedule by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertScheduleInScope(id, scope);
     const schedule = await this.schedulingService.findOne(id);
     return {
       success: true,
@@ -138,7 +146,8 @@ export class SchedulingController {
   @Get(':id/timeline')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get unified activity timeline for a schedule' })
-  async getTimeline(@Param('id', ParseUUIDPipe) id: string) {
+  async getTimeline(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertScheduleInScope(id, scope);
     const timeline = await this.schedulingService.getTimeline(id);
     return {
       success: true,

@@ -48,6 +48,9 @@ export default defineConfig({
           if (id.includes('leaflet')) return 'map';
           if (id.includes('@tanstack')) return 'query';
           if (id.includes('socket.io') || id.includes('engine.io')) return 'realtime';
+          // Its own chunk, fetched only when a call starts (call.service imports it dynamically),
+          // so livekit's transitive deps don't get pulled back into the initial vendor bundle.
+          if (id.includes('livekit')) return 'livekit';
           if (id.includes('react-router')) return 'router';
           if (id.includes('/react-dom/') || id.includes('/react/') || id.includes('/scheduler/')) return 'react';
           return 'vendor';

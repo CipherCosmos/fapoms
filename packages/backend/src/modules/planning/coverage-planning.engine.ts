@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectQueryService } from '../project/project-query.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
@@ -81,9 +82,12 @@ export class CoveragePlanningEngine {
     private readonly workloadProvider: WorkloadProvider,
   ) {}
 
-  async generateCoveragePlan(projectId: string): Promise<CoveragePlanOutput> {
+  async generateCoveragePlan(
+    projectId: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<CoveragePlanOutput> {
     const project = await this.projectQueryService.findOne(projectId);
-    const planningBranches = await this.branchProvider.getBranchesForPlanning(projectId);
+    const planningBranches = await this.branchProvider.getBranchesForPlanning(projectId, scope);
 
     // Group branches into domain structures for clustering
     const activeBranches = planningBranches.map((pb) => {
@@ -97,7 +101,7 @@ export class CoveragePlanningEngine {
 
     const clusters = this.clusterManager.clusterBranches(activeBranches);
 
-    const activeAssayers = await this.assayerProvider.getAvailableAssayers(new Date());
+    const activeAssayers = await this.assayerProvider.getAvailableAssayers(new Date(), scope);
     const assayerIds = activeAssayers.map((a) => a.assayerId.value);
     const allocationMap = await this.workloadProvider.getAssayerCurrentWorkloads(assayerIds);
 
