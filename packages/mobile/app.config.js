@@ -95,6 +95,9 @@ module.exports = {
       },
     },
     plugins: [
+      // Keeps release APKs off React Native's shared debug signing key. Must be a plugin, not an
+      // edit to android/app/build.gradle — that directory is a gitignored prebuild artifact.
+      './plugins/withReleaseSigning',
       // Wires @livekit/react-native + react-native-webrtc into the native build (audio-mode
       // service config, required Android/iOS project tweaks). Native builds only — Expo Go
       // ignores config plugins, where calls.ts detects the missing module and disables calling.
