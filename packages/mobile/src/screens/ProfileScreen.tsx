@@ -13,9 +13,27 @@ import { probeServerUrl } from '../services/server-config';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
 import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
 import * as LocalAuthentication from 'expo-local-authentication';
 
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
+
+/**
+ * Which JavaScript this handset is actually running.
+ *
+ * The version string alone cannot answer that: over-the-air updates change the JS without
+ * changing the version, so two assayers can both report "v1.0.0" while running different code —
+ * and the one reporting a bug may already have the fix, or may be stuck on a build that never
+ * updated. Support has no way to tell them apart.
+ *
+ * `Updates.updateId` is null when the app is running the bundle that shipped inside the APK, and
+ * a UUID once an update has been applied. Shown as a short prefix: enough to compare against
+ * `eas update:list`, short enough to read down a phone line.
+ */
+const bundleLabel = (): string => {
+  if (!Updates.isEnabled) return 'bundled';
+  return Updates.updateId ? Updates.updateId.slice(0, 8) : 'bundled';
+};
 
 /**
  * The assayer's record as the app holds it.
@@ -907,7 +925,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           HTTP on the LAN, and nothing here encrypts at rest beyond the OS keystore holding the
           session token. A false security claim in a bank audit tool is worse than no claim.
         */}
-        <AppText variant="caption" tone="faint">Orbit Field Assayer • v{appVersion}</AppText>
+        <AppText variant="caption" tone="faint">
+          Orbit Field Assayer • v{appVersion} • {bundleLabel()}
+        </AppText>
       </View>
 
       {/*
