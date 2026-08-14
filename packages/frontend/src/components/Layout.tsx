@@ -7,6 +7,7 @@ import { SearchOverlay } from './SearchOverlay';
 import { Header } from './Header';
 import { MenuToggle } from './ui/MenuToggle';
 import { RuleBypassBanner } from './RuleBypassBanner';
+import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -15,6 +16,20 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
+  /**
+   * Live updates for every screen, mounted once here rather than per page.
+   *
+   * It used to be called from five page components, which meant a screen nobody remembered to
+   * add it to simply never received a socket event — and the Operations Inbox, the negotiation
+   * queue itself, was one of them. Worse than a slow refresh: its poll is disabled while the
+   * socket is up (`refetchInterval: live ? false : 60_000`), so with nothing subscribed the
+   * counter-offer lane did not update at all until the operator reloaded the page.
+   *
+   * The Layout wraps every authenticated route, so mounting it here makes "is this screen live?"
+   * stop being a per-screen decision that can be forgotten.
+   */
+  useSocketInvalidation();
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 

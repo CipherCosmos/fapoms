@@ -1,4 +1,5 @@
 import { queryClient } from '../queryClient';
+import { disconnectSocket } from './socket';
 
 /**
  * Everything this app persists about a signed-in person, in one list.
@@ -31,6 +32,13 @@ const SESSION_KEYS = [
  * cache survives into the next sign-in and the new user is served the previous user's
  * branches, assignments and dashboard until each entry happens to go stale. The 401 path in
  * `api.ts` gets away with it only because it uses `location.replace`, which reloads.
+ *
+ * The live socket is torn down for the same reason, and it was missed for the same reason. Its
+ * rooms are joined once, from the token presented at connect time — so a socket that survives a
+ * router-navigated logout keeps the *previous* user's `user:`, `role:` and `region:` rooms. The
+ * next person signing in on that tab then gets someone else's region traffic and none of their
+ * own, which reads as "live updates just don't work for me". Reading the token freshly on
+ * reconnect does not help: an already-connected socket never reconnects.
  */
 export function clearSession(): void {
   for (const key of SESSION_KEYS) {
@@ -41,4 +49,5 @@ export function clearSession(): void {
     }
   }
   queryClient.clear();
+  disconnectSocket();
 }

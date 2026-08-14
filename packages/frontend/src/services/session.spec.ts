@@ -11,8 +11,11 @@ const store = new Map<string, string>();
   clear: () => store.clear(),
 };
 
+jest.mock('./socket', () => ({ disconnectSocket: jest.fn() }));
+
 import { clearSession } from './session';
 import { queryClient } from '../queryClient';
+import { disconnectSocket } from './socket';
 
 /**
  * Session teardown had drifted: logout removed three hardcoded keys, and the global scope key
@@ -65,5 +68,16 @@ describe('clearSession', () => {
     localStorage.setItem('fapoms_theme', 'noir');
     clearSession();
     expect(localStorage.getItem('fapoms_theme')).toBe('noir');
+  });
+
+  /**
+   * The live socket joins its rooms once, from the token presented at connect time. A socket
+   * left running across a router-navigated logout therefore keeps the previous user's `user:`,
+   * `role:` and `region:` rooms — so the next person on that tab receives someone else's region
+   * traffic and none of their own, which presents as "live updates don't work for me".
+   */
+  it('tears down the live socket so the next sign-in does not inherit its rooms', () => {
+    clearSession();
+    expect(disconnectSocket).toHaveBeenCalled();
   });
 });

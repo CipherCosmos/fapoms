@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil, Trash2 } from 'lucide-react';
 import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal } from '../components/ui';
-import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
 import type { Client } from '@fapoms/shared';
@@ -71,7 +70,6 @@ function findPathTo(from: string, target: string): string[] | null {
 }
 
 const Clients: React.FC = () => {
-  useSocketInvalidation();
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [status, setStatus] = useState('');

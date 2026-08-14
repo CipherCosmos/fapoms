@@ -9,7 +9,6 @@ import { useScope, withScope } from '../context/ScopeContext';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { useSocket } from '../hooks/useSocket';
 import { connectSocket } from '../services/socket';
-import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
@@ -517,8 +516,6 @@ export const PlanningWorkspace: React.FC = () => {
   const [dayPlanAssigning, setDayPlanAssigning] = useState<string | null>(null);
 
   useEffect(() => { loadProjects(); loadZones(); }, []);
-
-  useSocketInvalidation();
 
   useEffect(() => {
     const socket = connectSocket();

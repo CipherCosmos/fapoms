@@ -10,7 +10,6 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
-import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useExcelExport } from '../hooks/useExcelExport';
 
@@ -157,9 +156,9 @@ function WorkflowBreadcrumb({ onNavigate }: { onNavigate: (path: string) => void
 
 export const Assignments: React.FC = () => {
   const navigate = useNavigate();
-  // When the realtime socket is up, useSocketInvalidation keeps these queries fresh on every
-  // assignment event, so the 60s poll below is pure redundant load — one endpoint × every open
-  // tab × every user. Poll only as a fallback while the socket is down.
+  // When the realtime socket is up, the Layout's useSocketInvalidation keeps these queries fresh
+  // on every assignment event, so the 60s poll below is pure redundant load — one endpoint × every
+  // open tab × every user. Poll only as a fallback while the socket is down.
   const live = useSocketConnection();
   // FINANCE_MANAGER and READ_ONLY_AUDITOR reach this page as viewers, but the backend only lets
   // operations drive the lifecycle — so the write actions are hidden from everyone else rather than
@@ -178,8 +177,6 @@ export const Assignments: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [page, setPage] = useState(1);
-
-  useSocketInvalidation();
 
   const applyFilter = (value: string) => {
     setStatusFilter(value);

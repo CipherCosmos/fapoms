@@ -78,14 +78,19 @@ export const OperationsInbox: React.FC = () => {
   const navigate = useNavigate();
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
-  // Socket invalidation (via the desk.inbox key) already refreshes this queue on every assignment
-  // event, so the poll is only a fallback for when the realtime channel is down.
+  // The Layout's socket invalidation (via the desk.inbox key) refreshes this queue on every
+  // assignment event, so the poll is only a fallback for when the realtime channel is down.
   const live = useSocketConnection();
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     // From the registry, so `useSocketInvalidation` refreshes this queue on every assignment
     // event. As a bare literal it matched nothing in the socket map, and a counter-offer took up
     // to the 60-second poll below to reach the desk.
+    //
+    // The key alone was not enough: the hook it depends on was mounted per page, and never on
+    // this one — while the poll below is switched off whenever the socket is up. So the
+    // negotiation queue had neither channel and only moved when the operator reloaded. The hook
+    // now lives in the Layout, which every route renders inside.
     queryKey: [...queryKeys.desk.inbox, scopeKey],
     queryFn: () => api.request<InboxData>(`/assignments/inbox?${scopeQuery}`),
     staleTime: 20_000,

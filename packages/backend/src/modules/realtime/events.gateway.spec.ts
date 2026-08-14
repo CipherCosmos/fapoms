@@ -138,6 +138,101 @@ describe('EventsGateway — territorial rooms', () => {
 });
 
 /**
+ * Negotiation event routing.
+ *
+ * A fee negotiation runs on `assignment:counter-offered`, and that event had no case in
+ * `broadcastEvent` at all — it fell through to the generic path, whose only delivery is
+ * `emitOperational` (staff / region / org). Assayers are deliberately excluded from those rooms,
+ * so the desk's counter never reached the phone that had to answer it: the assayer saw the old
+ * fee until they pulled to refresh, while the web app saw the assayer's counters live. These
+ * cases pin both directions.
+ */
+describe('EventsGateway — negotiation event routing', () => {
+  const ASSIGNMENT_ID = '11111111-1111-1111-1111-111111111111';
+
+  const makeGateway = (eventRegion: string | null = 'WEST') => {
+    const guard = {
+      getUserRegions: jest.fn().mockResolvedValue(null),
+      resolveEventRegion: jest.fn().mockResolvedValue(eventRegion),
+    };
+    const gw = new EventsGateway({} as any, new DomainEventPublisher(), guard as any);
+    const emit = jest.fn();
+    (gw as any).server = { to: jest.fn().mockReturnValue({ emit }) };
+    return { gw, emit };
+  };
+
+  /** `emitOperational` resolves the region asynchronously and emits on the microtask queue. */
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  const counterOffer = {
+    eventType: 'assignment:counter-offered',
+    assignmentId: ASSIGNMENT_ID,
+    assayerId: 'assayer-1',
+    proposedFee: 1800,
+    userId: 'ops-1',
+  };
+
+  it('delivers a counter-offer to the assayer it concerns', async () => {
+    const { gw } = makeGateway();
+    gw.broadcastEvent('assignment:counter-offered', counterOffer);
+    await settle();
+    expect((gw as any).server.to).toHaveBeenCalledWith('user:assayer-1');
+  });
+
+  it('delivers a counter-offer to the room watching that assignment', async () => {
+    const { gw } = makeGateway();
+    gw.broadcastEvent('assignment:counter-offered', counterOffer);
+    await settle();
+    expect((gw as any).server.to).toHaveBeenCalledWith(`assignment:${ASSIGNMENT_ID}`);
+  });
+
+  // The direction that already worked must keep working.
+  it('still delivers a counter-offer to the desk, scoped to the branch region', async () => {
+    const { gw } = makeGateway('WEST');
+    gw.broadcastEvent('assignment:counter-offered', counterOffer);
+    await settle();
+    expect((gw as any).server.to).toHaveBeenCalledWith('region:WEST');
+  });
+
+  it('emits under the counter-offered name the clients subscribe to', async () => {
+    const { gw, emit } = makeGateway();
+    gw.broadcastEvent('assignment:counter-offered', counterOffer);
+    await settle();
+    expect(emit).toHaveBeenCalledWith('assignment:counter-offered', counterOffer);
+  });
+
+  /**
+   * `assignment:created` and `assignment:fee-updated` reached the desk only through `org:`, and
+   * most tokens issued here carry no organizationId — so a new offer and an agreed fee, the two
+   * numbers a negotiation starts and ends on, moved the assayer's phone and not the desk.
+   */
+  it('delivers a fee update to the desk, not only to the org room', async () => {
+    const { gw } = makeGateway('SOUTH');
+    gw.broadcastEvent('assignment:fee-updated', {
+      eventType: 'assignment:fee-updated',
+      assignmentId: ASSIGNMENT_ID,
+      assayerId: 'assayer-1',
+      agreedFee: 2000,
+    });
+    await settle();
+    expect((gw as any).server.to).toHaveBeenCalledWith('user:assayer-1');
+    expect((gw as any).server.to).toHaveBeenCalledWith('region:SOUTH');
+  });
+
+  it('delivers a newly created assignment to the desk as well as the assayer', async () => {
+    const { gw } = makeGateway('NORTH');
+    gw.broadcastEvent('assignment:created', {
+      eventType: 'assignment:created',
+      assignmentId: ASSIGNMENT_ID,
+      assayerId: 'assayer-1',
+    });
+    await settle();
+    expect((gw as any).server.to).toHaveBeenCalledWith('user:assayer-1');
+    expect((gw as any).server.to).toHaveBeenCalledWith('region:NORTH');
+  });
+});
+
+/**
  * Room entitlement — carried over from the branch that added it.
  *
  * Main's realtime work was newer in every other respect, but it had reverted the join to a bare

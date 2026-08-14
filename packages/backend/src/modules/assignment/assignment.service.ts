@@ -1046,8 +1046,16 @@ export class AssignmentService {
       this.eventPublisher.publish('assignment:counter-offered', {
         eventType: 'assignment:counter-offered',
         assignmentId: saved.id,
+        assignmentNumber: saved.assignmentNumber,
         assayerId: saved.assayerId,
         proposedFee: counterFee,
+        previousFee: previousFee ?? null,
+        negotiationRound: saved.negotiationCount,
+        // The phone receives this event and has to say something useful about it. Without a
+        // branch name the only live text it could show was a generic "an assignment changed",
+        // which tells an assayer holding several offers nothing about which one moved.
+        branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
+        projectBranchId: saved.projectBranchId,
         userId,
         timestamp: new Date(),
       });

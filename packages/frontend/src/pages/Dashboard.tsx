@@ -9,7 +9,6 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
-import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { formatRupees as money } from '@fapoms/shared';
 import { HBarChart, DonutChart, StackedColumnChart, type HBarDatum, type ColumnDatum } from '../components/charts';
 
@@ -74,7 +73,6 @@ const BLOCKER_TEXT: Record<string, string> = {
  */
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  useSocketInvalidation();
 
   // The territorial sections (funnel, due, capacity, projects) follow the header's global
   // scope; documents/validation/money stay national — see OperationsSnapshotService.

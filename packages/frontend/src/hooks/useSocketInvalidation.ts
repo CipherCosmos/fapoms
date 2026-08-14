@@ -78,11 +78,40 @@ export function useSocketInvalidation() {
       handlers.push({ event, handler });
     }
 
+    /**
+     * Catch up on everything that happened while the socket was down.
+     *
+     * The gateway replays missed events only for a reconnect inside its two-minute
+     * `connectionStateRecovery` window. Past that — a closed laptop lid, a longer network drop —
+     * the socket comes back healthy and the desk's "live" indicator turns green again, but every
+     * event from the outage was lost, so the screen keeps showing pre-outage state indefinitely.
+     * For a negotiation that means an operator confidently reading a superseded fee.
+     *
+     * Refetching the active queries on reconnect closes that hole. `refetchType: 'active'` keeps
+     * it to what is actually on screen rather than the whole cache. Bound to `connect` rather
+     * than `reconnect` deliberately: in socket.io-client v4 reconnection events live on the
+     * manager (`socket.io.on('reconnect')`), so a `socket.on('reconnect')` handler never fires
+     * at all — the same trap the mobile client already documents. It is gated on having actually
+     * been disconnected, so the first `connect` after mount does not refetch queries that the
+     * page has only just loaded.
+     */
+    let wasDisconnected = false;
+    const handleDisconnect = () => { wasDisconnected = true; };
+    const handleReconnect = () => {
+      if (!wasDisconnected) return;
+      wasDisconnected = false;
+      queryClient.invalidateQueries({ refetchType: 'active' });
+    };
+    socket.on('disconnect', handleDisconnect);
+    socket.on('connect', handleReconnect);
+
     return () => {
       if (timer) clearTimeout(timer);
       for (const { event, handler } of handlers) {
         socket.off(event, handler);
       }
+      socket.off('disconnect', handleDisconnect);
+      socket.off('connect', handleReconnect);
     };
   }, []);
 }

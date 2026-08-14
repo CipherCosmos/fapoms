@@ -12,7 +12,6 @@ import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
-import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useScope, withScope } from '../context/ScopeContext';
 import { Modal, FilterSelect, AlertBanner } from '../components/ui';
 
@@ -106,8 +105,6 @@ export const Scheduling: React.FC = () => {
   const [bulkQueueIds, setBulkQueueIds] = useState<Set<string>>(new Set());
   const [bulkDate, setBulkDate] = useState(todayDateKey());
   const [bulkScheduling, setBulkScheduling] = useState(false);
-
-  useSocketInvalidation();
 
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);

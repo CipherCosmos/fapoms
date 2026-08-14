@@ -115,6 +115,8 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
    * around one desk action (status, fee, notification), and at branch-rollout scale a burst
    * would otherwise become a burst of identical GETs from every handset at once.
    */
+  const selfUserId = user?.id;
+
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -150,6 +152,30 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
 
     /**
+     * The desk has countered the fee. Shared with `handleStatusChange` until now, which rendered
+     * it as "status has been updated to NEW" — no fee, no branch, and not even true. A counter is
+     * a number the assayer has to answer, so it says which branch and how much.
+     *
+     * The same event carries the assayer's *own* counter back to them, because both sides of a
+     * negotiation post through the one endpoint. That still refreshes the list — it is how the
+     * screen picks up the round number the server assigned — but it must not raise a banner
+     * announcing the assayer's own offer to them as though the desk had sent it.
+     */
+    const handleCounterOffer = (data: any) => {
+      reloadSoon();
+      if (selfUserId && data?.userId === selfUserId) return;
+      const fee = Number(data?.proposedFee);
+      const where = data?.branchName ? `${data.branchName}: ` : '';
+      scheduleLocalNotification(
+        'New fee offered',
+        Number.isFinite(fee) && fee > 0
+          ? `${where}the desk has offered ₹${fee.toLocaleString('en-IN')}. Open the app to accept or counter.`
+          : `${where}the desk has proposed a different fee. Open the app to respond.`,
+        data,
+      );
+    };
+
+    /**
      * Quiet reloads. These change what the screen should show but do not warrant interrupting
      * someone mid-audit with a banner — the desk's own notification covers anything that
      * genuinely needs attention.
@@ -167,7 +193,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     ];
 
     socket.on('assignment:status-changed', handleStatusChange);
-    socket.on('assignment:counter-offered', handleStatusChange);
+    socket.on('assignment:counter-offered', handleCounterOffer);
     socket.on('assignment:created', handleNewAssignment);
     QUIET_EVENTS.forEach((e) => socket.on(e, reloadSoon));
 
@@ -190,13 +216,13 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => {
       if (timer) clearTimeout(timer);
       socket.off('assignment:status-changed', handleStatusChange);
-      socket.off('assignment:counter-offered', handleStatusChange);
+      socket.off('assignment:counter-offered', handleCounterOffer);
       socket.off('assignment:created', handleNewAssignment);
       QUIET_EVENTS.forEach((e) => socket.off(e, reloadSoon));
       socket.off('connect', reloadSoon);
       socket.off('connect', flushLocationQueueOnReconnect);
     };
-  }, [isAuthenticated, loadAssignments]);
+  }, [isAuthenticated, loadAssignments, selfUserId]);
 
   const updateAssignmentStatus = async (
     assignmentId: string,

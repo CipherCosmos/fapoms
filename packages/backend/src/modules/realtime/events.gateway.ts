@@ -334,6 +334,10 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit('assignment:created', payload);
         }
+        // Without this the desk was only reached through `org:`, and most tokens issued here
+        // carry no organizationId — so a newly offered assignment reached the assayer's phone
+        // live and the operators' own queues not at all.
+        this.emitOperational('assignment:created', payload);
         break;
       }
 
@@ -362,6 +366,35 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
+      /**
+       * A counter-offer — the single event a fee negotiation actually runs on.
+       *
+       * It had no case here at all, so it fell through to `broadcastGenericEvent`, whose only
+       * delivery is `emitOperational` — the staff/region/org rooms. Assayers are deliberately
+       * excluded from those rooms (see EXTERNAL_ROLES above), and the `assignment:` room was
+       * never addressed either. The consequence was one-directional negotiation: an assayer
+       * countering from the field appeared on the desk live, but when the desk countered back
+       * the offer sat on the server and the assayer's phone showed the old fee until they
+       * pulled to refresh — even though the mobile app subscribes to this exact event.
+       *
+       * Routed like `assignment:status-changed`, because it is the same kind of change: the
+       * assayer it concerns, anyone watching that assignment, and the desk.
+       */
+      case 'assignment:counter-offered': {
+        const coAsnId = payload.assignmentId || payload.aggregateId;
+        if (coAsnId) {
+          this.server.to(`assignment:${coAsnId}`).emit('assignment:counter-offered', payload);
+        }
+        if (payload.assayerId) {
+          this.server.to(`user:${payload.assayerId}`).emit('assignment:counter-offered', payload);
+        }
+        if (payload.organizationId) {
+          this.server.to(`org:${payload.organizationId}`).emit('assignment:counter-offered', payload);
+        }
+        this.emitOperational('assignment:counter-offered', payload);
+        break;
+      }
+
       case 'assignment:fee-updated': {
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit('assignment:fee-updated', payload);
@@ -369,6 +402,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit('assignment:fee-updated', payload);
         }
+        // Same gap as `assignment:created`: with delivery limited to `org:`, an agreed fee — the
+        // number a negotiation exists to settle — never reached the desk's queues live.
+        this.emitOperational('assignment:fee-updated', payload);
         break;
       }
 
