@@ -1,0 +1,15 @@
+[Unit]
+Description=Nightly FAPOMS backup
+
+[Timer]
+# 02:30 local: after the field day is over and well before anyone starts the next one, so a long
+# object mirror never overlaps with real usage.
+OnCalendar=*-*-* 02:30:00
+# The host is a home server and is not guaranteed to be awake at 02:30. Persistent=true runs the
+# backup on the next boot if the scheduled one was missed — without it, a machine powered off
+# overnight would simply skip backups and nothing would say so.
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up the FAPOMS database and stored documents
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/apps/fapoms-ops/backup.sh
+# A dump plus an object mirror. Generous: the mirror walks every stored document, which grows
+# with the audit history rather than staying a fixed size.
+TimeoutStartSec=3600
+
+# Set FAPOMS_OFFSITE_REMOTE here once an rclone remote exists, e.g.
+#   Environment=FAPOMS_OFFSITE_REMOTE=b2:fapoms-backups
+# Until then every run logs that the copies are local-only.
