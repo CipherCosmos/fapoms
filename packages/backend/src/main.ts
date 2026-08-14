@@ -257,15 +257,30 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Swagger API documentation
-  const config = new DocumentBuilder()
-    .setTitle('FAPOMS API')
-    .setDescription('Field Audit Planning & Operations Management System')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  /**
+   * API documentation — never in production.
+   *
+   * This was mounted unconditionally, so `/api/docs` and `/api/docs-json` served the complete
+   * API surface — 302 endpoints with their parameters, request shapes and auth requirements — to
+   * anyone who asked, with no authentication. On an internal deployment that is untidy; behind a
+   * public tunnel it is a map of the entire application handed to whoever finds the URL.
+   *
+   * `NODE_ENV=production` is already set on real deployments, so this needs no new configuration.
+   * Set `ENABLE_API_DOCS=true` to bring it back deliberately — for a staging box, say — rather
+   * than having it on by default everywhere.
+   */
+  const docsEnabled =
+    process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_DOCS === 'true';
+  if (docsEnabled) {
+    const config = new DocumentBuilder()
+      .setTitle('FAPOMS API')
+      .setDescription('Field Audit Planning & Operations Management System')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   if (process.env.NODE_ENV !== 'test') {
     setupBullBoard(app);
@@ -300,7 +315,7 @@ async function bootstrap() {
   httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 65_000;
   httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 300_000;
   console.log(`FAPOMS API running on http://localhost:${port}`);
-  console.log(`API Documentation: http://localhost:${port}/api/docs`);
+  if (docsEnabled) console.log(`API Documentation: http://localhost:${port}/api/docs`);
   console.log(`Bull Board: http://localhost:${port}/bull-board`);
 }
 
