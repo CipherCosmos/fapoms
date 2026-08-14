@@ -102,6 +102,11 @@ npx eas login                 # free account
 npx eas init                  # creates the project, prints a project ID
 ```
 
+`eas-cli` is a devDependency of this package, so `npx eas` inside `packages/mobile` runs the
+pinned local binary. Run it from anywhere else and npm will fetch a **different** package from
+the registry that happens to be called `eas` — an unrelated project at version 0.1.0 — and
+execute it. Stay in this directory, or use `npx eas-cli` by its full name.
+
 Put the id in the build environment, then rebuild the APK **once** so it ships with the update
 URL baked in:
 
