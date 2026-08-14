@@ -4,7 +4,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } from '../components/ui/primitives';
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
-import { relativeDay } from '../utils/dates';
+import { relativeDay, RelativeDay } from '../utils/dates';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
 import { getAssignmentTotalFee } from '../utils/fees';
@@ -249,6 +249,48 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 };
 
 
+
+/**
+ * The line of facts under an assignment's title: when, where, how big, what it pays.
+ *
+ * Rendered identically by the offer card and the job card, and it was written out twice —
+ * same badge, same date rule, same distance and customer formatting. Two copies of a display
+ * rule drift: change how distance rounds and you change it in one place, and the same branch
+ * then reads differently depending on whether the assayer is looking at the offer or the job
+ * they accepted.
+ *
+ * The fee is the one real difference. It belongs on an offer, where the assayer is deciding
+ * whether to take the work, and not on the job afterwards, where it is settled and the card is
+ * about getting there.
+ */
+const AssignmentMeta: React.FC<{
+  assignment: AssayerAssignment;
+  /** From `relativeDay` — the label, its urgency tone and the calendar-day offset. */
+  when: RelativeDay;
+  /** Shown only when there is a fee to show — offers, not accepted jobs. */
+  fee?: number;
+}> = ({ assignment, when, fee }) => {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: t.space.sm }}>
+      {/* Urgency first: overdue reads danger, today accent, tomorrow warning. */}
+      <Badge label={when.label} tone={when.tone} icon="time-outline" />
+      {/* The concrete date stays for anything not today — "In 8 days" alone would make the
+          assayer open Details just to write the date down. */}
+      {when.diffDays !== 0 && (
+        <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+      )}
+      {assignment.distanceKm != null && (
+        <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
+      )}
+      {assignment.estimatedCustomerCount > 0 && (
+        <Meta icon="people-outline" label={`${assignment.estimatedCustomerCount} customers`} />
+      )}
+      {fee != null && fee > 0 && <Meta icon="wallet-outline" label={money(fee)} />}
+    </View>
+  );
+};
+
 /**
  * A job offer awaiting the assayer's decision.
  *
@@ -282,19 +324,7 @@ const OfferCard: React.FC<{
         ) : null}
       </View>
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: t.space.sm }}>
-        <Badge label={when.label} tone={when.tone} icon="time-outline" />
-        {when.diffDays !== 0 && (
-          <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
-        )}
-        {assignment.distanceKm != null && (
-          <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
-        )}
-        {assignment.estimatedCustomerCount > 0 && (
-          <Meta icon="people-outline" label={`${assignment.estimatedCustomerCount} customers`} />
-        )}
-        {fee > 0 && <Meta icon="wallet-outline" label={money(fee)} />}
-      </View>
+      <AssignmentMeta assignment={assignment} when={when} fee={fee} />
 
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
         <Button label="Accept" icon="checkmark" loading={busy} disabled={busy} onPress={onAccept} style={{ flex: 1 }} />
@@ -343,21 +373,7 @@ const CurrentJobCard: React.FC<{
         </View>
       </View>
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: t.space.sm }}>
-        {/* Urgency first: overdue reads danger, today accent, tomorrow warning. */}
-        <Badge label={when.label} tone={when.tone} icon="time-outline" />
-        {/* The concrete date stays for anything not today — "In 8 days" alone would make the
-            assayer open Details just to write the date down. */}
-        {when.diffDays !== 0 && (
-          <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
-        )}
-        {assignment.distanceKm != null && (
-          <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
-        )}
-        {assignment.estimatedCustomerCount > 0 && (
-          <Meta icon="people-outline" label={`${assignment.estimatedCustomerCount} customers`} />
-        )}
-      </View>
+      <AssignmentMeta assignment={assignment} when={when} />
 
       {/*
         One primary action, chosen by where the job actually is. Showing check-in, scan and
