@@ -24,9 +24,9 @@ module.exports = {
     runtimeVersion: { policy: 'appVersion' },
     updates: {
       fallbackToCacheTimeout: 0,
-      ...(process.env.EAS_PROJECT_ID
-        ? { url: `https://u.expo.dev/${process.env.EAS_PROJECT_ID}` }
-        : {}),
+      url: `https://u.expo.dev/${
+        process.env.EAS_PROJECT_ID || '05ed5767-ce2f-4872-be1e-5509682f33fe'
+      }`,
       /**
        * Which stream this build follows.
        *
@@ -76,7 +76,15 @@ module.exports = {
     extra: {
       googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
       apiUrl: process.env.EXPO_PUBLIC_API_URL || '',
-      ...(process.env.EAS_PROJECT_ID ? { eas: { projectId: process.env.EAS_PROJECT_ID } } : {}),
+      /**
+       * The EAS project this app publishes updates to: @deepstacker/fapoms-mobile.
+       *
+       * Hardcoded rather than env-only because a build that silently lacks it produces an APK
+       * with no update URL — one that looks fine, installs fine, and can never receive an OTA
+       * update. Not a secret; it appears in the project's own public URL. EAS_PROJECT_ID still
+       * overrides it, for anyone publishing to a different project.
+       */
+      eas: { projectId: process.env.EAS_PROJECT_ID || '05ed5767-ce2f-4872-be1e-5509682f33fe' },
     },
     ios: {
       supportsTablet: false,
@@ -97,7 +105,10 @@ module.exports = {
     },
     android: {
       package: 'com.fapoms.assayer',
-      versionCode: 2,
+      // Bumped for the first build carrying OTA updates. Android refuses an install whose
+      // versionCode is lower than the installed one, so every build handed to a user must
+      // increase this or it cannot be installed over its predecessor.
+      versionCode: 3,
       // Present in the repo but never wired in — without this, a native build has no way to
       // know which Firebase project to register push against, so `getDevicePushTokenAsync()`
       // would either fail or register against nothing at all.
