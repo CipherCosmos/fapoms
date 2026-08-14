@@ -19,20 +19,26 @@ import * as LocalAuthentication from 'expo-local-authentication';
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
 /**
- * Which JavaScript this handset is actually running.
+ * Which JavaScript this handset is actually running, in words a person can compare.
  *
- * The version string alone cannot answer that: over-the-air updates change the JS without
- * changing the version, so two assayers can both report "v1.0.0" while running different code —
- * and the one reporting a bug may already have the fix, or may be stuck on a build that never
- * updated. Support has no way to tell them apart.
+ * The version string alone cannot say: over-the-air updates change the JS without changing the
+ * version, so two assayers both report "v1.0.0" while running different code — and the one
+ * reporting a bug may already have the fix, or may be on a handset whose updates never arrived.
  *
- * `Updates.updateId` is null when the app is running the bundle that shipped inside the APK, and
- * a UUID once an update has been applied. Shown as a short prefix: enough to compare against
- * `eas update:list`, short enough to read down a phone line.
+ * Shows the update's publish TIME rather than its id. An id is a hex string nobody can compare
+ * down a phone line; "14 Aug 15:45" answers the only question support actually asks — is this
+ * handset current, or stuck. `isEmbeddedLaunch` distinguishes the bundle that shipped inside the
+ * APK from one that arrived later.
  */
 const bundleLabel = (): string => {
   if (!Updates.isEnabled) return 'bundled';
-  return Updates.updateId ? Updates.updateId.slice(0, 8) : 'bundled';
+  if (Updates.isEmbeddedLaunch || !Updates.createdAt) return 'as installed';
+  return `updated ${Updates.createdAt.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`;
 };
 
 /**

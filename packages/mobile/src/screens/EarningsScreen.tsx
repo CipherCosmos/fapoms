@@ -7,7 +7,7 @@ import { calendarDayDiff } from '../utils/dates';
 import { CAT_LABELS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
 import {
-  AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, GlowBlob, Icon, Section, StatStrip, StatTile,
+  AppText, Badge, Button, Card, CollapsibleSection, Divider, EmptyState, FadeIn, GlowBlob, Icon, StatStrip, StatTile,
 } from '../components/ui/primitives';
 
 interface EarningsScreenProps {
@@ -210,7 +210,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
       )}
 
       {statement && (
-        <Section title="Payables">
+        <CollapsibleSection title="Payables" defaultOpen>
           {payables.length === 0 ? (
             <EmptyState
               icon="document-text-outline"
@@ -256,11 +256,11 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
               );
             })
           )}
-        </Section>
+        </CollapsibleSection>
       )}
 
       {payments.length > 0 && (
-        <Section title="Payments received">
+        <CollapsibleSection title="Payments received" summary="What has already been paid to you">
           {payments.slice(0, 8).map((pm, i) => (
             <FadeIn key={pm.id} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
@@ -277,10 +277,10 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
               </Card>
             </FadeIn>
           ))}
-        </Section>
+        </CollapsibleSection>
       )}
 
-      <Section title="Expense claims">
+      <CollapsibleSection title="Expense claims" defaultOpen>
         {expenses.length === 0 ? (
           <EmptyState
             icon="receipt-outline"
@@ -313,9 +313,9 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             </FadeIn>
           ))
         )}
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Completed audits">
+      <CollapsibleSection title="Completed audits" summary="Your finished jobs">
         {completed.length === 0 ? (
           <EmptyState
             icon="wallet-outline"
@@ -341,7 +341,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             </FadeIn>
           ))
         )}
-      </Section>
+      </CollapsibleSection>
     </View>
   );
 };
