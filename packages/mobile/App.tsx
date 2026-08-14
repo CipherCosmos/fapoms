@@ -6,12 +6,7 @@ import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
 import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
-import {
-  registerForPushNotificationsAsync,
-  setupNotificationListeners,
-  getLastNotificationResponseAsync,
-  triggerAlertNotification,
-} from './src/services/notification.service';
+import { useAssayerNotifications, type NotificationTapData } from './src/hooks/useAssayerNotifications';
 import { getAssignmentTotalFee } from './src/utils/fees';
 import { connectMobileSocket } from './src/services/socket';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
@@ -52,13 +47,6 @@ import { NegotiateModal } from './src/components/NegotiateModal';
 import { ReportIssueModal } from './src/components/ReportIssueModal';
 import { FeedbackModal } from './src/components/FeedbackModal';
 import { AvailabilityModal, LeavePeriod } from './src/components/AvailabilityModal';
-
-/**
- * How recently a notification must have arrived for a launch to count as "opened from it".
- * Ten minutes comfortably covers seeing a banner and acting on it, without letting a tap
- * from days ago keep redirecting every future launch.
- */
-const DEEP_LINK_MAX_AGE_MS = 10 * 60 * 1000;
 
 /**
  * A completed audit packet waiting to be submitted. Native stages a file path so the bytes never
@@ -120,8 +108,56 @@ function AppMain() {
   // its own calendar UI, not a text field.
   const [availabilityLeaves, setAvailabilityLeaves] = useState<LeavePeriod[]>([]);
 
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  /**
+   * A tapped notification's `data` payload, whatever state the app was in when it was tapped
+   * (foreground banner, background, or the app launching fresh from a terminated state — all
+   * three carry the same shape, from `NotificationDeliveryWorker`'s FCM `data` field).
+   *
+   * The tab/modal shell here has no per-notification route to push onto, so "deep link" means
+   * the best a fixed shell can do: pick the tab that actually shows what the notification is
+   * about, and additionally open the query chat directly when the notification was specifically
+   * about a raised clarification — since that is the one case where "just look at your
+   * schedule" would leave the person hunting for the actual question.
+   *
+   * The catalog states each type's destination as a web route in `link`; the tab is derived
+   * from it rather than defaulting everything to Schedule. That default meant a "Payment sent"
+   * notification opened the schedule — the one screen that says nothing about money.
+   */
+  const handleNotificationTap = useCallback((data: NotificationTapData) => {
+    if (!data) return;
+    if (data.notificationId) {
+      MobileApiService.markNotificationRead(data.notificationId).catch(() => {});
+    }
+    const link: string = typeof data.link === 'string' ? data.link : '';
+
+    // Money lives on its own tab and carries no assignment to select, so it returns early —
+    // requiring an assignmentId below would drop these taps entirely.
+    if (link.startsWith('/earnings')) {
+      setPdfDocsAssignment(null);
+      setSelectedTab('EARNINGS');
+      return;
+    }
+
+    const assignmentId: string | undefined =
+      data.entityId || (link ? link.replace('/assignments/', '') : undefined);
+    if (!assignmentId) return;
+    // Dismiss any open detail view too, or the tab change lands behind it and the tapped
+    // notification appears to do nothing.
+    setPdfDocsAssignment(null);
+    setSelectedTab('SCHEDULE');
+    setPendingNotificationTarget({ assignmentId, category: data.category });
+  }, []);
+
+  /**
+   * Delivery lives in the hook; where a tap lands is decided here, because it depends on the tab
+   * shell and on which assignments have loaded.
+   */
+  const {
+    notifications,
+    unreadCount: unreadNotifCount,
+    load: loadNotifications,
+    markRead: markNotificationRead,
+  } = useAssayerNotifications({ isAuthenticated, onTap: handleNotificationTap });
 
   // Profile data state
   const [profile, setProfile] = useState<ProfileDataState>({
@@ -164,93 +200,6 @@ function AppMain() {
     assayerCode: user?.assayerCode || '',
   });
   const [savingProfile, setSavingProfile] = useState(false);
-
-  const seenNotifIdsRef = useRef<Set<string>>(new Set());
-  /** False until the opening poll has recorded the existing backlog. */
-  const hasPolledNotifsRef = useRef(false);
-
-  const loadNotifications = useCallback(async () => {
-    try {
-      const items = await MobileApiService.getNotifications();
-      setNotifications(items);
-      setUnreadNotifCount(items.filter((n) => !n.isRead).length);
-
-      /**
-       * The first poll of a session only records what is already there.
-       *
-       * `seenNotifIdsRef` starts empty on every launch, so without this the opening poll
-       * treats the entire unread backlog as "just arrived" and fires an alert for each —
-       * open the app with twenty unread and twenty notifications land at once, for things
-       * already visible on screen. Only genuinely new arrivals, seen while the app is
-       * running, are worth interrupting for.
-       */
-      const isFirstLoad = !hasPolledNotifsRef.current;
-      hasPolledNotifsRef.current = true;
-
-      items.forEach((n) => {
-        if (n.isRead || seenNotifIdsRef.current.has(n.id)) return;
-        seenNotifIdsRef.current.add(n.id);
-        if (isFirstLoad) return;
-        triggerAlertNotification(
-          n.title,
-          n.message || 'New audit alert received',
-          {
-            notificationId: n.id,
-            assignmentId: n.assignmentId,
-            link: n.link,
-          },
-          // Picks the Android channel, so a polled notification is presented exactly as
-          // loudly as the same notification would have been had it arrived as a push.
-          (n as any).priority,
-          // Chime only: polling runs only while the app is foregrounded, and the server has
-          // already put this same notification in the tray via push.
-          false,
-        );
-      });
-    } catch (e) {
-      console.error('Error loading notifications:', e);
-    }
-  }, []);
-
-  /**
-   * A tapped notification's `data` payload, whatever state the app was in when it was tapped
-   * (foreground banner, background, or the app launching fresh from a terminated state — all
-   * three carry the same shape, from `NotificationDeliveryWorker`'s FCM `data` field).
-   *
-   * The tab/modal shell here has no per-notification route to push onto, so "deep link" means
-   * the best a fixed shell can do: pick the tab that actually shows what the notification is
-   * about, and additionally open the query chat directly when the notification was specifically
-   * about a raised clarification — since that is the one case where "just look at your
-   * schedule" would leave the person hunting for the actual question.
-   *
-   * The catalog states each type's destination as a web route in `link`; the tab is derived
-   * from it rather than defaulting everything to Schedule. That default meant a "Payment sent"
-   * notification opened the schedule — the one screen that says nothing about money.
-   */
-  const handleNotificationTap = useCallback((data: any) => {
-    if (!data) return;
-    if (data.notificationId) {
-      MobileApiService.markNotificationRead(data.notificationId).catch(() => {});
-    }
-    const link: string = typeof data.link === 'string' ? data.link : '';
-
-    // Money lives on its own tab and carries no assignment to select, so it returns early —
-    // requiring an assignmentId below would drop these taps entirely.
-    if (link.startsWith('/earnings')) {
-      setPdfDocsAssignment(null);
-      setSelectedTab('EARNINGS');
-      return;
-    }
-
-    const assignmentId: string | undefined =
-      data.entityId || (link ? link.replace('/assignments/', '') : undefined);
-    if (!assignmentId) return;
-    // Dismiss any open detail view too, or the tab change lands behind it and the tapped
-    // notification appears to do nothing.
-    setPdfDocsAssignment(null);
-    setSelectedTab('SCHEDULE');
-    setPendingNotificationTarget({ assignmentId, category: data.category });
-  }, []);
 
   const loadAssayerProfile = useCallback(async () => {
     if (!user?.id) return;
@@ -323,8 +272,7 @@ function AppMain() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      registerForPushNotificationsAsync();
-      loadNotifications();
+      // Push registration and the opening notification load belong to useAssayerNotifications.
       loadAssayerProfile();
       loadExpenseSummary();
 
@@ -388,52 +336,6 @@ function AppMain() {
       };
     }
   }, [isAuthenticated, loadNotifications, loadAssayerProfile, loadAssignments, loadExpenseSummary]);
-
-  // Push reliability across app state: this is the piece that was entirely missing.
-  // `registerForPushNotificationsAsync` above got a token registered, but nothing was ever
-  // listening for what happened to a notification afterward — not a tap, not even one that
-  // arrived while the screen was open. `setupNotificationListeners` covers foreground and
-  // background; `getLastNotificationResponseAsync` covers the one case listeners cannot,
-  // launching fresh from a fully terminated state via a notification tap.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    getLastNotificationResponseAsync().then((response) => {
-      const data = response?.notification?.request?.content?.data;
-      if (!data) return;
-
-      /**
-       * This call returns the last tapped notification *forever*, not only when that tap is
-       * what launched the app. Every cold start replayed the same old tap, so the app always
-       * opened on the schedule of whichever assignment was last notified about — the chosen
-       * landing tab was silently overridden on launch, every launch.
-       *
-       * A tap that genuinely launched this session belongs to a recently-delivered
-       * notification, so anything older than the window is treated as already handled.
-       * Erring toward ignoring is the safe side: the notification list is still one tap away,
-       * whereas a wrong redirect hijacks the whole app on every launch.
-       */
-      const deliveredAt = response?.notification?.date;
-      const ageMs = typeof deliveredAt === 'number' ? Date.now() - deliveredAt : Infinity;
-      if (ageMs > DEEP_LINK_MAX_AGE_MS) return;
-
-      handleNotificationTap(data);
-    });
-
-    const unsubscribe = setupNotificationListeners(
-      () => {
-        // Received while the app is open — the OS banner is already configured to show
-        // (see notification.service.ts's handler), so this only needs to keep the
-        // in-app unread count and list from lagging behind it.
-        loadNotifications();
-      },
-      (response: any) => {
-        handleNotificationTap(response?.notification?.request?.content?.data);
-      },
-    );
-
-    return unsubscribe;
-  }, [isAuthenticated, handleNotificationTap, loadNotifications]);
 
   // Resolves a queued deep-link target once the assignment it points to has actually loaded —
   // opening the query chat is only meaningful once the app already knows about the query.
@@ -1031,25 +933,7 @@ function AppMain() {
           notifications={notifications}
           unreadCount={unreadNotifCount}
           onClose={overlay.close}
-          onMarkRead={(id) => {
-            // Marked read locally first so the list responds immediately, then reverted if the
-            // server disagrees. Previously the result was discarded entirely (behind a `.then`
-            // that did nothing), so a failed call left the row looking read until the next
-            // reload quietly brought it back.
-            setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
-            setUnreadNotifCount((c) => Math.max(0, c - 1));
-
-            MobileApiService.markNotificationRead(id)
-              .then((ok) => {
-                if (ok) return;
-                setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: false } : n)));
-                setUnreadNotifCount((c) => c + 1);
-              })
-              .catch(() => {
-                setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: false } : n)));
-                setUnreadNotifCount((c) => c + 1);
-              });
-          }}
+          onMarkRead={markNotificationRead}
           onTapNotification={(n) => {
             overlay.close();
             if (n.link) handleNotificationTap({ notificationId: n.id, entityId: n.assignmentId, link: n.link });
