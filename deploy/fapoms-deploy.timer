@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for new FAPOMS commits every 2 minutes
+
+[Timer]
+# Polling, not a webhook: a webhook would mean a second publicly reachable endpoint, and this
+# deployment deliberately has exactly one way in. Two minutes is well inside the time it takes
+# to notice a change is wanted.
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

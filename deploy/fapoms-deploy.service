@@ -1,0 +1,9 @@
+[Unit]
+Description=Deploy FAPOMS main if it moved
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/apps/fapoms-ops/auto-deploy.sh
+# A build plus a health wait; well clear of the ~2 minutes a rebuild takes.
+TimeoutStartSec=1800

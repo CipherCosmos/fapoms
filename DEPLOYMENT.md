@@ -158,3 +158,36 @@ start without it.
 
 **Frontend 404s on refresh.** The nginx config did not make it into the image — check
 `packages/frontend/nginx.conf` is copied to `/etc/nginx/conf.d/default.conf`.
+
+---
+
+## Automatic deployment
+
+A systemd user timer on the host checks `origin/main` every two minutes and redeploys what moved.
+Files live in `deploy/`: `auto-deploy.sh`, `fapoms-deploy.service`, `fapoms-deploy.timer`.
+
+```bash
+systemctl --user status fapoms-deploy.timer     # is it running
+tail -f ~/apps/fapoms-ops/auto-deploy.log       # what it has done
+systemctl --user start fapoms-deploy.service    # deploy now, do not wait
+```
+
+**It is not development hot reload**, and deliberately so. Bind-mounting source and running
+`nest start --watch` with a vite dev server would discard the production build, the nginx SPA
+fallback and the single-origin routing this deployment relies on — on a URL real assayers are
+testing against. What is automated is getting pushed commits onto the server, not turning the
+server into a development machine.
+
+Three properties worth knowing:
+
+- **Only what changed is rebuilt.** A backend-only commit does not spend two minutes rebuilding
+  the web bundle. A docs- or mobile-only commit rebuilds nothing.
+- **It refuses to run over local commits.** If the clone on the server has anything unpushed it
+  logs and stops rather than `reset --hard`-ing the work away. That is not hypothetical: an
+  unpushed commit was found on this host once, and it was real work that existed nowhere else.
+- **It verifies health afterwards**, polling `/api/v1/health` for two minutes, and logs a warning
+  if the service does not come back — so a failed deploy is visible in the log rather than only
+  when someone opens the app.
+
+**Mobile is not covered by this.** JavaScript changes reach handsets through `eas update`; native
+changes need a new APK. See `packages/mobile/BUILD-APK.md`.
