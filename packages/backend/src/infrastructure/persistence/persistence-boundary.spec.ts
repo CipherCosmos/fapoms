@@ -32,6 +32,9 @@ const SRC = path.resolve(__dirname, '../..');
 const IMPORTS_TYPEORM = [
   'core/audit/unified-audit.service.ts',
   'infrastructure/ocr/ocr-processing.service.ts',
+  // Read-only socket-room entitlement lookups (entity → branch region, users.regions);
+  // three single-row queries, no writes, no transactions.
+  'infrastructure/scope/region-guard.service.ts',
   'modules/assayer/assayer.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',
@@ -90,6 +93,8 @@ const IMPORTS_TYPEORM = [
  */
 const OPENS_ITS_OWN_TRANSACTIONS = [
   'core/audit/unified-audit.service.ts',
+  // Holds a DataSource but never opens a transaction: read-only room entitlement lookups.
+  'infrastructure/scope/region-guard.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',
   // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.

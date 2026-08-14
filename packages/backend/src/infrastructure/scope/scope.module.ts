@@ -5,14 +5,18 @@ import { ZoneEntity } from '../../modules/zone/zone.entity';
 import { ClientEntity } from '../../modules/client/client.entity';
 import { ProjectEntity } from '../../modules/project/project.entity';
 import { ScopeController } from './scope.controller';
+import { RegionGuardService } from './region-guard.service';
 
 /**
- * Serves the global scope filter's option lists. Read-only, and deliberately owns no service:
- * the enforcement it depends on lives in `global-scope.ts` as plain functions and a param
- * decorator, so there is nothing here to inject.
+ * Serves the global scope filter's option lists, and provides `RegionGuardService` — the
+ * per-entity entitlement check the realtime gateway runs before letting a socket join an
+ * `assignment:`/`query:` room. HTTP-side enforcement stays where it was: plain functions
+ * and a param decorator in `global-scope.ts`, with nothing to inject.
  */
 @Module({
   imports: [TypeOrmModule.forFeature([BranchEntity, ZoneEntity, ClientEntity, ProjectEntity])],
   controllers: [ScopeController],
+  providers: [RegionGuardService],
+  exports: [RegionGuardService],
 })
 export class ScopeModule {}

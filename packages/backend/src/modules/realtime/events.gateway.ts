@@ -9,6 +9,11 @@ import { Injectable } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import {
+  isInternalStaff,
+  RegionGuardService,
+  RoomVerdict,
+} from '../../infrastructure/scope/region-guard.service';
 
 interface AuthenticatedSocket extends Socket {
   user?: {
@@ -17,6 +22,12 @@ interface AuthenticatedSocket extends Socket {
     roles?: { name: string }[];
     organizationId?: string;
   };
+  /**
+   * Entitlement verdicts by room, so a client that re-subscribes (screen remounts, its own
+   * retry loops) does not re-run the lookup every time. Per-socket on purpose: it dies with
+   * the connection, and a reconnect re-checks against current data.
+   */
+  roomVerdicts?: Map<string, boolean>;
 }
 
 @Injectable()
@@ -48,6 +59,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly regionGuard: RegionGuardService,
   ) {
     this.eventPublisher.onPublish((eventName, payload) => {
       this.broadcastEvent(eventName, payload);
@@ -120,19 +132,13 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
        * organizationId — without this room those events would reach nobody and the web app's
        * live updates would silently stop.
        */
-      const roleNames: string[] = (payload.roles || [])
-        .map((r: any) => (typeof r === 'string' ? r : r?.name))
-        .filter(Boolean);
-
       // ASSAYER and CLIENT_USER are external principals. CLIENT_USER is excluded for the same
       // reason `STAFF_ROLES` excludes it: `users` has no client_id, so a client user cannot be
       // scoped to their own client, and unscoped access to every client's operational traffic
       // is worse than no live updates. A token carrying no roles at all is treated as external
-      // too — the room is opt-in, never a default.
-      const EXTERNAL_ROLES = ['ASSAYER', 'CLIENT_USER'];
-      const isInternalStaff =
-        roleNames.length > 0 && roleNames.some((r) => !EXTERNAL_ROLES.includes(r));
-      if (isInternalStaff) {
+      // too — the room is opt-in, never a default. The rule itself lives in
+      // `region-guard.service.ts` so the subscribe handlers below apply the identical test.
+      if (isInternalStaff(payload.roles)) {
         await client.join('staff');
       }
 
@@ -161,11 +167,60 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  /**
+   * A per-entity room join is a read grant: everything the gateway later emits to
+   * `assignment:<id>` / `query:<id>` — status changes, schedules, comments, fee and
+   * negotiation traffic — reaches every socket in the room. So a join must prove the same
+   * entitlement the HTTP layer would demand for the entity itself, not merely that the
+   * socket is authenticated; before this check, any principal could subscribe to a guessed
+   * UUID and watch another assayer's assignment live.
+   */
+  private async joinIfEntitled(
+    client: AuthenticatedSocket,
+    room: string,
+    entityId: unknown,
+    check: () => Promise<RoomVerdict>,
+  ) {
+    if (!client.user?.id) return;
+
+    // Refuse malformed ids before they reach a query: a non-UUID would make Postgres throw,
+    // and arbitrary strings must never become room names.
+    if (typeof entityId !== 'string' || !EventsGateway.UUID_RE.test(entityId)) {
+      client.emit('error', { message: `Invalid subscription id for ${room}` });
+      return;
+    }
+
+    const cache = (client.roomVerdicts ??= new Map());
+    let allowed = cache.get(room);
+    if (allowed === undefined) {
+      try {
+        const verdict = await check();
+        allowed = verdict.allowed;
+        // Unknown ids are refused but not cached (the entity may exist moments later);
+        // verdicts about a real entity are pinned for the socket's lifetime.
+        if (verdict.found) cache.set(room, allowed);
+      } catch {
+        // Lookup failure — DB hiccup or a ForbiddenException about the account itself.
+        // Refuse without caching so a transient error cannot pin a false refusal.
+        allowed = false;
+      }
+    }
+
+    if (allowed) {
+      await client.join(room);
+    } else {
+      client.emit('error', { message: `Not authorized to subscribe to ${room}` });
+    }
+  }
+
+  private static readonly UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
   @SubscribeMessage('subscribe:assignment')
   async handleSubscribeAssignment(client: AuthenticatedSocket, assignmentId: string) {
-    if (client.user?.id) {
-      await client.join(`assignment:${assignmentId}`);
-    }
+    await this.joinIfEntitled(client, `assignment:${assignmentId}`, assignmentId, () =>
+      this.regionGuard.assignmentVerdict(client.user!, assignmentId),
+    );
   }
 
   @SubscribeMessage('unsubscribe:assignment')
@@ -177,9 +232,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('subscribe:query')
   async handleSubscribeQuery(client: AuthenticatedSocket, queryId: string) {
-    if (client.user?.id) {
-      await client.join(`query:${queryId}`);
-    }
+    await this.joinIfEntitled(client, `query:${queryId}`, queryId, () =>
+      this.regionGuard.queryVerdict(client.user!, queryId),
+    );
   }
 
   @SubscribeMessage('unsubscribe:query')
