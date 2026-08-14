@@ -705,6 +705,7 @@ export class MobileApiService {
 
       const chunkUrl = `${API_BASE_URL}/documents/upload/session/${uploadId}/chunk/${index}`;
       let sent = false;
+      let lastChunkError = '';
 
       // Three attempts per chunk. A chunk is small, so a retry here costs seconds rather
       // than restarting the entire transfer.
@@ -725,6 +726,7 @@ export class MobileApiService {
             (form as any).append('chunk', blob, `${fileName}.part${index}`);
             const res = await this.fetchWithAuth(chunkUrl, { method: 'PUT', body: form as any });
             sent = res.ok;
+            if (!sent) lastChunkError = `HTTP ${res.status}`;
           } else {
             /**
              * Native goes through a temp file rather than FormData.
@@ -732,8 +734,21 @@ export class MobileApiService {
              * React Native's FormData only accepts `{uri, name, type}` parts, not Blobs, and
              * `atob` is not dependable under Hermes. Staging the slice on disk lets
              * `uploadAsync` stream the raw bytes, which is also what the single-shot path does.
+             *
+             * The `.bin` extension and the explicit `mimeType` below are both load-bearing.
+             *
+             * expo-file-system's Android multipart builder resolves the part's content type as
+             * `options.mimeType ?: URLConnection.guessContentTypeFromName(file.name)` into a
+             * non-null Kotlin `String`. `guessContentTypeFromName` returns null for a name it
+             * does not recognise, and the chunk file was named `chunk_<uploadId>_<index>` — no
+             * extension, nothing to recognise. Assigning that null threw NullPointerException
+             * inside the native module before a single byte went out.
+             *
+             * That is exactly what the server saw: a session opened, its status polled, and then
+             * no chunk request ever arriving — three identical silent failures, then "Upload
+             * stalled at part 1". Every scanned audit packet failed this way.
              */
-            tempUri = `${FileSystem.cacheDirectory}chunk_${uploadId}_${index}`;
+            tempUri = `${FileSystem.cacheDirectory}chunk_${uploadId}_${index}.bin`;
             await FileSystem.writeAsStringAsync(tempUri, base64, {
               encoding: FileSystem.EncodingType.Base64,
             });
@@ -741,12 +756,20 @@ export class MobileApiService {
               httpMethod: 'PUT',
               uploadType: FileSystem.FileSystemUploadType.MULTIPART,
               fieldName: 'chunk',
+              // A chunk is a byte range, not a document — the whole file's type is recorded on
+              // the session, and the server reassembles these without consulting it.
+              mimeType: 'application/octet-stream',
               headers: this.authToken ? { Authorization: `Bearer ${this.authToken}` } : undefined,
             });
             sent = result.status >= 200 && result.status < 300;
+            if (!sent) lastChunkError = `HTTP ${result.status}`;
           }
-        } catch {
+        } catch (err: any) {
+          // Previously `catch {}`. The native NPE above was thrown, discarded, and retried into
+          // the same wall three times — the one detail that would have identified the fault was
+          // the one thing being dropped.
           sent = false;
+          lastChunkError = err?.message || 'unknown error';
         } finally {
           if (tempUri) await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
         }
@@ -756,7 +779,10 @@ export class MobileApiService {
       if (!sent) {
         return {
           success: false,
-          error: `Upload stalled at part ${index + 1} of ${totalChunks}. Reconnect and retry — the parts already sent are kept.`,
+          error:
+            `Upload stalled at part ${index + 1} of ${totalChunks}` +
+            `${lastChunkError ? ` (${lastChunkError})` : ''}. ` +
+            'Reconnect and retry — the parts already sent are kept.',
         };
       }
       onProgress?.(Math.round(((index + 1) / totalChunks) * 100));

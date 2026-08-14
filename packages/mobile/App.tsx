@@ -58,6 +58,12 @@ import { AvailabilityModal, LeavePeriod } from './src/components/AvailabilityMod
  */
 const DEEP_LINK_MAX_AGE_MS = 10 * 60 * 1000;
 
+/**
+ * A completed audit packet waiting to be submitted. Native stages a file path so the bytes never
+ * enter JS memory; web has no path and stages the decoded content instead.
+ */
+type StagedPdf = { name: string; uri?: string; base64?: string };
+
 function AppMain() {
   const theme = useTheme();
   const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock } = useAuth();
@@ -92,7 +98,7 @@ function AppMain() {
 
   // Return-paperwork (pdf docs) screen state
   const [pdfDocsAssignment, setPdfDocsAssignment] = useState<AssayerAssignment | null>(null);
-  const [stagedPdf, setStagedPdf] = useState<{ name: string; base64: string } | null>(null);
+  const [stagedPdf, setStagedPdf] = useState<StagedPdf | null>(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
 
   // Query chat modal state
@@ -641,6 +647,19 @@ function AppMain() {
     return () => sub.remove();
   }, [pdfDocsAssignment, handleClosePdfDocs, selectedTab]);
 
+  /**
+   * Stage the picked file by reference, not by value.
+   *
+   * This used to read the whole PDF into a base64 string, hold that string in React state, and
+   * hand it to the uploader — which then wrote it back out to a temp file so it could stream it.
+   * A completed audit packet is scanned pages, routinely tens of megabytes, so that was a ~1.33x
+   * copy of the entire file living in JS memory for as long as the screen was open, on handsets
+   * that do not have it to spare. The uploader has taken a `uri` and streamed it straight off
+   * disk all along; nothing was passing one.
+   *
+   * Web has no file path to reference, so it still stages base64 — there the picker has already
+   * decoded the file into a data: URL anyway.
+   */
   const handleSelectPdfFile = useCallback(async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -649,22 +668,38 @@ function AppMain() {
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
-      const base64 = await assetToBase64(asset);
       const name = asset.name || 'audit_packet.pdf';
-      setStagedPdf({ name, base64 });
+      setStagedPdf(
+        Platform.OS === 'web'
+          ? { name, base64: await assetToBase64(asset) }
+          : { name, uri: asset.uri },
+      );
       feedback.success('PDF attached', `${name} is ready to submit.`);
     } catch (err: any) {
       feedback.error('File Picker Error', err?.message || 'Failed to select a PDF file.');
     }
   }, []);
 
-  const uploadPdf = useCallback((target: AssayerAssignment, name: string, base64: string) => {
+  const uploadPdf = useCallback((target: AssayerAssignment, staged: StagedPdf) => {
     setUploadingPdf(true);
-    return MobileApiService.uploadCompletedAuditPdf(target.id, name, { base64 }, target.id)
+    // A picked file gets the same resumable transfer the scanner does. It is the same operation
+    // over the same field connections, and there was no reason for one of them to have to start
+    // over from zero when the signal dropped. Resumable needs a real file path, so web keeps the
+    // single-shot path (which retries on its own).
+    const upload =
+      staged.uri && Platform.OS !== 'web'
+        ? MobileApiService.uploadAuditPdfResumable(target.id, staged.name, staged.uri, target.id)
+        : MobileApiService.uploadCompletedAuditPdf(
+            target.id,
+            staged.name,
+            { uri: staged.uri, base64: staged.base64 },
+            target.id,
+          );
+
+    return upload
       .then((res) => {
         if (res?.success) {
-          setStagedPdf({ name, base64 });
-          feedback.success('Upload Complete', `${name} was uploaded successfully.`);
+          feedback.success('Upload Complete', `${staged.name} was uploaded successfully.`);
           void refreshAfterServerChange();
         } else {
           feedback.error('Upload Failed', res?.error || 'The document could not be uploaded.');
@@ -684,7 +719,7 @@ function AppMain() {
       feedback.warning('Nothing to submit', 'Attach a PDF or scan the pages first.');
       return;
     }
-    uploadPdf(pdfDocsAssignment, stagedPdf.name, stagedPdf.base64).then((ok) => {
+    uploadPdf(pdfDocsAssignment, stagedPdf).then((ok) => {
       if (ok) handleClosePdfDocs();
     });
   }, [pdfDocsAssignment, stagedPdf, uploadPdf, handleClosePdfDocs]);
