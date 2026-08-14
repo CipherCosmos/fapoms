@@ -7,6 +7,7 @@ import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
 import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
 import { useAssayerNotifications, type NotificationTapData } from './src/hooks/useAssayerNotifications';
+import { useAssayerProfile } from './src/hooks/useAssayerProfile';
 import { getAssignmentTotalFee } from './src/utils/fees';
 import { connectMobileSocket } from './src/services/socket';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
@@ -33,7 +34,7 @@ import { ScheduleScreen } from './src/screens/ScheduleScreen';
 import { PdfDocsScreen } from './src/screens/PdfDocsScreen';
 import { QueriesScreen } from './src/screens/QueriesScreen';
 import { EarningsScreen } from './src/screens/EarningsScreen';
-import { ProfileScreen, ProfileDataState } from './src/screens/ProfileScreen';
+import { ProfileScreen } from './src/screens/ProfileScreen';
 
 // Modals
 import { NotificationsModal } from './src/components/NotificationsModal';
@@ -46,7 +47,7 @@ import { ExpenseModal } from './src/components/ExpenseModal';
 import { NegotiateModal } from './src/components/NegotiateModal';
 import { ReportIssueModal } from './src/components/ReportIssueModal';
 import { FeedbackModal } from './src/components/FeedbackModal';
-import { AvailabilityModal, LeavePeriod } from './src/components/AvailabilityModal';
+import { AvailabilityModal } from './src/components/AvailabilityModal';
 
 /**
  * A completed audit packet waiting to be submitted. Native stages a file path so the bytes never
@@ -104,10 +105,6 @@ function AppMain() {
   // single render pass and must survive the overlay being read, not written.
   const [rejectSubmitting, setRejectSubmitting] = useState(false);
 
-  // Availability (self-service time off). Held separately from the profile form because it is
-  // its own calendar UI, not a text field.
-  const [availabilityLeaves, setAvailabilityLeaves] = useState<LeavePeriod[]>([]);
-
   /**
    * A tapped notification's `data` payload, whatever state the app was in when it was tapped
    * (foreground banner, background, or the app launching fresh from a terminated state — all
@@ -160,91 +157,18 @@ function AppMain() {
   } = useAssayerNotifications({ isAuthenticated, onTap: handleNotificationTap });
 
   // Profile data state
-  const [profile, setProfile] = useState<ProfileDataState>({
-    phone: '',
-    alternatePhone: '',
-    address: '',
-    city: '',
-    state: '',
-    district: '',
-    pincode: '',
-    // Blank until the assayer's real address is geocoded or their device reports a fix.
-    // A New Delhi default here silently became the stored home location for workers who
-    // never edited the field, corrupting travel-distance and routing calculations.
-    latitude: location?.latitude ?? 0,
-    longitude: location?.longitude ?? 0,
-    preferredRegions: '',
-    preferredRadius: 10,
-    languages: '',
-    licenseNo: '',
-    emergencyName: '',
-    emergencyPhone: '',
-    emergencyRelation: '',
-    skills: '',
-    experienceYears: 0,
-    panNumber: '',
-    bankAccountNumber: '',
-    ifscCode: '',
-    maxDailyWorkload: 3,
-    maxWeeklyWorkload: 15,
-    employmentType: 'INTERNAL',
-    performanceRating: 0,
-    averageRating: 0,
-    totalAssignments: 0,
-    completedAssignments: 0,
-    onTimeCompletions: 0,
-    totalEarnings: 0,
-    runningBalance: 0,
-    earningsPaid: 0,
-    earningsAwaitingApproval: 0,
-    assayerCode: user?.assayerCode || '',
-  });
-  const [savingProfile, setSavingProfile] = useState(false);
-
-  const loadAssayerProfile = useCallback(async () => {
-    if (!user?.id) return;
-    try {
-      const res = await MobileApiService.getAssayerProfile(user.id);
-      if (res.success && res.data) {
-        const p = res.data;
-        setProfile((prev) => ({
-          ...prev,
-          phone: p.phone || prev.phone,
-          alternatePhone: p.alternatePhone || prev.alternatePhone,
-          address: p.address || prev.address,
-          city: p.city || prev.city,
-          state: p.state || prev.state,
-          district: p.district || prev.district,
-          pincode: p.pincode || prev.pincode,
-          skills: p.skills || prev.skills,
-          languages: p.languages || prev.languages,
-          experienceYears: p.experienceYears ?? prev.experienceYears,
-          licenseNo: p.licenseNo || prev.licenseNo,
-          panNumber: p.panNumber || prev.panNumber,
-          bankAccountNumber: p.bankAccountNumber || prev.bankAccountNumber,
-          ifscCode: p.ifscCode || prev.ifscCode,
-          assayerCode: p.assayerCode || prev.assayerCode,
-          totalEarnings: p.totalEarnings ?? 0,
-          runningBalance: p.runningBalance ?? 0,
-          earningsPaid: p.earningsPaid ?? 0,
-          earningsAwaitingApproval: p.earningsAwaitingApproval ?? 0,
-          completedAssignments: p.completedAssignments ?? 0,
-          totalAssignments: p.totalAssignments ?? 0,
-          averageRating: p.averageRating ?? prev.averageRating,
-        }));
-        // Normalise the leave calendar to plain YYYY-MM-DD ranges for the availability picker.
-        setAvailabilityLeaves(
-          Array.isArray(p.leaves)
-            ? p.leaves
-                .filter((l: any) => l?.startDate && l?.endDate)
-                .map((l: any) => ({ startDate: String(l.startDate).slice(0, 10), endDate: String(l.endDate).slice(0, 10) }))
-            : [],
-        );
-      }
-    } catch (e) {
-      console.error('Error fetching assayer profile:', e);
-    }
-  }, [user?.id]);
+  /**
+   * The assayer's own record — details, pay totals and the leave calendar that arrives with it.
+   */
+  const {
+    profile,
+    saving: savingProfile,
+    leaves: availabilityLeaves,
+    setLeaves: setAvailabilityLeaves,
+    load: loadAssayerProfile,
+    updateField: handleUpdateProfileField,
+    save: handleSaveProfile,
+  } = useAssayerProfile(user, location);
 
   const loadExpenseSummary = useCallback(async () => {
     if (!user?.id) return;
@@ -432,33 +356,6 @@ function AppMain() {
       }
     } finally {
       setBusyActionId(null);
-    }
-  };
-
-  const handleUpdateProfileField = (field: keyof ProfileDataState, value: any) => {
-    setProfile((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleSaveProfile = async () => {
-    setSavingProfile(true);
-    try {
-      if (!user?.id) {
-        feedback.error('Not signed in', 'Sign in again before saving your profile.');
-        return;
-      }
-      // `updateAssayerProfile` reports failure by return value, not by throwing, so the catch
-      // below never saw a rejected save. This claimed "Profile saved successfully" on a 404 —
-      // and the endpoint it called did not exist, so that is what every save did.
-      const result = await MobileApiService.updateAssayerProfile(user.id, profile);
-      if (!result.success) {
-        feedback.error('Not saved', result.error || 'Your profile could not be saved. Please try again.');
-        return;
-      }
-      feedback.success('Profile saved');
-    } catch (e: any) {
-      feedback.error('Not saved', e?.message || 'Your profile could not be saved.');
-    } finally {
-      setSavingProfile(false);
     }
   };
 
