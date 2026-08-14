@@ -9,7 +9,7 @@ import { Injectable } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { RegionGuardService, RoomVerdict } from '../../infrastructure/scope/region-guard.service';
 import { REGION_ORDER } from '@fapoms/shared';
 
 /** Every region room a national (unassigned) staff socket joins. */
@@ -22,6 +22,8 @@ interface AuthenticatedSocket extends Socket {
     roles?: { name: string }[];
     organizationId?: string;
   };
+  /** Room-join decisions already made for this socket — see `joinIfEntitled`. */
+  roomVerdicts?: Map<string, boolean>;
 }
 
 @Injectable()
@@ -187,11 +189,60 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  private async joinIfEntitled(
+    client: AuthenticatedSocket,
+    room: string,
+    entityId: unknown,
+    check: () => Promise<RoomVerdict>,
+  ) {
+    if (!client.user?.id) return;
+
+    // Refuse malformed ids before they reach a query: a non-UUID would make Postgres throw,
+    // and arbitrary strings must never become room names.
+    if (typeof entityId !== 'string' || !EventsGateway.UUID_RE.test(entityId)) {
+      client.emit('error', { message: `Invalid subscription id for ${room}` });
+      return;
+    }
+
+    const cache = (client.roomVerdicts ??= new Map());
+    let allowed = cache.get(room);
+    if (allowed === undefined) {
+      try {
+        const verdict = await check();
+        allowed = verdict.allowed;
+        // Unknown ids are refused but not cached (the entity may exist moments later);
+        // verdicts about a real entity are pinned for the socket's lifetime.
+        if (verdict.found) cache.set(room, allowed);
+      } catch {
+        // Lookup failure — DB hiccup or a ForbiddenException about the account itself.
+        // Refuse without caching so a transient error cannot pin a false refusal.
+        allowed = false;
+      }
+    }
+
+    if (allowed) {
+      await client.join(room);
+    } else {
+      client.emit('error', { message: `Not authorized to subscribe to ${room}` });
+    }
+  }
+
+  private static readonly UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /**
+   * Joining an entity room is an entitlement decision, not just an authentication one.
+   *
+   * This used to be `if (client.user?.id) join(...)` — so any authenticated principal, including
+   * an external assayer, could subscribe to an arbitrary assignment UUID and receive that
+   * assignment's status changes, comments, communications and fee negotiation. The rooms below
+   * carry all of it.
+   */
   @SubscribeMessage('subscribe:assignment')
   async handleSubscribeAssignment(client: AuthenticatedSocket, assignmentId: string) {
-    if (client.user?.id) {
-      await client.join(`assignment:${assignmentId}`);
-    }
+    await this.joinIfEntitled(client, `assignment:${assignmentId}`, assignmentId, () =>
+      this.regionGuard.assignmentVerdict(client.user!, assignmentId),
+    );
   }
 
   @SubscribeMessage('unsubscribe:assignment')
@@ -203,9 +254,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('subscribe:query')
   async handleSubscribeQuery(client: AuthenticatedSocket, queryId: string) {
-    if (client.user?.id) {
-      await client.join(`query:${queryId}`);
-    }
+    await this.joinIfEntitled(client, `query:${queryId}`, queryId, () =>
+      this.regionGuard.queryVerdict(client.user!, queryId),
+    );
   }
 
   @SubscribeMessage('unsubscribe:query')

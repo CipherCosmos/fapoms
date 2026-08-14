@@ -25,10 +25,54 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { GlobalScope } from './global-scope';
+import { GlobalScope, assignedRegions } from './global-scope';
+import { Region } from '@fapoms/shared';
+import { AssignmentEntity } from '../../modules/assignment/assignment.entity';
+import { ValidationQueryEntity } from '../../modules/validation-query/validation-query.entity';
+import { UserEntity } from '../../modules/user/user.entity';
 
 /** Distinguishes a UUID path param from a human-facing code on routes that accept both. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The socket principal shape `EventsGateway` builds from a verified JWT. */
+export interface SocketPrincipal {
+  id: string;
+  roles?: Array<string | { name?: string }>;
+}
+
+export interface RoomVerdict {
+  /**
+   * Whether the entity row exists. A verdict for an unknown id is refused but must not be
+   * cached: the id may be created moments later (a client subscribing off a `created`
+   * event), and a per-socket cache would pin the refusal for the connection's lifetime.
+   */
+  found: boolean;
+  allowed: boolean;
+}
+
+const REFUSED_UNKNOWN: RoomVerdict = { found: false, allowed: false };
+
+/** Role entries arrive from JWTs both as strings and as `{ name }` objects. */
+export function roleNames(roles: unknown): string[] {
+  if (!Array.isArray(roles)) return [];
+  return roles
+    .map((r: any) => (typeof r === 'string' ? r : r?.name))
+    .filter(Boolean);
+}
+
+/**
+ * ASSAYER and CLIENT_USER are external principals; a token carrying no roles at all is
+ * treated as external too — staff-grade access is opt-in, never a default. This is the
+ * same rule `handleConnection` applies when deciding who joins the `staff` room.
+ */
+const EXTERNAL_ROLES = ['ASSAYER', 'CLIENT_USER'];
+
+export function isInternalStaff(roles: unknown): boolean {
+  const names = roleNames(roles);
+  return names.length > 0 && names.some((r) => !EXTERNAL_ROLES.includes(r));
+}
+
+@Injectable()
 
 @Injectable()
 export class RegionGuardService {
@@ -199,5 +243,100 @@ export class RegionGuardService {
       [scheduleId],
     );
     this.assertRegionAllowed(rows?.[0]?.region, scope);
+  }
+
+  // ── Realtime room entitlement ──────────────────────────────────────────────
+  //
+  // The HTTP methods above answer "may this request read this record", by throwing. The methods
+  // below answer the socket gateway's question — "may this principal WATCH this entity" — and
+  // return a verdict instead, because a refused room join is not an error the client asked for.
+  //
+  // They exist because joining a room used to require nothing beyond being authenticated: any
+  // principal, including an external assayer, could subscribe to an arbitrary assignment UUID and
+  // receive that assignment's status changes, comments, fee negotiation and communications. This
+  // came from a branch that main had not taken; the rest of main's realtime work was newer, so
+  // the merge kept both rather than choosing.
+
+  /**
+   * The account's enforced region assignment, or `null` for unrestricted.
+   *
+   * Read from `users.regions` at check time rather than the JWT because the token does not
+   * carry regions — and must not, or a region reassignment would not bite until expiry.
+   */
+  async userRegions(userId: string): Promise<Region[] | null> {
+    const user = await this.dataSource.getRepository(UserEntity).findOne({
+      where: { id: userId },
+      select: ['id', 'regions'],
+    });
+    if (!user) {
+      // A verified token for an account that no longer exists gets nothing, not everything.
+      throw new ForbiddenException('Account not found');
+    }
+    return assignedRegions(user);
+  }
+
+  /** May `principal` watch live events for this assignment? */
+  async assignmentVerdict(principal: SocketPrincipal, assignmentId: string): Promise<RoomVerdict> {
+    const row = await this.dataSource
+      .getRepository(AssignmentEntity)
+      .createQueryBuilder('a')
+      .leftJoin('a.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .select('a.id', 'id')
+      .addSelect('a.assayerId', 'assayerId')
+      .addSelect('b.region', 'region')
+      .where('a.id = :id', { id: assignmentId })
+      .getRawOne<{ id: string; assayerId: string | null; region: string | null }>();
+
+    if (!row) return REFUSED_UNKNOWN;
+    if (row.assayerId && row.assayerId === principal.id) return { found: true, allowed: true };
+    return this.staffVerdict(principal, row.region);
+  }
+
+  /** May `principal` watch live events for this clarification thread? */
+  async queryVerdict(principal: SocketPrincipal, queryId: string): Promise<RoomVerdict> {
+    const row = await this.dataSource
+      .getRepository(ValidationQueryEntity)
+      .createQueryBuilder('q')
+      .leftJoin('q.validationCase', 'vc')
+      .leftJoin('vc.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .select('q.id', 'id')
+      .addSelect('q.assayerId', 'assayerId')
+      .addSelect('q.raisedByUserId', 'raisedByUserId')
+      .addSelect('b.region', 'region')
+      .where('q.id = :id', { id: queryId })
+      .getRawOne<{
+        id: string;
+        assayerId: string | null;
+        raisedByUserId: string | null;
+        region: string | null;
+      }>();
+
+    if (!row) return REFUSED_UNKNOWN;
+    const isOwner =
+      (row.assayerId && row.assayerId === principal.id) ||
+      (row.raisedByUserId && row.raisedByUserId === principal.id);
+    if (isOwner) return { found: true, allowed: true };
+    return this.staffVerdict(principal, row.region);
+  }
+
+  private async staffVerdict(
+    principal: SocketPrincipal,
+    region: string | null,
+  ): Promise<RoomVerdict> {
+    if (!isInternalStaff(principal.roles)) return { found: true, allowed: false };
+    const regions = await this.userRegions(principal.id);
+    return { found: true, allowed: this.regionAllowed(region, regions) };
+  }
+
+  /**
+   * The same predicate the HTTP layer applies (`branch.region IN (:regions)`): exact
+   * membership, no legacy-alias resolution, and a row with no resolvable region is visible
+   * only to unrestricted accounts.
+   */
+  private regionAllowed(region: string | null, regions: Region[] | null): boolean {
+    if (regions === null) return true;
+    return !!region && (regions as string[]).includes(region);
   }
 }
