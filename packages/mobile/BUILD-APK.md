@@ -63,3 +63,80 @@ If the DN says `CN=Android Debug`, it was built without the keystore properties 
 
 `versionCode` in `android/app/build.gradle` must increase for every build users upgrade onto;
 Android refuses an install whose code is not higher than the installed one.
+
+---
+
+# Distributing, and shipping updates
+
+## The link to hand out
+
+```
+https://homeserver.tailc73ec8.ts.net/download/app.apk
+```
+
+Served straight from the deployment. Publishing a new build is a copy, not a redeploy:
+
+```bash
+scp app-release.apk shivam@100.67.63.97:~/fapoms-downloads/app.apk
+```
+
+Testers must allow "install unknown apps" for their browser once — unavoidable outside Play.
+
+## Two kinds of update
+
+|  | Reaches users by | Needs a reinstall? |
+|---|---|---|
+| Screens, logic, styling, images, default backend URL | **over the air** | no |
+| New native module, permission, Expo SDK upgrade, `version` bump | new APK | yes |
+
+Almost everything is the first row. The split is not a preference — an OTA payload is JavaScript,
+and JS that calls a native module the installed binary does not contain crashes on launch with no
+way back. `runtimeVersion: appVersion` enforces the boundary: bump `version` and older installs
+stop being offered updates rather than being broken by one.
+
+## One-time setup (needs your Expo account — free)
+
+```bash
+cd packages/mobile
+npx eas login                 # free account
+npx eas init                  # creates the project, prints a project ID
+```
+
+Put the id in the build environment, then rebuild the APK **once** so it ships with the update
+URL baked in:
+
+```bash
+export EAS_PROJECT_ID=<the id from eas init>
+export EXPO_UPDATE_CHANNEL=production
+# …then the normal build above
+```
+
+A build made before this has no update URL and can never receive OTA updates — it must be
+replaced once.
+
+## Shipping an update after that
+
+```bash
+cd packages/mobile
+EXPO_PUBLIC_API_URL="https://homeserver.tailc73ec8.ts.net"   npx eas update --branch production --message "what changed"
+```
+
+Handsets fetch it in the background on next launch and apply it on the one after. No reinstall,
+no prompt.
+
+`fallbackToCacheTimeout: 0` means launch never blocks on the network — the app starts on the
+bundle it already has, which is what you want on a handset with poor signal.
+
+## Rolling back
+
+```bash
+npx eas update:rollback --branch production
+```
+
+Faster than a fix-forward, and the reason to prefer OTA for anything that can be JS.
+
+## Cost
+
+EAS Update's free tier covers 1,000 monthly active users. An internal assayer team is far inside
+it. If that ever changes, `expo-updates` supports a self-hosted update server — the same app
+builds work against it, only `updates.url` changes.
