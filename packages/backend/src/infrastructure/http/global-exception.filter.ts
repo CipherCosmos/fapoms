@@ -9,6 +9,7 @@ import {
 import type { Request, Response } from 'express';
 import { QueryFailedError } from 'typeorm';
 import { CORRELATION_ID_HEADER } from './correlation-id.middleware';
+import { errorAlerter, ErrorAlerter } from '../observability/error-alerter';
 
 /**
  * The single HTTP error boundary for the API. There was none — Nest's default handler let
@@ -27,6 +28,9 @@ import { CORRELATION_ID_HEADER } from './correlation-id.middleware';
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('ExceptionFilter');
+
+  /** Injectable for tests; the default is the process-wide instance. */
+  constructor(private readonly alerter: ErrorAlerter = errorAlerter) {}
 
   catch(exception: unknown, host: ArgumentsHost): void {
     // Only HTTP is handled here; let non-HTTP contexts (e.g. websockets) fall through.
@@ -53,6 +57,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         this.logger.error(
           `[${correlationId}] ${req.method} ${req.originalUrl} -> ${status}: ${JSON.stringify(body)}`,
         );
+        this.alerter.report({
+          method: req.method,
+          route: req.originalUrl,
+          errorName: exception.constructor?.name ?? 'HttpException',
+          correlationId: correlationId as string | undefined,
+        });
       }
       res.status(status).json(payload);
       return;
@@ -69,6 +79,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       `[${correlationId}] ${req.method} ${req.originalUrl} -> 500: ${detail}`,
       exception instanceof Error ? exception.stack : undefined,
     );
+
+    // The class name only. `detail` above carries the exception's message, and on this system a
+    // message routinely contains the data that caused it — a failed query includes its values,
+    // and those values are customer records. That stays in the log on the host.
+    this.alerter.report({
+      method: req.method,
+      route: req.originalUrl,
+      errorName: exception instanceof Error ? exception.name : 'UnknownError',
+      correlationId: correlationId as string | undefined,
+    });
 
     res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,

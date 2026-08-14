@@ -161,6 +161,75 @@ start without it.
 
 ---
 
+## Backups
+
+A systemd user timer dumps the database and mirrors the stored documents at 02:30 nightly.
+
+```bash
+systemctl --user status fapoms-backup.timer   # is it running
+tail -f ~/apps/fapoms-ops/backup.log          # what it has done
+systemctl --user start fapoms-backup.service  # back up now
+```
+
+Two things here cannot be rebuilt from this repository, and they fail differently. The database is
+the audit record; the object store holds the scanned returns, which are the evidence the audit
+exists to produce. Losing either loses the audit. Everything else on the host — images, containers,
+`node_modules` — is reproducible from a clone and is deliberately not backed up.
+
+The database is captured with `pg_dump -Fc`, which runs in a single transaction, so the dump is
+internally consistent while the app stays live. Objects are mirrored **append-only**: `--remove` is
+not passed, because audit evidence is not supposed to be deleted and a bucket that loses an object
+must not cause the backup to lose it too.
+
+Every dump is verified rather than assumed. A dump truncated by a full disk still leaves a
+plausible-looking file behind, and that gets discovered when someone needs it — the worst possible
+moment. `pg_restore --list` parses the archive's table of contents, so a truncated file fails
+loudly, with a table-count floor on top.
+
+Retention is 14 nightlies plus one dump per month for a year: a fault noticed late needs something
+older than the nightly window to compare against.
+
+### Prove a backup restores
+
+Run this occasionally. An untested backup is a belief about a file.
+
+```bash
+~/apps/fapoms-ops/restore.sh --drill
+```
+
+It restores the newest dump into a scratch database, creates the extensions a fresh database does
+not inherit (PostGIS, `uuid-ossp`, `pg_trgm` — exactly the class of thing that turns a restore into
+a bad afternoon), counts what came back, and drops the scratch even if it fails partway.
+
+To actually restore, `restore.sh --to-production <dump>`. It dumps the current state first, because
+restores are run under pressure and the decision to restore is sometimes the wrong one. Objects go
+back the other way with `mc mirror ~/backups/fapoms/objects src/fapoms-documents`.
+
+### Off-site — not yet done
+
+**The copies currently live on the same machine they are backing up.** That covers a bad migration,
+a dropped table, an accidental delete, a corrupted volume. It does **not** cover loss of the host or
+its disk, and this host has one disk and no RAID. Every backup run logs that fact rather than letting
+it go quiet.
+
+To close it, install `rclone`, configure a remote, and set it on the service:
+
+```bash
+systemctl --user edit fapoms-backup.service   # Environment=FAPOMS_OFFSITE_REMOTE=b2:fapoms-backups
+```
+
+---
+
+## When something breaks
+
+Set `ALERT_WEBHOOK_URL` and an unexpected 500 pushes a notification instead of waiting in a log
+nobody reads. Any plain-text POST endpoint works; ntfy needs no account. See `.env.docker.example`
+for what is and is not included in an alert, and why.
+
+Without it, errors are still logged with a correlation id — and nothing tells you to go and look.
+
+---
+
 ## Automatic deployment
 
 A systemd user timer on the host checks `origin/main` every two minutes and redeploys what moved.
@@ -171,6 +240,17 @@ systemctl --user status fapoms-deploy.timer     # is it running
 tail -f ~/apps/fapoms-ops/auto-deploy.log       # what it has done
 systemctl --user start fapoms-deploy.service    # deploy now, do not wait
 ```
+
+**It will not deploy a commit CI has not passed.** The verdict is read from that exact commit's
+check runs, and the gate fails closed on every uncertain answer — an unreachable API, a rate limit,
+a run that never appeared. A commit whose checks are still running waits for the next tick; one
+whose checks failed is refused and logged. `FAPOMS_SKIP_CI_GATE=1` overrides it for a genuine
+emergency and says so loudly in the log.
+
+(It reads check runs, not `/commits/{sha}/status`. GitHub Actions publishes check runs and creates
+no legacy statuses, so that endpoint reports `pending` with zero results for every commit forever —
+a gate reading it would treat "CI passed" and "CI does not exist" as the same answer and silently
+stop deploying.)
 
 **It is not development hot reload**, and deliberately so. Bind-mounting source and running
 `nest start --watch` with a vite dev server would discard the production build, the nginx SPA
