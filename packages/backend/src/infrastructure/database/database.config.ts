@@ -16,11 +16,18 @@ import { TypeOrmModuleOptions } from '@nestjs/typeorm';
  * migrations" before running any. Decided by the extension of this very file, so it is correct
  * under ts-node and under `node dist/main.js` without configuration. Single-level on purpose —
  * `migrations/_historical/` holds the 65 superseded files and must not be picked up.
+ *
+ * Resolved from `__dirname`, NOT `process.cwd()`. The production image starts as
+ * `node packages/backend/dist/main.js` from `/app`, so a cwd-relative glob pointed at
+ * `/app/dist/...` while the files are at `/app/packages/backend/dist/...`. TypeORM found no
+ * migrations, ran none, and the API came up against an empty database and died on the first
+ * query — with no error mentioning migrations at all. `__dirname` is right wherever the process
+ * is launched from, which is the only property worth relying on here.
  */
 const IS_COMPILED = __filename.endsWith('.js');
-const MIGRATIONS_GLOB = IS_COMPILED
-  ? [path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js')]
-  : [path.join(process.cwd(), 'src/infrastructure/database/migrations/*.ts')];
+const MIGRATIONS_GLOB = [
+  path.join(__dirname, IS_COMPILED ? 'migrations/*.js' : 'migrations/*.ts'),
+];
 
 export const databaseConfig = (
   configService: ConfigService,
