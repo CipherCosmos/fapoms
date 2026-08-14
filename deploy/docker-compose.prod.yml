@@ -82,6 +82,9 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
       - caddydata:/data
+      # APKs to hand out. A host directory rather than a volume, so publishing a new build is
+      # `scp` into it — no container rebuild, no compose restart.
+      - ${APK_DIR:-/srv/fapoms-downloads}:/srv/fapoms-downloads:ro,z
     depends_on: [backend, frontend]
 
 volumes:

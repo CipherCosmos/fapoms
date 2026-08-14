@@ -41,6 +41,21 @@
 		reverse_proxy backend:3000
 	}
 
+	# --- APK distribution ---------------------------------------------------------------------
+	# One stable link to hand to a field assayer: https://<host>/download/app.apk
+	#
+	# Only ever needed for the FIRST install and for native changes — everything else reaches the
+	# handset over the air. Served from a directory on the host so publishing a build is a copy,
+	# not a redeploy.
+	handle /download/* {
+		root * /srv/fapoms-downloads
+		uri strip_prefix /download
+		# Android will not install a file served as text/plain.
+		header Content-Type application/vnd.android.package-archive
+		header Content-Disposition "attachment"
+		file_server browse
+	}
+
 	# --- Everything else is the web app -------------------------------------------------------
 	# The frontend image handles SPA fallback internally (try_files → index.html), so a deep link
 	# forwarded here returns the app rather than a 404.

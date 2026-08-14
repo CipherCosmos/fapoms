@@ -3,6 +3,42 @@ module.exports = {
     name: 'Orbit',
     slug: 'fapoms-mobile',
     version: '1.0.0',
+
+    /**
+     * Over-the-air updates, so a fix reaches a field assayer without an APK reinstall.
+     *
+     * `runtimeVersion` is the contract between a shipped APK and the updates it may accept. The
+     * `appVersion` policy ties it to `version` above, which is exactly the safety property you
+     * want: an OTA payload is JavaScript and assets, and pushing JS that calls a native module
+     * the installed binary does not contain crashes the app on launch with no way back. Bumping
+     * `version` marks a build as native-incompatible, so older installs simply stop being offered
+     * updates instead of being broken by one.
+     *
+     * What OTA CAN change: screens, logic, styling, images, the default backend URL.
+     * What it CANNOT: new native modules, permissions, an Expo SDK upgrade. Those need a new APK.
+     *
+     * `fallbackToCacheTimeout: 0` means launch never blocks on the network — the app starts on
+     * the bundle it has and fetches in the background, which matters on a handset in the field
+     * with poor signal. The update applies on the NEXT launch.
+     */
+    runtimeVersion: { policy: 'appVersion' },
+    updates: {
+      fallbackToCacheTimeout: 0,
+      ...(process.env.EAS_PROJECT_ID
+        ? { url: `https://u.expo.dev/${process.env.EAS_PROJECT_ID}` }
+        : {}),
+      /**
+       * Which stream this build follows.
+       *
+       * `eas build` injects the channel from eas.json by itself. A LOCAL gradle build does not,
+       * and without it the app asks for updates on no channel and silently never receives any —
+       * a build that looks fine and is simply never updatable. Set EXPO_UPDATE_CHANNEL when
+       * building locally; see BUILD-APK.md.
+       */
+      ...(process.env.EXPO_UPDATE_CHANNEL
+        ? { requestHeaders: { 'expo-channel-name': process.env.EXPO_UPDATE_CHANNEL } }
+        : {}),
+    },
     orientation: 'portrait',
     userInterfaceStyle: 'automatic',
     icon: './assets/icon.png',
