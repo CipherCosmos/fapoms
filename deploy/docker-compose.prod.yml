@@ -70,15 +70,15 @@ services:
   caddy:
     image: docker.io/library/caddy:2-alpine
     restart: unless-stopped
-    # Loopback for Tailscale Funnel (it proxies from the public edge to localhost), and the
-    # host's Tailscale address so the tailnet can reach it directly. Deliberately NOT 0.0.0.0:
-    # that would also publish to whatever LAN this machine sits on, which nobody asked for.
+    # Loopback ONLY. Tailscale Funnel proxies from the public edge to localhost, so this is all
+    # it needs — and binding nothing else means there is exactly one way in, over TLS, with one
+    # place to reason about who can reach the app.
     #
-    # TS_ADDR is set in .env.docker; on a host without Tailscale, set it to 127.0.0.1 and the
-    # second binding collapses harmlessly onto the first.
+    # It briefly also bound the host's Tailscale address, which made the app reachable as plain
+    # HTTP on 100.x.x.x:8080. That is a second door with different (weaker) properties than the
+    # front one, and a second URL that anything pointed at it would silently depend on.
     ports:
       - "127.0.0.1:8080:8080"
-      - "${TS_ADDR}:8080:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
       - caddydata:/data
