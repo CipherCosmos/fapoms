@@ -8,6 +8,21 @@ import { CustomerRecordEntity } from './customer-record.entity';
 @Index(['projectId'])
 @Index(['versionNumber'])
 @Index(['status'])
+/**
+ * One approved version per project, enforced by the database.
+ *
+ * `approveVersion` supersedes the old version and approves the new one in a transaction, which
+ * two concurrent approvals defeat: each sees the other's row as un-superseded and both commit,
+ * leaving a project with two approved versions and a status column that says something untrue.
+ *
+ * Declared here as well as in migration 1790100000000 on purpose — `synchronize` rewrites the
+ * schema from the entities and silently drops any index it cannot see, so an index that lives
+ * only in a migration disappears the first time anyone runs with it on.
+ */
+@Index('uq_customer_master_approved_per_project', ['projectId'], {
+  unique: true,
+  where: `status = 'APPROVED' AND is_active = true`,
+})
 export class CustomerMasterVersionEntity extends BaseEntity {
   @Column({ name: 'project_id', type: 'uuid' })
   projectId: string;
