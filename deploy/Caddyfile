@@ -1,0 +1,55 @@
+# One origin in front of the whole application.
+#
+# The web app calls the API on RELATIVE paths (`/api`, `/socket.io`) — its dev server proxies
+# them, and in production something has to play that role or every request goes to the static
+# host and 404s. That is this file's job: same origin, so no CORS, and nothing about where the
+# API lives baked into the JS bundle at build time.
+#
+# Listens on :8080, not :80, because it runs as a rootless container and rootless cannot bind
+# privileged ports. Nothing is lost: Tailscale Funnel terminates TLS on :443 publicly and
+# forwards here, so the port this binds is an internal detail.
+
+{
+	admin off
+
+	# Funnel terminates TLS and speaks plain HTTP to us. Without this, Caddy would try to obtain
+	# its own certificate for a hostname it does not control and fail on every request.
+	auto_https off
+
+	# `servers` is a GLOBAL option. It was first written inside the site block below, where Caddy
+	# rejects it outright — "unrecognized directive: servers" — and the container exit-loops
+	# before serving anything.
+	servers {
+		# Tailscale forwards from a private address; without this the real client IP is lost and
+		# every request appears to come from the proxy.
+		trusted_proxies static private_ranges
+	}
+}
+
+:8080 {
+	encode gzip
+
+	# --- API and realtime --------------------------------------------------------------------
+	# WebSockets need no special directive in Caddy v2 — reverse_proxy upgrades automatically.
+	handle /api/* {
+		reverse_proxy backend:3000
+	}
+	handle /socket.io/* {
+		reverse_proxy backend:3000
+	}
+	handle /livekit/* {
+		reverse_proxy backend:3000
+	}
+
+	# --- Everything else is the web app -------------------------------------------------------
+	# The frontend image handles SPA fallback internally (try_files → index.html), so a deep link
+	# forwarded here returns the app rather than a 404.
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

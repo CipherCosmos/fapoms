@@ -1,0 +1,86 @@
+# Production stack. Runs under rootless Podman on this host.
+#
+# Differs from the repo's docker-compose.yml deliberately: that one is the development stack —
+# Dockerfile.dev, bind-mounted source, hot reload, and LiveKit's wide UDP media range, which
+# rootless networking cannot map. This builds the production images and publishes exactly one
+# port, to localhost, for Tailscale Funnel to reach.
+#
+#   Internet → Tailscale Funnel :443 → 127.0.0.1:8080 → caddy → frontend / backend
+
+services:
+  postgres:
+    # PostGIS, not stock Postgres: three columns are geometry and the planning engines are built
+    # on ST_* distance queries.
+    image: docker.io/postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  minio:
+    image: docker.io/minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      retries: 30
+
+  backend:
+    build:
+      context: ..
+      dockerfile: packages/backend/Dockerfile
+    restart: unless-stopped
+    env_file: [../.env.docker]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_healthy}
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: packages/frontend/Dockerfile
+    restart: unless-stopped
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    restart: unless-stopped
+    # Bound to loopback on purpose. The only public path in is Tailscale Funnel; publishing on
+    # 0.0.0.0 would additionally expose this to the LAN, which nobody asked for.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - caddydata:/data
+    depends_on: [backend, frontend]
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  caddydata:
