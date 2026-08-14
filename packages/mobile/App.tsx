@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text, BackHandler, AppState, KeyboardAvoidingView, Platform } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
@@ -8,11 +7,11 @@ import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
 import { useAssayerNotifications, type NotificationTapData } from './src/hooks/useAssayerNotifications';
 import { useAssayerProfile } from './src/hooks/useAssayerProfile';
+import { useReturnPaperwork } from './src/hooks/useReturnPaperwork';
 import { getAssignmentTotalFee } from './src/utils/fees';
 import { connectMobileSocket } from './src/services/socket';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries } from './src/utils/queries';
-import { assetToBase64 } from './src/utils/pickDocument';
 
 // Context Providers
 import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
@@ -49,12 +48,6 @@ import { ReportIssueModal } from './src/components/ReportIssueModal';
 import { FeedbackModal } from './src/components/FeedbackModal';
 import { AvailabilityModal } from './src/components/AvailabilityModal';
 
-/**
- * A completed audit packet waiting to be submitted. Native stages a file path so the bytes never
- * enter JS memory; web has no path and stages the decoded content instead.
- */
-type StagedPdf = { name: string; uri?: string; base64?: string };
-
 function AppMain() {
   const theme = useTheme();
   const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock } = useAuth();
@@ -87,11 +80,11 @@ function AppMain() {
   // `useOverlay` for why this replaced fourteen separate flags and subjects.
   const overlay = useOverlay();
 
-  // Return-paperwork (pdf docs) screen state. Not an overlay: it replaces the tab body, and the
-  // overlays above can open on top of it.
-  const [pdfDocsAssignment, setPdfDocsAssignment] = useState<AssayerAssignment | null>(null);
-  const [stagedPdf, setStagedPdf] = useState<StagedPdf | null>(null);
-  const [uploadingPdf, setUploadingPdf] = useState(false);
+  /**
+   * The audited return. Not an overlay: it replaces the tab body, and the overlays above can
+   * open on top of it.
+   */
+  const paperwork = useReturnPaperwork({ onSubmitted: () => refreshAfterServerChange() });
 
   // A tapped notification's target, held until `assignments` has actually loaded — a cold
   // start races the deep link against the assignment list fetch, so the target is queued
@@ -130,7 +123,7 @@ function AppMain() {
     // Money lives on its own tab and carries no assignment to select, so it returns early —
     // requiring an assignmentId below would drop these taps entirely.
     if (link.startsWith('/earnings')) {
-      setPdfDocsAssignment(null);
+      paperwork.close();
       setSelectedTab('EARNINGS');
       return;
     }
@@ -140,7 +133,7 @@ function AppMain() {
     if (!assignmentId) return;
     // Dismiss any open detail view too, or the tab change lands behind it and the tapped
     // notification appears to do nothing.
-    setPdfDocsAssignment(null);
+    paperwork.close();
     setSelectedTab('SCHEDULE');
     setPendingNotificationTarget({ assignmentId, category: data.category });
   }, []);
@@ -359,22 +352,11 @@ function AppMain() {
     }
   };
 
-  const handleOpenPdfDocs = useCallback((a: AssayerAssignment) => {
-    setPdfDocsAssignment(a);
-    setStagedPdf(null);
-  }, []);
-
-  const handleClosePdfDocs = useCallback(() => {
-    setPdfDocsAssignment(null);
-    setStagedPdf(null);
-    setUploadingPdf(false);
-  }, []);
-
   /**
    * The assignment detail view replaces the whole tab body, so it needs a way out.
    *
    * It had none: no back control was rendered, and switching tabs did not clear it either —
-   * `pdfDocsAssignment` stayed set, so the detail view kept winning over whichever tab was
+   * the open assignment stayed set, so the detail view kept winning over whichever tab was
    * selected. Opening any assignment left the app with no route back short of force-closing it.
    */
   /**
@@ -385,7 +367,7 @@ function AppMain() {
   const scrollRef = useRef<ScrollView>(null);
 
   const handleSelectTab = useCallback((tab: TabType) => {
-    setPdfDocsAssignment(null);
+    paperwork.close();
     setSelectedTab(tab);
     // Tapping the tab you are already on returns you to the top of it, which is the
     // convention everywhere else and the only way back up a long schedule without dragging.
@@ -394,7 +376,7 @@ function AppMain() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
-  }, [selectedTab, pdfDocsAssignment]);
+  }, [selectedTab, paperwork.assignment]);
 
   /**
    * Android hardware/gesture back, resolved in one place.
@@ -409,8 +391,8 @@ function AppMain() {
    */
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (pdfDocsAssignment) {
-        handleClosePdfDocs();
+      if (paperwork.assignment) {
+        paperwork.close();
         return true;
       }
       if (selectedTab !== 'HOME') {
@@ -420,84 +402,7 @@ function AppMain() {
       return false;
     });
     return () => sub.remove();
-  }, [pdfDocsAssignment, handleClosePdfDocs, selectedTab]);
-
-  /**
-   * Stage the picked file by reference, not by value.
-   *
-   * This used to read the whole PDF into a base64 string, hold that string in React state, and
-   * hand it to the uploader — which then wrote it back out to a temp file so it could stream it.
-   * A completed audit packet is scanned pages, routinely tens of megabytes, so that was a ~1.33x
-   * copy of the entire file living in JS memory for as long as the screen was open, on handsets
-   * that do not have it to spare. The uploader has taken a `uri` and streamed it straight off
-   * disk all along; nothing was passing one.
-   *
-   * Web has no file path to reference, so it still stages base64 — there the picker has already
-   * decoded the file into a data: URL anyway.
-   */
-  const handleSelectPdfFile = useCallback(async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf'],
-        copyToCacheDirectory: true,
-      });
-      if (result.canceled || !result.assets?.[0]) return;
-      const asset = result.assets[0];
-      const name = asset.name || 'audit_packet.pdf';
-      setStagedPdf(
-        Platform.OS === 'web'
-          ? { name, base64: await assetToBase64(asset) }
-          : { name, uri: asset.uri },
-      );
-      feedback.success('PDF attached', `${name} is ready to submit.`);
-    } catch (err: any) {
-      feedback.error('File Picker Error', err?.message || 'Failed to select a PDF file.');
-    }
-  }, []);
-
-  const uploadPdf = useCallback((target: AssayerAssignment, staged: StagedPdf) => {
-    setUploadingPdf(true);
-    // A picked file gets the same resumable transfer the scanner does. It is the same operation
-    // over the same field connections, and there was no reason for one of them to have to start
-    // over from zero when the signal dropped. Resumable needs a real file path, so web keeps the
-    // single-shot path (which retries on its own).
-    const upload =
-      staged.uri && Platform.OS !== 'web'
-        ? MobileApiService.uploadAuditPdfResumable(target.id, staged.name, staged.uri, target.id)
-        : MobileApiService.uploadCompletedAuditPdf(
-            target.id,
-            staged.name,
-            { uri: staged.uri, base64: staged.base64 },
-            target.id,
-          );
-
-    return upload
-      .then((res) => {
-        if (res?.success) {
-          feedback.success('Upload Complete', `${staged.name} was uploaded successfully.`);
-          void refreshAfterServerChange();
-        } else {
-          feedback.error('Upload Failed', res?.error || 'The document could not be uploaded.');
-        }
-        return res?.success ?? false;
-      })
-      .catch(() => {
-        feedback.error('Upload Failed', 'The document could not be uploaded. Please try again.');
-        return false;
-      })
-      .finally(() => setUploadingPdf(false));
-  }, []);
-
-  const handleSubmitCompletedPdf = useCallback(() => {
-    if (!pdfDocsAssignment) return;
-    if (!stagedPdf) {
-      feedback.warning('Nothing to submit', 'Attach a PDF or scan the pages first.');
-      return;
-    }
-    uploadPdf(pdfDocsAssignment, stagedPdf).then((ok) => {
-      if (ok) handleClosePdfDocs();
-    });
-  }, [pdfDocsAssignment, stagedPdf, uploadPdf, handleClosePdfDocs]);
+  }, [paperwork.assignment, paperwork.close, selectedTab]);
 
   if (authenticating) {
     return (
@@ -575,6 +480,10 @@ function AppMain() {
 
   // Narrowed once here rather than re-tested inside the JSX, so each modal below reads as
   // "render this when it is the open one" and gets its subject already proven to exist.
+  // Bound once so the detail branch below reads without re-asserting it: a property access
+  // does not narrow the way a binding does.
+  const openPaperwork = paperwork.assignment;
+
   const scanner = overlay.current('scanner');
   const queryChat = overlay.current('queryChat');
   const navigate = overlay.current('navigate');
@@ -627,10 +536,10 @@ function AppMain() {
           />
         }
       >
-        {pdfDocsAssignment ? (
+        {openPaperwork ? (
           <>
           <Tappable
-            onPress={handleClosePdfDocs}
+            onPress={paperwork.close}
             style={{
               flexDirection: 'row',
               alignItems: 'center',
@@ -640,22 +549,22 @@ function AppMain() {
           >
             <Icon name="arrow-back" size={20} color={theme.colors.primary} />
             <AppText variant="bodyStrong" tone="primary">
-              {pdfDocsAssignment.branchName || 'Back'}
+              {openPaperwork.branchName || 'Back'}
             </AppText>
           </Tappable>
           <PdfDocsScreen
-            activeAssignment={pdfDocsAssignment}
-            uploadedPdfName={stagedPdf?.name ?? null}
-            uploadingPdf={uploadingPdf}
-            onSelectPdfFile={handleSelectPdfFile}
-            onOpenScanner={() => overlay.open({ name: 'scanner', assignment: pdfDocsAssignment })}
-            onSubmitCompletedPdf={handleSubmitCompletedPdf}
+            activeAssignment={openPaperwork}
+            uploadedPdfName={paperwork.staged?.name ?? null}
+            uploadingPdf={paperwork.uploading}
+            onSelectPdfFile={paperwork.selectFile}
+            onOpenScanner={() => overlay.open({ name: 'scanner', assignment: openPaperwork })}
+            onSubmitCompletedPdf={() => { void paperwork.submit().then((ok) => { if (ok) paperwork.close(); }); }}
             onOpenExpenseModal={() =>
               // Claim is filed against the assignment whose paperwork is open — the one the
               // assayer is demonstrably working on.
-              overlay.open({ name: 'expense', assignment: pdfDocsAssignment })
+              overlay.open({ name: 'expense', assignment: openPaperwork })
             }
-            onReportIssue={() => overlay.open({ name: 'issue', assignment: pdfDocsAssignment })}
+            onReportIssue={() => overlay.open({ name: 'issue', assignment: openPaperwork })}
           />
           </>
         ) : (
@@ -668,7 +577,7 @@ function AppMain() {
             averageRating={profile.averageRating}
             runningBalance={Number(profile.runningBalance) || 0}
             expenseSummary={expenseSummary}
-            onOpenAssignment={handleOpenPdfDocs}
+            onOpenAssignment={paperwork.open}
             onCheckIn={handleCheckIn}
             onScan={(a) => overlay.open({ name: 'scanner', assignment: a })}
             onNavigate={(a) => overlay.open({ name: 'navigate', assignment: a })}
@@ -689,7 +598,7 @@ function AppMain() {
             onAcceptAssignment={handleAcceptAssignment}
             onOpenRejectModal={(id) => overlay.open({ name: 'reject', assignmentId: id, reason: '' })}
             onCheckIn={handleCheckIn}
-            onOpenPdfDocs={handleOpenPdfDocs}
+            onOpenPdfDocs={paperwork.open}
             onOpenScanner={(a) => overlay.open({ name: 'scanner', assignment: a })}
             onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}
             onOpenMap={(a) => overlay.open({ name: 'navigate', assignment: a })}
