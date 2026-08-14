@@ -3,6 +3,8 @@ import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, Re
 import * as DocumentPicker from 'expo-document-picker';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
+import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
+import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
 import {
   registerForPushNotificationsAsync,
@@ -92,18 +94,15 @@ function AppMain() {
     totalClaimed: 0,
   });
 
-  // Scanner modal state
-  const [scannerModalVisible, setScannerModalVisible] = useState(false);
-  const [activeScannerAssignment, setActiveScannerAssignment] = useState<AssayerAssignment | null>(null);
+  // Which overlay is open and what it is open on — one value for all ten of them. See
+  // `useOverlay` for why this replaced fourteen separate flags and subjects.
+  const overlay = useOverlay();
 
-  // Return-paperwork (pdf docs) screen state
+  // Return-paperwork (pdf docs) screen state. Not an overlay: it replaces the tab body, and the
+  // overlays above can open on top of it.
   const [pdfDocsAssignment, setPdfDocsAssignment] = useState<AssayerAssignment | null>(null);
   const [stagedPdf, setStagedPdf] = useState<StagedPdf | null>(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
-
-  // Query chat modal state
-  const [queryChatModalVisible, setQueryChatModalVisible] = useState(false);
-  const [queryChatAssignment, setQueryChatAssignment] = useState<AssayerAssignment | null>(null);
 
   // A tapped notification's target, held until `assignments` has actually loaded — a cold
   // start races the deep link against the assignment list fetch, so the target is queued
@@ -113,35 +112,14 @@ function AppMain() {
     category?: string;
   } | null>(null);
 
-  // Navigation modal state
-  const [navAssignment, setNavAssignment] = useState<AssayerAssignment | null>(null);
-
-  // Rejection modal state
-  const [rejectModalVisible, setRejectModalVisible] = useState(false);
-  const [rejectAssignmentId, setRejectAssignmentId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
+  // Transient async state for the decline, which the overlay itself does not own: it outlives a
+  // single render pass and must survive the overlay being read, not written.
   const [rejectSubmitting, setRejectSubmitting] = useState(false);
-
-  // Negotiate modal state
-  const [negotiateModalVisible, setNegotiateModalVisible] = useState(false);
-  const [negotiateAssignment, setNegotiateAssignment] = useState<AssayerAssignment | null>(null);
-
-  // Expense modal state. The assignment a claim is filed against is tracked explicitly rather
-  // than defaulting to assignments[0] — see the modal below.
-  const [expenseModalVisible, setExpenseModalVisible] = useState(false);
-  const [expenseAssignment, setExpenseAssignment] = useState<AssayerAssignment | null>(null);
-
-  // Report-an-issue modal state — the assayer's channel to flag a problem to the desk.
-  const [issueAssignment, setIssueAssignment] = useState<AssayerAssignment | null>(null);
 
   // Availability (self-service time off). Held separately from the profile form because it is
   // its own calendar UI, not a text field.
-  const [availabilityVisible, setAvailabilityVisible] = useState(false);
-  const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
   const [availabilityLeaves, setAvailabilityLeaves] = useState<LeavePeriod[]>([]);
 
-  // Notification modal state
-  const [notifModalVisible, setNotifModalVisible] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
 
@@ -465,11 +443,10 @@ function AppMain() {
     if (!target) return;
 
     if (pendingNotificationTarget.category === 'VALIDATION' && target.queries?.length) {
-      setQueryChatAssignment(target);
-      setQueryChatModalVisible(true);
+      overlay.open({ name: 'queryChat', assignment: target });
     }
     setPendingNotificationTarget(null);
-  }, [pendingNotificationTarget, assignments]);
+  }, [pendingNotificationTarget, assignments, overlay.open]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -497,14 +474,13 @@ function AppMain() {
   };
 
   const handleConfirmReject = async () => {
-    if (!rejectAssignmentId || rejectSubmitting) return;
+    const pending = overlay.current('reject');
+    if (!pending || rejectSubmitting) return;
     setRejectSubmitting(true);
     try {
-      const res = await rejectAssignment(rejectAssignmentId, rejectReason || 'Declined by assayer');
+      const res = await rejectAssignment(pending.assignmentId, pending.reason || 'Declined by assayer');
       if (res.success) {
-        setRejectModalVisible(false);
-        setRejectAssignmentId(null);
-        setRejectReason('');
+        overlay.close();
       } else {
         feedback.error('Not declined', res.error || 'The assignment could not be declined.');
       }
@@ -798,6 +774,16 @@ function AppMain() {
     .filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED')
     .reduce((sum, a) => sum + getAssignmentTotalFee(a), 0);
 
+  // Narrowed once here rather than re-tested inside the JSX, so each modal below reads as
+  // "render this when it is the open one" and gets its subject already proven to exist.
+  const scanner = overlay.current('scanner');
+  const queryChat = overlay.current('queryChat');
+  const navigate = overlay.current('navigate');
+  const negotiate = overlay.current('negotiate');
+  const issue = overlay.current('issue');
+  const reject = overlay.current('reject');
+  const expense = overlay.current('expense');
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
@@ -811,7 +797,7 @@ function AppMain() {
         name={assayerName}
         subtitle={profile.assayerCode ? `Code: ${profile.assayerCode}` : (user?.assayerCode ? `Code: ${user.assayerCode}` : 'Field Assayer')}
         unreadCount={unreadNotifCount}
-        onNotifications={() => { loadNotifications(); setNotifModalVisible(true); }}
+        onNotifications={() => { loadNotifications(); overlay.open({ name: 'notifications' }); }}
         onOpenProfile={() => handleSelectTab('MY_PROFILE')}
       />
 
@@ -863,18 +849,14 @@ function AppMain() {
             uploadedPdfName={stagedPdf?.name ?? null}
             uploadingPdf={uploadingPdf}
             onSelectPdfFile={handleSelectPdfFile}
-            onOpenScanner={() => {
-              setActiveScannerAssignment(pdfDocsAssignment);
-              setScannerModalVisible(true);
-            }}
+            onOpenScanner={() => overlay.open({ name: 'scanner', assignment: pdfDocsAssignment })}
             onSubmitCompletedPdf={handleSubmitCompletedPdf}
-            onOpenExpenseModal={() => {
+            onOpenExpenseModal={() =>
               // Claim is filed against the assignment whose paperwork is open — the one the
               // assayer is demonstrably working on.
-              setExpenseAssignment(pdfDocsAssignment);
-              setExpenseModalVisible(true);
-            }}
-            onReportIssue={() => setIssueAssignment(pdfDocsAssignment)}
+              overlay.open({ name: 'expense', assignment: pdfDocsAssignment })
+            }
+            onReportIssue={() => overlay.open({ name: 'issue', assignment: pdfDocsAssignment })}
           />
           </>
         ) : (
@@ -889,16 +871,10 @@ function AppMain() {
             expenseSummary={expenseSummary}
             onOpenAssignment={handleOpenPdfDocs}
             onCheckIn={handleCheckIn}
-            onScan={(a) => {
-              setActiveScannerAssignment(a);
-              setScannerModalVisible(true);
-            }}
-            onNavigate={(a) => setNavAssignment(a)}
+            onScan={(a) => overlay.open({ name: 'scanner', assignment: a })}
+            onNavigate={(a) => overlay.open({ name: 'navigate', assignment: a })}
             onAcceptOffer={(a) => handleAcceptAssignment(a.id)}
-            onDeclineOffer={(a) => {
-              setRejectAssignmentId(a.id);
-              setRejectModalVisible(true);
-            }}
+            onDeclineOffer={(a) => overlay.open({ name: 'reject', assignmentId: a.id, reason: '' })}
             onSeeSchedule={() => setSelectedTab('SCHEDULE')}
             onSeeQueries={() => setSelectedTab('QUERIES')}
             busyActionId={busyActionId}
@@ -912,39 +888,20 @@ function AppMain() {
             assignments={assignments}
             busyActionId={busyActionId}
             onAcceptAssignment={handleAcceptAssignment}
-            onOpenRejectModal={(id) => {
-              setRejectAssignmentId(id);
-              setRejectModalVisible(true);
-            }}
+            onOpenRejectModal={(id) => overlay.open({ name: 'reject', assignmentId: id, reason: '' })}
             onCheckIn={handleCheckIn}
-            onOpenPdfDocs={(a) => {
-              handleOpenPdfDocs(a);
-            }}
-            onOpenScanner={(a) => {
-              setActiveScannerAssignment(a);
-              setScannerModalVisible(true);
-            }}
-            onOpenQueryChat={(a) => {
-              setQueryChatAssignment(a);
-              setQueryChatModalVisible(true);
-            }}
-            onOpenMap={(a) => {
-              setNavAssignment(a);
-            }}
-            onCounterOffer={(a) => {
-              setNegotiateAssignment(a);
-              setNegotiateModalVisible(true);
-            }}
+            onOpenPdfDocs={handleOpenPdfDocs}
+            onOpenScanner={(a) => overlay.open({ name: 'scanner', assignment: a })}
+            onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}
+            onOpenMap={(a) => overlay.open({ name: 'navigate', assignment: a })}
+            onCounterOffer={(a) => overlay.open({ name: 'negotiate', assignment: a })}
           />
         )}
 
         {selectedTab === 'QUERIES' && (
           <QueriesScreen
             assignments={assignments}
-            onOpenQueryChat={(a) => {
-              setQueryChatAssignment(a);
-              setQueryChatModalVisible(true);
-            }}
+            onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}
           />
         )}
 
@@ -966,8 +923,7 @@ function AppMain() {
               const active = assignments.find(
                 (a) => a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS' || a.status === 'ACCEPTED',
               );
-              setExpenseAssignment(active ?? null);
-              setExpenseModalVisible(true);
+              overlay.open({ name: 'expense', assignment: active ?? null });
             }}
           />
         )}
@@ -982,8 +938,8 @@ function AppMain() {
             resolvedQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status === 'RESOLVED' || q.status === 'CLOSED').length, 0)}
             onUpdateProfileField={handleUpdateProfileField}
             onSaveProfile={handleSaveProfile}
-            onOpenAvailability={() => setAvailabilityVisible(true)}
-            onOpenFeedback={() => setFeedbackModalVisible(true)}
+            onOpenAvailability={() => overlay.open({ name: 'availability' })}
+            onOpenFeedback={() => overlay.open({ name: 'feedback' })}
             onLogout={logout}
           />
         )}
@@ -997,138 +953,84 @@ function AppMain() {
 
       {/* Modals */}
       <RejectionModal
-        visible={rejectModalVisible}
-        rejectReason={rejectReason}
+        visible={Boolean(reject)}
+        rejectReason={reject?.reason ?? ''}
         submitting={rejectSubmitting}
-        onChangeReason={setRejectReason}
+        onChangeReason={(text) =>
+          overlay.update((o) => (o.name === 'reject' ? { ...o, reason: text } : o))
+        }
         onConfirm={handleConfirmReject}
-        onCancel={() => {
-          setRejectModalVisible(false);
-          setRejectAssignmentId(null);
-        }}
+        onCancel={overlay.close}
       />
 
-      {scannerModalVisible && (
+      {scanner && (
         <DocumentScanner
-          visible={scannerModalVisible}
+          visible
           purpose="Audited return for this assignment"
-          onClose={() => {
-            setScannerModalVisible(false);
-            setActiveScannerAssignment(null);
-          }}
+          onClose={overlay.close}
           onSaved={async (doc) => {
-            const assignment = activeScannerAssignment;
-            setScannerModalVisible(false);
-            setActiveScannerAssignment(null);
-            if (!assignment) {
-              feedback.error('Upload Failed', 'No assignment was selected for this upload.');
-              return;
-            }
+            // Captured before the overlay closes — `scanner` is this render's narrowed value, so
+            // the assignment cannot go null underneath the upload the way a shared
+            // `activeScannerAssignment` could.
+            const assignment = scanner.assignment;
+            overlay.close();
 
-            /**
-             * One upload for the whole packet.
-             *
-             * This used to loop over the pages and POST each one separately, producing N
-             * unrelated `AUDITED_RETURN_PDF` rows named `..._p1of6.jpg` — six loose JPEGs
-             * where the desk expected one document, each triggering its own assignment
-             * completion. ML Kit now assembles the pages into a single PDF on-device, so
-             * the evidence arrives as one file that matches what the record claims to hold.
-             */
-            if (doc.pdfUri) {
-              /**
-               * Resumable, because this is the upload that matters and the worst place to be
-               * when it fails: a multi-megabyte scan going out over rural mobile data at the
-               * end of a branch visit. A drop now costs only the unsent chunks.
-               */
-              feedback.info('Uploading', `Sending ${doc.fileName}…`);
-              const res = await MobileApiService.uploadAuditPdfResumable(
-                assignment.id,
-                doc.fileName,
-                doc.pdfUri,
-                assignment.id,
-              ).catch((err: any) => ({ success: false, error: err?.message }));
+            feedback.info('Uploading', `Sending ${doc.fileName}…`);
+            const outcome = await uploadScannedAuditPacket(assignment.id, doc);
 
-              if (res?.success) {
-                feedback.success('Upload complete', `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} uploaded as ${doc.fileName}.`);
-                // Filing the return moves the assignment on server-side (see
-                // completeAssignmentForReturn). Without this the app kept showing the job as
-                // still needing a scan, and the assayer could upload the same packet twice.
-                await refreshAfterServerChange();
-              } else {
+            // Filing the return moves the assignment on server-side (see
+            // completeAssignmentForReturn). Without this the app kept showing the job as still
+            // needing a scan, and the assayer could upload the same packet twice.
+            if (outcome.kind !== 'failed') await refreshAfterServerChange();
+
+            switch (outcome.kind) {
+              case 'uploaded':
+                feedback.success(
+                  'Upload complete',
+                  `${outcome.pageCount} page${outcome.pageCount === 1 ? '' : 's'} uploaded as ${outcome.fileName}.`,
+                );
+                break;
+              case 'failed':
                 feedback.error(
                   'Upload failed',
-                  `${doc.fileName} was not uploaded${res?.error ? `: ${res.error}` : ''}. Please retry before leaving the branch.`,
+                  `${outcome.fileName} was not uploaded${outcome.error ? `: ${outcome.error}` : ''}. Please retry before leaving the branch.`,
                 );
-              }
-              return;
-            }
-
-            /**
-             * Image fallback for the platforms with no ML Kit PDF (iOS, web, attached files).
-             * Still reports partial failure honestly — a half-delivered evidence packet that
-             * announces success is worse than one that fails loudly.
-             */
-            const total = doc.pages.length;
-            const failed: number[] = [];
-            for (const pg of doc.pages) {
-              const base = doc.fileName.replace(/\.[^.]+$/, '');
-              const name = total === 1 ? doc.fileName : `${base}_p${pg.pageNumber}of${total}.jpg`;
-              try {
-                const res = await MobileApiService.uploadCompletedAuditPdf(
-                  assignment.id,
-                  name,
-                  { uri: pg.uri },
-                  assignment.id,
+                break;
+              case 'pages-uploaded':
+                feedback.success(
+                  'Upload complete',
+                  `All ${outcome.total} page${outcome.total === 1 ? '' : 's'} were uploaded.`,
                 );
-                if (!res?.success) failed.push(pg.pageNumber);
-              } catch {
-                failed.push(pg.pageNumber);
-              }
-            }
-
-            await refreshAfterServerChange();
-
-            if (failed.length === 0) {
-              feedback.success('Upload complete', `All ${total} page${total === 1 ? '' : 's'} were uploaded.`);
-            } else {
-              feedback.warning(
-                'Some pages did not upload',
-                `${total - failed.length} of ${total} uploaded. Page${failed.length === 1 ? '' : 's'} ${failed.join(', ')} failed — please scan ${failed.length === 1 ? 'it' : 'them'} again before leaving the branch.`,
-              );
+                break;
+              case 'pages-partial':
+                feedback.warning(
+                  'Some pages did not upload',
+                  `${outcome.uploaded} of ${outcome.total} uploaded. Page${outcome.failed.length === 1 ? '' : 's'} ${outcome.failed.join(', ')} failed — please scan ${outcome.failed.length === 1 ? 'it' : 'them'} again before leaving the branch.`,
+                );
+                break;
             }
           }}
         />
       )}
 
-      {queryChatModalVisible && queryChatAssignment && (
-        <AssayerQueryChatModal
-          visible={queryChatModalVisible}
-          assignment={queryChatAssignment}
-          onClose={() => {
-            setQueryChatModalVisible(false);
-            setQueryChatAssignment(null);
-          }}
-        />
+      {queryChat && (
+        <AssayerQueryChatModal visible assignment={queryChat.assignment} onClose={overlay.close} />
       )}
 
       {/* Voice-call UI, mounted once at root like the navigation modal. Renders nothing
           while no call exists; the calls service's store drives it entirely. */}
       <CallModal />
 
-      {navAssignment && (
-        <InAppNavigationModal
-          visible={Boolean(navAssignment)}
-          assignment={navAssignment}
-          onClose={() => setNavAssignment(null)}
-        />
+      {navigate && (
+        <InAppNavigationModal visible assignment={navigate.assignment} onClose={overlay.close} />
       )}
 
-      {notifModalVisible && (
+      {overlay.current('notifications') && (
         <NotificationsModal
-          visible={notifModalVisible}
+          visible
           notifications={notifications}
           unreadCount={unreadNotifCount}
-          onClose={() => setNotifModalVisible(false)}
+          onClose={overlay.close}
           onMarkRead={(id) => {
             // Marked read locally first so the list responds immediately, then reverted if the
             // server disagrees. Previously the result was discarded entirely (behind a `.then`
@@ -1149,38 +1051,38 @@ function AppMain() {
               });
           }}
           onTapNotification={(n) => {
-            setNotifModalVisible(false);
+            overlay.close();
             if (n.link) handleNotificationTap({ notificationId: n.id, entityId: n.assignmentId, link: n.link });
           }}
         />
       )}
 
-      {expenseModalVisible && (
+      {expense && (
         <ExpenseModal
-          visible={expenseModalVisible}
-          quotedTravelFee={expenseAssignment?.quotedTravelFee}
-          quotedTransportMode={expenseAssignment?.quotedTransportMode}
-          onClose={() => setExpenseModalVisible(false)}
+          visible
+          quotedTravelFee={expense.assignment?.quotedTravelFee}
+          quotedTransportMode={expense.assignment?.quotedTransportMode}
+          onClose={overlay.close}
           onAddExpense={async (category, amount, description) => {
             // Against the assignment chosen at the entry point, never assignments[0]. The old
             // code filed every claim against whatever assignment happened to sort first — so a
             // travel claim for today's branch could land on a completed job from weeks ago, and
             // with an empty list it was silently dropped with no error.
-            if (!expenseAssignment?.id) {
+            if (!expense.assignment?.id) {
               feedback.error(
                 'No assignment selected',
                 'Open the assignment you are claiming for and file the expense from there.',
               );
               return;
             }
-            const res = await submitExpense(expenseAssignment.id, {
+            const res = await submitExpense(expense.assignment.id, {
               category: category as any,
               amount: Number(amount) || 0,
               description,
             });
             if (res.success) {
               feedback.success('Claim filed', `₹${amount} for ${category} is awaiting approval.`);
-              setExpenseModalVisible(false);
+              overlay.close();
               // Pull the totals back so the new claim shows on Home immediately rather
               // than only after the next manual pull-to-refresh.
               loadExpenseSummary();
@@ -1191,15 +1093,15 @@ function AppMain() {
         />
       )}
 
-      <FeedbackModal visible={feedbackModalVisible} onClose={() => setFeedbackModalVisible(false)} />
+      <FeedbackModal visible={Boolean(overlay.current('feedback'))} onClose={overlay.close} />
 
-      {issueAssignment && (
+      {issue && (
         <ReportIssueModal
-          visible={!!issueAssignment}
-          assignment={issueAssignment}
-          onClose={() => setIssueAssignment(null)}
+          visible
+          assignment={issue.assignment}
+          onClose={overlay.close}
           onSubmit={async (category, note) => {
-            const res = await MobileApiService.reportAssignmentIssue(issueAssignment.id, category, note);
+            const res = await MobileApiService.reportAssignmentIssue(issue.assignment.id, category, note);
             if (res.success) {
               feedback.success('Reported to desk', 'The operations team has been notified and will follow up.');
               return true;
@@ -1210,11 +1112,11 @@ function AppMain() {
         />
       )}
 
-      {availabilityVisible && (
+      {overlay.current('availability') && (
         <AvailabilityModal
-          visible={availabilityVisible}
+          visible
           initialLeaves={availabilityLeaves}
-          onClose={() => setAvailabilityVisible(false)}
+          onClose={overlay.close}
           onSave={async (leaves) => {
             if (!user?.id) return false;
             const res = await MobileApiService.updateAvailability(user.id, { leaves });
@@ -1230,23 +1132,20 @@ function AppMain() {
         />
       )}
 
-      {negotiateModalVisible && negotiateAssignment && (
+      {negotiate && (
         <NegotiateModal
-          visible={negotiateModalVisible}
+          visible
           // Pass the real fee (0 when unresolved), not `|| 1800`. The modal seeds an empty
           // counter-offer box for a non-positive fee on purpose; injecting 1800 here defeated
           // that guard and re-fabricated the phantom asking price it exists to prevent.
-          currentFee={negotiateAssignment.proposedFee || 0}
-          quotedTravelFee={negotiateAssignment.quotedTravelFee}
-          quotedTransportMode={negotiateAssignment.quotedTransportMode}
-          quotedDistanceKm={negotiateAssignment.quotedDistanceKm}
-          onCancel={() => {
-            setNegotiateModalVisible(false);
-            setNegotiateAssignment(null);
-          }}
+          currentFee={negotiate.assignment.proposedFee || 0}
+          quotedTravelFee={negotiate.assignment.quotedTravelFee}
+          quotedTransportMode={negotiate.assignment.quotedTransportMode}
+          quotedDistanceKm={negotiate.assignment.quotedDistanceKm}
+          onCancel={overlay.close}
           onSubmit={async (counterFee, remarks) => {
             const res = await updateAssignmentStatus(
-              negotiateAssignment.id,
+              negotiate.assignment.id,
               'PENDING',
               remarks,
               { proposedFee: counterFee }
@@ -1256,8 +1155,7 @@ function AppMain() {
                 'Counter-Offer Submitted',
                 `Your proposed fee of ₹${counterFee.toLocaleString('en-IN')} has been sent to Operations.`
               );
-              setNegotiateModalVisible(false);
-              setNegotiateAssignment(null);
+              overlay.close();
             } else {
               feedback.error('Offer not sent', res.error || 'The counter-offer could not be submitted.');
             }
