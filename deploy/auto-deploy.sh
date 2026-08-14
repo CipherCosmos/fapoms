@@ -95,7 +95,7 @@ if $NEED_RECREATE; then
   podman compose -f "$COMPOSE" --env-file "$ENVFILE" up -d >> "$LOG" 2>&1
 fi
 if ! $NEED_BACKEND && ! $NEED_FRONTEND && ! $NEED_CADDY_RELOAD && ! $NEED_RECREATE; then
-  log "nothing deployable changed (docs, tests or mobile only) — no work done"
+  log "no change affects a running container — nothing rebuilt or restarted"
   exit 0
 fi
 

@@ -178,7 +178,26 @@ fallback and the single-origin routing this deployment relies on — on a URL re
 testing against. What is automated is getting pushed commits onto the server, not turning the
 server into a development machine.
 
-Three properties worth knowing:
+### What triggers what
+
+| Changed | Action | Cost |
+|---|---|---|
+| `packages/backend/**` | rebuild backend | ~45s |
+| `packages/frontend/**` | rebuild frontend | ~85s |
+| `packages/shared/**` | rebuild both | ~2m |
+| root `package-lock.json` | rebuild both | ~2m |
+| `deploy/Caddyfile` | validate, then restart caddy | ~1s |
+| `deploy/docker-compose*` | recreate containers, no build | seconds |
+| `*.md`, `docs/`, `*.spec.*`, `packages/mobile/**` | nothing | 0 |
+
+Tests do not run in production, documentation is in neither image, and mobile ships through
+`eas update` and the APK — none of them can change what a container does.
+
+The Caddyfile path **validates before restarting**: a config the process rejects would leave the
+proxy down, and the proxy is the only way into this deployment. (`caddy reload` would avoid the
+restart entirely, but it needs the admin API this Caddyfile turns off.)
+
+Three further properties worth knowing:
 
 - **Only what changed is rebuilt.** A backend-only commit does not spend two minutes rebuilding
   the web bundle. A docs- or mobile-only commit rebuilds nothing.
