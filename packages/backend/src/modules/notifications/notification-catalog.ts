@@ -185,7 +185,11 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   ASSIGNMENT_REJECTED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
-    roles: OPS,
+    // Also to ADMINS: this is the auto-decline-on-negotiation-limit path too (see
+    // AssignmentService.proposeCounterFee), and an OPS-only audience resolved to zero
+    // recipients on a deployment with no active OPERATIONS_MANAGER/EXECUTIVE — a stalled
+    // branch nobody was told about. SLA_BREACHED and ESCALATED already carry this fallback.
+    roles: [...OPS, ...ADMINS],
     channels: BOTH_CHANNELS,
     title: 'Assignment declined',
     body: '${assayerName} declined ${branchName}. Reason: ${reason}. A replacement is needed.',
@@ -209,11 +213,17 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
-  /** The assayer wants a different fee — ops has to answer before the branch stalls. */
+  /**
+   * The assayer wants a different fee — ops has to answer before the branch stalls.
+   *
+   * Also to ADMINS, same reasoning as ASSIGNMENT_REJECTED just above: an OPS-only audience
+   * resolves to zero recipients wherever no OPERATIONS_MANAGER/EXECUTIVE is active, which
+   * silently drops the one notification a negotiation actually depends on.
+   */
   ASSIGNMENT_COUNTER_OFFERED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
-    roles: OPS,
+    roles: [...OPS, ...ADMINS],
     channels: BOTH_CHANNELS,
     title: 'Counter-offer received',
     body: '${assayerName} proposed ₹${proposedFee} for ${branchName}. Reason: ${reason}',
