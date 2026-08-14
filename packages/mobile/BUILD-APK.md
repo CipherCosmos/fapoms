@@ -119,6 +119,31 @@ export EXPO_UPDATE_CHANNEL=production
 A build made before this has no update URL and can never receive OTA updates — it must be
 replaced once.
 
+## Channels must exist, or updates go nowhere
+
+A build follows a **channel**; `eas update` publishes to a **branch**. They are different things
+and must be linked, once:
+
+```bash
+npx eas channel:create production
+```
+
+Skip it and the failure is silent in the worst way: the update publishes successfully, the
+dashboard shows it, and every handset asking for that channel gets a plain `404` forever. Nothing
+errors, nobody is told, and the app simply never updates.
+
+Verify what a device actually sees rather than trusting the dashboard:
+
+```bash
+curl -s -D- -o /dev/null "https://u.expo.dev/<projectId>" \
+  -H "expo-platform: android" -H "expo-runtime-version: 1.0.0" \
+  -H "expo-channel-name: production" -H "expo-protocol-version: 1" \
+  -H "expo-api-version: 1" -H "Accept: multipart/mixed"
+```
+
+`200` with `content-type: multipart/mixed` means an update is being served. `404` means the
+channel is missing or nothing is published for that runtime version.
+
 ## Shipping an update after that
 
 ```bash

@@ -108,7 +108,7 @@ module.exports = {
       // Bumped for the first build carrying OTA updates. Android refuses an install whose
       // versionCode is lower than the installed one, so every build handed to a user must
       // increase this or it cannot be installed over its predecessor.
-      versionCode: 3,
+      versionCode: 4,
       // Present in the repo but never wired in — without this, a native build has no way to
       // know which Firebase project to register push against, so `getDevicePushTokenAsync()`
       // would either fail or register against nothing at all.
