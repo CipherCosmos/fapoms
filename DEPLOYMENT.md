@@ -28,8 +28,12 @@ That is the whole thing. On first boot the backend:
 Then seed the first administrator and the reference data:
 
 ```bash
-docker compose exec backend sh -c 'cd /app/packages/backend && npm run seed'
+docker compose exec backend sh -c 'cd /app/packages/backend && npm run seed:prod'
 ```
+
+`seed:prod` runs the compiled seed. `npm run seed` is the development one and invokes `ts-node`
+against `src/`, neither of which exists in the production image — it fails with
+`command failed: sh -c ts-node ...`, which reads like a broken script rather than the wrong one.
 
 Sign in as `admin` / `admin123` and **change that password immediately**.
 

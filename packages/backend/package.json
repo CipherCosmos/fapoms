@@ -15,7 +15,8 @@
     "migration:generate": "typeorm migration:generate -d src/infrastructure/database/data-source.ts",
     "migration:run": "typeorm migration:run -d src/infrastructure/database/data-source.ts",
     "migration:revert": "typeorm migration:revert -d src/infrastructure/database/data-source.ts",
-    "seed": "ts-node src/infrastructure/database/seed.ts"
+    "seed": "ts-node src/infrastructure/database/seed.ts",
+    "seed:prod": "node dist/infrastructure/database/seed.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1095.0",
