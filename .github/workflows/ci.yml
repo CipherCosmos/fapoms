@@ -1,0 +1,67 @@
+# Runs the tests that already exist.
+#
+# There were 1058 of them and nothing executed them on push. Meanwhile `auto-deploy` polls main
+# every two minutes and ships it to the server real assayers are using, so a broken commit reached
+# the field before anyone knew it was broken. Tests that only run when someone remembers to run
+# them are a record of past intentions, not a safety net.
+#
+# The deploy gate lives in `deploy/auto-deploy.sh`, which refuses to deploy a commit this workflow
+# has not marked green. That is the half that makes this more than a status badge.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push makes an in-flight run pointless — except on main, where every commit needs its own
+# verdict because the deploy gate reads the result per commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` rather than `npm install`: it installs exactly what the lockfile pins and fails if
+      # the lockfile and package.json disagree, which is a real failure mode in a four-package
+      # workspace where hoisting can otherwise mask an undeclared dependency.
+      - name: Install
+        run: npm ci
+
+      # Shared is built first because both the backend and the frontend import from it, and a
+      # stale dist would let a breaking change in shared pass unnoticed.
+      - name: Build shared
+        run: npm run build:shared
+
+      # Types catch a class of breakage tests never reach — a renamed field, a changed signature,
+      # a null that is now possible. Mobile is typechecked here and nowhere else: it has no build
+      # step in CI because it ships through EAS, so this is its only structural check.
+      - name: Typecheck
+        run: |
+          npx tsc --noEmit -p packages/backend/tsconfig.json
+          npx tsc --noEmit -p packages/frontend/tsconfig.json
+          npx tsc --noEmit -p packages/mobile/tsconfig.json
+
+      - name: Test
+        run: npm test --workspaces --if-present
+
+      # The images are built from these two commands on the server. A build that only breaks
+      # inside the Docker build breaks at deploy time, on the host, with the old container already
+      # torn down — so it gets caught here instead.
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Build frontend
+        run: npm run build:frontend
