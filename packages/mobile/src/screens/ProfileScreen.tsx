@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, TextInput, Switch, TextStyle } from 'react-native';
+import { View, TextInput, Switch, TextStyle, Modal } from 'react-native';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
-  AppText, Avatar, Badge, Button, Card, Divider, Icon, IconName, Section, StatStrip, StatTile, Tappable,
+  AppText, Avatar, Badge, Button, Card, CollapsibleSection, Divider, Icon, IconName, StatStrip, StatTile, Tappable,
 } from '../components/ui/primitives';
+import { ChangePasswordScreen } from './ChangePasswordScreen';
 import { useLocation } from '../context/LocationContext';
 import { formatRupees as money } from '@fapoms/shared';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
@@ -303,6 +304,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onOpenFeedback,
   onOpenAvailability,
 }) => {
+  const [changePasswordVisible, setChangePasswordVisible] = useState(false);
   const t = useTheme();
   const [tab, setTab] = useState<SectionKey>('PROFILE');
 
@@ -492,14 +494,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
       {tab === 'PROFILE' && (
         <>
-          <Section title="Contact">
+          <CollapsibleSection title="Contact" summary="Phone and email">
             <Card level={1} style={{ gap: t.space.lg }}>
               <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" />
               <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Address">
+          <CollapsibleSection title="Address" summary="Where you are based">
             <Card level={1} style={{ gap: t.space.lg }}>
               <FieldInput label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" />
               <View style={{ flexDirection: 'row', gap: t.space.md }}>
@@ -519,9 +521,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 </View>
               </View>
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Emergency contact">
+          <CollapsibleSection title="Emergency contact" summary="Who to call if something happens on site">
             <Card level={1} style={{ gap: t.space.lg }}>
               <FieldInput label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" />
               <View style={{ flexDirection: 'row', gap: t.space.md }}>
@@ -533,13 +535,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 </View>
               </View>
             </Card>
-          </Section>
+          </CollapsibleSection>
         </>
       )}
 
       {tab === 'WORK' && (
         <>
-          <Section title="Availability">
+          <CollapsibleSection title="Availability" defaultOpen>
             <Card level={1}>
               {/* Self-service time off. The scheduler already honours leave, so this is what
                   keeps offers away while the assayer is out — no HR round-trip. */}
@@ -553,17 +555,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 chevron
               />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Capability">
+          <CollapsibleSection title="Capability" summary="Skills and languages on your record">
             <Card level={1} style={{ gap: t.space.lg }}>
               <FieldInput label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" />
               <FieldInput label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" />
               <FieldInput label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Capacity">
+          <CollapsibleSection title="Capacity" summary="How much work you can take">
             <Card level={1} style={{ gap: t.space.lg }}>
               <View style={{ flexDirection: 'row', gap: t.space.md }}>
                 <View style={{ flex: 1 }}>
@@ -576,9 +578,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <FieldInput label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" />
               <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Payment details">
+          <CollapsibleSection title="Payment details" summary="Bank account and PAN">
             <Card level={1} style={{ gap: t.space.lg }}>
               <AppText variant="caption" tone="faint">
                 Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
@@ -587,7 +589,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <FieldInput label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason="Payment details are changed by HR only, so a payout cannot be redirected from a handset." />
               <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason="Changed by HR alongside your bank account." />
             </Card>
-          </Section>
+          </CollapsibleSection>
         </>
       )}
 
@@ -606,7 +608,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
       {tab === 'APP' && (
         <>
-          <Section title="Appearance">
+          <CollapsibleSection title="Appearance" summary="Theme and display">
             <Card level={1} style={{ gap: t.space.md }}>
               <SettingRow
                 icon="color-palette-outline"
@@ -641,9 +643,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 })}
               </View>
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Notifications">
+          <CollapsibleSection title="Notifications" defaultOpen>
             <Card level={1}>
               {/* Registers or removes this handset's push token on the server. Delivery is
                   decided server-side, so unregistering is the only thing that genuinely stops
@@ -700,9 +702,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 onChange={async (v) => { setSoundAlerts(v); await setDevicePreference('soundAlerts', v); }}
               />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Location & Recommendations">
+          <CollapsibleSection title="Location & Recommendations" summary="Live location sharing">
             <Card level={1}>
               <ToggleRow
                 icon="navigate-outline"
@@ -722,10 +724,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 </View>
               )}
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Security & Biometrics">
+          <CollapsibleSection title="Security & Biometrics" defaultOpen>
             <Card level={1}>
+              {/*
+                Changing your own password had no route in the app at all. The screen existed and
+                was complete, but it rendered only when `mustChangePassword` was set — that is,
+                after an administrator forced a reset. An assayer who simply wanted to change a
+                password they had shared, or suspected was known, could not: their only option was
+                to phone HR and ask to be locked out of their own account first.
+              */}
+              <SettingRow
+                icon="key-outline"
+                tone="neutral"
+                label="Change password"
+                hint="Update the password you sign in with"
+                chevron
+                onPress={() => setChangePasswordVisible(true)}
+              />
+              <Divider spacing={t.space.xs} />
               {/* Controls the lock over a restored session, and whether the sign-in screen
                   offers the biometric option. Persisted to the device, so it survives a
                   restart. */}
@@ -766,9 +784,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 }
               />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Accreditation & License">
+          <CollapsibleSection title="Accreditation & License" summary="Certifications and their expiry">
             <Card level={1} style={{ gap: t.space.sm }}>
               {/*
                 Shows the assayer's own licence number, or says it is missing.
@@ -788,9 +806,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits.
               </AppText>
             </Card>
-          </Section>
+          </CollapsibleSection>
 
-          <Section title="Connection">
+          <CollapsibleSection title="Connection" summary="Which server this app talks to">
             <Card level={1} style={{ gap: t.space.md }}>
               <SettingRow
                 icon="server-outline"
@@ -817,7 +835,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 onPress={() => { void checkConnection(); }}
               />
             </Card>
-          </Section>
+          </CollapsibleSection>
 
           {/*
             An "Operations Desk & Hotline" card sat here with "Ops Hotline" and "Emergency SOS"
@@ -845,7 +863,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* Help & Feedback: the assayer's two-way channel to the product team — report a
           bug, ask for something, or ask a question, and follow the replies in thread. */}
       {onOpenFeedback && (
-        <Section title="Help & Feedback">
+        <CollapsibleSection title="Help & Feedback" defaultOpen>
           <Card level={1}>
             <SettingRow
               icon="chatbox-ellipses-outline"
@@ -857,13 +875,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               chevron
             />
           </Card>
-        </Section>
+        </CollapsibleSection>
       )}
 
       {/* Session: the destructive action lives alone at the very bottom, in danger tone,
           visually severed from everything an assayer edits day to day. Never glowing. */}
       {onLogout && (
-        <Section title="Session">
+        <CollapsibleSection title="Session" defaultOpen>
           <Card level={1}>
             <SettingRow
               icon="log-out-outline"
@@ -875,7 +893,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               chevron
             />
           </Card>
-        </Section>
+        </CollapsibleSection>
       )}
 
       <View style={{ alignItems: 'center', paddingVertical: t.space.sm, gap: 2 }}>
@@ -891,6 +909,24 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         */}
         <AppText variant="caption" tone="faint">Orbit Field Assayer • v{appVersion}</AppText>
       </View>
+
+      {/*
+        The same screen the forced-reset flow uses, presented as a sheet.
+        `onChanged` only closes it here: this is a voluntary change, so there is no
+        `mustChangePassword` flag to clear and nothing further for the app to do.
+      */}
+      <Modal
+        visible={changePasswordVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setChangePasswordVisible(false)}
+      >
+        <ChangePasswordScreen
+          onChanged={() => setChangePasswordVisible(false)}
+          onCancel={() => setChangePasswordVisible(false)}
+          onLogout={() => { setChangePasswordVisible(false); onLogout?.(); }}
+        />
+      </Modal>
     </View>
   );
 };

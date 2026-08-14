@@ -254,6 +254,60 @@ export const Card: React.FC<{
 };
 
 /** A page section with an optional overline heading and trailing control. */
+/**
+ * A `Section` that can be folded away.
+ *
+ * The assayer profile grew to fifteen sections — contact, address, emergency contact,
+ * availability, capability, capacity, payment, appearance, notifications, location, security,
+ * accreditation, connection, help, session — every one of them expanded, every time. The
+ * handful an assayer touches in a working week (am I available, are notifications on, change my
+ * password) sat interleaved with details they set once when they were onboarded and never open
+ * again, so finding anything meant scrolling past most of the screen.
+ *
+ * Collapsing rather than removing is the point: nothing is taken away, and a section someone
+ * needs is one tap from where it always was. `defaultOpen` decides what greets them.
+ */
+export const CollapsibleSection: React.FC<{
+  title: string;
+  /** Open on first render. Reserve for what a working assayer needs without hunting. */
+  defaultOpen?: boolean;
+  /** Short line shown when collapsed, so the section is identifiable without opening it. */
+  summary?: string;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}> = ({ title, defaultOpen = false, summary, style, children }) => {
+  const t = useTheme();
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <View style={[{ gap: t.space.md }, style]}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${title}, ${open ? 'expanded' : 'collapsed'}`}
+        // A section header is a small target; the hit slop keeps it comfortable on a handset
+        // being used one-handed in the field.
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingHorizontal: t.space.xs,
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          <AppText variant="overline" tone="faint">{title.toUpperCase()}</AppText>
+          {!open && summary ? (
+            <AppText variant="caption" tone="faint" numberOfLines={1}>{summary}</AppText>
+          ) : null}
+        </View>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={16} color={t.colors.textFaint} />
+      </Pressable>
+      {open ? children : null}
+    </View>
+  );
+};
+
 export const Section: React.FC<{
   title?: string;
   action?: React.ReactNode;

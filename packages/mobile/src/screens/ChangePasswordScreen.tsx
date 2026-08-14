@@ -19,11 +19,22 @@ interface Props {
   /** Cleared on success so the app can proceed. */
   onChanged: () => void;
   onLogout: () => void;
+  /**
+   * Dismiss without changing anything.
+   *
+   * Supplied only by the voluntary route (Profile → Security → Change password). The forced
+   * route omits it, because there the whole point is that the session cannot continue on an
+   * issued password — and "Sign out" is then the honest way out.
+   *
+   * Without this, opening the screen to look and thinking better of it would sign the assayer
+   * out, since that was the only exit on the screen.
+   */
+  onCancel?: () => void;
 }
 
 const MIN_LENGTH = 8;
 
-export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout }) => {
+export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onCancel }) => {
   const t = useTheme();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -98,10 +109,13 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout }) =
       >
         <View style={{ alignItems: 'center', gap: t.space.sm }}>
           <Icon name="lock-closed" size={34} color={t.colors.primary} />
-          <AppText variant="h2" style={{ textAlign: 'center' }}>Choose your own password</AppText>
+          <AppText variant="h2" style={{ textAlign: 'center' }}>
+            {onCancel ? 'Change your password' : 'Choose your own password'}
+          </AppText>
           <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-            Your account is still using a password that was issued to you. Set one only you
-            know before continuing.
+            {onCancel
+              ? 'Enter your current password, then the new one you want to use.'
+              : 'Your account is still using a password that was issued to you. Set one only you know before continuing.'}
           </AppText>
         </View>
 
@@ -168,7 +182,11 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout }) =
           <Button label={busy ? 'Saving…' : 'Set password'} onPress={submit} loading={busy} size="lg" full />
         </Card>
 
-        <Button label="Sign out" variant="ghost" onPress={onLogout} full />
+        {onCancel ? (
+          <Button label="Cancel" variant="ghost" onPress={onCancel} full />
+        ) : (
+          <Button label="Sign out" variant="ghost" onPress={onLogout} full />
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
