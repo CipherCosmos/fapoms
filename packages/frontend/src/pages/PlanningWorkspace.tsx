@@ -667,7 +667,20 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       const data = await getProjectBranches<ProjectBranch>(projectId, scopeQueryRef.current);
       setBranches(data);
-      setSelectedBranchId(data.length > 0 ? data[0].id : null);
+      /**
+       * Keep whatever branch is already selected if the refresh still contains it.
+       *
+       * This reloads after nearly every action on this page — assign, negotiate, bulk-assign,
+       * a coverage-plan deploy, even a realtime event for a branch that isn't the one open —
+       * and used to snap back to `data[0]` every single time. Negotiating a fee on branch #12
+       * would refresh the queue and silently swap the open panel to branch #1, so finishing one
+       * negotiation meant re-finding whichever branch you'd actually been working on. Only fall
+       * back to the first branch (or none) when the previous selection is genuinely gone from
+       * the list — completed, reassigned elsewhere, or this is the first load.
+       */
+      setSelectedBranchId((current) =>
+        current && data.some((b) => b.id === current) ? current : (data.length > 0 ? data[0].id : null)
+      );
     } catch { console.error('Failed to fetch project branches queue'); }
     finally { setIsLoadingQueue(false); }
   };
