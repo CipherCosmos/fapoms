@@ -127,7 +127,7 @@ export const Settings: React.FC = () => {
       {/* Header Banner */}
       <div>
         <h2 style={{ fontSize: '24px', fontWeight: 800, fontFamily: 'var(--font-display)', margin: 0 }}>
-          Account & Workspace Settings
+          My Account
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: '4px 0 0' }}>
           Manage your personal details, security credentials, visual themes, and workspace preferences.

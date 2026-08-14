@@ -102,6 +102,9 @@ export interface BranchCluster {
     durationFromStaticFallback: boolean;
     district: string;
     city: string;
+    /** Where the branch sits, so travel can be priced from the transport rate card. */
+    state: string | null;
+    region: string | null;
   }>;
   /** Total packets across the cluster — the throughput this day actually buys. */
   totalPackets: number;
@@ -620,6 +623,8 @@ export class DayPlannerService {
           durationFromStaticFallback: fromStaticFallback,
           district: pb.branch.district,
           city: pb.branch.city,
+          state: pb.branch.state ?? null,
+          region: pb.branch.region ?? null,
         };
       })
       // Seed clusters from the heaviest branches so the biggest workloads anchor a day and
@@ -957,6 +962,13 @@ export class DayPlannerService {
       let baseFee = 0;
       let travelFee = 0;
 
+      // Travel is one physical route; its transport pricing follows the first stop's place —
+      // the same rule the assign path applies, so the plan's figure survives assignment.
+      const firstStop = cluster.branches[0];
+      const clusterPlace = firstStop
+        ? { state: firstStop.state, region: firstStop.region }
+        : null;
+
       if (distinctClients.size <= 1) {
         // Single client — one quote covers the whole cluster, as before.
         const quote = await this.feePolicyService.quote({
@@ -966,6 +978,10 @@ export class DayPlannerService {
           distanceKm: totalTravelKm,
           branchCount: cluster.branches.length,
           onDate: scheduledDate,
+          place: clusterPlace,
+          // The optimized route is a closed loop ending at home — the return leg is already
+          // in the kilometres. Without this flag the transport estimate doubled the loop.
+          distanceIsRoundTrip: true,
         });
         baseFee = quote.baseFee;
         travelFee = quote.travelFee;
@@ -982,6 +998,9 @@ export class DayPlannerService {
               distanceKm: index === 0 ? totalTravelKm : 0,
               branchCount: 1,
               onDate: scheduledDate,
+              place: index === 0 ? clusterPlace : null,
+              // The route km on the first stop are the full loop, not one way.
+              distanceIsRoundTrip: true,
             });
           }),
         );

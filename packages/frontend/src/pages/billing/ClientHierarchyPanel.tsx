@@ -2,10 +2,9 @@ import React, { useState } from 'react';
 import { ChevronRight, ChevronDown, TrendingDown, TrendingUp, AlertCircle } from 'lucide-react';
 import { useClientBillingReport } from '../../hooks/useBilling';
 import type { BillingProjectRollup, BillingAssignmentRollup } from '../../services/billing';
-import { formatRupees } from '@fapoms/shared';
 
 // Paise matter on the client billing hierarchy; every other surface rounds to whole rupees.
-const money = (n?: number | null) => formatRupees(n, { decimals: 2 });
+import { moneyExact as money } from '../../utils/money';
 
 /**
  * Client → Projects → Assignments, with the revenue and the assayer cost booked

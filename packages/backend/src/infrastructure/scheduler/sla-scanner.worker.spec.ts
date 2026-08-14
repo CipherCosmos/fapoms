@@ -6,6 +6,8 @@ import { NotificationDispatchService } from '../../modules/notifications/notific
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
+import { EmailDigestService } from './email-digest.service';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
 
 /**
  * The scanner runs six independent scans behind one 15-minute tick. The property under test is
@@ -41,6 +43,19 @@ describe('SlaScannerWorker phase isolation', () => {
         { provide: DeskEscalationService, useValue: deskEscalation },
         { provide: FeedbackEscalationService, useValue: feedbackEscalation },
         { provide: LocationTrailService, useValue: locationTrail },
+        { provide: EmailDigestService, useValue: { run: jest.fn() } },
+        {
+          provide: PlatformSettingsService,
+          // Nothing configured in tests: every lookup falls through to the caller's fallback,
+          // which is the shipped constant.
+          useValue: {
+            get: jest.fn(async () => null),
+            getMany: jest.fn(async () => ({})),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            describeAll: jest.fn(async () => []),
+            onChange: jest.fn(),
+          },
+        },
       ],
     }).compile();
     worker = module.get(SlaScannerWorker);

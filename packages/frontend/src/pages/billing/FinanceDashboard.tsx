@@ -3,9 +3,10 @@ import { ArrowDownLeft, ArrowUpRight, AlertTriangle, FileText, CheckCircle2, Clo
 import { useFinanceDashboard } from '../../hooks/useBilling';
 import type { BillingAging } from '../../services/billing';
 
-import { formatRupees, formatRupees as money } from '@fapoms/shared';
+// Aggregates: a bucket with nothing in it is ₹0, not an unknown amount.
+import { moneyTotal as money } from '../../utils/money';
 // Paise-accurate variant for reconciliation figures, from the same shared formatter.
-const moneyExact = (n?: number | null) => formatRupees(n, { decimals: 2 });
+import { moneyExact } from '../../utils/money';
 
 /**
  * The finance console, organised around the questions finance actually asks —

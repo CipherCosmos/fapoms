@@ -12,7 +12,9 @@ export interface SearchResult {
 
 export const SEARCH_NAV_PATHS: Record<string, string> = {
   branches: '/branches?id=',
-  assayers: '/assayers/',
+  // The roster with that person's drawer already open — one implementation of "view an
+  // assayer", reached the same way from search as from the list itself.
+  assayers: '/hr/roster?assayer=',
   projects: '/projects?id=',
   clients: '/clients?id=',
   assignments: '/assignments?id=',

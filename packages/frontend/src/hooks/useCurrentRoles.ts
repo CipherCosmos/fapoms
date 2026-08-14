@@ -78,6 +78,42 @@ export function canManageHolidays(roles: SystemRole[]): boolean {
   );
 }
 
+/**
+ * Platform configuration — fees, tax, schedules, the mailbox the platform sends from.
+ *
+ * Deliberately its own helper rather than reusing the notification one it happens to match
+ * today: they gate different backends (SETTINGS_ADMIN_ROLES vs NOTIFICATION_ADMIN_ROLES), and
+ * a page whose permission check is named after a different feature is a trap for whoever
+ * changes either list next.
+ */
+export function canAdministerPlatformSettings(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
+/**
+ * Transport rates price the travel in every offer. Operations own planning inputs; finance
+ * owns what things cost — both manage. Mirrors RATE_MANAGER_ROLES on the backend controller.
+ */
+export function canManageTransportRates(roles: SystemRole[]): boolean {
+  return roles.some((r) =>
+    [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.FINANCE_MANAGER,
+    ].includes(r),
+  );
+}
+
+/**
+ * Notification & email administration. Deliberately narrower than the other config helpers:
+ * these settings decide what reaches everyone's inbox and phone across the organisation, not
+ * one desk's planning inputs. Mirrors NOTIFICATION_ADMIN_ROLES on the backend controller.
+ */
+export function canAdministerNotifications(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+}
+
 /** Business rules feed candidate scoring directly — operations own this too. */
 export function canManageZones(roles: SystemRole[]): boolean {
   return roles.some((r) =>

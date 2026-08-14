@@ -6,6 +6,9 @@ import { NotificationEntity } from './notification.entity';
 import { DeviceTokenEntity } from './device-token.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { NotificationSettingsService } from './notification-settings.service';
+import { UserEntity } from '../user/user.entity';
 import { NotificationSweeper } from './notification.sweeper';
 
 const baseNotification = (over: Partial<NotificationEntity> = {}): any => ({
@@ -35,8 +38,10 @@ describe('NotificationDeliveryWorker', () => {
   };
   const tokenRepo = { find: jest.fn(), update: jest.fn() };
   const prefRepo = { findOne: jest.fn() };
+  const userRepo = { findOne: jest.fn() };
   const fcm = { sendMulticast: jest.fn() };
-  const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn() };
+  const emailProvider = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
+  const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedEmails: jest.fn() };
 
   const lastStatus = () => [...updates].reverse().find((u) => u.status)?.status;
 
@@ -51,7 +56,21 @@ describe('NotificationDeliveryWorker', () => {
         { provide: getRepositoryToken(NotificationEntity), useValue: notifRepo },
         { provide: getRepositoryToken(DeviceTokenEntity), useValue: tokenRepo },
         { provide: getRepositoryToken(NotificationPreferenceEntity), useValue: prefRepo },
+        { provide: getRepositoryToken(UserEntity), useValue: userRepo },
         { provide: FcmProvider, useValue: fcm },
+        { provide: EmailProvider, useValue: emailProvider },
+        {
+          provide: NotificationSettingsService,
+          // No overrides in tests: resolve straight to the shipped catalog entry.
+          useValue: {
+            defFor: jest.fn(async (t: string) => {
+              const { NOTIFICATION_CATALOG } = require('./notification-catalog');
+              const base = NOTIFICATION_CATALOG[t];
+              return base ? { ...base, type: t, enabled: true, overridden: [], notes: null } : null;
+            }),
+            effectiveCatalog: jest.fn(async () => ({})),
+          },
+        },
         { provide: NotificationSweeper, useValue: sweeper },
       ],
     }).compile();

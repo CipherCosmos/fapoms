@@ -1,6 +1,7 @@
 import React from 'react';
 import { Users, AlertTriangle, Check, RefreshCw, X } from 'lucide-react';
 
+import { usePlatformLimits } from '../../hooks/usePlatformLimits';
 interface ProjectBranchAssignment {
   id: string;
   status: string;
@@ -13,7 +14,6 @@ interface ProjectBranchAssignment {
   assayer?: { id: string; displayName: string; assayerCode?: string };
 }
 
-const MAX_NEGOTIATION_ROUNDS = 3;
 
 /**
  * The active counter-offer banner — an assayer has proposed a different fee and ops needs to
@@ -26,7 +26,9 @@ export const NegotiationBanner: React.FC<{
   onDecline: () => void;
 }> = ({ assignment, onAccept, onCounter, onDecline }) => {
   const round = Math.max(1, assignment.negotiationCount ?? 1);
-  const roundsLeft = Math.max(0, MAX_NEGOTIATION_ROUNDS - (assignment.negotiationCount ?? 0));
+  // From the server, which enforces it — see usePlatformLimits.
+  const { maxNegotiationRounds } = usePlatformLimits();
+  const roundsLeft = Math.max(0, maxNegotiationRounds - (assignment.negotiationCount ?? 0));
 
   return (
     <div style={{
@@ -46,7 +48,7 @@ export const NegotiationBanner: React.FC<{
               Counter offer from {assignment.assayer?.displayName || 'assayer'}
             </span>
             <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)', whiteSpace: 'nowrap' }}>
-              Round {round} of {MAX_NEGOTIATION_ROUNDS}
+              Round {round} of {maxNegotiationRounds}
             </span>
           </div>
           <div style={{ fontSize: '19px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '3px' }}>

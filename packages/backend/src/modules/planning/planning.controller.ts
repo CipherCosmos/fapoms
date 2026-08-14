@@ -276,7 +276,10 @@ export class PlanningController {
   }
 
   @Put('field/visits/:visitId/status')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  // OPERATIONS_EXECUTIVE was listed here but was never granted PLANNING:EDIT/CREATE, so the
+  // permission guard refused it right after the role guard admitted it — a dead entry that
+  // made this route look wider than it has ever been.
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Transition field visit execution status (e.g. READY to TRAVELLING)' })
   async transitionVisit(
@@ -292,7 +295,10 @@ export class PlanningController {
   }
 
   @Post('field/visits/:visitId/incidents')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  // OPERATIONS_EXECUTIVE was listed here but was never granted PLANNING:EDIT/CREATE, so the
+  // permission guard refused it right after the role guard admitted it — a dead entry that
+  // made this route look wider than it has ever been.
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Report operational field incident (e.g. branch closed, assayer illness)' })
   async reportIncident(
@@ -358,7 +364,10 @@ export class PlanningController {
   }
 
   @Post('execution/packages/:groupId/conversations')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  // OPERATIONS_EXECUTIVE was listed here but was never granted PLANNING:EDIT/CREATE, so the
+  // permission guard refused it right after the role guard admitted it — a dead entry that
+  // made this route look wider than it has ever been.
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Record conversation message with fee/date negotiations' })
   async postMessage(

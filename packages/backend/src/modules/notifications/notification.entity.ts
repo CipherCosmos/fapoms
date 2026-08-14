@@ -42,6 +42,9 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 @Index(['entityType', 'entityId'])
 @Index(['userId', 'isRead', 'createdAt'])
 @Index('UQ_notifications_dedupe', ['dedupeKey'], { unique: true, where: '"dedupe_key" IS NOT NULL' })
+// Serves the stranded-email sweep. Declared here AND in the migration — synchronize drops
+// migration-only indexes (see the class comment above; it has happened to this very table).
+@Index('idx_notifications_email_pending', ['createdAt'], { where: `"email_status" = 'PENDING'` })
 export class NotificationEntity extends BaseEntity {
   @Column({ name: 'user_id', type: 'uuid', nullable: true })
   userId: string | null;
@@ -97,6 +100,23 @@ export class NotificationEntity extends BaseEntity {
 
   @Column({ type: 'integer', default: 0 })
   attempts: number;
+
+  // ── Email delivery, tracked separately ──────────────────────────────────
+  /**
+   * `status` above belongs to the in-app/push lifecycle, and the two must not share a column:
+   * push marking a row DELIVERED would trip the email path's terminal-state guard (and vice
+   * versa), silently dropping one channel — the exact bug the in-app/push interaction already
+   * had once. NULL means this row never owed anyone an email (channel absent, or the recipient
+   * is an assayer — email is a staff channel).
+   */
+  @Column({ name: 'email_status', type: 'varchar', length: 16, nullable: true })
+  emailStatus: NotificationStatus | null;
+
+  @Column({ name: 'emailed_at', type: 'timestamptz', nullable: true })
+  emailedAt: Date | null;
+
+  @Column({ name: 'email_failure_reason', type: 'text', nullable: true })
+  emailFailureReason: string | null;
 
   // ── Traceability / deep linking ─────────────────────────────────────────
   @Column({ name: 'entity_type', type: 'varchar', length: 64, nullable: true })

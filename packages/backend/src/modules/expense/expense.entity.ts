@@ -65,4 +65,21 @@ export class ExpenseEntity extends BaseEntity {
    */
   @Column({ name: 'review_notes', type: 'text', nullable: true })
   reviewNotes: string | null;
+
+  /**
+   * The payable raised when this claim was approved — how the assayer actually gets the money.
+   *
+   * Approval used to be the end of the road: the claim reached APPROVED and no row anywhere
+   * owed anyone anything, so the reimbursement was never paid. It now raises an
+   * `assayer_payables` row, which already carries approval, TDS, disbursement and a payment
+   * history, and this column points at it.
+   *
+   * There is deliberately no PAID status on the claim. Whether the money has gone out is a fact
+   * about the payable, and duplicating it here would create two answers that could disagree —
+   * read it through this link instead. Uniquely indexed, so approving twice cannot raise a
+   * second payable and pay the claim twice.
+   */
+  @Index({ unique: true, where: 'reimbursement_payable_id IS NOT NULL' })
+  @Column({ name: 'reimbursement_payable_id', type: 'uuid', nullable: true })
+  reimbursementPayableId: string | null;
 }

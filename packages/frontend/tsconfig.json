@@ -26,5 +26,11 @@
     }
   },
   "include": ["src"],
+  // Tests are not part of the shipped bundle and must not gate the production build. Compiling
+  // them here made `tsc` demand a test-runner's globals from the app build, which only resolved
+  // because @types/jest happened to be hoisted from the BACKEND's dependencies into the root
+  // node_modules. A clean checkout — any CI job, any new machine — has no such accident, and the
+  // production image failed to build with "Cannot find name 'expect'" across every spec file.
+  "exclude": ["src/**/*.spec.ts", "src/**/*.spec.tsx", "src/**/*.test.ts", "src/**/*.test.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

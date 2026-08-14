@@ -1,9 +1,21 @@
 /**
- * FAPOMS — Canonical Domain Interfaces
+ * FAPOMS — Shared Domain Shapes (API payloads, NOT the schema)
  *
- * These interfaces represent the business entities defined across
- * Parts 2, 7, and 8 of the specification. They are the canonical
- * data model shared between backend and frontend.
+ * ## Read this before trusting anything below
+ *
+ * These are convenience types for data crossing the wire between backend and frontend. They
+ * are **not** the source of truth for the database. The TypeORM entities are — one per table,
+ * under `packages/backend/src/modules/*` — and where an interface here disagrees with an
+ * entity, the entity is right and this file is stale.
+ *
+ * The header used to call these "canonical", which was actively misleading: several described
+ * a specification that was never built. `Communication`, for instance, still declares
+ * `direction`, `subject`, `contactedAt` and `contactedBy`, none of which exist on
+ * `communication.entity.ts` (which has `content`, `recipientRef`, `isDelivered`). Twelve more
+ * interfaces described tables nothing had ever read them for and have been deleted.
+ *
+ * So: model a DTO on the entity, not on this file. Add something here only when two packages
+ * genuinely need to agree on a payload shape, and delete it when they stop.
  *
  * System identifiers (id) are separate from business identifiers
  * (clientCode, branchCode, solId, etc.) per Part 7 §12.
@@ -19,7 +31,6 @@ import {
   ClientType,
   ClientBillingStatus,
   ClientBillingEventType,
-  CommunicationType,
   ContractStatus,
   DocumentStatus,
   DocumentType,
@@ -294,16 +305,6 @@ export interface Assessment extends ExtendedAuditMetadata {
   city?: string;
 }
 
-export interface CallLog extends AuditMetadata {
-  id: string;
-  assessmentId: string;
-  assessorId: string;
-  calledBy: string;
-  timestamp: string;
-  outcome: string; // ACCEPTED, REJECTED, NEGOTIATING, NO_ANSWER
-  negotiatedFee?: number;
-  notes?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Assayer (Part 2 §6) — Permanent Master Entity
@@ -347,56 +348,9 @@ export interface Assayer extends AuditMetadata {
   photograph?: string;
 }
 
-export interface AssayerGovernmentDocument {
-  id: string;
-  assayerId: string;
-  documentType: 'AADHAAR' | 'PAN' | 'PASSPORT' | 'DRIVING_LICENSE' | 'VOTER_ID';
-  documentNumber: string;
-  expiryDate?: string;
-  verificationStatus: 'PENDING' | 'VERIFIED' | 'REJECTED';
-  verifiedAt?: string;
-  verifiedBy?: string;
-  filePaths: string[];
-  remarks?: string;
-}
 
-export interface AssayerDocument {
-  id: string;
-  assayerId: string;
-  documentType: 'RESUME' | 'OFFER_LETTER' | 'NDA' | 'TRAINING_CERTIFICATE' | 'INSURANCE' | 'MEDICAL_CERTIFICATE' | 'POLICE_VERIFICATION';
-  fileName: string;
-  filePath: string;
-  fileSize: number;
-  mimeType: string;
-  versionNumber: number;
-  parentDocumentId?: string;
-  remarks?: string;
-}
 
-export interface AssayerRemark {
-  id: string;
-  assayerId: string;
-  authorId: string;
-  authorName: string;
-  content: string;
-  category: 'GENERAL' | 'PERFORMANCE' | 'COMPLIANCE' | 'DISCIPLINARY' | 'FEEDBACK' | 'OTHER';
-  visibility: 'PUBLIC' | 'MANAGER_ONLY' | 'ADMIN_ONLY';
-  attachments: string[];
-  createdAt: string;
-}
 
-export interface AssayerActivity {
-  id: string;
-  assayerId: string;
-  eventType: string;
-  previousState?: string;
-  newState?: string;
-  performedBy: string;
-  performedByName: string;
-  remarks?: string;
-  metadata?: Record<string, unknown>;
-  occurredAt: string;
-}
 
 // ---------------------------------------------------------------------------
 // Assignment (Part 2 §8) — Transactional
@@ -471,16 +425,6 @@ export interface Holiday extends AuditMetadata {
 // Communication (Part 2 §13)
 // ---------------------------------------------------------------------------
 
-export interface Communication extends AuditMetadata {
-  id: string;
-  assignmentId: string;
-  type: CommunicationType;
-  direction: 'INBOUND' | 'OUTBOUND';
-  subject?: string;
-  notes: string;
-  contactedAt: string;
-  contactedBy: string;
-}
 
 // ---------------------------------------------------------------------------
 // Travel (Part 2 §14)
@@ -623,39 +567,13 @@ export interface AuditEvent {
 // Geographic Reference Data (Part 7 §10)
 // ---------------------------------------------------------------------------
 
-export interface GeoState {
-  id: string;
-  name: string;
-  code: string;
-}
 
-export interface GeoDistrict {
-  id: string;
-  name: string;
-  stateId: string;
-}
 
-export interface GeoCity {
-  id: string;
-  name: string;
-  districtId: string;
-  pincode?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Coverage Metrics (Part 2 §15, Part 5 §7)
 // ---------------------------------------------------------------------------
 
-export interface CoverageMetrics {
-  totalBranches: number;
-  assignedBranches: number;
-  scheduledBranches: number;
-  completedBranches: number;
-  unassignedBranches: number;
-  unableToCover: number;
-  coveragePercentage: number;       // Confirmed coverage
-  plannedCoveragePercentage: number; // Including in-negotiation
-}
 
 // ---------------------------------------------------------------------------
 // Candidate Recommendation (Part 5 §6, Part 9 §10-11)
@@ -665,19 +583,6 @@ export interface CoverageMetrics {
 // Assayer Commercial Profile (Enterprise)
 // ---------------------------------------------------------------------------
 
-export interface AssayerCommercialProfile extends AuditMetadata {
-  id: string;
-  assayerId: string;
-  baseFee: number;
-  hourlyRate: number;
-  dailyRate: number;
-  travelReimbursement: number;
-  accommodationAllowance: number;
-  mealAllowance: number;
-  currency: string;
-  effectiveStartDate: string;
-  effectiveEndDate?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Workforce Attribute (Enterprise)
@@ -693,34 +598,11 @@ export interface WorkforceAttribute extends AuditMetadata {
   metadata?: Record<string, unknown>;
 }
 
-export interface CandidateRecommendation {
-  assayerId: string;
-  assayerName: string;
-  distanceKm: number;
-  estimatedTravelCost: number;
-  state: string;
-  activeAssignments: number;
-  totalHistoricalAssignments: number;
-  lastAssignmentDate?: string;
-  availabilityStatus: AssayerStatus;
-  score: number;                    // Composite recommendation score
-}
 
 // ---------------------------------------------------------------------------
 // Multi-level Billing Engine (Client / Project / Assignment / Assayer Payable)
 // ---------------------------------------------------------------------------
 
-export interface BillingMoney {
-  baseAmount: number;
-  travelAmount?: number;
-  adjustmentAmount?: number;
-  discountAmount?: number;
-  taxAmount?: number;
-  taxRate?: number;
-  tdsAmount?: number;
-  totalAmount: number;
-  currency: string;
-}
 
 export interface BillingEntry extends AuditMetadata {
   id: string;

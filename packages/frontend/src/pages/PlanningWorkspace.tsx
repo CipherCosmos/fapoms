@@ -27,6 +27,7 @@ import {
   optimizeRoute,
 } from '../services/planning';
 
+import { money } from '../utils/money';
 /** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
 interface FeeQuote {
   baseFee: number;
@@ -43,6 +44,19 @@ interface FeeQuote {
     defaultBaseFee: number;
     clientConfigured: boolean;
   };
+  /** Where the travel figure came from — the transport rate card, or the legacy per-km contract. */
+  travelSource?: 'TRANSPORT_RATE_CARD' | 'CLIENT_RATE_CARD' | 'PLATFORM_DEFAULT';
+  transport?: {
+    distanceKm: number;
+    options: Array<{
+      mode: string; modeLabel: string; baseFare: number; perKmRate: number;
+      oneWayCost: number; roundTripCost: number; preferred: boolean;
+    }>;
+    recommended: {
+      mode: string; modeLabel: string; baseFare: number; perKmRate: number;
+      oneWayCost: number; roundTripCost: number; preferred: boolean;
+    } | null;
+  } | null;
 }
 
 interface ProjectOption {
@@ -411,7 +425,26 @@ export const PlanningWorkspace: React.FC = () => {
    * with `dateConflict` set and are labelled on the row, so nothing is hidden.
    */
   const [ignoreDateAvailability, setIgnoreDateAvailability] = useState(false);
-  const [slaEnabled, setSlaEnabled] = useState(true);
+  /**
+   * The conflict-of-interest independence floor — an optional manual override, OFF by default.
+   *
+   * This is not an SLA. The backend uses "SLA" for travel time and scores a nearby assayer
+   * *higher* for it (`recommendation.engine.ts`: `dist <= 15` earns +20, "High SLA guarantee
+   * zone"). What this control does is the opposite thing: hide candidates who live too CLOSE to
+   * the branch, because auditing somewhere you have local ties is a conflict of interest.
+   *
+   * It used to default to ON at 50 km, and `PlanningWorkspace` sent that figure to the backend
+   * as `minDistanceKm`, where `resolveMinDistanceKm` takes `Math.max` of it and the client's own
+   * value. Clients contract this floor at 5–10 km. So the screen silently overrode the contract
+   * by a factor of five to ten and hid every genuinely nearby assayer, by default, from every
+   * planner — who then dispatched someone 50 km away and billed the travel. Worse, the page's
+   * own empty-list warning describes the symptom without naming the cause.
+   *
+   * Default OFF: the backend already enforces the client's real floor through
+   * `DistancePolicyFilter`, so leaving this alone gets the contracted behaviour. Turning it on is
+   * a deliberate act of tightening beyond the contract for one session.
+   */
+  const [slaEnabled, setSlaEnabled] = useState(false);
   const [slaRadius, setSlaRadius] = useState(50);
   /**
    * The map's search radius, owned here so one number governs the whole screen.
@@ -1004,7 +1037,7 @@ export const PlanningWorkspace: React.FC = () => {
           autoSchedule: autoDispatch,
           acceptOnBehalf: assignDirectly,
           acceptanceReason: assignDirectly
-            ? `Agreed at ₹${Number(negotiatingFee).toLocaleString('en-IN')} during Call & Assign.`
+            ? `Agreed at ${money(negotiatingFee)} during Call & Assign.`
             : undefined,
         })
       });
@@ -1149,6 +1182,11 @@ export const PlanningWorkspace: React.FC = () => {
       // reads as "nothing proposed yet", where a hardcoded ₹1500 read as a real offer.
       setNegotiatingFee(assignment.proposedFee != null ? String(assignment.proposedFee) : '');
       setCounterRemarks('');
+      // This path opens the modal without fetching a fresh quote, so whatever quote the last
+      // Call & Assign left behind belongs to a DIFFERENT assayer and branch. Clearing it keeps
+      // the transport-grounding panel from lending this negotiation someone else's numbers.
+      setFeeQuote(null);
+      setCommercialBaseFee(null);
       // Counter-back mode: submit will counter THIS assignment, not create a new one.
       setCounterOfferAssignmentId(assignment.id);
       setShowNegotiationModal(true);
@@ -1379,6 +1417,9 @@ export const PlanningWorkspace: React.FC = () => {
           // The real weighted score, or nothing. This used to invent 98/88/74 from distance when the
           // server returned no score, showing ops a confident match % the engine never produced.
           const conf = c.score != null ? Math.round(c.score) : null;
+          // "Independent"/"too close", not "SLA compliant"/"SLA breach" — being near the branch
+          // is good for service level and bad only for independence. Calling proximity an SLA
+          // breach told planners the opposite of what the recommendation engine scores.
           const slaStatus = slaEnabled && c.distanceKm !== null
             ? (c.distanceKm >= slaRadius ? 'compliant' : 'breach')
             : null;
@@ -1494,6 +1535,9 @@ export const PlanningWorkspace: React.FC = () => {
                         assayerId: c.id,
                         projectId: selectedProjectId || undefined,
                         distanceKm: c.distanceKm || 0,
+                        // The branch being covered — lets the transport rate card price the
+                        // actual journey for its state instead of the generic per-km formula.
+                        branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
                       }),
                     });
                     setFeeQuote(quote);
@@ -1570,7 +1614,9 @@ export const PlanningWorkspace: React.FC = () => {
                       therefore show a travel fee that no part of the system would ever charge. */}
                   <div>
                     • Est. Travel Fee: {feeQuote
-                      ? `₹${feeQuote.travelFee} (₹${feeQuote.rates.travelFeePerKm}/km beyond ${feeQuote.rates.freeTravelAllowanceKm} km)`
+                      ? feeQuote.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended
+                        ? `₹${feeQuote.travelFee} by ${feeQuote.transport.recommended.modeLabel}, round trip (transport rate card)`
+                        : `₹${feeQuote.travelFee} (₹${feeQuote.rates.travelFeePerKm}/km beyond ${feeQuote.rates.freeTravelAllowanceKm} km)`
                       : '—'}
                   </div>
                   <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Path covers multiple branch locations with TSP roundtrip routing optimization.</div>
@@ -2175,6 +2221,27 @@ export const PlanningWorkspace: React.FC = () => {
                   style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>
+
+            {/* The transport grounding behind the recommended fee: what the journey actually
+                costs by the recommended mode, with the alternatives, so the caller can argue
+                in specifics ("bus both ways is ₹240") instead of feel. Server-quoted — this
+                modal computes nothing. */}
+            {feeQuote?.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended && (
+              <div style={{ marginTop: '12px', padding: '10px 12px', background: 'rgba(216,174,71,0.06)', border: '1px dashed rgba(216,174,71,0.35)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                  🚌 Recommended fee includes ₹{feeQuote.travelFee.toLocaleString()} travel — {feeQuote.transport.recommended.modeLabel}, round trip
+                  {feeQuote.transport.distanceKm ? ` (~${Math.round(feeQuote.transport.distanceKm)} km each way)` : ''}
+                </div>
+                {feeQuote.transport.options.length > 1 && (
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    Alternatives: {feeQuote.transport.options
+                      .filter((o) => o.mode !== feeQuote.transport!.recommended!.mode)
+                      .map((o) => `${o.modeLabel} ₹${o.roundTripCost.toLocaleString()}`)
+                      .join(' · ')}
+                  </div>
+                )}
+              </div>
+            )}
 
             {counterOfferAssignmentId && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '12px' }}>

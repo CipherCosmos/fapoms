@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 import { FeedbackThreadEntity } from './feedback-thread.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -23,19 +24,17 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
  * as the assayer-assignment and data-entry desks already do.
  */
 
-const hours = (key: string, fallback: number): number => {
-  const v = Number(process.env[key]);
-  return Number.isFinite(v) && v > 0 ? v : fallback;
-};
-
-export const FEEDBACK_SLA = {
-  firstResponse: hours('FEEDBACK_FIRST_RESPONSE_SLA_HOURS', 24),
-  resolution: {
-    CRITICAL: hours('FEEDBACK_RESOLUTION_CRITICAL_SLA_HOURS', 8),
-    HIGH: hours('FEEDBACK_RESOLUTION_HIGH_SLA_HOURS', 24),
-    MEDIUM: hours('FEEDBACK_RESOLUTION_MEDIUM_SLA_HOURS', 72),
-    LOW: hours('FEEDBACK_RESOLUTION_LOW_SLA_HOURS', 168),
-  },
+/**
+ * The shipped commitments, used when nothing is configured.
+ *
+ * These used to BE the SLA: a frozen object built from `process.env` at import time, so the
+ * response commitment could only be changed by editing an environment file and restarting —
+ * by whoever has deploy access rather than by the product team who owns the promise. They are
+ * now the last fallback in the usual saved -> env -> default chain, read per scan.
+ */
+export const FEEDBACK_SLA_DEFAULTS = {
+  firstResponse: 24,
+  resolution: { CRITICAL: 8, HIGH: 24, MEDIUM: 72, LOW: 168 },
 };
 
 export interface FeedbackAttentionItem {
@@ -61,7 +60,20 @@ export class FeedbackEscalationService {
     @InjectRepository(FeedbackThreadEntity)
     private readonly threadRepository: Repository<FeedbackThreadEntity>,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly settings: PlatformSettingsService,
   ) {}
+
+  /** Resolved per scan, so a change on the settings page takes effect on the next sweep. */
+  private async sla() {
+    const [firstResponse, CRITICAL, HIGH, MEDIUM, LOW] = await Promise.all([
+      this.settings.getNumber('feedback.firstResponseHours', FEEDBACK_SLA_DEFAULTS.firstResponse),
+      this.settings.getNumber('feedback.resolveCriticalHours', FEEDBACK_SLA_DEFAULTS.resolution.CRITICAL),
+      this.settings.getNumber('feedback.resolveHighHours', FEEDBACK_SLA_DEFAULTS.resolution.HIGH),
+      this.settings.getNumber('feedback.resolveMediumHours', FEEDBACK_SLA_DEFAULTS.resolution.MEDIUM),
+      this.settings.getNumber('feedback.resolveLowHours', FEEDBACK_SLA_DEFAULTS.resolution.LOW),
+    ]);
+    return { firstResponse, resolution: { CRITICAL, HIGH, MEDIUM, LOW } };
+  }
 
   private map(rows: any[]): FeedbackAttentionItem[] {
     return rows.map((r) => ({
@@ -76,6 +88,7 @@ export class FeedbackEscalationService {
   }
 
   async attention(): Promise<FeedbackAttention> {
+    const sla = await this.sla();
     const [firstResponseOverdue, resolutionOverdue] = await Promise.all([
       this.threadRepository.manager.query(
         `
@@ -88,7 +101,7 @@ export class FeedbackEscalationService {
           AND created_at < NOW() - make_interval(hours => $1::int)
         ORDER BY created_at ASC
         `,
-        [FEEDBACK_SLA.firstResponse],
+        [sla.firstResponse],
       ),
       this.threadRepository.manager.query(
         `
@@ -107,7 +120,7 @@ export class FeedbackEscalationService {
           CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
           created_at ASC
         `,
-        [FEEDBACK_SLA.resolution.CRITICAL, FEEDBACK_SLA.resolution.HIGH, FEEDBACK_SLA.resolution.MEDIUM, FEEDBACK_SLA.resolution.LOW],
+        [sla.resolution.CRITICAL, sla.resolution.HIGH, sla.resolution.MEDIUM, sla.resolution.LOW],
       ),
     ]);
     return { firstResponseOverdue: this.map(firstResponseOverdue), resolutionOverdue: this.map(resolutionOverdue) };

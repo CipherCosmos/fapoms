@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Linking } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { getAssignmentTotalFee } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
-import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly } from '@fapoms/shared';
+import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly, travelModeLabel } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
 
@@ -49,6 +49,20 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onOpenQueryChat,
   onOpenMap,
 }) => {
+  /**
+   * The negotiation cap, from the server that enforces it — not a copy on the phone.
+   *
+   * Hardcoding it meant the button could disagree with the rule: too low and the assayer is
+   * locked out of a negotiation the platform allows, too high and a tap auto-declines the offer
+   * and loses them the job. Falls back to the shipped default while the fetch is in flight.
+   */
+  const [maxRounds, setMaxRounds] = useState(3);
+  useEffect(() => {
+    let alive = true;
+    void MobileApiService.getPlatformLimits().then((l) => { if (alive) setMaxRounds(l.maxNegotiationRounds); });
+    return () => { alive = false; };
+  }, []);
+
   const t = useTheme();
   const [tab, setTab] = React.useState<'ACTIVE' | 'DONE'>('ACTIVE');
   const [downloadingId, setDownloadingId] = React.useState<string | null>(null);
@@ -205,6 +219,17 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                   />
                 </View>
 
+                {/* What part of that fee is meant to cover the journey — the desk's own
+                    breakdown, recorded when the offer was priced. Informational: the fee
+                    above already includes it. */}
+                {a.quotedTravelFee != null && a.quotedTravelFee > 0 && fee > 0 && (
+                  <AppText variant="small" tone="muted">
+                    Includes {money(a.quotedTravelFee)} travel
+                    {a.quotedTransportMode ? ` by ${travelModeLabel(a.quotedTransportMode).toLowerCase()}` : ''}
+                    {a.quotedDistanceKm ? ` · ~${Math.round(Number(a.quotedDistanceKm))} km each way` : ''}
+                  </AppText>
+                )}
+
                 {a.status === 'PENDING' && (
                   <View style={{ gap: t.space.sm }}>
                     {rounds > 0 && (
@@ -213,7 +238,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                         backgroundColor: t.colors.accentSoft, gap: 3,
                       }}>
                         <AppText variant="caption" tone="accent">
-                          Counter-offer round {rounds} of 3 · proposed {money(a.proposedFee ?? 0)}
+                          Counter-offer round {rounds} of {maxRounds} · proposed {money(a.proposedFee ?? 0)}
                         </AppText>
                         {a.remarks ? <AppText variant="small" tone="muted">{a.remarks}</AppText> : null}
                       </View>
@@ -224,10 +249,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     </View>
                     {onCounterOffer && (
                       <Button
-                        label={rounds >= 3 ? 'Negotiation closed' : `Propose a different fee (${rounds}/3)`}
-                        icon={rounds >= 3 ? 'lock-closed-outline' : 'swap-horizontal'}
+                        label={rounds >= maxRounds ? 'Negotiation closed' : `Propose a different fee (${rounds}/${maxRounds})`}
+                        icon={rounds >= maxRounds ? 'lock-closed-outline' : 'swap-horizontal'}
                         variant="neutral"
-                        disabled={rounds >= 3}
+                        disabled={rounds >= maxRounds}
                         onPress={() => onCounterOffer(a)}
                         full
                       />

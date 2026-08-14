@@ -6,7 +6,7 @@ import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
 import type { Client } from '@fapoms/shared';
-import { ClientLifecycleStatus } from '@fapoms/shared';
+import { CLIENT_LIFECYCLE_TRANSITIONS as CLIENT_LIFECYCLE_TRANSITIONS_SHARED, ClientLifecycleStatus } from '@fapoms/shared';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { useToast } from '../components/ui';
@@ -43,16 +43,15 @@ const CLIENT_TYPE_FILTERS = ['BANK', 'NBFC', 'MICROFINANCE', 'INSURANCE', 'CORPO
 const PRIORITY_FILTERS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 /** Legal next lifecycle steps per stage, mirroring the backend state machine. */
-const CLIENT_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [ClientLifecycleStatus.PROSPECT]: [ClientLifecycleStatus.ONBOARDING, ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.ONBOARDING]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.INACTIVE],
-  [ClientLifecycleStatus.ACTIVE]: [ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.INACTIVE],
-  [ClientLifecycleStatus.SUSPENDED]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.TERMINATED],
-  [ClientLifecycleStatus.UNDER_REVIEW]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.TERMINATED],
-  [ClientLifecycleStatus.INACTIVE]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.TERMINATED]: [ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.ARCHIVED]: [],
-};
+/**
+ * The client lifecycle graph, from the shared package rather than a third hand-kept copy.
+ *
+ * This literal used to be maintained here, in `client.service.ts`, and in that service's
+ * workflow registration — three copies in two packages. They happened to agree, but nothing
+ * made them agree, and this one drives the "what happens if I move this client" preview the
+ * user acts on. A stale copy here would have shown a path the backend then refused.
+ */
+const CLIENT_LIFECYCLE_TRANSITIONS = CLIENT_LIFECYCLE_TRANSITIONS_SHARED as Record<string, string[]>;
 
 function findPathTo(from: string, target: string): string[] | null {
   if (from === target) return [];

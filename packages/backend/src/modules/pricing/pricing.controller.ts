@@ -11,8 +11,11 @@
 import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsDateString, Min } from 'class-validator';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 import { FeePolicyService, FeeRates, FeeBreakdown } from './fee-policy.service';
+import { BranchEntity } from '../branch/branch.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
@@ -26,6 +29,20 @@ class QuoteRequestDto {
   /** Alternative to clientId — the server resolves the client's rate card from the project. */
   @IsOptional() @IsUUID()
   projectId?: string;
+
+  /**
+   * Where the work is, so the transport rate card can price the actual journey. The Planning
+   * screen has always sent this field; it used to be ignored.
+   */
+  @IsOptional() @IsUUID()
+  branchId?: string;
+
+  /** Direct place inputs, for callers quoting without a concrete branch. */
+  @IsOptional() @IsString()
+  state?: string;
+
+  @IsOptional() @IsString()
+  region?: string;
 
   @IsNumber() @Min(0)
   distanceKm: number;
@@ -43,7 +60,11 @@ class QuoteRequestDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Roles(...STAFF_ROLES)
 export class PricingController {
-  constructor(private readonly feePolicyService: FeePolicyService) {}
+  constructor(
+    private readonly feePolicyService: FeePolicyService,
+    @InjectRepository(BranchEntity)
+    private readonly branchRepository: Repository<BranchEntity>,
+  ) {}
 
   @Get('rates')
   @ApiOperation({ summary: 'Resolve the fee rate card in force for a client' })
@@ -62,12 +83,25 @@ export class PricingController {
     const clientId = dto.clientId
       ?? (dto.projectId ? await this.feePolicyService.resolveClientIdForProject(dto.projectId) : null);
 
+    // Place, best effort: the branch row when one was named, direct inputs otherwise. A
+    // branch that cannot be loaded degrades to legacy travel pricing, never to an error —
+    // this endpoint's job is to always have a number for the desk.
+    let place: { state: string | null; region: string | null } | null =
+      dto.state || dto.region ? { state: dto.state ?? null, region: dto.region ?? null } : null;
+    if (dto.branchId) {
+      const branch = await this.branchRepository
+        .findOne({ where: { id: dto.branchId }, select: ['id', 'state', 'region'] })
+        .catch(() => null);
+      if (branch) place = { state: branch.state ?? null, region: branch.region ?? null };
+    }
+
     return this.feePolicyService.quote({
       assayerId: dto.assayerId,
       clientId,
       distanceKm: dto.distanceKm,
       branchCount: dto.branchCount,
       onDate: dto.onDate ? new Date(dto.onDate) : undefined,
+      place,
     });
   }
 }

@@ -7,17 +7,45 @@ export class AssignmentStateMachine {
     [AssignmentStatus.PENDING]: [AssignmentStatus.ACCEPTED, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED],
     [AssignmentStatus.ACCEPTED]: [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.CANCELLED],
     [AssignmentStatus.CHECKED_IN]: [AssignmentStatus.CHECKED_IN, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
-    [AssignmentStatus.IN_PROGRESS]: [AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
+    // CHECKED_IN is reachable from IN_PROGRESS because a field check-in is retried: a flaky
+    // mobile connection, a GPS refresh, or a second attempt at the geofence all re-issue it
+    // after work has already started. Refusing that would fail a legitimate retry, so it is
+    // allowed here rather than being a backwards move nobody intended.
+    [AssignmentStatus.IN_PROGRESS]: [AssignmentStatus.IN_PROGRESS, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
     [AssignmentStatus.COMPLETED]: [],
     [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
     [AssignmentStatus.CANCELLED]: [AssignmentStatus.PENDING],
   };
 
   private static validateTransition(current: AssignmentStatus, target: AssignmentStatus) {
-    const allowed = AssignmentStateMachine.VALID_PATHS[current];
-    if (!allowed || !allowed.includes(target)) {
+    if (!AssignmentStateMachine.canTransition(current, target)) {
       throw new BadRequestException(`Invalid transition path from '${current}' to '${target}'`);
     }
+  }
+
+  /**
+   * The same question `validateTransition` asks, answered rather than thrown.
+   *
+   * Check-in comes from the mobile app and reports refusals as a result object with a message
+   * the assayer can act on, not as a 400 — so it needs to ask permission without an exception.
+   * It exists so that path can consult VALID_PATHS instead of keeping its own list: check-in
+   * previously carried a local `CHECK_IN_ALLOWED_FROM` array that had drifted out of agreement
+   * with the table above, leaving two answers to "may this assignment be checked in" and no way
+   * to tell which one the system actually used.
+   */
+  static canTransition(current: AssignmentStatus, target: AssignmentStatus): boolean {
+    return AssignmentStateMachine.VALID_PATHS[current]?.includes(target) ?? false;
+  }
+
+  /**
+   * Arriving on site. Written through the machine like every other transition — see
+   * `canTransition` for why this one is also askable without throwing.
+   */
+  static checkIn(assignment: AssignmentEntity, userId: string) {
+    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.CHECKED_IN);
+    const prev = assignment.status;
+    assignment.status = AssignmentStatus.CHECKED_IN;
+    return { previousState: prev, newState: assignment.status, userId };
   }
 
   static acceptOffer(assignment: AssignmentEntity, userId: string) {

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Bell, CheckCheck, RefreshCw, Wrench, ShieldCheck, FileText, MapPinned, Users, Wallet,
+  Bell, CheckCheck, RefreshCw, Wrench, ShieldCheck, FileText, MapPinned, Users, Wallet, MessageSquare,
   Settings2, Smartphone, MonitorSmartphone, Mail,
 } from 'lucide-react';
 import { api, WebNotification, NotificationCategory, NotificationPreference } from '../services/api';
@@ -19,17 +19,36 @@ import { useToast } from '../components/ui';
  * added delivery), but nothing let a person set one. Both are wired in below.
  */
 
-const CATEGORIES: NotificationCategory[] = ['ASSIGNMENT', 'VALIDATION', 'DOCUMENT', 'PLANNING', 'WORKFORCE', 'BILLING', 'SYSTEM'];
+/**
+ * Derived from the enum, not typed out beside it.
+ *
+ * The hand-written list was missing FEEDBACK, so the tab it drives blanked the entire app.
+ * Deriving it means a category added to shared shows up here automatically.
+ */
+const CATEGORIES: NotificationCategory[] = Object.values(NotificationCategory);
 
 const CATEGORY_META: Record<NotificationCategory, { icon: React.ElementType; tone: string; label: string }> = {
-  ASSIGNMENT: { icon: Wrench, tone: 'var(--accent)', label: 'Assignments' },
-  VALIDATION: { icon: ShieldCheck, tone: 'var(--success)', label: 'Validation' },
-  DOCUMENT: { icon: FileText, tone: 'var(--text-secondary)', label: 'Documents' },
-  PLANNING: { icon: MapPinned, tone: 'var(--warning)', label: 'Planning' },
-  WORKFORCE: { icon: Users, tone: 'var(--accent)', label: 'Workforce' },
-  BILLING: { icon: Wallet, tone: 'var(--success)', label: 'Billing' },
-  SYSTEM: { icon: Settings2, tone: 'var(--text-muted)', label: 'System' },
+  [NotificationCategory.ASSIGNMENT]: { icon: Wrench, tone: 'var(--accent)', label: 'Assignments' },
+  [NotificationCategory.VALIDATION]: { icon: ShieldCheck, tone: 'var(--success)', label: 'Validation' },
+  [NotificationCategory.DOCUMENT]: { icon: FileText, tone: 'var(--text-secondary)', label: 'Documents' },
+  [NotificationCategory.PLANNING]: { icon: MapPinned, tone: 'var(--warning)', label: 'Planning' },
+  [NotificationCategory.WORKFORCE]: { icon: Users, tone: 'var(--accent)', label: 'Workforce' },
+  [NotificationCategory.BILLING]: { icon: Wallet, tone: 'var(--success)', label: 'Billing' },
+  [NotificationCategory.SYSTEM]: { icon: Settings2, tone: 'var(--text-muted)', label: 'System' },
+  [NotificationCategory.FEEDBACK]: { icon: MessageSquare, tone: 'var(--accent)', label: 'Feedback' },
 };
+
+/**
+ * Never let a missing entry take the page down again.
+ *
+ * `Record<NotificationCategory, …>` makes an omission a compile error now that the local union
+ * is gone, but this app has no error boundary — one undefined lookup unmounts the whole root.
+ * A category arriving from an older or newer server than this bundle degrades to a readable row
+ * instead of a blank screen.
+ */
+const metaFor = (category: string) =>
+  CATEGORY_META[category as NotificationCategory] ??
+  { icon: Bell, tone: 'var(--text-muted)', label: category };
 
 const formatTime = (iso: string) => {
   const d = new Date(iso);
@@ -49,7 +68,12 @@ const PAGE_SIZE = 20;
 export const Notifications: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [tab, setTab] = useState<'inbox' | 'preferences'>('inbox');
+  // Honours ?tab=preferences so the bell's "Choose what reaches me" lands on the right tab
+  // rather than dropping people on the inbox to hunt for it.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<'inbox' | 'preferences'>(
+    searchParams.get('tab') === 'preferences' ? 'preferences' : 'inbox',
+  );
   const [category, setCategory] = useState<NotificationCategory | null>(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [notifications, setNotifications] = useState<WebNotification[]>([]);
@@ -293,7 +317,7 @@ const PreferencesPanel: React.FC = () => {
       // bell or this inbox at all — a much bigger step than muting push or
       // email, and one a non-technical user could easily not intend.
       const ok = window.confirm(
-        `Turn off in-app notifications for ${CATEGORY_META[category].label}? You will stop seeing these in your notification bell entirely.`,
+        `Turn off in-app notifications for ${metaFor(category).label}? You will stop seeing these in your notification bell entirely.`,
       );
       if (!ok) return;
     }
@@ -332,7 +356,7 @@ const PreferencesPanel: React.FC = () => {
         <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><Mail size={12} /> Email</span>
       </div>
       {prefs.map((p) => {
-        const meta = CATEGORY_META[p.category];
+        const meta = metaFor(p.category);
         return (
           <div key={p.category} style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-hair)' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', fontWeight: 600 }}>

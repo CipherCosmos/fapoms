@@ -7,8 +7,12 @@ import { NotificationChannel, NotificationStatus } from '@fapoms/shared';
 import { NotificationEntity } from './notification.entity';
 import { DeviceTokenEntity } from './device-token.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
+import { UserEntity } from '../user/user.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
+import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
+import { renderTemplate } from './notification-catalog';
 import { NotificationSweeper } from './notification.sweeper';
+import { NotificationSettingsService } from './notification-settings.service';
 import { NOTIFICATION_QUEUE } from './notification.constants';
 
 export { NOTIFICATION_QUEUE };
@@ -58,14 +62,19 @@ export class NotificationDeliveryWorker {
     private readonly deviceTokenRepo: Repository<DeviceTokenEntity>,
     @InjectRepository(NotificationPreferenceEntity)
     private readonly preferenceRepo: Repository<NotificationPreferenceEntity>,
+    @InjectRepository(UserEntity)
+    private readonly userRepo: Repository<UserEntity>,
     private readonly fcm: FcmProvider,
+    private readonly email: EmailProvider,
     private readonly sweeper: NotificationSweeper,
+    private readonly settings: NotificationSettingsService,
   ) {}
 
   /** Re-queues rows the enqueue never reached. Registered as a repeatable job. */
   @Process('sweep')
   async sweep(): Promise<void> {
     await this.sweeper.requeueStranded();
+    await this.sweeper.requeueStrandedEmails();
   }
 
   /** Settles rows abandoned mid-send so `SENT` cannot masquerade as success. */
@@ -208,6 +217,189 @@ export class NotificationDeliveryWorker {
     // Hand back to Bull so the configured backoff applies. On the final attempt
     // `onFailed` records the terminal state.
     throw new Error(reason);
+  }
+
+  /**
+   * Emails one notification to its internal-user recipient.
+   *
+   * A separate job from `deliver` on purpose: push and email fail independently (an FCM
+   * outage must not burn email's retries, and Gmail throttling must not delay pushes), and
+   * their bookkeeping is separate columns for the same reason — push marking the row
+   * DELIVERED must not read as "the email went", nor trip a shared terminal-state guard.
+   */
+  @Process({ name: 'deliver-email', concurrency: 3 })
+  async deliverEmail(job: Job<DeliveryJob>): Promise<void> {
+    const notification = await this.notificationRepo.findOne({
+      where: { id: job.data.notificationId },
+    });
+    if (!notification) return;
+
+    // Only PENDING proceeds: DELIVERED/FAILED/SUPPRESSED are terminal, NULL means this row
+    // never owed an email.
+    if (notification.emailStatus !== NotificationStatus.PENDING) return;
+
+    if (!notification.userId) {
+      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+        'Email reaches internal users only; this recipient is a field assayer.');
+      return;
+    }
+
+    // Same convention as push: absence of a preference row means opted in; only an explicit
+    // false suppresses.
+    const pref = await this.preferenceRepo.findOne({
+      where: { userId: notification.userId, category: notification.category },
+    });
+    if (pref && pref.email === false) {
+      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+        'Recipient has turned off email for this category.');
+      return;
+    }
+
+    const user = await this.userRepo.findOne({
+      where: { id: notification.userId },
+      select: ['id', 'email', 'isActive', 'status'],
+    });
+    if (!user?.email) {
+      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+        'Recipient has no email address on file.');
+      return;
+    }
+    /**
+     * Durably cut off, not merely locked out.
+     *
+     * Emailing a suspended or archived account leaks operational detail to someone deliberately
+     * removed. LOCKED is not that: it is the automatic fifteen-minute lockout five bad passwords
+     * produce, and an SLA escalation is if anything MORE useful to that person, who is a
+     * colleague having a bad morning rather than an ex-colleague.
+     */
+    const CUT_OFF = ['SUSPENDED', 'DISABLED', 'ARCHIVED', 'INVITED'];
+    if (!user.isActive || CUT_OFF.includes(user.status)) {
+      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+        `Recipient account is ${user.isActive ? user.status.toLowerCase() : 'deactivated'}.`);
+      return;
+    }
+
+    const linkUrl = notification.link ? `${appPublicUrl()}${notification.link}` : null;
+
+    /**
+     * Email wording, when an operator has written some.
+     *
+     * The row already carries the rendered in-app title and message; an email-specific
+     * template is rendered here instead, against the payload the event was raised with. An
+     * inbox has room for context a lock screen does not, which is the whole reason the
+     * override exists — and falling back to the in-app text keeps every type that has not
+     * been customised sending exactly what it sent before.
+     */
+    const def = notification.type
+      ? await this.settings.defFor(notification.type).catch(() => null)
+      : null;
+    const payload = notification.payload ?? {};
+    const subject = def?.emailSubject
+      ? renderTemplate(def.emailSubject, payload)
+      : notification.title;
+    const bodyText = def?.emailBody
+      ? renderTemplate(def.emailBody, payload)
+      : notification.message;
+
+    /**
+     * Claim the row here — as late as possible, immediately before the only irreversible step.
+     *
+     * The stranded-email sweep re-enqueues anything PENDING for five minutes, which a large
+     * fan-out or a throttling provider produces routinely, so two jobs can genuinely be in
+     * flight for one row. A conditional PENDING → SENT update means exactly one of them may
+     * send.
+     *
+     * Why *here* and not earlier: everything above is read-only and idempotent, and claiming
+     * before it turned an ordinary database blip into a lost email. A throw during the
+     * preference or user lookup would leave the row SENT, and the retry — the very machinery
+     * that exists for transient errors — would see a non-PENDING row and return without
+     * sending. Claiming late keeps the anti-duplicate guarantee (this is still the last thing
+     * before the send) while leaving the fragile reads outside it, where a throw simply leaves
+     * the row PENDING for the retry to pick up.
+     */
+    const claim = await this.notificationRepo
+      .createQueryBuilder()
+      .update(NotificationEntity)
+      .set({
+        emailStatus: NotificationStatus.SENT,
+        // The claim's own clock. `updated_at` is bumped by every write to the row — including
+        // the push leg's own sweep — so it cannot tell the abandoned-send sweep how long THIS
+        // send has been outstanding.
+        emailedAt: new Date(),
+      })
+      .where('id = :id', { id: notification.id })
+      .andWhere('email_status = :pending', { pending: NotificationStatus.PENDING })
+      .execute();
+    if (!claim.affected) {
+      this.logger.debug(`Email for ${notification.id} is already claimed by another job.`);
+      return;
+    }
+
+    const result = await this.email.send({
+      to: user.email,
+      subject,
+      text: `${bodyText}${linkUrl ? `\n\nOpen in FAPOMS: ${linkUrl}` : ''}`,
+      html: renderEmailHtml({
+        title: subject,
+        bodyLines: bodyText.split('\n').filter(Boolean),
+        linkUrl,
+      }),
+    });
+
+    if (result.success) {
+      await this.notificationRepo.update(notification.id, {
+        emailStatus: NotificationStatus.DELIVERED,
+        emailedAt: new Date(),
+        emailFailureReason: null,
+      });
+      return;
+    }
+
+    if (result.permanent) {
+      /**
+       * "No transport configured" is not a failure of this message — it is the platform
+       * being told not to send email at all. Recording it as FAILED made every notification
+       * in an unconfigured deployment look like something had gone wrong, when the honest
+       * reading is that email is switched off. Everything else permanent (a rejected address,
+       * bad credentials) genuinely failed.
+       */
+      const notConfigured = !this.email.isEnabled();
+      await this.settleEmail(
+        notification,
+        notConfigured ? NotificationStatus.SUPPRESSED : NotificationStatus.FAILED,
+        notConfigured ? 'Email is not configured, so none was sent.' : (result.error ?? 'Email send failed.'),
+      );
+      return;
+    }
+
+    // Transient. Record what happened; on the final attempt settle as FAILED instead of
+    // throwing — throwing on the last try would leave the row PENDING forever, which the
+    // push path avoids only via an external mark-exhausted job nothing enqueues.
+    const attemptsAllowed = Number(job.opts?.attempts ?? 1);
+    if (job.attemptsMade + 1 >= attemptsAllowed) {
+      await this.settleEmail(notification, NotificationStatus.FAILED,
+        `${result.error ?? 'Email send failed.'} (after ${attemptsAllowed} attempts)`);
+      return;
+    }
+    // Release the claim so the retry — or the sweeper, if this process dies — can take the row
+    // again. Leaving it SENT would strand it until `failAbandonedSends` gave up on it.
+    await this.notificationRepo.update(notification.id, {
+      emailStatus: NotificationStatus.PENDING,
+      emailFailureReason: result.error ?? 'Email send failed.',
+    });
+    throw new Error(result.error ?? 'Email send failed.');
+  }
+
+  private async settleEmail(
+    n: NotificationEntity,
+    status: NotificationStatus,
+    reason: string,
+  ): Promise<void> {
+    await this.notificationRepo.update(n.id, {
+      emailStatus: status,
+      emailFailureReason: reason.slice(0, 1000),
+      ...(status === NotificationStatus.DELIVERED ? { emailedAt: new Date() } : {}),
+    });
   }
 
   private async markFailed(n: NotificationEntity, reason: string): Promise<void> {

@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { SystemRole } from '@fapoms/shared';
 import { canAccessRoute, ROUTE_PERMISSIONS } from './route-permissions';
 
@@ -85,23 +87,42 @@ describe('canAccessRoute', () => {
 
   describe('parameterised paths', () => {
     it('matches an id segment', () => {
-      expect(canAccessRoute([SystemRole.HR_MANAGER], '/assayers/abc-123')).toBe(true);
-      expect(canAccessRoute([SystemRole.VALIDATOR], '/assayers/abc-123')).toBe(false);
+      // The single assayer view is the roster's drawer now (/hr/roster?assayer=…), so the
+      // gate that matters is the roster's.
+      expect(canAccessRoute([SystemRole.HR_MANAGER], '/hr/roster')).toBe(true);
+      expect(canAccessRoute([SystemRole.VALIDATOR], '/hr/roster')).toBe(false);
     });
   });
 
   describe('every route the app can render', () => {
     it('has an entry, so nothing is denied by omission', () => {
-      // Deny-by-default is only safe if the list is complete. These are the paths mounted in
-      // App.tsx; a new page must be added here as well as there.
-      const mounted = [
-        '/dashboard', '/executive-map', '/projects', '/branches', '/planning',
-        '/assignments', '/scheduling', '/documents', '/data-entry', '/validation',
-        '/users', '/hr', '/assayers', '/clients', '/billing', '/rules',
-        '/holidays', '/notifications', '/settings',
-      ];
+      /**
+       * Read the routes out of App.tsx rather than keeping a copy here.
+       *
+       * This was a hand-maintained array, and it drifted exactly as you would expect: five
+       * pages were added and none of them reached the list, so the test that exists to prove
+       * "no page is mounted without a permissions entry" quietly stopped covering the newest
+       * pages — the ones most likely to have been forgotten. Parsing the router means the
+       * check cannot fall behind it.
+       */
+      const appSource = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+      const mounted = [...appSource.matchAll(/<Route\s+path="([^"]+)"/g)]
+        .map((m) => m[1])
+        // '*' is the not-found catch-all, '/' the redirect, and '/login' is deliberately
+        // public — it is the one route reached before anyone has a role at all.
+        .filter((p) => p !== '*' && p !== '/' && p !== '/login')
+        // Child routes of a layout are governed by their parent's entry.
+        .filter((p) => p.startsWith('/'));
+
+      expect(mounted.length).toBeGreaterThan(15);
+
       const declared = new Set(ROUTE_PERMISSIONS.map((rp) => rp.path));
-      expect(mounted.filter((p) => !declared.has(p))).toEqual([]);
+      const undeclared = mounted.filter((p) => {
+        if (declared.has(p)) return false;
+        // Longest-prefix matching means a sub-path inherits its section's entry.
+        return ![...declared].some((d) => p.startsWith(d + '/'));
+      });
+      expect({ undeclared }).toEqual({ undeclared: [] });
     });
 
     it('grants a super administrator everything', () => {

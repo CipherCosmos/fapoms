@@ -125,6 +125,37 @@ export class ExpenseController {
     return { success: true, data: await this.expenseService.findForAssayer(assayerId, status) };
   }
 
+  /**
+   * Approved claims that never became a payable.
+   *
+   * A reimbursement that fails to raise its payable leaves the assayer told they were approved
+   * and finance holding nothing to pay — the one failure that is invisible from both ends. This
+   * is where it becomes visible.
+   */
+  @Get('expenses/unpaid-approvals')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER, SystemRole.FINANCE_MANAGER,
+  )
+  @ApiOperation({ summary: 'Approved claims with no reimbursement payable raised' })
+  async unpaidApprovals() {
+    return { success: true, data: await this.expenseService.listUnpaidApprovals() };
+  }
+
+  /** Retries the above. Idempotent — a claim that already has a payable is skipped. */
+  @Post('expenses/unpaid-approvals/retry')
+  @Roles(
+    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
+    SystemRole.OPERATIONS_MANAGER, SystemRole.FINANCE_MANAGER,
+  )
+  @ApiOperation({ summary: 'Raise the missing reimbursement payables' })
+  async retryUnpaidApprovals(@Req() req: any) {
+    return {
+      success: true,
+      data: await this.expenseService.retryUnpaidApprovals(req.user.userId ?? req.user.id),
+    };
+  }
+
   // Approving reimbursement commits money, so this is narrower than the read routes above.
   @Post('expenses/:expenseId/review')
   @Roles(

@@ -29,6 +29,7 @@ import { ProjectBranchStateMachine } from '../project/project.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { ProjectEntity } from '../project/project.entity';
 import { COMMITTED_ASSIGNMENT_STATUSES } from './assignment-workload';
@@ -103,6 +104,19 @@ export interface TransitionAssignmentDto {
   scheduledDate?: string;
 }
 
+/**
+ * How many counter-offers a negotiation may run before the offer auto-declines.
+ *
+ * The number was written three times in one block — the comparison, a comment, and the message
+ * the assayer is shown — so the rule and the explanation of the rule could drift apart, and the
+ * person told "3 counter-offers max" would be the last to know if it had.
+ */
+const DEFAULT_MAX_NEGOTIATION_ROUNDS = 3;
+
+/** Shipped default for the check-in geofence; the saved setting wins. */
+const DEFAULT_CHECK_IN_GEOFENCE_METERS = 2000;
+
+
 @Injectable()
 export class AssignmentService {
   private static readonly logger = new Logger(AssignmentService.name);
@@ -124,6 +138,7 @@ export class AssignmentService {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly constraintEvaluator: ConstraintEvaluator,
     private readonly ruleBypass: RuleBypassService,
+    private readonly settings: PlatformSettingsService,
     private readonly operationsInbox: OperationsInboxService,
     private readonly routingService: RoutingService,
     private readonly validationService: ValidationService,
@@ -311,13 +326,19 @@ export class AssignmentService {
     }
 
     // One calculator, one rate card. The free-commute allowance and per-km rate come from
-    // the client's contract, not from a constant in this file.
+    // the client's contract, not from a constant in this file. The branch's place lets the
+    // transport rate card ground the travel component in what the journey actually costs —
+    // by bus, own vehicle, whatever the desk has configured for that state — when rates exist.
     const quote = await this.feePolicyService.quote({
       assayerId: assayer.id,
       clientId: projectBranch.project?.clientId ?? null,
       configuration: projectBranch.project?.client?.configuration ?? undefined,
       distanceKm: chargeableDistanceKm,
       onDate: scheduledDateObj || new Date(),
+      place: {
+        state: projectBranch.branch?.state ?? null,
+        region: projectBranch.branch?.region ?? null,
+      },
     });
     const baseFee = quote.baseFee;
     calculatedTravelFee = quote.travelFee;
@@ -345,14 +366,37 @@ export class AssignmentService {
       resolvedProposedFee = override;
     }
 
-    // Validate proposed date against Holiday calendar via ConstraintEvaluator
+    /**
+     * The same date check every other caller makes.
+     *
+     * This used to call `checkHoliday(state, date)` with **no clientId**, while all six other
+     * callers pass one. Without it `isHoliday` cannot read the client's contracted working days
+     * and falls back to Sunday + 2nd/4th Saturday — and since every client is created with
+     * `workingDays: [1..5]`, the 1st, 3rd and 5th Saturday were closed everywhere in the system
+     * except here. An operator could book a Saturday, the offer would go out, the assayer would
+     * accept, and the audit could then never be scheduled: every later step passes the clientId
+     * and refuses the date. It also dropped the client filter on the holiday rows themselves,
+     * matching *other clients'* private holidays.
+     *
+     * `checkDateAvailability` is that check, and it also brings the two this path was missing
+     * entirely — approved leave and the project timeline — which `update()` and `scheduleAudit()`
+     * have always run.
+     */
     if (scheduledDateObj) {
-      const holidayCheck = await this.constraintEvaluator.checkHoliday(projectBranch.branch.state, scheduledDateObj);
-      if (!holidayCheck.passed) {
-        throw new BadRequestException(holidayCheck.reason);
+      const availability = await this.constraintEvaluator.checkDateAvailability({
+        assayer,
+        assayerId: dto.assayerId,
+        project: projectBranch.project ?? null,
+        branchState: projectBranch.branch.state,
+        clientId: projectBranch.project?.clientId ?? null,
+        scheduledDate: scheduledDateObj,
+      });
+      if (!availability.passed) {
+        throw new BadRequestException(availability.reason);
       }
 
-      // Validate Assayer availability and prevent double-booking via ConstraintEvaluator
+      // Kept separate: double-booking is a ConflictException (409), which the desk UI renders as
+      // "already booked" rather than as an invalid date.
       const doubleBookingCheck = await this.constraintEvaluator.checkDoubleBooking(dto.assayerId, scheduledDateObj);
       if (!doubleBookingCheck.passed) {
         throw new ConflictException(doubleBookingCheck.reason);
@@ -395,6 +439,12 @@ export class AssignmentService {
       assignment.checkedInAt = null;
       assignment.negotiationCount = 0;
       assignment.priority = projectBranch.priority;
+      // The quote behind THIS offer, for this assayer. The previous assayer's breakdown must
+      // not survive the reuse — their home, their distance, their rate card.
+      assignment.quotedDistanceKm = distanceKm > 0 ? Number(distanceKm.toFixed(2)) : null;
+      assignment.quotedBaseFee = quote.baseFee;
+      assignment.quotedTravelFee = quote.travelFee;
+      assignment.quotedTransportMode = quote.transport?.recommended?.mode ?? null;
       assignment.updatedBy = userId;
       assignment.isActive = true;
     } else {
@@ -410,6 +460,14 @@ export class AssignmentService {
         priority: projectBranch.priority,
         proposedFee: resolvedProposedFee,
         agreedFee: null,
+        // What the calculator said this job should cost, kept alongside what was actually
+        // offered. Negotiation moves proposedFee/agreedFee; these stay put, so "what did we
+        // recommend vs what did we agree" remains answerable forever — and the travel figure
+        // and distance are what expense review and travel verification later compare against.
+        quotedDistanceKm: distanceKm > 0 ? Number(distanceKm.toFixed(2)) : null,
+        quotedBaseFee: quote.baseFee,
+        quotedTravelFee: quote.travelFee,
+        quotedTransportMode: quote.transport?.recommended?.mode ?? null,
         scheduledDate: scheduledDateObj,
         autoSchedule: dto.autoSchedule ?? true,
         syncToken: `SYNC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -672,22 +730,24 @@ export class AssignmentService {
       if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.ASSIGNMENT_CONFIRMED) {
         pbEvent = ProjectBranchStateMachine.confirmAssignment(assignment.projectBranch, userId);
       }
-      // If autoSchedule is enabled (or true by default), automatically create calendar dispatch packet upon acceptance
+      /**
+       * Auto-scheduling on acceptance, through the same gate the scheduling desk passes.
+       *
+       * This wrote a CONFIRMED `schedules` row directly — via a string-keyed generic repository,
+       * skipping `checkDateAvailability` entirely. So an assayer accepting an offer produced a
+       * confirmed dispatch on a day they were on leave, on a client holiday, or outside the
+       * project timeline: every condition that check exists to catch. It left no
+       * SCHEDULE_CONFIRMED audit row and sent no dispatch notification, so the assayer was never
+       * told and the dispatch had no evidence trail. And because it ran by default
+       * (`autoSchedule ?? true`), it was the path almost every schedule actually took — while
+       * `SchedulingService.create`, the one with the checks, became a no-op update.
+       *
+       * The check now runs first. If the date is not available the assignment still accepts —
+       * the assayer's acceptance is real and must not be undone by a calendar clash — but no
+       * schedule is written, and the reason is recorded so the desk can place it deliberately.
+       */
       if (assignment.autoSchedule !== false && assignment.scheduledDate) {
-        const scheduleRepo = this.dataSource.getRepository('schedules');
-        const existing = await scheduleRepo.findOne({ where: { assignmentId: assignment.id, isActive: true } }).catch(() => null);
-        if (!existing) {
-          await scheduleRepo.save({
-            assignmentId: assignment.id,
-            projectId: assignment.projectId,
-            assayerId: assignment.assayerId,
-            scheduledDate: assignment.scheduledDate,
-            status: 'CONFIRMED',
-            remarks: 'Auto-created upon offer acceptance (Direct Calendar Lock)',
-            createdBy: userId,
-            updatedBy: userId,
-          });
-        }
+        await this.autoScheduleOnAcceptance(assignment, userId);
       }
     } else if (targetStatus === AssignmentStatus.REJECTED) {
       event = AssignmentStateMachine.rejectOffer(assignment, userId, reason);
@@ -878,10 +938,14 @@ export class AssignmentService {
       );
     }
     const currentCount = assignment.negotiationCount || 0;
-    if (currentCount >= 3) {
-      // Auto-decline when negotiation round limit (3) is exceeded
-      assignment.status = AssignmentStatus.REJECTED;
-      assignment.rejectReason = 'Negotiation limit reached (3 counter-offers max). Offer auto-declined.';
+    const maxRounds = await this.settings
+      .getNumber('field.maxNegotiationRounds', DEFAULT_MAX_NEGOTIATION_ROUNDS)
+      .catch(() => DEFAULT_MAX_NEGOTIATION_ROUNDS);
+    if (currentCount >= maxRounds) {
+      AssignmentStateMachine.rejectOffer(
+        assignment, userId,
+        `Negotiation limit reached (${maxRounds} counter-offers max). Offer auto-declined.`,
+      );
       assignment.remarks = `Negotiation limit reached. Auto-declined.`;
       assignment.updatedBy = userId;
       if (assignment.projectBranch) {
@@ -1216,6 +1280,102 @@ export class AssignmentService {
         assignmentStatus: a?.status ?? null,
         open,
       };
+    });
+  }
+
+  /**
+   * Writes the acceptance-time schedule, or declines to and says why.
+   *
+   * `SchedulingService` cannot be injected here — it imports this module — so the shared piece is
+   * `ConstraintEvaluator`, which is what both paths must agree on. The row itself is written
+   * through the `schedules` repository with the same shape `SchedulingService.create` produces,
+   * and the same audit event, so a schedule is indistinguishable whichever door it came through.
+   */
+  private async autoScheduleOnAcceptance(assignment: AssignmentEntity, userId: string): Promise<void> {
+    const scheduledDateObj = new Date(assignment.scheduledDate as any);
+
+    // try/catch, not `.catch()`: a synchronous throw here would escape a promise-only handler and
+    // roll back an acceptance that has already legitimately happened. Whatever goes wrong while
+    // checking the calendar, the assayer still accepted the job.
+    let availability: { passed: boolean; reason?: string };
+    try {
+      availability = await this.constraintEvaluator.checkDateAvailability({
+        assayer: assignment.assayer ?? null,
+        assayerId: assignment.assayerId,
+        project: assignment.project ?? null,
+        branchState: assignment.projectBranch?.branch?.state ?? null,
+        clientId: assignment.project?.clientId ?? null,
+        scheduledDate: scheduledDateObj,
+        excludeAssignmentId: assignment.id,
+      });
+    } catch (err) {
+      availability = {
+        passed: false,
+        reason: `Availability could not be checked: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    if (!availability.passed) {
+      // Deliberately not thrown. The acceptance already happened and is correct; only the
+      // calendar entry is in doubt. Recorded so the branch shows up on the desk as needing a
+      // date rather than silently having none.
+      AssignmentService.logger.warn(
+        `Assignment ${assignment.assignmentNumber} accepted but not auto-scheduled: ${availability.reason}`,
+      );
+      await this.auditService.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'SCHEDULE_AUTO_SKIPPED',
+        entityType: 'ASSIGNMENT',
+        entityId: assignment.id,
+        userId,
+        remarks: `Offer accepted, calendar entry withheld: ${availability.reason}`,
+      });
+      return;
+    }
+
+    const scheduleRepo = this.dataSource.getRepository(ScheduleEntity);
+    const existing = await scheduleRepo
+      .findOne({ where: { assignmentId: assignment.id, isActive: true } })
+      .catch(() => null);
+    if (existing) return;
+
+    const saved = await scheduleRepo.save(
+      scheduleRepo.create({
+        assignmentId: assignment.id,
+        projectId: assignment.projectId ?? null,
+        assayerId: assignment.assayerId,
+        scheduledDate: scheduledDateObj,
+        status: ScheduleStatus.CONFIRMED,
+        remarks: 'Auto-created upon offer acceptance (Direct Calendar Lock)',
+        createdBy: userId,
+        updatedBy: userId,
+      } as any),
+    );
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'SCHEDULE_CONFIRMED',
+      entityType: 'SCHEDULE',
+      entityId: (saved as any).id,
+      userId,
+      remarks: `Confirmed on acceptance of ${assignment.assignmentNumber}.`,
+    });
+
+    // The assayer is the one who has to show up; a dispatch they were never told about is not a
+    // dispatch. `SchedulingService` sends this on its path, and this one sent nothing.
+    this.notificationDispatch.emitSafe({
+      type: 'SCHEDULE_DISPATCHED',
+      entityType: 'SCHEDULE',
+      entityId: (saved as any).id,
+      actorUserId: userId,
+      assayerId: assignment.assayerId,
+      dedupeKey: `SCHEDULE_DISPATCHED:${(saved as any).id}`,
+      payload: {
+        assignmentId: assignment.id,
+        assignmentNumber: assignment.assignmentNumber,
+        scheduledDate: scheduledDateObj.toISOString(),
+        branchName: assignment.projectBranch?.branch?.name ?? '',
+      },
     });
   }
 
@@ -1699,11 +1859,13 @@ export class AssignmentService {
    * What the movement trail says about the journey this assignment was paid travel for.
    *
    * Assembled here rather than in LocationTrailService because the *claimed* side of the comparison
-   * lives in this module: the travel allowance is quoted from the assayer's home to the branch, and
-   * that distance is not persisted anywhere (see FeePolicyService.quote), so it has to be
-   * recomputed the same way the quote computed it. `expectedIsRecomputed` says so plainly on the
-   * response — the assayer's registered home may have changed since, and a reviewer comparing
-   * numbers deserves to know the baseline was reconstructed rather than recorded.
+   * lives in this module. Offers now record the distance their quote priced
+   * (`quotedDistanceKm`, written at creation), and that recorded figure is preferred: it is
+   * what the money was actually based on. Older assignments predate the column, so the
+   * distance is recomputed from home to branch the way the quote would have — and
+   * `expectedIsRecomputed` says so plainly, because the assayer's registered home may have
+   * changed since and a reviewer deserves to know the baseline was reconstructed rather than
+   * recorded.
    */
   async getTravelVerification(assignmentId: string): Promise<{
     assignmentId: string;
@@ -1739,10 +1901,16 @@ export class AssignmentService {
       };
     }
 
-    // The quote's basis: home to branch. Routed where possible, straight-line otherwise — the same
-    // order of preference the fee calculation itself uses.
-    let expectedDistanceKm: number | null = null;
-    if (branch?.latitude != null && branch?.longitude != null &&
+    // The quote's basis. Preferred: the distance recorded when the offer was priced — the
+    // number the money was actually based on. Fallback for pre-column assignments: recompute
+    // home to branch, routed where possible, straight-line otherwise — the same order of
+    // preference the fee calculation itself uses.
+    let expectedDistanceKm: number | null =
+      assignment.quotedDistanceKm != null ? Number(assignment.quotedDistanceKm) : null;
+    let expectedIsRecomputed = expectedDistanceKm == null;
+
+    if (expectedDistanceKm == null &&
+        branch?.latitude != null && branch?.longitude != null &&
         assayer?.homeLatitude != null && assayer?.homeLongitude != null) {
       try {
         const route = await this.routingService.calculateRoute(
@@ -1765,7 +1933,7 @@ export class AssignmentService {
       trackingEnabled: Boolean(assayer?.isLiveEnabled),
     });
 
-    return { ...base, expectedDistanceKm, assessment, unavailableReason: null };
+    return { ...base, expectedDistanceKm, expectedIsRecomputed, assessment, unavailableReason: null };
   }
 
   async getDashboardSummary(scope?: Partial<GlobalScope>): Promise<any> {
@@ -1872,8 +2040,10 @@ export class AssignmentService {
       }
     }
 
-    const CHECK_IN_ALLOWED_FROM = [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS];
-    if (!CHECK_IN_ALLOWED_FROM.includes(assignment.status)) {
+    // Asks the state machine rather than a local list. The list this replaced permitted
+    // IN_PROGRESS -> CHECKED_IN while VALID_PATHS did not, so the two disagreed about the same
+    // transition and only the one here was ever consulted.
+    if (!AssignmentStateMachine.canTransition(assignment.status, AssignmentStatus.CHECKED_IN)) {
       return {
         success: false,
         assignment,
@@ -1952,7 +2122,12 @@ export class AssignmentService {
        * address while still making "677 km away" impossible. Skipped when the branch has no
        * coordinates — a guard that fires on missing master data would block legitimate work.
        */
-      const GEOFENCE_METERS = 2000;
+      // Configurable at /admin/settings (field.checkInGeofenceMeters). Too tight locks honest
+      // workers out of their own job; too loose and check-in stops being evidence of attendance
+      // — which is why it is an operator's decision rather than a redeploy.
+      const GEOFENCE_METERS = await this.settings
+        .getNumber('field.checkInGeofenceMeters', DEFAULT_CHECK_IN_GEOFENCE_METERS)
+        .catch(() => DEFAULT_CHECK_IN_GEOFENCE_METERS);
       if (distanceMeters != null) {
         const allowance = GEOFENCE_METERS + Math.max(0, accuracyMeters ?? 0);
         if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
@@ -1998,7 +2173,7 @@ export class AssignmentService {
     assignment.checkedInAt = now;
     assignment.checkInDistanceMeters = distanceMeters;
 
-    assignment.status = AssignmentStatus.CHECKED_IN;
+    AssignmentStateMachine.checkIn(assignment, userId || assignment.assayerId || id);
     assignment.updatedBy = userId || assignment.assayerId || id;
     assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 

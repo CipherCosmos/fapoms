@@ -56,4 +56,44 @@ describe('AssignmentStateMachine', () => {
     expect(assignment.status).toBe(AssignmentStatus.CANCELLED);
     expect(assignment.cancelReason).toBe('Admin override');
   });
+
+  describe('check-in — one authority, not two', () => {
+    const at = (status: AssignmentStatus) => ({ status }) as AssignmentEntity;
+
+    it('accepts a check-in from an accepted assignment', () => {
+      const a = at(AssignmentStatus.ACCEPTED);
+      expect(AssignmentStateMachine.checkIn(a, 'u1').newState).toBe(AssignmentStatus.CHECKED_IN);
+    });
+
+    it('accepts a repeated check-in, because the field app retries them', () => {
+      // A flaky connection or a second geofence attempt re-issues the check-in. Refusing the
+      // retry would strand an assayer who is standing at the branch.
+      expect(() => AssignmentStateMachine.checkIn(at(AssignmentStatus.CHECKED_IN), 'u1')).not.toThrow();
+      expect(() => AssignmentStateMachine.checkIn(at(AssignmentStatus.IN_PROGRESS), 'u1')).not.toThrow();
+    });
+
+    it('refuses a check-in on work that was never accepted', () => {
+      // The path that matters: PENDING -> CHECKED_IN -> COMPLETED would satisfy completeAudit's
+      // guard and auto-bill a client for a visit to an assignment nobody ever took.
+      expect(() => AssignmentStateMachine.checkIn(at(AssignmentStatus.PENDING), 'u1')).toThrow(BadRequestException);
+    });
+
+    it('refuses a check-in on a terminal assignment', () => {
+      for (const s of [AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED]) {
+        expect(() => AssignmentStateMachine.checkIn(at(s), 'u1')).toThrow(BadRequestException);
+      }
+    });
+
+    it('answers the same question canTransition answers, so the service cannot drift from it', () => {
+      // The service asks canTransition to build a friendly refusal instead of a 400. If these
+      // two ever diverge, the app would refuse what the machine permits, or vice versa — which
+      // is exactly the bug that came from keeping a separate CHECK_IN_ALLOWED_FROM list.
+      for (const s of Object.values(AssignmentStatus)) {
+        const permitted = AssignmentStateMachine.canTransition(s, AssignmentStatus.CHECKED_IN);
+        let threw = false;
+        try { AssignmentStateMachine.checkIn(at(s), 'u1'); } catch { threw = true; }
+        expect(threw).toBe(!permitted);
+      }
+    });
+  });
 });

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Calendar, Plus, Trash2, Edit2, ShieldAlert, X, ChevronLeft, ChevronRight, List, Grid3x3, Info } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
+import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
 import { StatusBadge, Modal, AlertBanner } from '../components/ui';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
@@ -15,12 +16,6 @@ interface Holiday {
   applicableStates?: string[] | null;
   clientId?: string | null;
   year?: number;
-}
-
-interface ClientOption {
-  id: string;
-  name: string;
-  code: string;
 }
 
 /**
@@ -81,11 +76,8 @@ export const Holidays: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const { data: clientsRes } = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.request<ClientOption[]>('/clients'),
-  });
-  const clients = (Array.isArray(clientsRes) ? clientsRes : (clientsRes as any)?.data) || [];
+  const { data: clientsRes } = useClientOptions();
+  const clients = clientsRes ?? [];
 
   const { data: holidaysResponse, isLoading, refetch } = useQuery({
     queryKey: ['holidays', yearFilter, clientFilter],
@@ -94,7 +86,8 @@ export const Holidays: React.FC = () => {
   // Memoized so its identity is stable across renders — otherwise the `byDate` Map below rebuilt on
   // every render (form typing, etc.), not just when the data changed.
   const holidays = useMemo(
-    () => (Array.isArray(holidaysResponse) ? holidaysResponse : (holidaysResponse as any)?.data) || [],
+    // api.request unwraps the {success,data} envelope centrally now.
+    () => holidaysResponse ?? [],
     [holidaysResponse],
   );
 

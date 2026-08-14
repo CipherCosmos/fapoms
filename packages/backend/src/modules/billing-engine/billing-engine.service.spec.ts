@@ -20,6 +20,7 @@ import {
   BillingLevel, BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection,
   InvoiceStatus, InvoiceType, PaymentState,
 } from '@fapoms/shared';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
  * Covers the money math, the guards that decide whether money may move, and — since
@@ -261,6 +262,18 @@ describe('BillingEngineService', () => {
     payableRepo.manager.query = managerQuery;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        {
+          provide: PlatformSettingsService,
+          // Nothing configured in tests: every lookup falls through to the caller's fallback,
+          // which is the shipped constant.
+          useValue: {
+            get: jest.fn(async () => null),
+            getMany: jest.fn(async () => ({})),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            describeAll: jest.fn(async () => []),
+            onChange: jest.fn(),
+          },
+        },
         BillingEngineService,
         { provide: getRepositoryToken(BillingEntryEntity), useValue: entryRepo },
         { provide: getRepositoryToken(BillingInvoiceEntity), useValue: invoiceRepo },

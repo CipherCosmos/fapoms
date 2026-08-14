@@ -32,6 +32,8 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { EventCategory, UserStatus } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 export interface JwtPayload {
   sub: string;           // User ID
@@ -66,6 +68,7 @@ export class AuthService implements OnModuleInit {
     private readonly auditService: AuditService,
     private readonly cache: CacheService,
     private readonly events: DomainEventPublisher,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {
     this.accessExpiration = Number(this.configService.get<any>(
       'JWT_ACCESS_EXPIRATION',
@@ -172,6 +175,7 @@ export class AuthService implements OnModuleInit {
         await this.assayerRepository
           .update(assayer.id, { failedLoginAttempts: attempts, lockedUntil })
           .catch(() => undefined);
+        if (lockedUntil) this.notifyAccountLocked(`Assayer ${assayer.displayName ?? assayer.assayerCode ?? assayer.id}`, assayer.id, attempts);
         throw new UnauthorizedException('Invalid credentials');
       }
 
@@ -242,6 +246,11 @@ export class AuthService implements OnModuleInit {
       if (user.failedLoginAttempts >= 5) {
         user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000); // Lock for 15 min
         user.status = UserStatus.LOCKED;
+        this.notifyAccountLocked(
+          `${user.displayName ?? user.username} (${user.email})`,
+          user.id,
+          user.failedLoginAttempts,
+        );
       }
       await this.userRepository.save(user);
       throw new UnauthorizedException('Invalid credentials');
@@ -579,5 +588,24 @@ export class AuthService implements OnModuleInit {
 
   private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * Tells the admins an account just locked itself out.
+   *
+   * Lockouts used to be completely silent — the account flipped and the first anyone heard
+   * was the owner phoning in. One notification per account per business day: a brute-force
+   * run relocks the same account every 15 minutes, and thirty copies of the same fact teach
+   * people to stop reading it. Fire-and-forget, because failing to notify must never change
+   * the login path's behaviour.
+   */
+  private notifyAccountLocked(accountLabel: string, accountId: string, attempts: number): void {
+    this.notificationDispatch.emitSafe({
+      type: 'ACCOUNT_LOCKED',
+      entityType: 'ACCOUNT',
+      entityId: accountId,
+      dedupeKey: `ACCOUNT_LOCKED:${accountId}:${businessTodayDateKey()}`,
+      payload: { accountLabel, attempts },
+    });
   }
 }

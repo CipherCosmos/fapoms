@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In } from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
@@ -10,7 +10,7 @@ import { ValidationStateMachine } from './validation.state-machine';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition, ValidationQueryStatus } from '@fapoms/shared';
+import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition, ValidationQueryStatus, toWorkflowTransitions } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
@@ -21,6 +21,8 @@ export interface CreateValidationCaseDto {
 
 @Injectable()
 export class ValidationService implements OnModuleInit {
+  private readonly logger = new Logger(ValidationService.name);
+
   constructor(
     @InjectRepository(ValidationCaseEntity)
     private readonly validationCaseRepository: Repository<ValidationCaseEntity>,
@@ -37,30 +39,10 @@ export class ValidationService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.workflowEngine.registerWorkflow('validation', [
-      { from: [ValidationStatus.PENDING], to: ValidationStatus.ASSIGNED },
-      { from: [ValidationStatus.ASSIGNED], to: ValidationStatus.OCR_PROCESSING },
-      { from: [ValidationStatus.OCR_PROCESSING], to: ValidationStatus.HUMAN_REVIEW },
-      /**
-       * Hand-back straight to review, without passing through OCR.
-       *
-       * `getOrAdvanceForHandBack` explicitly handles a case sitting at PENDING — that is the
-       * normal state, since `getOrCreateForBranch` opens every case at PENDING the moment a
-       * packet is delegated. But this edge was never registered, so the workflow engine
-       * rejected the very first hand-back of every packet. The caller in
-       * `document.service.ts` catches and logs that, returning HTTP 200, so the operator saw
-       * "handed back" while the case silently stayed put and never reached the head's review
-       * queue. Work looked done and simply stopped moving.
-       *
-       * ASSIGNED is included for the same reason: a packet delegated to a member and typed up
-       * without an OCR pass must still be able to reach review.
-       */
-      { from: [ValidationStatus.PENDING, ValidationStatus.ASSIGNED], to: ValidationStatus.HUMAN_REVIEW },
-      { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.APPROVED },
-      { from: [ValidationStatus.HUMAN_REVIEW], to: ValidationStatus.CORRECTION_REQUIRED },
-      { from: [ValidationStatus.CORRECTION_REQUIRED], to: ValidationStatus.HUMAN_REVIEW },
-      { from: [ValidationStatus.APPROVED], to: ValidationStatus.SUBMITTED },
-    ]);
+    // Derived from the one table, not typed out again. The engine gates
+    // `executeCommand` before the state machine runs, so a hand-written copy here
+    // silently outranks the real rules wherever the two drift apart.
+    this.workflowEngine.registerWorkflow('validation', toWorkflowTransitions(VALIDATION_TRANSITIONS));
   }
 
   async create(dto: CreateValidationCaseDto, userId: string): Promise<ValidationCaseEntity> {
@@ -375,7 +357,7 @@ export class ValidationService implements OnModuleInit {
       prevStatus === ValidationStatus.HUMAN_REVIEW || prevStatus === ValidationStatus.CORRECTION_REQUIRED;
 
     if (!reviewStage) {
-      if (!isValidTransition(VALIDATION_TRANSITIONS, prevStatus, ValidationStatus.ASSIGNED)) {
+      if (!ValidationStateMachine.canTransition(prevStatus, ValidationStatus.ASSIGNED)) {
         throw new BadRequestException(`Invalid Transition: Cannot transition validation case from ${prevStatus} to ASSIGNED.`);
       }
       validationCase.status = ValidationStatus.ASSIGNED;
@@ -419,6 +401,15 @@ export class ValidationService implements OnModuleInit {
     for (let i = 0; i < unassignedCases.length; i++) {
       const caseItem = unassignedCases[i];
       const validatorId = availableValidatorIds[i % availableValidatorIds.length];
+      // Validated like every other transition. This loop used to write ASSIGNED outright, so a
+      // bulk auto-assign could move a case from a state the single-case path would have refused
+      // — the one route into validation with no rule applied to it at all.
+      if (!ValidationStateMachine.canTransition(caseItem.status, ValidationStatus.ASSIGNED)) {
+        this.logger.warn(
+          `Auto-balance skipped validation case ${caseItem.id}: cannot assign from ${caseItem.status}.`,
+        );
+        continue;
+      }
       caseItem.reviewerId = validatorId;
       caseItem.status = ValidationStatus.ASSIGNED;
       caseItem.updatedBy = userId;

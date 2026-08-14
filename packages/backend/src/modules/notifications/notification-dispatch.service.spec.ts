@@ -3,6 +3,8 @@ import { getQueueToken } from '@nestjs/bull';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationCategory, NotificationStatus } from '@fapoms/shared';
 import { NotificationDispatchService } from './notification-dispatch.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationEntity } from './notification.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { UserEntity } from '../user/user.entity';
@@ -23,6 +25,12 @@ describe('NotificationDispatchService', () => {
   };
   const publishCalls: any[] = [];
   const mockEventPublisher = { publish: jest.fn((event: string, payload: any) => { publishCalls.push({ event, payload }); }) };
+
+  /** Resolves to the shipped catalog entry unless a test says otherwise. */
+  const mockSettings = {
+    defFor: jest.fn(),
+    effectiveCatalog: jest.fn(async () => ({})),
+  };
 
   const mockUserQb = {
     innerJoin: jest.fn().mockReturnThis(),
@@ -86,6 +94,11 @@ describe('NotificationDispatchService', () => {
     mockQueue.add.mockClear();
     mockQueue.addBulk.mockClear();
     mockUserQb.getMany.mockReset();
+    mockSettings.defFor.mockReset();
+    mockSettings.defFor.mockImplementation(async (t: string) => {
+      const base = NOTIFICATION_CATALOG[t];
+      return base ? { ...base, type: t, enabled: true, overridden: [], notes: null } : null;
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -113,6 +126,8 @@ describe('NotificationDispatchService', () => {
           },
         },
         { provide: getQueueToken(NOTIFICATION_QUEUE), useValue: mockQueue },
+        { provide: EmailProvider, useValue: { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() } },
+        { provide: NotificationSettingsService, useValue: mockSettings },
         { provide: DomainEventPublisher, useValue: mockEventPublisher },
         {
           provide: AuditService,
@@ -288,14 +303,61 @@ describe('NotificationDispatchService', () => {
     });
   });
 
+  describe('operator overrides', () => {
+    it('raises nothing at all for a type switched off in the admin screen', async () => {
+      // Unit-testing defFor in isolation is not enough: this is the integration where a
+      // legitimate "disabled" null was once mistaken for a failed lookup and quietly replaced
+      // with the shipped default, so the off switch generated notifications anyway.
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+      mockSettings.defFor.mockResolvedValueOnce(null);
+
+      const res = await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
+
+      expect(res.created).toBe(0);
+      expect(insertedRows).toHaveLength(0);
+      expect(queuedJobs).toHaveLength(0);
+    });
+
+    it('still delivers on the shipped default when the settings lookup is broken', async () => {
+      // The opposite failure: settings unreadable must never mean silence.
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+      mockSettings.defFor.mockRejectedValueOnce(new Error('settings table gone'));
+
+      const res = await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
+
+      expect(res.created).toBe(1);
+    });
+
+    it('uses the operator’s channels rather than the shipped ones', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+      mockSettings.defFor.mockResolvedValueOnce({
+        ...NOTIFICATION_CATALOG['ASSIGNMENT_ESCALATED'],
+        type: 'ASSIGNMENT_ESCALATED',
+        enabled: true,
+        overridden: ['channels'],
+        notes: null,
+        channels: ['IN_APP'],
+      } as any);
+
+      await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
+
+      expect(insertedRows[0].channels).toEqual(['IN_APP']);
+      // No push job, and no email bookkeeping, because neither channel applies any more.
+      expect(queuedJobs).toHaveLength(0);
+      expect(insertedRows[0].emailStatus).toBeNull();
+    });
+  });
+
   describe('queue hand-off', () => {
-    it('enqueues one push job per recipient of a push-carrying event', async () => {
+    it('enqueues one push job and one email job per recipient of an escalation', async () => {
+      // ASSIGNMENT_ESCALATED is a decision-forcing event: it pushes AND emails. Each channel
+      // gets its own job so an FCM outage cannot burn email's retries, and vice versa.
       mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
 
       await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
 
-      expect(queuedJobs).toHaveLength(2);
-      expect(queuedJobs[0].name).toBe('deliver');
+      expect(queuedJobs.filter((j: any) => j.name === 'deliver')).toHaveLength(2);
+      expect(queuedJobs.filter((j: any) => j.name === 'deliver-email')).toHaveLength(2);
     });
 
     it('enqueues nothing for an in-app-only event', async () => {

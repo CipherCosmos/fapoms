@@ -18,7 +18,6 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { AuditModule } from './core/audit/audit.module';
 import { PlatformModule } from './modules/platform/platform.module';
-import { PlatformFoundationModule } from './modules/platform/platform-foundation.module';
 
 // Business modules
 import { OrganizationModule } from './modules/organization/organization.module';
@@ -31,7 +30,6 @@ import { PlanningModule } from './modules/planning/planning.module';
 import { ProjectModule } from './modules/project/project.module';
 import { AssignmentModule } from './modules/assignment/assignment.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
-import { CommunicationModule } from './modules/communication/communication.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DocumentModule } from './modules/document/document.module';
 import { ValidationModule } from './modules/validation/validation.module';
@@ -61,9 +59,14 @@ import { FeedbackModule } from './modules/feedback/feedback.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { APP_GUARD } from '@nestjs/core';
+import { PlatformSettingsModule } from './infrastructure/settings/platform-settings.module';
 
 @Module({
   imports: [
+    // Global: pricing, billing, expenses, scheduling and delivery all read operator-owned
+    // configuration, and threading a module import through each of them would add graph edges
+    // purely to fetch a number.
+    PlatformSettingsModule,
     SecurityModule,
     // Environment configuration
     ConfigModule.forRoot({
@@ -151,7 +154,6 @@ import { APP_GUARD } from '@nestjs/core';
     AuthModule,
     UserModule,
     PlatformModule,
-    PlatformFoundationModule,
 
     // Business modules
     OrganizationModule,
@@ -164,7 +166,6 @@ import { APP_GUARD } from '@nestjs/core';
     ProjectModule,
     AssignmentModule,
     SchedulingModule,
-    CommunicationModule,
     NotificationsModule,
     DocumentModule,
     ValidationModule,

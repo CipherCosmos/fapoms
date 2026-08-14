@@ -17,7 +17,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
-import { EventCategory, ClientLifecycleStatus, ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
+import { EventCategory, ClientLifecycleStatus, ClientBillingStatus, ClientBillingEventType, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 
 export interface CreateClientDto {
   clientCode: string;
@@ -145,16 +145,12 @@ export interface UpdateBillingDto {
   tdsRate?: number;
 }
 
-const VALID_LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [ClientLifecycleStatus.PROSPECT]: [ClientLifecycleStatus.ONBOARDING, ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.ONBOARDING]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.INACTIVE],
-  [ClientLifecycleStatus.ACTIVE]: [ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.INACTIVE],
-  [ClientLifecycleStatus.SUSPENDED]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.TERMINATED],
-  [ClientLifecycleStatus.UNDER_REVIEW]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.TERMINATED],
-  [ClientLifecycleStatus.INACTIVE]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.TERMINATED]: [ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.ARCHIVED]: [],
-};
+/**
+ * Aliased, not redefined. The literal that used to sit here was one of three identical copies of
+ * the client lifecycle — this file, the workflow registration below it, and the web app's
+ * `Clients.tsx` path-finder — kept in step by hand across two packages.
+ */
+const VALID_LIFECYCLE_TRANSITIONS: Record<string, string[]> = CLIENT_LIFECYCLE_TRANSITIONS as Record<string, string[]>;
 
 /** Ordered path of client lifecycle states from `from` to `target`, walking only
  *  allowed transitions (BFS). Returns [] when already there, or null when the
@@ -207,24 +203,10 @@ export class ClientService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.workflowEngine.registerWorkflow('client', [
-      { from: [ClientLifecycleStatus.PROSPECT], to: ClientLifecycleStatus.ONBOARDING },
-      { from: [ClientLifecycleStatus.PROSPECT], to: ClientLifecycleStatus.ARCHIVED },
-      { from: [ClientLifecycleStatus.ONBOARDING], to: ClientLifecycleStatus.ACTIVE },
-      { from: [ClientLifecycleStatus.ONBOARDING], to: ClientLifecycleStatus.INACTIVE },
-      { from: [ClientLifecycleStatus.ACTIVE], to: ClientLifecycleStatus.SUSPENDED },
-      { from: [ClientLifecycleStatus.ACTIVE], to: ClientLifecycleStatus.UNDER_REVIEW },
-      { from: [ClientLifecycleStatus.ACTIVE], to: ClientLifecycleStatus.INACTIVE },
-      { from: [ClientLifecycleStatus.SUSPENDED], to: ClientLifecycleStatus.ACTIVE },
-      { from: [ClientLifecycleStatus.SUSPENDED], to: ClientLifecycleStatus.UNDER_REVIEW },
-      { from: [ClientLifecycleStatus.SUSPENDED], to: ClientLifecycleStatus.TERMINATED },
-      { from: [ClientLifecycleStatus.UNDER_REVIEW], to: ClientLifecycleStatus.ACTIVE },
-      { from: [ClientLifecycleStatus.UNDER_REVIEW], to: ClientLifecycleStatus.SUSPENDED },
-      { from: [ClientLifecycleStatus.UNDER_REVIEW], to: ClientLifecycleStatus.TERMINATED },
-      { from: [ClientLifecycleStatus.INACTIVE], to: ClientLifecycleStatus.ACTIVE },
-      { from: [ClientLifecycleStatus.INACTIVE], to: ClientLifecycleStatus.ARCHIVED },
-      { from: [ClientLifecycleStatus.TERMINATED], to: ClientLifecycleStatus.ARCHIVED },
-    ]);
+    // Derived from the one table, not typed out again. The engine gates
+    // `executeCommand` before the state machine runs, so a hand-written copy here
+    // silently outranks the real rules wherever the two drift apart.
+    this.workflowEngine.registerWorkflow('client', toWorkflowTransitions(CLIENT_LIFECYCLE_TRANSITIONS));
   }
 
   // -----------------------------------------------------------------------

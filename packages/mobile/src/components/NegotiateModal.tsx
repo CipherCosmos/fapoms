@@ -1,11 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
+import { travelModeLabel } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
 
 interface NegotiateModalProps {
   visible: boolean;
   currentFee: number;
+  /**
+   * The travel component inside the offered fee, as the desk's calculator priced it. Shown so
+   * the assayer knows what part of the number is meant to cover their journey — travel used to
+   * be argued blind, in free-text remarks. Display-only; `currentFee` already contains it.
+   */
+  quotedTravelFee?: number | null;
+  quotedTransportMode?: string | null;
+  quotedDistanceKm?: number | null;
   onSubmit: (counterFee: number, remarks: string) => void | Promise<void>;
   onCancel: () => void;
 }
@@ -13,6 +22,9 @@ interface NegotiateModalProps {
 export const NegotiateModal: React.FC<NegotiateModalProps> = ({
   visible,
   currentFee,
+  quotedTravelFee,
+  quotedTransportMode,
+  quotedDistanceKm,
   onSubmit,
   onCancel,
 }) => {
@@ -93,6 +105,13 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
           <AppText variant="caption" tone="muted">
             Current Offered Fee: ₹{(currentFee || 0).toLocaleString('en-IN')}
           </AppText>
+          {quotedTravelFee != null && quotedTravelFee > 0 && (
+            <AppText variant="caption" tone="muted">
+              Includes ₹{Number(quotedTravelFee).toLocaleString('en-IN')} for travel
+              {quotedTransportMode ? ` by ${travelModeLabel(quotedTransportMode).toLowerCase()}` : ''}
+              {quotedDistanceKm ? ` (~${Math.round(Number(quotedDistanceKm))} km each way)` : ''}
+            </AppText>
+          )}
 
           <View style={{ gap: t.space.xs }}>
             <AppText variant="overline" tone="faint">PROPOSED COUNTER FEE (₹)</AppText>

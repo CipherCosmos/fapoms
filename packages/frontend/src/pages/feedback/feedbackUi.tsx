@@ -1,6 +1,7 @@
 import React from 'react';
 import { FeedbackCategory, FeedbackSeverity, FeedbackStatus } from '@fapoms/shared';
 
+import { FEEDBACK_CATEGORY_LABELS, FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
 /**
  * Shared vocabulary for the feedback UI: how each category, severity and status
  * reads and colours, plus a couple of small format helpers. Colours are drawn as
@@ -15,12 +16,18 @@ export const fmtDay = (d: string | null): string =>
 
 type Chip = { label: string; bg: string; fg: string };
 
+/**
+ * Colours are a web concern and live here; the WORDING comes from shared.
+ *
+ * The words used to live here too, and the mobile app had its own set — the desk said
+ * "Acknowledged" and "Enhancement" where the phone said "Seen" and "Idea", about the same thread.
+ */
 export const CATEGORY: Record<FeedbackCategory, Chip> = {
-  [FeedbackCategory.BUG]: { label: 'Bug', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444' },
-  [FeedbackCategory.ENHANCEMENT]: { label: 'Enhancement', bg: 'rgba(59,130,246,0.15)', fg: '#3b82f6' },
-  [FeedbackCategory.PROCESS]: { label: 'Process', bg: 'rgba(168,85,247,0.15)', fg: '#a855f7' },
-  [FeedbackCategory.QUESTION]: { label: 'Question', bg: 'rgba(20,184,166,0.15)', fg: '#14b8a6' },
-  [FeedbackCategory.OTHER]: { label: 'Other', bg: 'rgba(148,163,184,0.15)', fg: '#94a3b8' },
+  [FeedbackCategory.BUG]: { label: FEEDBACK_CATEGORY_LABELS[FeedbackCategory.BUG], bg: 'rgba(239,68,68,0.15)', fg: '#ef4444' },
+  [FeedbackCategory.ENHANCEMENT]: { label: FEEDBACK_CATEGORY_LABELS[FeedbackCategory.ENHANCEMENT], bg: 'rgba(59,130,246,0.15)', fg: '#3b82f6' },
+  [FeedbackCategory.PROCESS]: { label: FEEDBACK_CATEGORY_LABELS[FeedbackCategory.PROCESS], bg: 'rgba(168,85,247,0.15)', fg: '#a855f7' },
+  [FeedbackCategory.QUESTION]: { label: FEEDBACK_CATEGORY_LABELS[FeedbackCategory.QUESTION], bg: 'rgba(20,184,166,0.15)', fg: '#14b8a6' },
+  [FeedbackCategory.OTHER]: { label: FEEDBACK_CATEGORY_LABELS[FeedbackCategory.OTHER], bg: 'rgba(148,163,184,0.15)', fg: '#94a3b8' },
 };
 
 export const SEVERITY: Record<FeedbackSeverity, Chip> = {
@@ -31,11 +38,11 @@ export const SEVERITY: Record<FeedbackSeverity, Chip> = {
 };
 
 export const STATUS: Record<FeedbackStatus, Chip> = {
-  [FeedbackStatus.OPEN]: { label: 'New', bg: 'rgba(234,179,8,0.15)', fg: '#eab308' },
-  [FeedbackStatus.ACKNOWLEDGED]: { label: 'Acknowledged', bg: 'rgba(59,130,246,0.15)', fg: '#3b82f6' },
-  [FeedbackStatus.IN_PROGRESS]: { label: 'In progress', bg: 'rgba(168,85,247,0.15)', fg: '#a855f7' },
-  [FeedbackStatus.RESOLVED]: { label: 'Resolved', bg: 'rgba(34,197,94,0.15)', fg: '#22c55e' },
-  [FeedbackStatus.CLOSED]: { label: 'Closed', bg: 'rgba(148,163,184,0.15)', fg: '#94a3b8' },
+  [FeedbackStatus.OPEN]: { label: FEEDBACK_STATUS_LABELS[FeedbackStatus.OPEN], bg: 'rgba(234,179,8,0.15)', fg: '#eab308' },
+  [FeedbackStatus.ACKNOWLEDGED]: { label: FEEDBACK_STATUS_LABELS[FeedbackStatus.ACKNOWLEDGED], bg: 'rgba(59,130,246,0.15)', fg: '#3b82f6' },
+  [FeedbackStatus.IN_PROGRESS]: { label: FEEDBACK_STATUS_LABELS[FeedbackStatus.IN_PROGRESS], bg: 'rgba(168,85,247,0.15)', fg: '#a855f7' },
+  [FeedbackStatus.RESOLVED]: { label: FEEDBACK_STATUS_LABELS[FeedbackStatus.RESOLVED], bg: 'rgba(34,197,94,0.15)', fg: '#22c55e' },
+  [FeedbackStatus.CLOSED]: { label: FEEDBACK_STATUS_LABELS[FeedbackStatus.CLOSED], bg: 'rgba(148,163,184,0.15)', fg: '#94a3b8' },
 };
 
 export const Badge: React.FC<{ chip: Chip; title?: string }> = ({ chip, title }) => (

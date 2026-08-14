@@ -13,6 +13,7 @@ import { useSocketConnection } from '../hooks/useSocketConnection';
 import { getRecommendations } from '../services/planning';
 import { AlertBanner } from '../components/ui';
 
+import { usePlatformLimits } from '../hooks/usePlatformLimits';
 /**
  * The Operations Inbox — every assignment waiting on a DESK decision, one queue, actions inline.
  *
@@ -69,10 +70,11 @@ interface Candidate {
   baseFee: number | null; phone?: string;
 }
 
-const inr = (n: number | null | undefined) => (n != null ? `₹${Number(n).toLocaleString('en-IN')}` : '—');
+import { money as inr } from '../utils/money';
 const age = (h: number) => (h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`);
 
 export const OperationsInbox: React.FC = () => {
+  const { maxNegotiationRounds } = usePlatformLimits();
   const navigate = useNavigate();
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
@@ -368,7 +370,7 @@ export const OperationsInbox: React.FC = () => {
               const busy = busyId === item.id;
               return (
                 <CardShell key={item.id} item={item}
-                  chip={<span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>ROUND {item.negotiationCount}/3</span>}>
+                  chip={<span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>ROUND {item.negotiationCount}/{maxNegotiationRounds}</span>}>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <button
                       onClick={() => void act(item, async () => {

@@ -4,6 +4,7 @@ import { NotFoundException, BadRequestException, ConflictException } from '@nest
 import { Repository, DataSource } from 'typeorm';
 import { AssignmentService } from './assignment.service';
 import { AssignmentEntity } from './assignment.entity';
+import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationService } from '../notifications/notification.service';
@@ -26,6 +27,7 @@ import { ValidationService } from '../validation/validation.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DocumentService } from '../document/document.service';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -127,12 +129,16 @@ const mockNotificationService = {
 
   /**
    * The ACCEPTED transition writes the calendar dispatch packet through
-   * `dataSource.getRepository('schedules')`. It needs its own double: the shared user-repo one
+   * `dataSource.getRepository(ScheduleEntity)`. It needs its own double: the shared user-repo one
    * returns a bare `undefined` from findOne, and the service chains `.catch()` onto that call.
+   *
+   * Keyed by the entity class now, not the string `'schedules'` — the write moved to the typed
+   * repository when it was routed through the availability gate, so it also needs `create`.
    */
   const mockScheduleRepoViaDataSource = {
     findOne: jest.fn().mockResolvedValue(null),
-    save: jest.fn((arg: any) => Promise.resolve(arg)),
+    create: jest.fn((arg: any) => arg),
+    save: jest.fn((arg: any) => Promise.resolve({ id: 'sched-1', ...arg })),
   };
 
   const mockDataSource = {
@@ -145,7 +151,7 @@ const mockNotificationService = {
       }),
     })),
     getRepository: jest.fn((target: any) =>
-      target === 'schedules' ? mockScheduleRepoViaDataSource : mockUserRepoViaDataSource,
+      target === 'schedules' || target === ScheduleEntity ? mockScheduleRepoViaDataSource : mockUserRepoViaDataSource,
     ),
   };
 
@@ -189,6 +195,17 @@ const mockNotificationService = {
           // tests are actually about.
           provide: RuleBypassService,
           useValue: { isBypassedSync: () => false, isBypassed: async () => false, noteBypass: () => undefined },
+        },
+        {
+          // Nothing configured in tests, so every lookup falls through to the caller's fallback
+          // — which is the shipped default. That is deliberately the state these tests assert
+          // against: the geofence and negotiation cap behave as delivered.
+          provide: PlatformSettingsService,
+          useValue: {
+            get: jest.fn(async () => null),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            onChange: jest.fn(),
+          },
         },
         AssignmentService,
         {
@@ -511,6 +528,41 @@ const mockNotificationService = {
 
       const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
       expect(quoteArgs.distanceKm).toBe(0);
+    });
+
+    it("hands the branch's place to the quote so transport rates can price the journey", async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.place).toBeDefined();
+      // The fixture branch carries whatever state/region the setup gave it; what matters is
+      // the shape reached the calculator rather than being dropped on the way.
+      expect(quoteArgs.place).toHaveProperty('state');
+      expect(quoteArgs.place).toHaveProperty('region');
+    });
+
+    it('freezes the quoted breakdown on the offer — recommendation stays distinguishable from agreement', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockFeePolicyService.quote.mockResolvedValueOnce({
+        baseFee: 1200, branchCount: 1, baseComponent: 1200,
+        distanceKm: 40, chargeableKm: 40, travelFee: 130, total: 1330,
+        usedFallbackBaseFee: false,
+        rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
+        travelSource: 'TRANSPORT_RATE_CARD',
+        transport: { distanceKm: 40, options: [], recommended: { mode: 'BUS' } },
+      });
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const created = mockAssignmentRepo.create.mock.calls.at(-1)?.[0];
+      expect(created.quotedBaseFee).toBe(1200);
+      expect(created.quotedTravelFee).toBe(130);
+      expect(created.quotedTransportMode).toBe('BUS');
+      expect(created.quotedDistanceKm).toBeGreaterThan(0);
     });
   });
 
@@ -982,6 +1034,59 @@ const mockNotificationService = {
       const { manager, repo } = makeManager({ id: 'sch-1', status: 'CONFIRMED', completedAt: null });
       repo.save.mockRejectedValueOnce(new Error('db down'));
       await expect((service as any).syncScheduleCompletion(assignment, 'user-1', manager)).rejects.toThrow('db down');
+    });
+  });
+
+  describe('auto-scheduling on acceptance passes the same gate as the scheduling desk', () => {
+    // This is the path almost every schedule actually takes — `autoSchedule` defaults to true —
+    // so it is the one that has to be right, not the desk's.
+    const acceptFlow = async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', assignmentNumber: 'ASN-2026-1', assayerId: 'assayer-1', projectId: 'proj-1',
+        status: AssignmentStatus.PENDING, autoSchedule: true, scheduledDate: new Date('2026-09-01'),
+        agreedFee: 500, proposedFee: 500, isActive: true,
+        projectBranch: { id: 'pb-1', isActive: true, status: ProjectBranchStatus.NEGOTIATION, branch: { name: 'Thrissur Main', state: 'KL' } },
+      } as any);
+      return service.acceptOffer('asn-1', 'user-1');
+    };
+
+    beforeEach(() => {
+      mockScheduleRepoViaDataSource.save.mockClear();
+      mockConstraintEvaluator.checkDateAvailability.mockResolvedValue({ passed: true });
+    });
+
+    it('writes the calendar entry when the date is available', async () => {
+      await acceptFlow().catch(() => undefined);
+      expect(mockConstraintEvaluator.checkDateAvailability).toHaveBeenCalled();
+      expect(mockScheduleRepoViaDataSource.save).toHaveBeenCalled();
+    });
+
+    it('writes NO calendar entry when the date is refused', async () => {
+      // Before the gate, this wrote a CONFIRMED dispatch on a day the assayer was on leave, on a
+      // client holiday, or outside the project timeline — the exact conditions the check exists
+      // for — and told nobody.
+      mockConstraintEvaluator.checkDateAvailability.mockResolvedValue({
+        passed: false, reason: 'Assayer is on approved leave on 2026-09-01.',
+      });
+      await acceptFlow().catch(() => undefined);
+      expect(mockScheduleRepoViaDataSource.save).not.toHaveBeenCalled();
+    });
+
+    it('still accepts the offer when the date is refused', async () => {
+      // The assayer said yes. A calendar clash is the desk's problem to place, not a reason to
+      // silently un-accept a job someone has committed to.
+      mockConstraintEvaluator.checkDateAvailability.mockResolvedValue({ passed: false, reason: 'Client holiday.' });
+      const result = await acceptFlow();
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+    });
+
+    it('survives the availability check throwing outright, without losing the acceptance', async () => {
+      // A synchronous throw used to escape the promise-only handler and roll the acceptance back
+      // to PENDING — the assayer's "yes" vanished because a calendar lookup failed.
+      mockConstraintEvaluator.checkDateAvailability.mockImplementation(() => { throw new Error('db down'); });
+      const result = await acceptFlow();
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(mockScheduleRepoViaDataSource.save).not.toHaveBeenCalled();
     });
   });
 });

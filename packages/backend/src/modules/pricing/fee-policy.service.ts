@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 
@@ -6,6 +6,9 @@ import { ClientConfigurationEntity } from '../client/client-configuration.entity
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { TransportRateService, TransportEstimate, TransportPlace } from './transport-rate.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
 
 /** Rate cards change rarely (contract renegotiations); a short TTL bounds staleness cheaply. */
 const RATES_CACHE_TTL_SECONDS = 300;
@@ -28,10 +31,21 @@ const RATES_CACHE_TTL_SECONDS = 300;
  * client has not negotiated its own.
  */
 
-/** Platform fallbacks. Only used when a client has no configured rate. */
-export const PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM = 8;
-export const PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM = 10;
-export const PLATFORM_DEFAULT_BASE_FEE = 1200;
+/**
+ * Platform fallbacks — the SHIPPED values, and the last resort of three.
+ *
+ * These are no longer the live numbers on their own: an operator can change them at
+ * Administration → Platform Settings → Fees, and `platformDefaults()` reads that first. They
+ * remain exported as the value used when settings cannot be read, and as what "reset" restores
+ * — and they are DERIVED from the registry, so there is exactly one place the shipped number
+ * is written down.
+ * Do not compare against them directly to decide anything — ask the settings service, or two
+ * screens will disagree about the same fee (which is exactly what happened to the Operations
+ * Inbox's fee-warning flag).
+ */
+export const PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM = Number(SETTING_BY_KEY['fees.platformTravelPerKm'].default);
+export const PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM = Number(SETTING_BY_KEY['fees.platformFreeTravelKm'].default);
+export const PLATFORM_DEFAULT_BASE_FEE = Number(SETTING_BY_KEY['fees.platformBaseFee'].default);
 
 export interface FeeRates {
   travelFeePerKm: number;
@@ -60,6 +74,18 @@ export interface FeeBreakdown {
   /** Where the base fee came from — shown wherever a fee is displayed, so a number is never anonymous. */
   feeSource: 'ASSAYER_CONTRACT' | 'CLIENT_RATE_CARD' | 'PLATFORM_DEFAULT';
   /**
+   * Where the travel component came from. TRANSPORT_RATE_CARD means a desk-managed transport
+   * rate matched the branch's place and priced the actual journey (round trip, by the
+   * recommended mode); the other two mean the legacy per-km contract formula.
+   */
+  travelSource: 'TRANSPORT_RATE_CARD' | 'CLIENT_RATE_CARD' | 'PLATFORM_DEFAULT';
+  /**
+   * The transport grounding behind `travelFee` when a rate card matched — the recommended
+   * mode and every alternative, so the desk can see *why* the number is what it is and argue
+   * with it in specifics. Null when travel came from the legacy formula.
+   */
+  transport: TransportEstimate | null;
+  /**
    * Sanity guard. baseFee ÷ the client's reference rate; `feeFlagged` when it exceeds
    * FEE_FLAG_MULTIPLIER (default 1.5×). A mis-entered contract rate (the way ₹4,224 audits
    * once shipped as offers) surfaces as a visible warning instead of silently becoming money.
@@ -68,12 +94,31 @@ export interface FeeBreakdown {
   feeFlagged: boolean;
 }
 
-/** Base fees above this multiple of the client's reference rate are flagged, never blocked. */
-export const FEE_FLAG_MULTIPLIER = Number(process.env.FEE_FLAG_MULTIPLIER) || 1.5;
+/**
+ * Base fees above this multiple of the client's reference rate are flagged, never blocked.
+ *
+ * The shipped value, derived from the registry so the settings screen and this constant cannot
+ * state different numbers. Ask the settings service for the live one.
+ */
+export const FEE_FLAG_MULTIPLIER =
+  Number(process.env.FEE_FLAG_MULTIPLIER) || Number(SETTING_BY_KEY['fees.flagMultiplier'].default);
 
 @Injectable()
-export class FeePolicyService {
+export class FeePolicyService implements OnModuleInit {
   private readonly logger = new Logger(FeePolicyService.name);
+
+  onModuleInit(): void {
+    /**
+     * Client rate cards are cached for five minutes, and a cached entry embeds whichever
+     * platform fallbacks were in force when it was written. Changing "what an unpriced audit is
+     * worth" and then watching the old number keep coming out for five minutes is exactly the
+     * kind of thing that makes people stop trusting a settings screen, so the cache is dropped
+     * the moment a fee setting changes.
+     */
+    this.settings.onChange('fees.', async () => {
+      await this.cache.delByPattern('ref:rates:*').catch(() => undefined);
+    });
+  }
 
   constructor(
     @InjectRepository(ClientConfigurationEntity)
@@ -83,7 +128,26 @@ export class FeePolicyService {
     @InjectRepository(ProjectEntity)
     private readonly projectRepository: Repository<ProjectEntity>,
     private readonly cache: CacheService,
+    private readonly transportRateService: TransportRateService,
+    private readonly settings: PlatformSettingsService,
   ) {}
+
+  /**
+   * The platform fallbacks, as configured.
+   *
+   * These were exported constants — the last three business decisions in this file that only a
+   * deploy could change. They are still the LAST resort: an assayer's contracted fee and a
+   * client's rate card both win over them, exactly as before. Reading them through settings
+   * only means an operator can correct "what an unpriced audit is worth" without an engineer.
+   */
+  private async platformDefaults(): Promise<{ baseFee: number; perKm: number; freeKm: number }> {
+    const [baseFee, perKm, freeKm] = await Promise.all([
+      this.settings.getNumber('fees.platformBaseFee', PLATFORM_DEFAULT_BASE_FEE),
+      this.settings.getNumber('fees.platformTravelPerKm', PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM),
+      this.settings.getNumber('fees.platformFreeTravelKm', PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM),
+    ]).catch(() => [PLATFORM_DEFAULT_BASE_FEE, PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM, PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM]);
+    return { baseFee, perKm, freeKm };
+  }
 
   /**
    * Resolve which client's rate card applies from a project. Lets callers quote without
@@ -103,13 +167,15 @@ export class FeePolicyService {
    * `ratesFromConfiguration` instead of paying for another query.
    */
   async getRates(clientId?: string | null): Promise<FeeRates> {
+    const fallbacks = await this.platformDefaults();
     // Read on every fee quote; cache the resolved rate card so a hot quoting path
     // doesn't hit the configuration table each time. Read-through, so a cache miss
     // (including Redis being down) simply resolves from the database as before.
     if (!clientId) {
-      return this.cache.wrap('ref:rates:default', RATES_CACHE_TTL_SECONDS, async () =>
-        this.ratesFromConfiguration(null),
-      );
+      // Not cached under a shared key: the platform fallbacks can change from the settings
+      // screen, and a five-minute stale copy of "what an audit costs" is worth less than the
+      // one query this saves.
+      return this.ratesFromConfiguration(null, fallbacks);
     }
 
     return this.cache.wrap(`ref:rates:client:${clientId}`, RATES_CACHE_TTL_SECONDS, async () => {
@@ -117,12 +183,20 @@ export class FeePolicyService {
         .findOne({ where: { clientId }, order: { effectiveFrom: 'DESC' } })
         .catch(() => null);
 
-      return this.ratesFromConfiguration(config);
+      return this.ratesFromConfiguration(config, fallbacks);
     });
   }
 
   /** Same resolution, for callers that already loaded the configuration row. */
-  ratesFromConfiguration(config: Partial<ClientConfigurationEntity> | null | undefined): FeeRates {
+  ratesFromConfiguration(
+    config: Partial<ClientConfigurationEntity> | null | undefined,
+    fallbacks?: { baseFee: number; perKm: number; freeKm: number },
+  ): FeeRates {
+    const fb = fallbacks ?? {
+      baseFee: PLATFORM_DEFAULT_BASE_FEE,
+      perKm: PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM,
+      freeKm: PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM,
+    };
     const num = (v: unknown): number | null => {
       if (v === null || v === undefined) return null;
       const n = Number(v);
@@ -130,12 +204,11 @@ export class FeePolicyService {
     };
 
     return {
-      travelFeePerKm: num(config?.travelFeePerKm) ?? PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM,
+      travelFeePerKm: num(config?.travelFeePerKm) ?? fb.perKm,
       // 0 is a legitimate value here ("charge from the first kilometre"), so this must
       // distinguish null from zero — `??`, never `||`.
-      freeTravelAllowanceKm:
-        num(config?.freeTravelAllowanceKm) ?? PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM,
-      defaultBaseFee: num(config?.defaultBaseFee) ?? PLATFORM_DEFAULT_BASE_FEE,
+      freeTravelAllowanceKm: num(config?.freeTravelAllowanceKm) ?? fb.freeKm,
+      defaultBaseFee: num(config?.defaultBaseFee) ?? fb.baseFee,
       clientConfigured: !!config,
     };
   }
@@ -194,14 +267,69 @@ export class FeePolicyService {
     onDate?: Date;
     /** Pre-loaded configuration, to avoid a redundant query. */
     configuration?: Partial<ClientConfigurationEntity> | null;
+    /**
+     * Where the journey ends — the branch's state and/or region. When supplied and a transport
+     * rate matches, the travel component is the real journey cost by the recommended mode
+     * instead of the legacy contract per-km. Callers that cannot say where the work is (or
+     * pass 0 km) keep the legacy formula unchanged.
+     */
+    place?: TransportPlace | null;
+    /**
+     * True when `distanceKm` already covers the whole journey (a day plan's optimized route
+     * is a closed loop ending at home). The transport estimate then charges the loop once
+     * instead of doubling it. The legacy per-km formula is unaffected — it has always
+     * charged whatever distance it was handed exactly once.
+     */
+    distanceIsRoundTrip?: boolean;
   }): Promise<FeeBreakdown> {
     const rates = params.configuration !== undefined
-      ? this.ratesFromConfiguration(params.configuration)
+      ? this.ratesFromConfiguration(params.configuration, await this.platformDefaults())
       : await this.getRates(params.clientId);
 
     const { baseFee, usedFallback } = await this.resolveBaseFee(params.assayerId, rates, params.onDate);
     const branchCount = Math.max(1, params.branchCount ?? 1);
-    const { chargeableKm, travelFee } = this.calculateTravelFee(params.distanceKm, rates);
+
+    /**
+     * Travel: the transport rate card when it can speak for this place, the contract per-km
+     * formula otherwise.
+     *
+     * The two differ on purpose. The legacy formula deducts the client's free-commute
+     * allowance and charges one way, because it prices what the *client* is billed. A
+     * transport rate prices what the journey *costs the assayer* — a bus ticket has no free
+     * first 10 km and must be bought in both directions — so it uses the full distance, round
+     * trip, and no allowance. Which one produced the number is never ambiguous:
+     * `travelSource` says, and `transport` carries the workings.
+     *
+     * The rate card lookup failing (cache down, table unreachable) falls back to the legacy
+     * formula rather than failing the quote — an offer priced the old way beats no offer.
+     */
+    let chargeableKm: number;
+    let travelFee: number;
+    let travelSource: FeeBreakdown['travelSource'];
+    let transport: TransportEstimate | null = null;
+
+    const estimate = params.place
+      ? await this.transportRateService
+          .estimate(params.distanceKm, params.place, params.onDate, {
+            distanceIsRoundTrip: params.distanceIsRoundTrip,
+          })
+          .catch((err) => {
+            this.logger.warn(`Transport rate lookup failed; quoting legacy travel: ${err?.message ?? err}`);
+            return null;
+          })
+      : null;
+
+    if (estimate?.recommended) {
+      transport = estimate;
+      chargeableKm = estimate.distanceKm;
+      travelFee = estimate.recommended.roundTripCost;
+      travelSource = 'TRANSPORT_RATE_CARD';
+    } else {
+      const legacy = this.calculateTravelFee(params.distanceKm, rates);
+      chargeableKm = legacy.chargeableKm;
+      travelFee = legacy.travelFee;
+      travelSource = rates.clientConfigured ? 'CLIENT_RATE_CARD' : 'PLATFORM_DEFAULT';
+    }
 
     const baseComponent = baseFee * branchCount;
 
@@ -212,6 +340,9 @@ export class FeePolicyService {
       : 'PLATFORM_DEFAULT';
     const reference = rates.defaultBaseFee > 0 ? rates.defaultBaseFee : baseFee;
     const feeDeviation = reference > 0 ? Number((baseFee / reference).toFixed(2)) : 1;
+    const flagMultiplier = await this.settings
+      .getNumber('fees.flagMultiplier', FEE_FLAG_MULTIPLIER)
+      .catch(() => FEE_FLAG_MULTIPLIER);
 
     return {
       baseFee,
@@ -224,8 +355,10 @@ export class FeePolicyService {
       rates,
       usedFallbackBaseFee: usedFallback,
       feeSource,
+      travelSource,
+      transport,
       feeDeviation,
-      feeFlagged: feeDeviation > FEE_FLAG_MULTIPLIER,
+      feeFlagged: feeDeviation > flagMultiplier,
     };
   }
 }

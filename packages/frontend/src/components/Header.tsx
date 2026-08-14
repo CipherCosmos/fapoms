@@ -31,10 +31,24 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/hr', category: 'Management', label: 'Workforce' },
   { prefix: '/documents', category: 'Management', label: 'Documents' },
   { prefix: '/data-entry', category: 'Management', label: 'Data Entry & Validation' },
-  { prefix: '/holidays', category: 'Administration', label: 'Holiday Calendar' },
-  { prefix: '/rules', category: 'Administration', label: 'Rule Engine' },
+  { prefix: '/holidays', category: 'Operational Setup', label: 'Holiday Calendar' },
+  { prefix: '/rules', category: 'Operational Setup', label: 'Rule Engine' },
   { prefix: '/users', category: 'Administration', label: 'User Management' },
-  { prefix: '/settings', category: 'Administration', label: 'Settings' },
+  /**
+   * The personal page, filed under "My Account" rather than "Administration".
+   *
+   * It holds one person's profile, password and theme — nothing organisation-wide — and the
+   * old category label was the single most misleading string in the app once a genuinely
+   * administrative settings page appeared two rows below it in the sidebar.
+   */
+  { prefix: '/settings', category: 'My Account', label: 'Profile & Preferences' },
+  // The org-wide pages, so the header names them instead of falling back to the brand text.
+  { prefix: '/admin/settings', category: 'Administration', label: 'Platform Settings' },
+  { prefix: '/admin/notifications', category: 'Administration', label: 'Notification Rules' },
+  { prefix: '/admin/rule-bypass', category: 'Administration', label: 'Rule Bypass' },
+  { prefix: '/transport-costs', category: 'Operational Setup', label: 'Transport Costs' },
+  { prefix: '/zones', category: 'Operational Setup', label: 'Territorial Zones' },
+  { prefix: '/notifications', category: 'My Account', label: 'Notifications' },
 ];
 
 /** One row of the scope panel. A native select — the list can run to 30+ states. */
@@ -537,7 +551,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
               >
                 <SettingsIcon size={15} style={{ color: 'var(--accent)' }} />
-                <span>Settings & Profile</span>
+                <span>My Account</span>
               </button>
 
               {onLogout && (

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { ValidationCaseEntity } from './validation-case.entity';
-import { ValidationStatus } from '@fapoms/shared';
+import { ValidationStatus, VALIDATION_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 import {
   ValidationApprovedEvent,
   ValidationCorrectionRequestedEvent,
@@ -9,23 +9,24 @@ import {
 } from '../../core/events/domain-events';
 
 export class ValidationStateMachine {
+  /**
+   * Reads the shared table rather than a private copy of it.
+   *
+   * The copy that used to live here disagreed with `VALIDATION_TRANSITIONS` in three places —
+   * see that table for what was reconciled and why. Two tables for one enum meant the answer to
+   * "may this case move" depended on which code path asked.
+   */
   private static validateTransition(current: ValidationStatus, target: ValidationStatus) {
-    const validPaths: Record<string, string[]> = {
-      PENDING: [ValidationStatus.ASSIGNED, ValidationStatus.HUMAN_REVIEW],
-      ASSIGNED: [ValidationStatus.OCR_PROCESSING, ValidationStatus.HUMAN_REVIEW, ValidationStatus.APPROVED],
-      OCR_PROCESSING: [ValidationStatus.HUMAN_REVIEW],
-      HUMAN_REVIEW: [
-        ValidationStatus.APPROVED,
-        ValidationStatus.CORRECTION_REQUIRED,
-      ],
-      CORRECTION_REQUIRED: [ValidationStatus.HUMAN_REVIEW],
-      APPROVED: [ValidationStatus.SUBMITTED],
-    };
-
-    const allowed = validPaths[current] || [];
-    if (!allowed.includes(target)) {
-      throw new BadRequestException(`Invalid Transition: Cannot transition validation case from ${current} to ${target}.`);
+    if (!isValidTransition(VALIDATION_TRANSITIONS, current, target)) {
+      throw new BadRequestException(
+        `Invalid Transition: Cannot transition validation case from ${current} to ${target}.`,
+      );
     }
+  }
+
+  /** The same question, answered rather than thrown — for callers that report refusals softly. */
+  static canTransition(current: ValidationStatus, target: ValidationStatus): boolean {
+    return isValidTransition(VALIDATION_TRANSITIONS, current, target);
   }
 
   static approveValidation(

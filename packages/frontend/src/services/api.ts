@@ -1,8 +1,21 @@
+import { NotificationCategory } from '@fapoms/shared';
 import { fromNetwork, fromResponse } from './errors';
 import { clearSession } from './session';
 
-export type NotificationCategory =
-  | 'ASSIGNMENT' | 'VALIDATION' | 'DOCUMENT' | 'PLANNING' | 'WORKFORCE' | 'BILLING' | 'SYSTEM';
+/**
+ * Re-exported from shared, never re-declared.
+ *
+ * This was a local union of seven members while the shared enum had eight. The server sends a
+ * preference row per category unconditionally, so every user received a `FEEDBACK` row the web
+ * app's types said could not exist — `Record<NotificationCategory, …>` type-checked clean
+ * against the short union, `CATEGORY_META['FEEDBACK']` came back undefined at runtime, and
+ * dereferencing it threw during render. With no error boundary anywhere in this app, React
+ * unmounted the whole root: the Preferences tab took the entire page blank for every user.
+ *
+ * A local copy of a shared enum does not just risk drift — it actively suppresses the error that
+ * would have caught the drift.
+ */
+export { NotificationCategory } from '@fapoms/shared';
 export type NotificationPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'CRITICAL';
 export type NotificationDeliveryStatus = 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'SUPPRESSED';
 
@@ -119,7 +132,27 @@ class ApiClient {
     if ((options as any)?.withMeta) {
       return res as T;
     }
-    return res.data as T;
+
+    /**
+     * Envelope-tolerant, in one place.
+     *
+     * Most controllers answer `{ success: true, data: … }`, but a number of them return the
+     * value directly (the pricing quote, for one). This used to be an unconditional
+     * `res.data`, which is `undefined` for the bare ones — so page after page grew its own
+     * workaround: two private `unwrap()` helpers and four `Array.isArray(res) ? res : res.data`
+     * ternaries, each solving the same problem slightly differently and each a place for the
+     * next reader to wonder which shape an endpoint really returns.
+     *
+     * Both keys are required before unwrapping, so a bare payload that happens to carry a
+     * `data` field of its own is passed through untouched.
+     */
+    const enveloped =
+      res !== null &&
+      typeof res === 'object' &&
+      !Array.isArray(res) &&
+      'success' in res &&
+      'data' in res;
+    return (enveloped ? (res as any).data : res) as T;
   }
 
   /** @deprecated use getNotificationPage — kept for the couple of call sites not yet migrated. */

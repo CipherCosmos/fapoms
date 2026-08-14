@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
+import { travelModeLabel } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
 
@@ -18,6 +19,14 @@ export interface ExpenseModalProps {
   expenseCategory?: ExpenseCategory;
   expenseAmount?: string;
   expenseDescription?: string;
+  /**
+   * The travel money already inside the assignment's agreed fee, as the desk's calculator
+   * priced it. Shown as context on a TRAVEL_KM claim so the assayer knows what the fee was
+   * already meant to cover before claiming on top of it. Never pre-filled into the amount —
+   * a claim is the assayer's own statement, not a suggestion accepted by inertia.
+   */
+  quotedTravelFee?: number | null;
+  quotedTransportMode?: string | null;
   onSelectCategory?: (cat: ExpenseCategory) => void;
   onChangeAmount?: (val: string) => void;
   onChangeDescription?: (val: string) => void;
@@ -32,6 +41,8 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   expenseCategory: controlledCat,
   expenseAmount: controlledAmt,
   expenseDescription: controlledDesc,
+  quotedTravelFee,
+  quotedTransportMode,
   onSelectCategory,
   onChangeAmount,
   onChangeDescription,
@@ -166,6 +177,14 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
               })}
             </View>
           </View>
+
+          {cat === 'TRAVEL_KM' && quotedTravelFee != null && quotedTravelFee > 0 && (
+            <AppText variant="small" tone="muted">
+              Your fee for this assignment already includes ₹{Number(quotedTravelFee).toLocaleString('en-IN')} for travel
+              {quotedTransportMode ? ` by ${travelModeLabel(quotedTransportMode).toLowerCase()}` : ''}.
+              Claim here only what that did not cover.
+            </AppText>
+          )}
 
           <View style={{ gap: t.space.xs }}>
             <AppText variant="overline" tone="faint">AMOUNT (₹)</AppText>

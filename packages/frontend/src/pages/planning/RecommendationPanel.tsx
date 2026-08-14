@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { NegotiationBanner } from './NegotiationBanner';
 import { ProjectBranch } from './BranchListPanel';
 
+import { assignmentFee } from '../../utils/money';
 /**
  * Shared definition of the recommended assayers panel.
  */
@@ -80,7 +81,7 @@ export const RecommendationPanel: React.FC<{
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>AGREED FEE</div>
-                    <div style={{ fontSize: '13px', color: 'var(--success)', fontWeight: 700 }}>₹{selectedPb.assignment.agreedFee ?? selectedPb.assignment.proposedFee ?? '—'}</div>
+                    <div style={{ fontSize: '13px', color: 'var(--success)', fontWeight: 700 }}>{assignmentFee(selectedPb.assignment)}</div>
                   </div>
                 </div>
                 <div>

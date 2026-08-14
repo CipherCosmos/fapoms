@@ -64,7 +64,6 @@ const IMPORTS_TYPEORM = [
   'modules/branch/branch-query.service.ts',
   'modules/branch/branch.service.ts',
   'modules/client/client.service.ts',
-  'modules/communication/communication.service.ts',
   'modules/customer-master/customer-master.service.ts',
   // Read-only SLA breach detector for the data-entry desk; aggregate queries only, no writes.
   'modules/validation/desk-escalation.service.ts',
@@ -78,6 +77,9 @@ const IMPORTS_TYPEORM = [
   'modules/geo/geo-seed.service.ts',
   'modules/holiday/holiday.service.ts',
   'modules/notifications/notification-dispatch.service.ts',
+  // The notification override table. One config table it alone owns — the operator's
+  // deliberate departures from the code catalog; repository reads/writes only, no transactions.
+  'modules/notifications/notification-settings.service.ts',
   'modules/notifications/notification.service.ts',
   'modules/notifications/push-notification.service.ts',
   'modules/organization/organization.service.ts',
@@ -90,8 +92,15 @@ const IMPORTS_TYPEORM = [
   'modules/planning/planning-orchestrator.service.ts',
   'modules/planning/planning.service.ts',
   'modules/planning/scenario-planning.service.ts',
-  'modules/platform/audit/platform-audit.service.ts',
   'modules/pricing/fee-policy.service.ts',
+  // The transport rate card. One config table it alone owns, plus its scope-resolution reads —
+  // the same shape as fee-policy above; both are the pricing module's narrow storage edge.
+  'modules/pricing/transport-rate.service.ts',
+  // The morning digest's read-only aggregates — same entry as in the DataSource list below.
+  'infrastructure/scheduler/email-digest.service.ts',
+  // Operator-owned platform configuration. One key/value table it alone owns; repository
+  // reads and writes, no transactions.
+  'infrastructure/settings/platform-settings.service.ts',
   'modules/project/call-log.service.ts',
   'modules/project/project-query.service.ts',
   'modules/project/project.service.ts',
@@ -118,6 +127,9 @@ const IMPORTS_TYPEORM = [
 const OPENS_ITS_OWN_TRANSACTIONS = [
   // Takes a DataSource for read-only region lookups only; opens no transaction.
   'infrastructure/scope/region-guard.service.ts',
+  // Read-only morning-digest aggregates (pending payables/expenses/overdue invoices) and the
+  // role-holder audience query; queries only, no writes, no transactions.
+  'infrastructure/scheduler/email-digest.service.ts',
   'core/audit/unified-audit.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',

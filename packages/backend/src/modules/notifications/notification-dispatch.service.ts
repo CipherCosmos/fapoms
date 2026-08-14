@@ -14,6 +14,7 @@ import { UserEntity } from '../user/user.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
+import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_QUEUE } from './notification.constants';
 
 export interface EmitOptions {
@@ -73,6 +74,7 @@ export class NotificationDispatchService {
     private readonly eventPublisher: DomainEventPublisher,
     @InjectQueue(NOTIFICATION_QUEUE)
     private readonly deliveryQueue: Queue,
+    private readonly settings: NotificationSettingsService,
   ) {}
 
   /**
@@ -115,6 +117,7 @@ export class NotificationDispatchService {
 
     const usesInApp = channels.includes(NotificationChannel.IN_APP);
     const usesPush = channels.includes(NotificationChannel.PUSH);
+    const usesEmail = channels.includes(NotificationChannel.EMAIL);
 
     const prefs = await this.preferenceRepository.find({
       where: [
@@ -130,7 +133,14 @@ export class NotificationDispatchService {
 
     const result = { userIds: new Set<string>(), assayerIds: new Set<string>() };
     for (const pref of prefs) {
-      const silent = (!usesInApp || pref.inApp === false) && (!usesPush || pref.push === false);
+      // Email only reaches internal users, so for an assayer the email channel can never be
+      // the one keeping them audible — treating it as "on" for them would let an EMAIL-carrying
+      // type resurrect an assayer who muted in-app and push.
+      const emailSilent = pref.userId ? pref.email === false : true;
+      const silent =
+        (!usesInApp || pref.inApp === false) &&
+        (!usesPush || pref.push === false) &&
+        (!usesEmail || emailSilent);
       if (!silent) continue;
       if (pref.userId) result.userIds.add(pref.userId);
       if (pref.assayerId) result.assayerIds.add(pref.assayerId);
@@ -204,11 +214,38 @@ export class NotificationDispatchService {
   }
 
   async emit(opts: EmitOptions): Promise<EmitResult> {
-    const def = NOTIFICATION_CATALOG[opts.type];
-    if (!def) {
+    if (!NOTIFICATION_CATALOG[opts.type]) {
       // A typo in an event name must not take down the business action that
       // raised it, but it must not vanish either.
       this.logger.error(`Unknown notification type "${opts.type}" — nothing sent.`);
+      return { groupKey: '', created: 0, suppressed: 0, recipients: { userIds: [], assayerIds: [] } };
+    }
+
+    /**
+     * The live definition, not the compiled-in one: an operator can switch a type off or
+     * re-route its channels from the admin screen, and that has to bite on the very next
+     * event. `defFor` returns null for a type somebody has disabled.
+     */
+    let def: EffectiveNotificationType | null;
+    try {
+      def = await this.settings.defFor(opts.type);
+    } catch (err: any) {
+      /**
+       * The fallback belongs HERE and nowhere else.
+       *
+       * `defFor` returns null for a type an operator has switched off — a legitimate answer,
+       * not a failure. Written as `defFor(...).catch(() => null) ?? CATALOG[type]` the two
+       * cases collapse: the `??` cannot tell "disabled" from "lookup broke", so it resurrected
+       * every disabled event from the shipped catalog and the off switch did nothing at all.
+       * Only a thrown error means the settings are unreadable, and only then is falling back to
+       * the compiled-in default the right answer.
+       */
+      this.logger.warn(`Notification settings unreadable for "${opts.type}", using the shipped default: ${err?.message}`);
+      def = NOTIFICATION_CATALOG[opts.type] as EffectiveNotificationType;
+    }
+
+    if (!def) {
+      this.logger.debug(`"${opts.type}" is switched off in notification settings — nothing sent.`);
       return { groupKey: '', created: 0, suppressed: 0, recipients: { userIds: [], assayerIds: [] } };
     }
 
@@ -289,9 +326,26 @@ export class NotificationDispatchService {
       attempts: 0,
     };
 
+    /**
+     * Email bookkeeping is stamped at birth, and only for internal users — assayers have the
+     * app; their channels are in-app and push.
+     *
+     * Whether a mailer is configured is deliberately NOT decided here. This service runs in
+     * whichever replica handled the request; the send happens in whichever replica drains the
+     * queue, and those are not the same process. An emitter that stamped SUPPRESSED because
+     * its own env lacked the credentials would permanently silence a row a properly configured
+     * worker could have delivered. The worker settles SUPPRESSED with the reason when it finds
+     * no transport, so "why did no email arrive" is still answerable from the row — just
+     * answered by the process that actually knows.
+     */
+    const emailBirth = def.channels.includes(NotificationChannel.EMAIL)
+      ? { emailStatus: NotificationStatus.PENDING }
+      : { emailStatus: null };
+
     const rows: Partial<NotificationEntity>[] = [
       ...[...userIds].map((userId, i) => ({
         ...base,
+        ...emailBirth,
         userId,
         assayerId: null,
         // Dedupe is per recipient: one event reaching five people is five rows,
@@ -300,6 +354,7 @@ export class NotificationDispatchService {
       })),
       ...audienceAssayerIds.map((assayerId) => ({
         ...base,
+        emailStatus: null,
         userId: null,
         assayerId,
         dedupeKey: dedupeKey ? `${dedupeKey}:a:${assayerId}` : null,
@@ -410,6 +465,29 @@ export class NotificationDispatchService {
       } catch (err: any) {
         // Never thrown: the rows exist, so the stranded-row sweeper still delivers if Redis is down.
         this.logger.warn(`Could not bulk-enqueue push for ${createdRows.length} notification(s): ${err?.message}`);
+      }
+    }
+
+    // ── Hand email delivery to the queue ──────────────────────────────────
+    // Same contract as push: the row is the source of truth, the queue is a cache of pending
+    // work, and the sweeper re-queues anything the enqueue missed.
+    const emailRows = createdRows.filter((row) => row.emailStatus === NotificationStatus.PENDING);
+    if (emailRows.length > 0) {
+      try {
+        await this.deliveryQueue.addBulk(
+          emailRows.map((row) => ({
+            name: 'deliver-email',
+            data: { notificationId: row.id },
+            opts: {
+              attempts: 5,
+              backoff: { type: 'exponential', delay: 5000 },
+              removeOnComplete: true,
+              removeOnFail: false,
+            },
+          })),
+        );
+      } catch (err: any) {
+        this.logger.warn(`Could not bulk-enqueue email for ${emailRows.length} notification(s): ${err?.message}`);
       }
     }
 

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
-  X, ExternalLink, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
+  X, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
 import { nextAssayerLifecycleStates } from '@fapoms/shared';
@@ -24,6 +23,10 @@ import { CommercialProfileModal, type CommercialProfile } from './CommercialProf
  *
  * Each tab loads only when first opened — the roster is the common case and should
  * not pay for five extra requests per row.
+ *
+ * This is now the ONLY view of a single assayer. A separate full-page profile used to exist
+ * alongside it, reached from global search and the planning screen's excluded-candidates list;
+ * both now open the roster with `?assayer=<id>`, which lands here. One person, one screen.
  */
 
 
@@ -43,7 +46,6 @@ export const AssayerDetailDrawer: React.FC<{
   onEdit: (a: Assayer) => void;
   onChanged: () => void;
 }> = ({ assayerId, canManage, onClose, onEdit, onChanged }) => {
-  const navigate = useNavigate();
   const [a, setA] = useState<Assayer | null>(null);
   const [tab, setTab] = useState<TabKey>('summary');
   const [loaded, setLoaded] = useState<Record<string, any>>({});
@@ -176,9 +178,6 @@ export const AssayerDetailDrawer: React.FC<{
               </div>
 
               <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
-                <button onClick={() => navigate(`/assayers/${a.id}`)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <ExternalLink size={12} /> Full profile
-                </button>
                 {canManage && (
                   <button onClick={() => onEdit(a)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Edit2 size={12} /> Edit

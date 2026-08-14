@@ -14,6 +14,7 @@ import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useExcelExport } from '../hooks/useExcelExport';
 
+import { assignmentFee } from '../utils/money';
 interface Assignment {
   id: string;
   assignmentNumber: string;
@@ -361,9 +362,21 @@ export const Assignments: React.FC = () => {
   // One row per affected assignment, newest report first, with a ×N badge for repeats — two
   // reports about the same branch are one problem to solve, not two queue entries.
   const openIssues = fieldIssues.filter(i => i.open);
+  const handledIssues = fieldIssues.filter(i => !i.open);
+  /**
+   * Open by default, with the settled ones behind a toggle.
+   *
+   * This panel and a separate /field-issues page used to render the same endpoint — the page
+   * listing history with no actions, the panel listing open ones you could click through to the
+   * assignment. Two places showing one queue, and only one of them could do anything about it.
+   * The history moved here rather than the actions moving there, because this is the screen the
+   * desk already has open when it deals with a field problem.
+   */
+  const [showHandledIssues, setShowHandledIssues] = React.useState(false);
   const groupedIssues = React.useMemo(() => {
+    const source = showHandledIssues ? fieldIssues : openIssues;
     const byAssignment = new Map<string, { latest: FieldIssue; count: number }>();
-    for (const issue of openIssues) {
+    for (const issue of source) {
       const existing = byAssignment.get(issue.assignmentId);
       if (!existing) {
         byAssignment.set(issue.assignmentId, { latest: issue, count: 1 });
@@ -375,7 +388,7 @@ export const Assignments: React.FC = () => {
     return [...byAssignment.values()].sort(
       (a, b) => new Date(b.latest.reportedAt).getTime() - new Date(a.latest.reportedAt).getTime(),
     );
-  }, [fieldIssues]);
+  }, [fieldIssues, showHandledIssues]);
 
   // When the selected assignment isn't on the current page (deep-link ?id=, a socket update that
   // moved the row off-page, or a filter that excludes it), fetch it directly so the detail panel
@@ -642,12 +655,24 @@ export const Assignments: React.FC = () => {
       {/* Field issues — problems the field flagged from the mobile app. Clicking a row jumps
           straight to the affected assignment. Resolved implicitly when the assignment leaves an
           actionable state, so only open ones demand attention here. */}
-      {groupedIssues.length > 0 && (
+      {(groupedIssues.length > 0 || handledIssues.length > 0) && (
         <details className="glass-card" style={{ border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }} open={groupedIssues.length <= 3}>
           <summary style={{ padding: '10px 16px', cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 700, color: 'var(--warning)' }}>
-            <AlertTriangle size={15} /> {groupedIssues.length} branch{groupedIssues.length > 1 ? 'es' : ''} with field issues
-            {openIssues.length > groupedIssues.length && (
+            <AlertTriangle size={15} />
+            {groupedIssues.length > 0
+              ? <>{groupedIssues.length} branch{groupedIssues.length > 1 ? 'es' : ''} with field issues</>
+              : <>No open field issues</>}
+            {openIssues.length > groupedIssues.length && !showHandledIssues && (
               <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>({openIssues.length} reports)</span>
+            )}
+            {handledIssues.length > 0 && (
+              <span
+                role="button"
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowHandledIssues(v => !v); }}
+                style={{ marginLeft: 'auto', fontSize: '11px', fontWeight: 700, color: 'var(--accent)' }}
+              >
+                {showHandledIssues ? 'Open only' : `Include ${handledIssues.length} settled`}
+              </span>
             )}
           </summary>
           <div style={{ maxHeight: '220px', overflowY: 'auto', borderTop: '1px solid var(--border-color)' }}>
@@ -655,7 +680,7 @@ export const Assignments: React.FC = () => {
               <div
                 key={issue.assignmentId}
                 onClick={() => selectAndShow(issue.assignmentId)}
-                style={{ padding: '9px 16px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px' }}
+                style={{ padding: '9px 16px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px', opacity: issue.open ? 1 : 0.55 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                   <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -750,7 +775,7 @@ export const Assignments: React.FC = () => {
                       {overdue && ' ⚠'}
                     </td>
                     <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                      {(asn.agreedFee ?? asn.proposedFee) != null ? `₹${(asn.agreedFee ?? asn.proposedFee).toLocaleString('en-IN')}` : '—'}
+                      {assignmentFee(asn)}
                     </td>
                     <td style={{ padding: '10px 14px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
@@ -924,7 +949,7 @@ export const Assignments: React.FC = () => {
                   {/* Plain color: the old same-color "gradient" text-fill rendered the fee invisible
                       if the CSS variable ever failed to resolve. */}
                   <p style={{ fontSize: '14px', fontWeight: 800, margin: '1px 0', color: 'var(--warning)' }}>
-                    ₹{(selectedAsn.agreedFee ?? selectedAsn.proposedFee)?.toLocaleString?.('en-IN') ?? (selectedAsn.agreedFee ?? selectedAsn.proposedFee)}
+                    {assignmentFee(selectedAsn)}
                   </p>
                 </div>
                 <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>

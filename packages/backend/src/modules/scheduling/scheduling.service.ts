@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { branchScopeWhere } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ScheduleEntity } from './schedule.entity';
@@ -331,17 +332,38 @@ export class SchedulingService {
     return saved;
   }
 
-  async getAssayerWorkloadInRange(assayerId: string, from: Date, to: Date): Promise<{ count: number; schedules: any[] }> {
+  async getAssayerWorkloadInRange(
+    assayerId: string,
+    from: Date,
+    to: Date,
+  ): Promise<{ count: number; weeklyCapacity: number; schedules: any[] }> {
+    // The assayer's own ceiling when they have one, otherwise the platform default the planning
+    // engines already use — one number, so the desk and the engines cannot disagree about
+    // whether someone is full.
+    const row = await this.scheduleRepository.manager
+      .query(`SELECT max_weekly_workload FROM assayers WHERE id = $1 LIMIT 1`, [assayerId])
+      .catch(() => []);
+    const assayerCapacity = Number(row?.[0]?.max_weekly_workload) || DEFAULT_WEEKLY_CAPACITY;
+
     const schedules = await this.scheduleRepository.find({
       where: {
         assayerId,
         isActive: true,
-        scheduledDate: { gte: from, lte: to } as any,
+        // `Between`, not `{gte, lte}`. TypeORM serialises a plain object as a literal JSON
+        // string into the SQL and Postgres rejects it — the same defect the sibling query above
+        // documents having fixed. The frontend swallows the resulting error
+        // (`catch { setAssayerWorkload(null); }`), so the over-booking banner this feeds simply
+        // never rendered and nobody noticed the endpoint was dead.
+        scheduledDate: Between(from, to),
       },
       relations: ['assignment', 'project'],
       order: { scheduledDate: 'ASC' },
     });
     return {
+      // The ceiling travels with the count. The desk hardcoded 3 — the DAILY cap — against this
+      // WEEKLY window, so it painted a red over-booked warning at a fifth of the real limit while
+      // the planning engines were recommending the same assayer as having room for twelve more.
+      weeklyCapacity: assayerCapacity,
       count: schedules.length,
       schedules: schedules.map(s => ({
         id: s.id,

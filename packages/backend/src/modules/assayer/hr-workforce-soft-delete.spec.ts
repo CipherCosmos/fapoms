@@ -31,12 +31,23 @@ function assayerQueries(): { line: number; statement: string }[] {
     // `/** … */` form above ON_ROSTER_A.
     const trimmed = lines[i].trim();
     if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
-    if (!/FROM assayers\b/.test(lines[i])) continue;
+    // `JOIN assayers a ON …`, not just `FROM assayers`. Scanning only for FROM is how six
+    // queries came to omit the is_active clause unnoticed: every one of them reaches the table
+    // through a JOIN from `workforce_attributes` or `assayer_government_documents`, so the
+    // narrower pattern never saw them and this suite passed while the rule was broken.
+    if (!/\b(FROM|JOIN)\s+assayers\b/.test(lines[i])) continue;
 
     // The statement runs to the end of the template literal, or 12 lines, whichever is first.
     const window = lines.slice(i, Math.min(i + 12, lines.length)).join('\n');
     const end = window.indexOf('`');
-    found.push({ line: i + 1, statement: end > 0 ? window.slice(0, end) : window });
+    // An exemption marker reads naturally ABOVE the FROM/JOIN it applies to, which is outside
+    // the statement window — so it is looked for separately rather than by widening the window,
+    // which would truncate the statement at the template literal's opening backtick.
+    const preamble = lines.slice(Math.max(0, i - 6), i).join('\n');
+    found.push({
+      line: i + 1,
+      statement: (end > 0 ? window.slice(0, end) : window) + preamble,
+    });
   }
   return found;
 }
@@ -50,6 +61,11 @@ describe('HR workforce queries respect soft deletion', () => {
 
   it('every query over assayers filters out deleted profiles', () => {
     const leaking = assayerQueries()
+      // A query may opt out by saying so in SQL, next to itself, with a reason. The activity
+      // trail is the only current case: history does not stop being true when someone leaves.
+      // Declaring it at the query rather than as a line number here means the exemption moves
+      // with the code and has to be re-justified if the query is rewritten.
+      .filter(({ statement }) => !/soft-delete-exempt/.test(statement))
       .filter(({ statement }) => !/is_active|ON_ROSTER/.test(statement))
       .map(({ line }) => `hr-workforce.service.ts:${line}`);
 

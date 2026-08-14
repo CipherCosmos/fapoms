@@ -23,8 +23,8 @@ export const AssayerMultiSelect: React.FC<{
   const { data, isLoading } = useQuery<AssayerOption[]>({
     queryKey: ['assayers', 'options'],
     queryFn: async () => {
-      const res = await api.request<AssayerOption[] | { data: AssayerOption[] }>('/assayers', { method: 'GET' });
-      return Array.isArray(res) ? res : (res as any).data ?? [];
+      const res = await api.request<AssayerOption[]>('/assayers', { method: 'GET' });
+      return res ?? [];
     },
     staleTime: 5 * 60_000,
   });

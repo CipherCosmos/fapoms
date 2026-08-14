@@ -7,6 +7,7 @@ import { NotificationDispatchService } from '../../modules/notifications/notific
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
+import { EmailDigestService } from './email-digest.service';
 
 @Injectable()
 @Processor('sla-scanner')
@@ -26,7 +27,18 @@ export class SlaScannerWorker {
     private readonly deskEscalation: DeskEscalationService,
     private readonly feedbackEscalation: FeedbackEscalationService,
     private readonly locationTrail: LocationTrailService,
+    private readonly emailDigest: EmailDigestService,
   ) {}
+
+  /**
+   * The morning email digest, on its own schedule (default 08:30 IST — see the module).
+   * A separate job from 'scan': the scan runs every 15 minutes and must stay cheap; the
+   * digest runs once a day and sends real email.
+   */
+  @Process('digest')
+  async runDigest(_job: Job) {
+    await this.emailDigest.run();
+  }
 
   /**
    * Six independent scans behind one 15-minute tick. Each is idempotent (its notifications carry

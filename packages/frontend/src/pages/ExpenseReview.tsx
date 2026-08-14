@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, X, Receipt, RefreshCw, MapPin } from 'lucide-react';
+import { Check, X, Receipt, RefreshCw, MapPin, AlertTriangle } from 'lucide-react';
 import { formatRupees } from '@fapoms/shared';
 import { DataTable, Column, Modal, useToast } from '../components/ui';
 import {
@@ -7,6 +7,8 @@ import {
   reviewExpense,
   EXPENSE_CATEGORY_LABELS,
   ExpenseClaim,
+  getUnpaidApprovals,
+  retryUnpaidApprovals,
 } from '../services/expenses';
 import { TravelEvidence } from '../components/TravelEvidence';
 
@@ -25,11 +27,26 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
   const [rejectReason, setRejectReason] = useState('');
   // A travel claim whose movement trail the reviewer has opened.
   const [inspecting, setInspecting] = useState<ExpenseClaim | null>(null);
+  /**
+   * Approved claims whose reimbursement payable never got raised.
+   *
+   * Normally empty. When it is not, an assayer has been told their claim was approved and
+   * nothing anywhere owes them the money — the one failure in this flow that is invisible from
+   * both ends unless it is put on the reviewer's screen.
+   */
+  const [unpaid, setUnpaid] = useState<ExpenseClaim[]>([]);
+  const [retrying, setRetrying] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setClaims(await getPendingExpenses());
+      const [pending, stuck] = await Promise.all([
+        getPendingExpenses(),
+        // A failure here must not hide the queue the reviewer came for.
+        getUnpaidApprovals().catch(() => [] as ExpenseClaim[]),
+      ]);
+      setClaims(pending);
+      setUnpaid(stuck);
     } catch (err: any) {
       toast({ type: 'error', title: 'Could not load claims', message: err?.message ?? 'Please try again.' });
     } finally {
@@ -193,6 +210,54 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
           </button>
         </div>
       </div>
+
+      {unpaid.length > 0 && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            padding: '12px 14px', marginBottom: 14,
+            background: 'var(--status-warning-bg, rgba(217,119,6,0.08))',
+            border: '1px solid var(--warning, #d97706)',
+            borderRadius: 'var(--radius-sm, 6px)',
+          }}
+        >
+          <AlertTriangle size={18} style={{ color: 'var(--warning, #d97706)', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>
+              {unpaid.length} approved {unpaid.length === 1 ? 'claim has' : 'claims have'} no reimbursement raised
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {formatRupees(unpaid.reduce((sum, c) => sum + Number(c.amount || 0), 0))} was approved but never
+              became a payable, so nothing is due to be paid. Retrying is safe — a claim that already has one is skipped.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              setRetrying(true);
+              try {
+                const r = await retryUnpaidApprovals();
+                toast({
+                  type: r.raised === r.attempted ? 'success' : 'warning',
+                  title: `${r.raised} of ${r.attempted} reimbursed`,
+                  message: r.raised === r.attempted
+                    ? 'Every approved claim now has a payable behind it.'
+                    : 'Some could not be raised — they stay listed here.',
+                });
+                await load();
+              } catch (err: any) {
+                toast({ type: 'error', title: 'Retry failed', message: err?.message ?? 'Please try again.' });
+              } finally {
+                setRetrying(false);
+              }
+            }}
+            disabled={retrying}
+            style={btnStyle('var(--warning, #d97706)')}
+          >
+            <RefreshCw size={15} /> {retrying ? 'Raising…' : 'Raise them now'}
+          </button>
+        </div>
+      )}
 
       <DataTable<ExpenseClaim>
         columns={columns}

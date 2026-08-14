@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Map, Plus, Trash2, Edit2, X, Building2, MapPin, Info } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
+import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
 import { Modal, AlertBanner } from '../components/ui';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
@@ -14,12 +15,6 @@ interface Zone {
   clientId?: string | null;
   states?: string[] | null;
   districts?: string[] | null;
-}
-
-interface ClientOption {
-  id: string;
-  name: string;
-  code: string;
 }
 
 /**
@@ -51,11 +46,8 @@ export const Zones: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const { data: clientsRes } = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.request<ClientOption[]>('/clients'),
-  });
-  const clients = (Array.isArray(clientsRes) ? clientsRes : (clientsRes as any)?.data) || [];
+  const { data: clientsRes } = useClientOptions();
+  const clients = clientsRes ?? [];
 
   const { data: zonesRes, isLoading, refetch } = useQuery({
     queryKey: ['zones', 'all'],

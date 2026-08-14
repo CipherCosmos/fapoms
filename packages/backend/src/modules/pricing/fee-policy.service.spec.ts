@@ -11,6 +11,8 @@ import { ClientConfigurationEntity } from '../client/client-configuration.entity
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { TransportRateService } from './transport-rate.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
  * These lock in the behaviour that the two old duplicate implementations disagreed on:
@@ -21,6 +23,7 @@ describe('FeePolicyService', () => {
   let clientConfigRepo: any;
   let commercialRepo: any;
   let projectRepo: any;
+  let transportRates: any;
   let qb: any;
 
   beforeEach(async () => {
@@ -33,6 +36,11 @@ describe('FeePolicyService', () => {
     clientConfigRepo = { findOne: jest.fn().mockResolvedValue(null) };
     commercialRepo = { createQueryBuilder: jest.fn().mockReturnValue(qb) };
     projectRepo = { findOne: jest.fn().mockResolvedValue(null) };
+    // No transport rates by default — the legacy travel formula these tests were written
+    // against stays in force unless a test provides an estimate.
+    transportRates = {
+      estimate: jest.fn().mockResolvedValue({ distanceKm: 0, options: [], recommended: null }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -40,6 +48,19 @@ describe('FeePolicyService', () => {
         { provide: getRepositoryToken(ClientConfigurationEntity), useValue: clientConfigRepo },
         { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: commercialRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
+        { provide: TransportRateService, useValue: transportRates },
+        {
+          provide: PlatformSettingsService,
+          // Nothing configured in tests: every lookup falls through to the caller's fallback,
+          // which is the shipped constant.
+          useValue: {
+            get: jest.fn(async () => null),
+            getMany: jest.fn(async () => ({})),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            describeAll: jest.fn(async () => []),
+            onChange: jest.fn(),
+          },
+        },
         {
           provide: CacheService,
           useValue: {
@@ -146,6 +167,73 @@ describe('FeePolicyService', () => {
       const assignLike = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25 });
       const planLike = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25, branchCount: 1 });
       expect(assignLike.total).toBe(planLike.total);
+    });
+  });
+
+  describe('quote with a transport rate card', () => {
+    const busEstimate = {
+      distanceKm: 25,
+      options: [
+        {
+          mode: 'BUS', modeLabel: 'Bus', scopeType: 'NATIONAL', scopeValue: null,
+          baseFare: 10, perKmRate: 1.5, oneWayCost: 48, roundTripCost: 96, preferred: true,
+        },
+      ],
+      recommended: {
+        mode: 'BUS', modeLabel: 'Bus', scopeType: 'NATIONAL', scopeValue: null,
+        baseFare: 10, perKmRate: 1.5, oneWayCost: 48, roundTripCost: 96, preferred: true,
+      },
+    };
+
+    it('prices travel from the rate card when the place has one, and says so', async () => {
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      transportRates.estimate.mockResolvedValue(busEstimate);
+
+      const q = await service.quote({
+        assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' },
+      });
+
+      // Round-trip bus cost, full distance — no free-km deduction: a bus ticket has no free
+      // first 10 km and must be bought both ways.
+      expect(q.travelFee).toBe(96);
+      expect(q.chargeableKm).toBe(25);
+      expect(q.total).toBe(1296);
+      expect(q.travelSource).toBe('TRANSPORT_RATE_CARD');
+      expect(q.transport?.recommended?.mode).toBe('BUS');
+    });
+
+    it('keeps the legacy formula when no rate matches the place', async () => {
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      transportRates.estimate.mockResolvedValue({ distanceKm: 25, options: [], recommended: null });
+
+      const q = await service.quote({
+        assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' },
+      });
+
+      expect(q.travelFee).toBe(120); // (25 - 10) * 8
+      expect(q.travelSource).toBe('PLATFORM_DEFAULT');
+      expect(q.transport).toBeNull();
+    });
+
+    it('keeps the legacy formula when the caller cannot say where the work is', async () => {
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      const q = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25 });
+      expect(q.travelFee).toBe(120);
+      expect(transportRates.estimate).not.toHaveBeenCalled();
+    });
+
+    it('quotes legacy travel rather than failing when the rate lookup breaks', async () => {
+      // An offer priced the old way beats no offer. The desk seeing CLIENT_RATE_CARD /
+      // PLATFORM_DEFAULT provenance is the honest account of what happened.
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      transportRates.estimate.mockRejectedValue(new Error('redis down'));
+
+      const q = await service.quote({
+        assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' },
+      });
+
+      expect(q.travelFee).toBe(120);
+      expect(q.travelSource).toBe('PLATFORM_DEFAULT');
     });
   });
 });

@@ -65,17 +65,6 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    // The desk's queue of problems the field flagged — same operations roles that act on
-    // assignments, since acting on the assignment is how an issue is cleared.
-    path: '/field-issues',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-    ],
-  },
-  {
     // Operations executives work this queue daily; finance needs it to see what was billable.
     path: '/assignments',
     allowedRoles: [
@@ -147,20 +136,6 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    // Mirrors the backend GET /assayers/:id/profile @Roles — operations and finance are allowed the
-    // (field-scoped) dossier, and global search links every user to this route, so the gate must not
-    // be narrower than the API or those clicks dead-end on an access-denied redirect.
-    path: '/assayers/:id',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.HR_MANAGER,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.FINANCE_MANAGER,
-    ],
-  },
-  {
     path: '/documents',
     allowedRoles: [
       SystemRole.SUPER_ADMINISTRATOR,
@@ -183,6 +158,44 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.DOCUMENT_EXECUTIVE,
       SystemRole.VALIDATION_MANAGER,
       SystemRole.VALIDATOR,
+      SystemRole.READ_ONLY_AUDITOR,
+    ],
+  },
+  {
+    // The transport rate card behind offer travel recommendations. Executives read it (they
+    // negotiate on the phone against these numbers); managing is gated by
+    // canManageTransportRates() — ops + finance, mirroring the backend controller.
+    path: '/transport-costs',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.OPERATIONS_EXECUTIVE,
+      SystemRole.FINANCE_MANAGER,
+      SystemRole.READ_ONLY_AUDITOR,
+    ],
+  },
+  {
+    // Platform configuration. Staff may see how the platform is configured — a support
+    // conversation goes faster when both sides can — but editing is gated by
+    // canAdministerPlatformSettings(), mirroring the backend's SETTINGS_ADMIN_ROLES.
+    path: '/admin/settings',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
+      SystemRole.FINANCE_MANAGER,
+      SystemRole.READ_ONLY_AUDITOR,
+    ],
+  },
+  {
+    // Which events the platform raises, to whom, on what channels. Read for staff who need to
+    // see what each event says; editing is gated by canAdministerNotifications() — admins only.
+    path: '/admin/notifications',
+    allowedRoles: [
+      SystemRole.SUPER_ADMINISTRATOR,
+      SystemRole.ADMINISTRATOR,
+      SystemRole.OPERATIONS_MANAGER,
       SystemRole.READ_ONLY_AUDITOR,
     ],
   },

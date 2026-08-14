@@ -376,8 +376,26 @@ async function seed() {
           updatedBy: 'system',
         });
       } else {
-        role.permissions = rolePermissions;
-        role.responsibilities = roleResponsibilities;
+        /**
+         * Merge, never replace.
+         *
+         * `role.permissions = rolePermissions` overwrote the row outright. Several resources —
+         * HOLIDAY, ZONE, PLANNING, BILLING, CUSTOMER_MASTER — are created and granted by
+         * migrations and are absent from this file's `defaultPermissions`, so re-running the
+         * seed against a migrated database silently stripped them from SUPER_ADMINISTRATOR,
+         * ADMINISTRATOR, OPERATIONS_MANAGER, OPERATIONS_EXECUTIVE and VALIDATOR. That is exactly
+         * the every-role-403 outage `BackfillMissingPermissions` was written to repair — the
+         * seed could recreate it in one command.
+         *
+         * A seed's job is to guarantee a baseline exists, not to assert it is the whole truth.
+         */
+        const byId = new Map((role.permissions ?? []).map((p: any) => [p.id, p]));
+        for (const p of rolePermissions) byId.set(p.id, p);
+        role.permissions = [...byId.values()];
+
+        const respById = new Map((role.responsibilities ?? []).map((r: any) => [r.id, r]));
+        for (const r of roleResponsibilities) respById.set(r.id, r);
+        role.responsibilities = [...respById.values()];
       }
       const savedRole = await roleRepository.save(role);
       rolesMap.set(rd.name as SystemRole, savedRole);

@@ -679,13 +679,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
    * Only driving is a billable allowance. The two-wheeler and walking figures are fuel
    * estimates for comparing how the assayer might travel, and are labelled as such.
    */
-  const perKmRate = travelRates?.travelFeePerKm ?? 8;
+  // No literal fallback. A hardcoded ₹8 here was a third answer to "what does travel cost",
+  // beside the client rate card and the platform default — and it silently disagreed with both
+  // the moment either was changed. When the server has not answered, say so instead of guessing.
+  const perKmRate = travelRates?.travelFeePerKm ?? null;
   const freeAllowanceKm = travelRates?.freeTravelAllowanceKm ?? 0;
   const chargeableKm = Math.max(0, actualDistance - freeAllowanceKm);
-  const fuelModes = { driving: perKmRate, 'two-wheeler': 3, walking: 0 };
-  const estCost = travelMode === 'driving'
-    ? Math.round(chargeableKm * perKmRate)
-    : Math.round(actualDistance * fuelModes[travelMode]);
+  // null when the server has not answered — rendered as "rate unavailable" rather than a
+  // number nothing would actually charge.
+  const estCost: number | null = travelMode === 'walking'
+    ? 0
+    : travelMode === 'two-wheeler'
+      ? Math.round(actualDistance * 3)
+      : perKmRate == null ? null : Math.round(chargeableKm * perKmRate);
 
   return (
     <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative', flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px', boxSizing: 'border-box' }}>
@@ -860,7 +866,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span>{travelMode === 'driving'
                 ? (roadDistanceKm !== null ? 'Travel allowance:' : 'Travel allowance (approx):')
                 : 'Est. fuel cost:'}</span>
-              <b style={{ color: 'var(--text-primary)', fontSize: '12px' }}>₹{estCost}</b>
+              <b style={{ color: estCost == null ? 'var(--text-muted)' : 'var(--text-primary)', fontSize: '12px' }}>
+                {estCost == null ? 'rate unavailable' : `₹${estCost}`}
+              </b>
             </div>
             <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {roadDistanceKm !== null ? 'Road distance from OSRM' : 'Estimate based on straight-line distance'} — traffic not included

@@ -285,12 +285,21 @@ export enum CommunicationType {
   SYSTEM = 'SYSTEM',
 }
 
+/**
+ * How a field worker physically gets to a branch. The vocabulary of the transport rate card:
+ * every mode here can carry a per-km cost, and the offer engine recommends travel money in
+ * terms of these. CAR/TWO_WHEELER mean the assayer's own vehicle (fuel + wear); TAXI and
+ * AUTO_RICKSHAW are hired point-to-point; BUS/TRAIN are fares. OTHER exists for the true
+ * odd cases (ferry, shared jeep) and deliberately has no special handling anywhere.
+ */
 export enum TravelMode {
   CAR = 'CAR',
   TRAIN = 'TRAIN',
   BUS = 'BUS',
   FLIGHT = 'FLIGHT',
   TWO_WHEELER = 'TWO_WHEELER',
+  AUTO_RICKSHAW = 'AUTO_RICKSHAW',
+  TAXI = 'TAXI',
   OTHER = 'OTHER',
 }
 

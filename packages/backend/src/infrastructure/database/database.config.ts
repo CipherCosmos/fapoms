@@ -5,8 +5,22 @@
  * Reads configuration from environment variables.
  */
 
+import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+
+/**
+ * Where the migrations are, for the runtime — mirroring `data-source.ts`, which the CLI uses.
+ *
+ * Compiled or source, never both: matching both globs makes TypeORM abort with "Duplicate
+ * migrations" before running any. Decided by the extension of this very file, so it is correct
+ * under ts-node and under `node dist/main.js` without configuration. Single-level on purpose —
+ * `migrations/_historical/` holds the 65 superseded files and must not be picked up.
+ */
+const IS_COMPILED = __filename.endsWith('.js');
+const MIGRATIONS_GLOB = IS_COMPILED
+  ? [path.join(process.cwd(), 'dist/infrastructure/database/migrations/*.js')]
+  : [path.join(process.cwd(), 'src/infrastructure/database/migrations/*.ts')];
 
 export const databaseConfig = (
   configService: ConfigService,
@@ -24,6 +38,22 @@ export const databaseConfig = (
   // synchronize, letting TypeORM rewrite the live schema from the entities and drop any
   // column, index or constraint it does not recognise. Mirrors the DB_LOGGING line below.
   synchronize: configService.get<string>('DB_SYNCHRONIZE', 'false') === 'true',
+  /**
+   * Apply pending migrations on connect. Defaults ON — this is what makes a new machine work.
+   *
+   * Nothing ran migrations. Not the Dockerfile (`CMD ["node", "dist/main.js"]`), not compose,
+   * not an entrypoint. It never mattered while `synchronize` was building the schema from the
+   * entities on every boot — but that is exactly what left the migration chain to rot, and with
+   * synchronize correctly off, a fresh deploy would come up against an *empty database* and fail
+   * every query. Turning one off without turning the other on would have traded a slow problem
+   * for an immediate one.
+   *
+   * Set `DB_MIGRATIONS_RUN=false` when running more than one replica, and apply migrations as a
+   * separate step before rollout: TypeORM takes no cross-instance lock, so parallel starts can
+   * race on the same migration.
+   */
+  migrationsRun: configService.get<string>('DB_MIGRATIONS_RUN', 'true') === 'true',
+  migrations: MIGRATIONS_GLOB,
   logging: configService.get<string>('DB_LOGGING', 'false') === 'true',
   // Survive a database that is briefly unavailable at boot (rolling DB restart,
   // cold start behind a pooler) instead of crashing the whole API on the first

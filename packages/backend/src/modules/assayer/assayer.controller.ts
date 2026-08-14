@@ -369,6 +369,20 @@ export class UpdateLiveLocationDto {
 
   @IsNumber()
   longitude: number;
+
+  /**
+   * Set by clients that record and upload their own movement trail via the batch endpoint.
+   *
+   * The trail append on this route (see `updateLiveLocation` below) exists so that a handset which
+   * only knows how to push its live position still leaves a history behind. A client that queues
+   * its own fixes does not need that, and letting it happen anyway writes a second row for every
+   * position — the same place, a different timestamp, no extra evidence.
+   *
+   * Absent means "an older build that does not queue", which is the only safe default: mirroring a
+   * fix that was already recorded costs a row, while skipping one that was not loses it for good.
+   */
+  @IsOptional() @IsBoolean()
+  trailSelfManaged?: boolean;
 }
 
 /** One position in an uploaded batch. Coordinate sanity is enforced again in the service. */
@@ -857,22 +871,30 @@ export class AssayerController {
       id, dto.latitude, dto.longitude, req.user?.id ?? id,
     );
     /**
-     * The same fix is also appended to the movement trail.
+     * The same fix is also appended to the movement trail — unless the client keeps its own.
      *
      * `assayers.live_location` is a single column overwritten by every push — it answers "where
      * are they now?" and destroys the history that a travel allowance is actually paid against.
-     * Appending here means a trail accumulates from the existing app immediately, without waiting
-     * for a mobile release to adopt the batch endpoint below.
+     * Appending here means a trail accumulates from an app that only knows how to push its live
+     * position, without waiting for a mobile release to adopt the batch endpoint below.
+     *
+     * Current builds do queue their own fixes and say so, and for those this append is pure
+     * duplication: the same position under a server clock instead of the device's, adding a row to
+     * a table that will hold millions of them and no evidence to the journey. So it is skipped for
+     * them and kept for everyone else, because handsets in the field are updated by hand and old
+     * builds will be sending live positions for a long while yet.
      */
-    await this.locationTrail
-      .record(id, dto.latitude, dto.longitude, {
-        source: LocationPingSource.APP_TRACKING,
-        recordedBy: req.user?.id ?? id,
-      })
-      // The live position has already been saved by the time this runs; failing the request now
-      // would report an error for an update that succeeded, and make the app retry a push it
-      // already delivered.
-      .catch(() => undefined);
+    if (!dto.trailSelfManaged) {
+      await this.locationTrail
+        .record(id, dto.latitude, dto.longitude, {
+          source: LocationPingSource.APP_TRACKING,
+          recordedBy: req.user?.id ?? id,
+        })
+        // The live position has already been saved by the time this runs; failing the request now
+        // would report an error for an update that succeeded, and make the app retry a push it
+        // already delivered.
+        .catch(() => undefined);
+    }
     return { success: true, data: assayer };
   }
 
@@ -1217,9 +1239,11 @@ export class AssayerController {
     return { success: true, data: remark };
   }
 
+  // Same reconciliation as the update above: neither OPERATIONS role holds
+  // `ASSAYER:DELETE:ORGANIZATION`, so both were dead entries the decorator advertised.
   @Delete(':assayerId/remark/:remarkId')
   @HttpCode(204)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Delete a remark' })
   async removeRemark(

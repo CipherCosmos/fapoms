@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { AssayerLifecycleStatus, formatRupees } from '@fapoms/shared';
+import { AssayerLifecycleStatus } from '@fapoms/shared';
 
 /** Shared shape and colours for the workforce record, used by the roster and its forms. */
 
@@ -102,7 +102,7 @@ export const fmtWhen = (d?: string | null) =>
   d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 
 /** Rupees with an em-dash for empty, matching the workforce screens. */
-export const money = (n?: number | null) => formatRupees(n, { emptyAs: '—' });
+export { money } from '../../utils/money';
 
 /** The small uppercase caption style repeated across the workforce record surfaces. */
 export const fieldLabelStyle: CSSProperties = {

@@ -3,18 +3,12 @@ import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
+import { BILLING_READ_ROLES } from '../billing-engine/billing-roles';
 import { SystemRole, BillingState } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ReportsService } from './reports.service';
 import { EXCEL_MIME } from './excel-export';
 
-const BILLING_ROLES = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.FINANCE_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.OPERATIONS_EXECUTIVE,
-];
 
 /** Roster is PII-scoped per caller role inside the service, so keep it to staff. */
 const ROSTER_ROLES = STAFF_ROLES;
@@ -62,7 +56,7 @@ export class ReportsController {
   }
 
   @Get('billing')
-  @Roles(...BILLING_ROLES)
+  @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Export billing entries and invoices to Excel' })
   async billing(
     @Query('clientId') clientId?: string,

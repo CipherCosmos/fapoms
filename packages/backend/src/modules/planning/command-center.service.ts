@@ -22,8 +22,23 @@ export { canonicalState };
 
 /** A working day an assayer can actually sell, in hours. */
 const WORKING_HOURS_PER_DAY = 10;
-/** Beyond this an assayer is not realistically "nearby" for same-day work. */
-const SERVICEABLE_RADIUS_KM = 150;
+/**
+ * Fallback serviceable radius, for a client that has not contracted one.
+ *
+ * This used to be applied flat to every client, and no client is configured at 150: the seeded
+ * contracts are 200 and 150, and the candidate pre-filter runs at 50. So for a client whose
+ * ceiling is 200km, branches between 150 and 200 were reported as `isolated` and listed under
+ * `coverageGaps` — described in this file as "a hiring/partnering signal" — while that client's
+ * own rules permitted assigning them today. Headcount decisions were being driven off a number
+ * nobody had agreed to.
+ *
+ * The client's `planning_preferences.maxDistanceKm` is the contracted figure and now governs;
+ * this is only what applies when there isn't one.
+ */
+const DEFAULT_SERVICEABLE_RADIUS_KM = 150;
+
+/** The contracted ceiling for the joined client, in SQL. Falls back to the platform default. */
+const CLIENT_RADIUS_SQL = `COALESCE(NULLIF(c.planning_preferences->>'maxDistanceKm','')::numeric, ${DEFAULT_SERVICEABLE_RADIUS_KM})`;
 
 @Injectable()
 export class CommandCenterService {
@@ -117,8 +132,9 @@ export class CommandCenterService {
                   AND ST_DistanceSphere(
                         ST_SetSRID(ST_MakePoint(b.longitude, b.latitude), 4326),
                         ST_SetSRID(ST_MakePoint(a2.longitude, a2.latitude), 4326)
-                      ) / 1000 <= ${SERVICEABLE_RADIUS_KM}
+                      ) / 1000 <= ${CLIENT_RADIUS_SQL}
               ) AS assayers_in_range,
+              ${CLIENT_RADIUS_SQL} AS serviceable_radius_km,
               (SELECT COUNT(*) FROM assignments asg
                 WHERE asg.project_branch_id = pb.id AND asg.is_active = true
                   AND asg.status NOT IN ('CANCELLED','REJECTED')) AS assignment_count,
@@ -190,6 +206,9 @@ export class CommandCenterService {
         nearestAssayerKm: km,
         nearestAssayerName: b.nearest_assayer_name,
         assayersInRange: n(b.assayers_in_range),
+        // This branch's client-contracted ceiling, so downstream filters use the same number the
+        // count above was measured against rather than a platform-wide guess.
+        serviceableRadiusKm: n(b.serviceable_radius_km) || DEFAULT_SERVICEABLE_RADIUS_KM,
         realisedRevenue: n(b.realised_revenue),
         // Nobody within serviceable range means this branch cannot be staffed
         // locally at all — a hiring/partnering signal, not a scheduling one.
@@ -294,7 +313,8 @@ export class CommandCenterService {
 
     return {
       generatedAt: new Date().toISOString(),
-      serviceableRadiusKm: SERVICEABLE_RADIUS_KM,
+      // Reported as the default; each branch was measured against its own client's ceiling.
+      serviceableRadiusKm: DEFAULT_SERVICEABLE_RADIUS_KM,
       totals: {
         branches: branchPoints.length,
         assayers: assayerPoints.length,
@@ -311,7 +331,8 @@ export class CommandCenterService {
       territories: territoryList,
       // Where to actually put the next assayer: the branches nobody can reach.
       coverageGaps: branchPoints
-        .filter((b: any) => b.isolated || (b.nearestAssayerKm ?? 0) > SERVICEABLE_RADIUS_KM)
+        // Against the branch's own client ceiling, carried through on the row.
+        .filter((b: any) => b.isolated || (b.nearestAssayerKm ?? 0) > Number(b.serviceableRadiusKm ?? DEFAULT_SERVICEABLE_RADIUS_KM))
         .sort((a: any, b: any) => (b.nearestAssayerKm ?? 0) - (a.nearestAssayerKm ?? 0))
         .slice(0, 25),
       // Idle capacity that could absorb work from a neighbouring territory.

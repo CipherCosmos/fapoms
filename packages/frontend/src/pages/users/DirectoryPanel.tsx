@@ -110,7 +110,7 @@ export const DirectoryPanel: React.FC = () => {
       // Without an explicit limit the API returns only the first 20 users, silently truncating the
       // directory and every KPI/holder count derived from it. Pull a full working page.
       const response = await api.request<UserProfile[]>('/users?limit=500');
-      const list = Array.isArray(response) ? response : (response as any)?.data ?? [];
+      const list = response ?? [];
       setUsers(list);
       // Keep the open edit panel in sync after an action (e.g. unlock) refetches.
       setEditingUser((prev) => (prev ? list.find((u: UserProfile) => u.id === prev.id) ?? null : prev));
@@ -124,7 +124,7 @@ export const DirectoryPanel: React.FC = () => {
   const loadRoles = async () => {
     try {
       const response = await api.request<UserRole[]>('/users/roles');
-      setRoles(Array.isArray(response) ? response : (response as any)?.data ?? []);
+      setRoles(response ?? []);
     } catch {
       // Non-fatal: the role checklist is just empty until this loads.
     }

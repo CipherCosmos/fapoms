@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException } from '@nestjs/common';
 import { LocationTrailService } from './location-trail.service';
 import { AssayerLocationPingEntity } from './assayer-location-ping.entity';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
  * Ingestion is the gate between "a handset said something" and "the platform holds evidence".
@@ -30,6 +31,22 @@ describe('LocationTrailService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        {
+          provide: PlatformSettingsService,
+          useValue: {
+            // Mirrors the real resolution order (saved → environment → default) for the one
+            // key this service reads, so the env-driven tests below exercise the real path.
+            get: jest.fn(async (key: string) =>
+              key === 'locationTrail.retentionDays'
+                ? (process.env.LOCATION_TRAIL_RETENTION_DAYS ?? null)
+                : null),
+            getMany: jest.fn(async () => ({})),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            getWithSource: jest.fn(async () => ({ value: null, source: 'default' })),
+            describeAll: jest.fn(async () => []),
+            onChange: jest.fn(),
+          },
+        },
         LocationTrailService,
         { provide: getRepositoryToken(AssayerLocationPingEntity), useValue: mockRepo },
       ],

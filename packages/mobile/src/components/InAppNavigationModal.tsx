@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Modal as RNModal, Platform, ActivityIndic
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { useTheme } from '../theme/ThemeProvider';
+import { useLocation } from '../context/LocationContext';
 import { AppText, Badge, Button, Icon, IconButton, Tappable } from './ui/primitives';
 import { AssayerAssignment } from '../types/mobile-app';
 import { InteractiveMap } from './MapEntry';
@@ -170,6 +171,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   onClose,
 }) => {
   const t = useTheme();
+  const { attachPositionSource, reportPosition } = useLocation();
   const [origin, setOrigin] = useState<LatLng | null>(null);
   const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
@@ -446,12 +448,27 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   // ---- Live turn-by-turn position handler: advances the current step, refreshes
   // the live traffic ETA, tracks the travelled route, and re-routes when off course.
   const handleNavPosition = useCallback(
-    (lat: number, lng: number, opt?: { heading?: number | null; speed?: number | null }) => {
+    (
+      lat: number,
+      lng: number,
+      opt?: { heading?: number | null; speed?: number | null; accuracy?: number | null },
+    ) => {
       const ctx = navCtxRef.current;
       const c: LatLng = { latitude: lat, longitude: lng };
       setOrigin(c);
       if (opt?.heading != null) setHeading(opt.heading);
       if (opt?.speed != null) setSpeed(opt.speed);
+
+      // Share the stream with the movement trail rather than making it open a second subscription
+      // to the same hardware. It applies its own recording policy, so most of these are discarded
+      // — this is a drive, and turn-by-turn samples far finer than any travel claim needs.
+      reportPosition({
+        latitude: lat,
+        longitude: lng,
+        accuracy: opt?.accuracy ?? null,
+        speed: opt?.speed ?? null,
+        heading: opt?.heading ?? null,
+      });
 
       const ends = stepEndsRef.current;
       if (ends.length > 0 && ctx.steps.length > 0) {
@@ -489,8 +506,19 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
         }
       }
     },
-    [],
+    [reportPosition],
   );
+
+  /**
+   * Tell the movement trail to stand its own watcher down while this one is running.
+   *
+   * Held for the whole navigating window, including the web polling path, so there is never a
+   * moment where both this component and the trail are asking the platform for positions.
+   */
+  useEffect(() => {
+    if (!visible || !navigating) return;
+    return attachPositionSource();
+  }, [visible, navigating, attachPositionSource]);
 
   // Native: high-frequency location watch powering turn-by-turn navigation.
   useEffect(() => {
@@ -505,6 +533,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
         (loc) => handleNavPosition(loc.coords.latitude, loc.coords.longitude, {
           heading: loc.coords.heading,
           speed: loc.coords.speed,
+          accuracy: loc.coords.accuracy,
         }),
       );
       if (!cancelled) watchRef.current = sub;
@@ -530,6 +559,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
         handleNavPosition(loc.coords.latitude, loc.coords.longitude, {
           heading: loc.coords.heading,
           speed: loc.coords.speed,
+          accuracy: loc.coords.accuracy,
         });
       } catch {
         // ignore location failures during polling

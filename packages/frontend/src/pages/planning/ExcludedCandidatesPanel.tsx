@@ -124,7 +124,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                       transition control instead of offering a bypass. */}
                   {isOnboarding && (
                     <a
-                      href={`/assayers/${e.assayerId}`}
+                      href={`/hr/roster?assayer=${e.assayerId}`}
                       className="btn btn-secondary"
                       style={{ padding: '3px 8px', fontSize: '10px', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', textDecoration: 'none' }}
                     >

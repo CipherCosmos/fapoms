@@ -36,8 +36,7 @@ interface CoveragePreview {
   }>;
 }
 
-const inr = (n: number | null | undefined) =>
-  n != null ? `₹${Math.round(n).toLocaleString('en-IN')}` : '—';
+import { money as inr } from '../../utils/money';
 
 /**
  * The coverage-plan lifecycle, surfaced. The backend could always generate → approve → deploy a

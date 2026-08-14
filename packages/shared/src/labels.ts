@@ -24,6 +24,9 @@ import {
   ContractStatus,
   ClientBillingStatus,
   ProjectStatus,
+  TravelMode,
+  FeedbackStatus,
+  FeedbackCategory,
 } from './enums';
 
 /** Where a branch sits in the audit lifecycle. */
@@ -357,4 +360,78 @@ export const ASSIGNMENT_ISSUE_CATEGORY_LABELS: Record<AssignmentIssueCategory, s
 export function assignmentIssueCategoryLabel(category?: string | null): string {
   if (!category) return 'Issue';
   return ASSIGNMENT_ISSUE_CATEGORY_LABELS[category as AssignmentIssueCategory] ?? category;
+}
+
+/** How an assayer travels. Rendered wherever a transport rate or recommendation is shown. */
+export const TRAVEL_MODE_LABELS: Record<TravelMode, string> = {
+  [TravelMode.CAR]: 'Own Car',
+  [TravelMode.TWO_WHEELER]: 'Own Two-Wheeler',
+  [TravelMode.BUS]: 'Bus',
+  [TravelMode.TRAIN]: 'Train',
+  [TravelMode.AUTO_RICKSHAW]: 'Auto-Rickshaw',
+  [TravelMode.TAXI]: 'Taxi / Cab',
+  [TravelMode.FLIGHT]: 'Flight',
+  [TravelMode.OTHER]: 'Other',
+};
+
+/** Stable display order — everyday modes first, so dropdowns lead with the common cases. */
+export const TRAVEL_MODE_ORDER: readonly TravelMode[] = [
+  TravelMode.TWO_WHEELER,
+  TravelMode.CAR,
+  TravelMode.BUS,
+  TravelMode.TRAIN,
+  TravelMode.AUTO_RICKSHAW,
+  TravelMode.TAXI,
+  TravelMode.FLIGHT,
+  TravelMode.OTHER,
+];
+
+export function travelModeLabel(mode?: string | null): string {
+  if (!mode) return '—';
+  return TRAVEL_MODE_LABELS[mode as TravelMode] ?? mode;
+}
+
+/**
+ * Feedback wording, shared so the two surfaces of one conversation say the same thing.
+ *
+ * The web triage desk and the mobile app each wrote their own map, and they disagreed on the two
+ * words users actually exchange: the desk said "Acknowledged" where the phone said "Seen", and
+ * "Enhancement" where the phone said "Idea". Both are describing the same thread — so a field
+ * assayer would report that their issue was marked "Seen" while the product team was looking at a
+ * badge reading "Acknowledged", and neither could tell whether they were discussing the same
+ * state. Mobile also rendered the raw category (`ENHANCEMENT`) in thread headers, which is the
+ * SCREAMING_SNAKE leak this file exists to prevent.
+ *
+ * One wording, chosen for the person being told rather than for the schema.
+ */
+export const FEEDBACK_STATUS_LABELS: Record<FeedbackStatus, string> = {
+  // "New", which is what both surfaces already said — it reads as a queue position rather than
+  // a state, which is how the person looking at it thinks about it.
+  [FeedbackStatus.OPEN]: 'New',
+  // "Acknowledged", not mobile's "Seen". The enum means the team has replied and is engaging;
+  // "Seen" reads as merely opened, which understates it to the person waiting for an answer.
+  [FeedbackStatus.ACKNOWLEDGED]: 'Acknowledged',
+  [FeedbackStatus.IN_PROGRESS]: 'In progress',
+  [FeedbackStatus.RESOLVED]: 'Resolved',
+  [FeedbackStatus.CLOSED]: 'Closed',
+};
+
+export const FEEDBACK_CATEGORY_LABELS: Record<FeedbackCategory, string> = {
+  [FeedbackCategory.BUG]: 'Bug',
+  // "Enhancement", not mobile's "Idea". Friendlier is not worth two names for one thing when
+  // both people are looking at the same thread.
+  [FeedbackCategory.ENHANCEMENT]: 'Enhancement',
+  [FeedbackCategory.PROCESS]: 'Process',
+  [FeedbackCategory.QUESTION]: 'Question',
+  [FeedbackCategory.OTHER]: 'Other',
+};
+
+export function feedbackStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return FEEDBACK_STATUS_LABELS[status as FeedbackStatus] ?? status;
+}
+
+export function feedbackCategoryLabel(category?: string | null): string {
+  if (!category) return '—';
+  return FEEDBACK_CATEGORY_LABELS[category as FeedbackCategory] ?? category;
 }

@@ -16,16 +16,17 @@ import { FeedbackThreadPanel } from './FeedbackThreadPanel';
 import { FeedbackLauncher } from './FeedbackLauncher';
 import { getThread } from '../../services/feedback';
 
+import { FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
 const PAGE_SIZE = 25;
 const TEAM_ROLES = [SystemRole.PRODUCT_SUPPORT, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR];
 
 const STATUS_TABS: { key: FeedbackStatus | 'ALL'; label: string }[] = [
   { key: 'ALL', label: 'All' },
-  { key: FeedbackStatus.OPEN, label: 'New' },
-  { key: FeedbackStatus.ACKNOWLEDGED, label: 'Acknowledged' },
-  { key: FeedbackStatus.IN_PROGRESS, label: 'In progress' },
-  { key: FeedbackStatus.RESOLVED, label: 'Resolved' },
-  { key: FeedbackStatus.CLOSED, label: 'Closed' },
+  { key: FeedbackStatus.OPEN, label: FEEDBACK_STATUS_LABELS[FeedbackStatus.OPEN] },
+  { key: FeedbackStatus.ACKNOWLEDGED, label: FEEDBACK_STATUS_LABELS[FeedbackStatus.ACKNOWLEDGED] },
+  { key: FeedbackStatus.IN_PROGRESS, label: FEEDBACK_STATUS_LABELS[FeedbackStatus.IN_PROGRESS] },
+  { key: FeedbackStatus.RESOLVED, label: FEEDBACK_STATUS_LABELS[FeedbackStatus.RESOLVED] },
+  { key: FeedbackStatus.CLOSED, label: FEEDBACK_STATUS_LABELS[FeedbackStatus.CLOSED] },
 ];
 
 const Stat: React.FC<{ n: number; label: string; tone?: string; onClick?: () => void; active?: boolean }> = ({ n, label: l, tone, onClick, active }) => (

@@ -195,6 +195,92 @@ export function regionLabel(value: string | null | undefined): string {
   return isRegion(value) ? REGION_LABELS[value] : value;
 }
 
+/**
+ * Alias → canonical state name.
+ *
+ * `STATE_TO_REGION` deliberately holds many spellings per state, because its job is to
+ * *recognise* input. Anything that needs to *store or compare* a state — rate cards scoped to
+ * "Maharashtra", dropdowns, grouping — needs the opposite: exactly one name per state. This maps
+ * every alias key above to that one name. Keys must stay in lockstep with `STATE_TO_REGION`;
+ * the backend's transport-rate spec asserts the two never drift (shared has no test runner).
+ */
+const STATE_CANONICAL_NAMES: Record<string, string> = {
+  'jammu and kashmir': 'Jammu & Kashmir',
+  'jammu kashmir': 'Jammu & Kashmir',
+  'j and k': 'Jammu & Kashmir',
+  'ladakh': 'Ladakh',
+  'himachal pradesh': 'Himachal Pradesh',
+  'punjab': 'Punjab',
+  'haryana': 'Haryana',
+  'uttarakhand': 'Uttarakhand',
+  'uttaranchal': 'Uttarakhand',
+  'delhi': 'Delhi',
+  'new delhi': 'Delhi',
+  'nct of delhi': 'Delhi',
+  'chandigarh': 'Chandigarh',
+  'uttar pradesh': 'Uttar Pradesh',
+  'rajasthan': 'Rajasthan',
+  'assam': 'Assam',
+  'arunachal pradesh': 'Arunachal Pradesh',
+  'manipur': 'Manipur',
+  'meghalaya': 'Meghalaya',
+  'mizoram': 'Mizoram',
+  'nagaland': 'Nagaland',
+  'tripura': 'Tripura',
+  'sikkim': 'Sikkim',
+  'west bengal': 'West Bengal',
+  'bihar': 'Bihar',
+  'jharkhand': 'Jharkhand',
+  'odisha': 'Odisha',
+  'orissa': 'Odisha',
+  'andaman and nicobar islands': 'Andaman & Nicobar Islands',
+  'andaman nicobar': 'Andaman & Nicobar Islands',
+  'madhya pradesh': 'Madhya Pradesh',
+  'chhattisgarh': 'Chhattisgarh',
+  'chattisgarh': 'Chhattisgarh',
+  'maharashtra': 'Maharashtra',
+  'gujarat': 'Gujarat',
+  'goa': 'Goa',
+  'dadra and nagar haveli and daman and diu': 'Dadra & Nagar Haveli and Daman & Diu',
+  'dadra and nagar haveli': 'Dadra & Nagar Haveli and Daman & Diu',
+  'daman and diu': 'Dadra & Nagar Haveli and Daman & Diu',
+  'karnataka': 'Karnataka',
+  'kerala': 'Kerala',
+  'tamil nadu': 'Tamil Nadu',
+  'tamilnadu': 'Tamil Nadu',
+  'andhra pradesh': 'Andhra Pradesh',
+  'andra pradesh': 'Andhra Pradesh',
+  'telangana': 'Telangana',
+  'puducherry': 'Puducherry',
+  'pondicherry': 'Puducherry',
+  'lakshadweep': 'Lakshadweep',
+};
+
+/**
+ * Resolve any real-world state spelling to its single canonical name, or `null` when the
+ * input is unrecognised. Same tolerance as `resolveRegion` — including the despaced-variant
+ * fallback that recovers "ANDRAPRADESH" and "WESTBENGAL" — and the same refusal to guess.
+ */
+export function canonicalStateName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const key = normalizeStateKey(value);
+  if (!key) return null;
+
+  const exact = STATE_CANONICAL_NAMES[key];
+  if (exact) return exact;
+
+  const despaced = key.replace(/\s/g, '');
+  for (const [candidate, canonical] of Object.entries(STATE_CANONICAL_NAMES)) {
+    if (candidate.replace(/\s/g, '') === despaced) return canonical;
+  }
+  return null;
+}
+
+/** Every canonical state name once, sorted — the dropdown source for state-scoped config. */
+export const CANONICAL_STATE_NAMES: readonly string[] = [
+  ...new Set(Object.values(STATE_CANONICAL_NAMES)),
+].sort((a, b) => a.localeCompare(b));
+
 /** The state → region pairs, for the migration's backfill and for tests. */
 export const STATE_REGION_PAIRS: ReadonlyArray<readonly [string, Region]> =
   Object.entries(STATE_TO_REGION) as ReadonlyArray<readonly [string, Region]>;

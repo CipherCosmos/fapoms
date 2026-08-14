@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Trash2, Edit2, Shield, Sliders, AlertTriangle, Info } from 'lucide-react';
 import { api } from '../services/api';
+import { useClientOptions } from '../hooks/useClients';
 import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton } from '../components/ui';
 import { useCurrentRoles, canManageRules, canDeleteRules } from '../hooks/useCurrentRoles';
 
@@ -28,7 +29,6 @@ interface BusinessRule {
   isActive?: boolean;
 }
 
-interface ClientOption { id: string; name: string; clientCode?: string }
 interface BranchOption { id: string; name: string; branchCode?: string }
 
 /**
@@ -90,7 +90,7 @@ export const Rules: React.FC = () => {
   const [form, setForm] = useState(emptyForm);
   const [stateInput, setStateInput] = useState('');
 
-  const { data: clientsRes } = useQuery({ queryKey: ['clients'], queryFn: () => api.request<ClientOption[]>('/clients') });
+  const { data: clientsRes } = useClientOptions();
   const clients = (Array.isArray(clientsRes) ? clientsRes : (clientsRes as any)?.data) || [];
   const { data: branchesRes } = useQuery({ queryKey: ['branches', 'all'], queryFn: () => api.request<any>('/branches?limit=1000') });
   const branches: BranchOption[] = (Array.isArray(branchesRes) ? branchesRes : branchesRes?.data) || [];

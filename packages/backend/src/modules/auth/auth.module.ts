@@ -14,6 +14,7 @@ import { JwtStrategy } from './jwt.strategy';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -29,6 +30,9 @@ import { AssayerEntity } from '../assayer/assayer.entity';
       }),
     }),
     TypeOrmModule.forFeature([UserEntity, RefreshTokenEntity, AssayerEntity]),
+    // For the lockout alert. Safe direction: NotificationsModule pulls guards as plain
+    // class imports, never this module.
+    NotificationsModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

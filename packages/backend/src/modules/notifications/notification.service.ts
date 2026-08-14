@@ -276,7 +276,7 @@ export class NotificationService {
 
   /**
    * Every category's preference row for this recipient, filled in with the opt-out default
-   * (everything on except email) wherever no row has been saved yet. The caller never has to
+   * (everything on, including email) wherever no row has been saved yet. The caller never has to
    * special-case "no preference set" — the list is always complete and always the right shape
    * for a settings screen to render directly.
    */
@@ -292,7 +292,7 @@ export class NotificationService {
         category,
         inApp: row?.inApp ?? true,
         push: row?.push ?? true,
-        email: row?.email ?? false,
+        email: row?.email ?? true,
       };
     });
   }
@@ -313,7 +313,9 @@ export class NotificationService {
         category,
         inApp: true,
         push: true,
-        email: false,
+        // Opted in, matching the other channels and what delivery actually does. A row created
+        // because somebody touched a different switch must not arrive pre-muted.
+        email: true,
         createdBy: recipientId,
       });
     }

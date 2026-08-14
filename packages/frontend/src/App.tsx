@@ -27,7 +27,6 @@ const Assignments = React.lazy(() => import('./pages/Assignments').then((m) => (
 const Scheduling = React.lazy(() => import('./pages/Scheduling').then((m) => ({ default: m.Scheduling })));
 const Documents = React.lazy(() => import('./pages/Documents').then((m) => ({ default: m.Documents })));
 const Users = React.lazy(() => import('./pages/Users'));
-const AssayerProfile = React.lazy(() => import('./pages/AssayerProfile'));
 const Clients = React.lazy(() => import('./pages/Clients').then((m) => ({ default: m.Clients })));
 const Billing = React.lazy(() => import('./pages/Billing').then((m) => ({ default: m.Billing })));
 const LedgerPage = React.lazy(() => import('./pages/billing/LedgerPage').then((m) => ({ default: m.LedgerPage })));
@@ -37,8 +36,10 @@ const Rules = React.lazy(() => import('./pages/Rules'));
 const Notifications = React.lazy(() => import('./pages/Notifications'));
 const FeedbackPage = React.lazy(() => import('./pages/feedback/FeedbackPage').then((m) => ({ default: m.FeedbackPage })));
 const Holidays = React.lazy(() => import('./pages/Holidays'));
+const TransportCosts = React.lazy(() => import('./pages/TransportCosts'));
+const NotificationAdmin = React.lazy(() => import('./pages/admin/NotificationAdmin'));
+const PlatformSettings = React.lazy(() => import('./pages/admin/PlatformSettings'));
 const Zones = React.lazy(() => import('./pages/Zones'));
-const FieldIssues = React.lazy(() => import('./pages/FieldIssues').then((m) => ({ default: m.FieldIssues })));
 const OperationsInbox = React.lazy(() => import('./pages/OperationsInbox').then((m) => ({ default: m.OperationsInbox })));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
@@ -228,7 +229,6 @@ export const App: React.FC = () => {
         </Route>
         {/* The roster now lives inside the workforce console; keep the old path working. */}
         <Route path="/assayers" element={<Navigate to="/hr/roster" replace />} />
-        <Route path="/assayers/:id" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerProfile /></ProtectedRoute>} />
         <Route path="/clients" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Clients /></ProtectedRoute>} />
         <Route path="/billing" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Billing /></ProtectedRoute>} />
         <Route path="/billing/ledger" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><LedgerPage /></ProtectedRoute>} />
@@ -237,9 +237,11 @@ export const App: React.FC = () => {
         <Route path="/admin/rule-bypass" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><RuleBypassPanel /></ProtectedRoute>} />
         <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
         <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
+        <Route path="/transport-costs" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><TransportCosts /></ProtectedRoute>} />
+        <Route path="/admin/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><NotificationAdmin /></ProtectedRoute>} />
+        <Route path="/admin/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><PlatformSettings /></ProtectedRoute>} />
         <Route path="/zones" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Zones /></ProtectedRoute>} />
         <Route path="/inbox" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><OperationsInbox /></ProtectedRoute>} />
-        <Route path="/field-issues" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FieldIssues /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
         <Route path="/feedback" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FeedbackPage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Settings /></ProtectedRoute>} />

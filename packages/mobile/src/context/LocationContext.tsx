@@ -1,6 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import * as Location from 'expo-location';
-import { queueFix, flushQueue } from '../services/location-queue';
+import { queueFix, flushQueue, queuedCount, persistQueue } from '../services/location-queue';
+import {
+  decideFix,
+  shouldUpload,
+  shouldPushLive,
+  heartbeatOverdue,
+  HEARTBEAT_CHECK_MS,
+  WATCH_OPTIONS,
+  type PolicyFix,
+  type RecordReason,
+} from '../services/location-policy';
 import { MobileApiService } from '../services/api.service';
 import { calculateHaversineDistance } from '@fapoms/shared';
 
@@ -21,12 +32,27 @@ interface LocationContextType {
   requestLocationPermission: () => Promise<boolean>;
   refreshLocation: () => Promise<LocationCoords | null>;
   calculateDistanceKm: (targetLat: number, targetLng: number) => number | null;
-  // Live-location sharing (opt-in, default OFF). When enabled, the device keeps
-  // pushing its current position to the backend so the recommendation engine can
-  // rank by where the assayer actually is, not just their home address.
+  // Live-location sharing (default OFF, turned on for the duration of a job). While enabled the
+  // device records a movement trail and keeps the backend's "where are they now" position current,
+  // so the recommendation engine can rank by where the assayer actually is rather than their home
+  // address, and a later travel claim has something to be checked against.
   liveTrackingEnabled: boolean;
   liveTrackingReady: boolean;
   setLiveTrackingEnabled: (enabled: boolean) => Promise<boolean>;
+  /**
+   * Declare that something else is already watching the device's position at a higher rate, and
+   * will feed it here via `reportPosition`. Returns a function to stand down again.
+   *
+   * Turn-by-turn navigation is the case this exists for, and it is the worst case: an assayer
+   * driving to a branch has the navigation view holding a `BestForNavigation` subscription — GPS
+   * pinned, a fix every couple of seconds — at the exact moment the trail also wants to watch. Two
+   * subscriptions do not halve anything; the OS services the union at the strictest setting, so
+   * the second one costs a whole extra stream of callbacks and buys nothing the first is not
+   * already producing. Borrowing that stream is free.
+   */
+  attachPositionSource: () => () => void;
+  /** Hand a position from an attached source to the trail. Subject to the same recording policy. */
+  reportPosition: (coords: LocationCoords) => void;
   /**
    * Consecutive failed position pushes, reset on the next success.
    *
@@ -55,10 +81,20 @@ const LocationContext = createContext<LocationContextType | undefined>(undefined
 
 /**
  * Drain the queued fixes to the server. Safe to call often — it no-ops when the queue is empty and
- * guards against overlapping drains internally, so a timer tick and a reconnect cannot race.
+ * guards against overlapping drains internally, so a foreground return and a new fix cannot race.
  */
 const flushLocationQueue = () =>
   flushQueue((batch) => MobileApiService.uploadLocationPings(batch)).catch(() => undefined);
+
+/**
+ * How often the device may re-ask the server whether sharing should be on.
+ *
+ * The flag is not the assayer's alone to set: accepting a job turns it on server-side, and the
+ * handset has to find out. Re-checking when the app comes to the foreground is enough — nobody
+ * accepts work without looking at their phone — and the throttle stops a user flicking between
+ * apps from turning that into a stream of requests.
+ */
+const TRACKING_SYNC_MIN_INTERVAL_MS = 60_000;
 
 export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [location, setLocation] = useState<LocationCoords | null>(null);
@@ -72,70 +108,152 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [liveTrackingEnabled, setLiveTrackingEnabledState] = useState(false);
   const [liveTrackingReady, setLiveTrackingReady] = useState(false);
   const liveEnabledRef = useRef(false);
-  const reportTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasPermissionRef = useRef<boolean | null>(null);
 
-  // Load the current live-sharing flag from the backend once (self profile).
+  // Cadence state. Refs, not state: none of it should cause a render, and the watcher callback
+  // must see the current values rather than whatever was captured when it was registered — the
+  // stale-closure trap that previously froze the whole trail on a single coordinate.
+  const lastKeptFixRef = useRef<PolicyFix | null>(null);
+  const lastUploadAtRef = useRef(0);
+  const lastLivePushAtRef = useRef(0);
+  const lastTrackingSyncAtRef = useRef(0);
+
+  // How many higher-rate position sources are currently feeding us. A count rather than a flag so
+  // two overlapping navigation views cannot have the first one to close stand the feed down.
+  const positionSourcesRef = useRef(0);
+  const [externalFeedActive, setExternalFeedActive] = useState(false);
+
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await MobileApiService.getSelfProfile();
-        if (!cancelled && res?.data) {
-          const enabled = !!res.data.isLiveEnabled;
-          liveEnabledRef.current = enabled;
-          setLiveTrackingEnabledState(enabled);
-        }
-      } catch {
-        // keep default OFF
-      } finally {
-        if (!cancelled) setLiveTrackingReady(true);
+    hasPermissionRef.current = hasPermission;
+  }, [hasPermission]);
+
+  /**
+   * Ask the server whether sharing should be on, and adopt the answer.
+   *
+   * Deliberately one-directional: the server is the authority, because it is what turns tracking
+   * on when a job is accepted and what refuses to let it off while that job is live.
+   */
+  const syncTrackingFlag = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastTrackingSyncAtRef.current < TRACKING_SYNC_MIN_INTERVAL_MS) return;
+    lastTrackingSyncAtRef.current = now;
+    try {
+      const res = await MobileApiService.getSelfProfile();
+      if (res?.data) {
+        const enabled = !!res.data.isLiveEnabled;
+        liveEnabledRef.current = enabled;
+        setLiveTrackingEnabledState(enabled);
       }
-    })();
-    return () => { cancelled = true; };
+    } catch {
+      // Keep whatever we had. A failed sync must never silently switch tracking off mid-job.
+    } finally {
+      setLiveTrackingReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void syncTrackingFlag();
+    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') void syncTrackingFlag();
+    });
+    return () => sub.remove();
+  }, [syncTrackingFlag]);
+
+  /** Drain the queue only when a batch has built up or the oldest fix has waited long enough. */
+  const uploadIfDue = useCallback(async () => {
+    const count = await queuedCount();
+    if (!shouldUpload(count, Date.now() - lastUploadAtRef.current)) return;
+    lastUploadAtRef.current = Date.now();
+    await flushLocationQueue();
   }, []);
 
   /**
-   * One place where a position push succeeds or fails, so the outcome is recorded rather
-   * than discarded. Deliberately does not surface a toast — the push runs on a timer in the
-   * background and a transient signal drop is normal; it is a *sustained* failure that
-   * matters, which is what the counter makes visible.
+   * Put a fix into the trail, if it is worth the cost.
+   *
+   * Two different jobs, deliberately not merged. The queued fix is *evidence*: it becomes part of
+   * the movement trail a travel claim is later checked against, and a fix taken where there was no
+   * signal is exactly the one worth keeping, so it is written to the device first and uploaded
+   * when the network allows. The PUT answers "where is this assayer now" and is disposable — if it
+   * fails, the next one replaces it and nothing is lost, which is why it is rate-limited to actual
+   * movement while the trail is not.
+   *
+   * Returns whether the fix was kept, so the caller can avoid re-rendering the tree for a fix that
+   * changed nothing.
    */
-  const pushLiveLocation = useCallback((lat: number, lng: number, accuracyMeters?: number | null) => {
-    /**
-     * Two different jobs, deliberately not merged.
-     *
-     * The PUT answers "where is this assayer now" and is disposable — if it fails, the next one
-     * thirty seconds later replaces it and nothing is lost. The queued fix is *evidence*: it
-     * becomes part of the movement trail a travel claim is later checked against, and a fix taken
-     * where there was no signal is exactly the one worth keeping. So it is written to the device
-     * first and uploaded whenever the network allows, rather than being fired at the server and
-     * forgotten.
-     */
-    void queueFix({
-      latitude: lat,
-      longitude: lng,
-      accuracyMeters: accuracyMeters ?? null,
-      recordedAt: new Date().toISOString(),
-    }).then(() => flushLocationQueue());
+  const recordFix = useCallback(
+    (coords: LocationCoords, opts: { force?: boolean } = {}): boolean => {
+      // Nothing leaves the device while sharing is off. This gate is the reason the check is here
+      // and not in the watcher: `refreshLocation` reaches this path too, and it runs at app start
+      // for every user, assayer or not.
+      if (!liveEnabledRef.current) return false;
 
-    MobileApiService.updateLiveLocation(lat, lng)
-      .then(() => setLiveTrackingFailures(0))
-      .catch((err: any) => {
-        setLiveTrackingFailures((n) => {
-          const next = n + 1;
-          if (next === 1 || next % 5 === 0) {
-            console.warn(`Live location push failed (${next} in a row):`, err?.message ?? err);
-          }
-          return next;
-        });
-      });
+      const now = Date.now();
+      const candidate: PolicyFix = {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracyMeters: coords.accuracy ?? null,
+        at: now,
+      };
+
+      const decision = opts.force
+        ? ({ record: true, reason: 'first' as RecordReason, movedMeters: 0 } as const)
+        : decideFix(lastKeptFixRef.current, candidate);
+      if (!decision.record) return false;
+
+      lastKeptFixRef.current = candidate;
+
+      void queueFix({
+        latitude: candidate.latitude,
+        longitude: candidate.longitude,
+        accuracyMeters: candidate.accuracyMeters,
+        recordedAt: new Date(now).toISOString(),
+      }).then(() => uploadIfDue());
+
+      if (shouldPushLive(decision.reason, now - lastLivePushAtRef.current)) {
+        lastLivePushAtRef.current = now;
+        MobileApiService.updateLiveLocation(candidate.latitude, candidate.longitude)
+          .then(() => setLiveTrackingFailures(0))
+          .catch((err: any) => {
+            setLiveTrackingFailures((n) => {
+              const next = n + 1;
+              if (next === 1 || next % 5 === 0) {
+                console.warn(`Live location push failed (${next} in a row):`, err?.message ?? err);
+              }
+              return next;
+            });
+          });
+      }
+
+      return true;
+    },
+    [uploadIfDue],
+  );
+
+  const attachPositionSource = useCallback((): (() => void) => {
+    positionSourcesRef.current += 1;
+    setExternalFeedActive(true);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      positionSourcesRef.current = Math.max(0, positionSourcesRef.current - 1);
+      if (positionSourcesRef.current === 0) setExternalFeedActive(false);
+    };
   }, []);
+
+  const reportPosition = useCallback(
+    (coords: LocationCoords) => {
+      if (recordFix(coords)) setLocation(coords);
+    },
+    [recordFix],
+  );
 
   const requestLocationPermission = useCallback(async (): Promise<boolean> => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       const granted = status === 'granted';
       setHasPermission(granted);
+      hasPermissionRef.current = granted;
       if (!granted) {
         setErrorMsg('Permission to access location was denied');
       }
@@ -143,6 +261,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (err: any) {
       setErrorMsg(err?.message || 'Error requesting location permission');
       setHasPermission(false);
+      hasPermissionRef.current = false;
       return false;
     }
   }, []);
@@ -151,7 +270,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setLoadingLocation(true);
     setErrorMsg(null);
     try {
-      let perm = hasPermission;
+      let perm = hasPermissionRef.current;
       if (perm !== true) {
         perm = await requestLocationPermission();
       }
@@ -170,7 +289,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
         setLocation(coords);
         setLoadingLocation(false);
-        pushLiveLocation(coords.latitude, coords.longitude, coords.accuracy);
+        recordFix(coords);
         return coords;
       } else {
         // Permission refused. Say so plainly and report no position at all.
@@ -187,51 +306,162 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setLoadingLocation(false);
       return null;
     }
-  }, [hasPermission, requestLocationPermission]);
+  }, [requestLocationPermission, recordFix]);
 
   useEffect(() => {
     refreshLocation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Report the live position on an interval while sharing is enabled. Only runs
-  // when the assayer has opted in — live coordinates never reach the backend
-  // (and are never used for recommendations) while sharing is off.
+  /**
+   * Watch the device's position while sharing is on.
+   *
+   * This replaced a thirty-second timer that called `getCurrentPositionAsync`, which was both
+   * wasteful and wrong: wasteful because it demanded a fresh fix whether or not anyone had moved,
+   * and wrong because the timer closed over a stale `location`, so after the first fix it pushed
+   * the *same coordinate* every thirty seconds — a trail that recorded a stationary assayer no
+   * matter how far they drove, and would have contradicted honest travel claims.
+   *
+   * A subscription hands the filtering to the platform's own fusion engine, which can answer from
+   * cell and wifi and leave the GNSS chip asleep when nothing is happening. `decideFix` then
+   * decides what is worth keeping, so a stationary handset settles at one recorded fix every four
+   * minutes instead of a hundred and twenty an hour.
+   *
+   * The subscription is torn down when the app leaves the foreground. That is not a compromise:
+   * this app holds foreground permission only (`NSLocationWhenInUseUsageDescription`,
+   * `ACCESS_FINE_LOCATION`), so the OS stops delivering fixes anyway and a live subscription would
+   * be nothing but wake-ups that return nothing.
+   */
   useEffect(() => {
-    if (reportTimerRef.current) {
-      clearInterval(reportTimerRef.current);
-      reportTimerRef.current = null;
+    if (!liveTrackingEnabled) {
+      // Ending a job should not strand evidence on the handset.
+      void flushLocationQueue();
+      lastKeptFixRef.current = null;
+      return;
     }
-    if (!liveTrackingEnabled) return;
-    const report = async () => {
-      const cur = location;
-      if (!cur) {
-        const loc = await refreshLocation();
-        if (loc) pushLiveLocation(loc.latitude, loc.longitude);
-        return;
-      }
-      pushLiveLocation(cur.latitude, cur.longitude);
-    };
-    report();
-    reportTimerRef.current = setInterval(report, 30000);
-    return () => {
-      if (reportTimerRef.current) { clearInterval(reportTimerRef.current); reportTimerRef.current = null; }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveTrackingEnabled]);
 
-  const setLiveTrackingEnabled = useCallback(async (enabled: boolean): Promise<boolean> => {
-    const ok = await MobileApiService.setLiveTracking(enabled);
-    if (ok) {
-      liveEnabledRef.current = enabled;
-      setLiveTrackingEnabledState(enabled);
-      // Immediately report a fresh position so the switch takes effect right away.
-      if (enabled) {
-        const loc = await refreshLocation();
-        if (loc) pushLiveLocation(loc.latitude, loc.longitude);
+    let cancelled = false;
+    let subscription: Location.LocationSubscription | null = null;
+
+    const start = async () => {
+      // Something faster is already watching and feeding us; a second subscription would only
+      // duplicate its callbacks. `reportPosition` carries the trail while it lasts.
+      if (cancelled || subscription || externalFeedActive) return;
+      const perm = hasPermissionRef.current === true ? true : await requestLocationPermission();
+      if (!perm || cancelled) return;
+      try {
+        const sub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Balanced, ...WATCH_OPTIONS },
+          (pos) => {
+            const coords: LocationCoords = {
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+              altitude: pos.coords.altitude,
+              speed: pos.coords.speed,
+              heading: pos.coords.heading,
+            };
+            // Only re-render for a fix the trail actually kept. While driving the OS can deliver
+            // one every couple of seconds, and re-rendering every consumer for a position nothing
+            // reads at that resolution is its own kind of battery drain.
+            if (recordFix(coords)) setLocation(coords);
+          },
+        );
+        if (cancelled) sub.remove();
+        else subscription = sub;
+      } catch {
+        // Location services off or revoked mid-session. `refreshLocation` reports it to the user;
+        // there is nothing useful to do from a background subscription attempt.
       }
-    }
-    return ok;
-  }, [refreshLocation]);
+    };
+
+    /**
+     * The heartbeat, and the reason it is a timer rather than part of the stream above.
+     *
+     * `distanceInterval` is what makes the subscription cheap, and it means a handset that has not
+     * moved is delivered nothing at all — so a stationary assayer would go completely silent, the
+     * one reading indistinguishable from a switched-off phone. This checks whether the trail has
+     * gone quiet and asks for a position only then: on a moving device the condition is false and
+     * nothing is spent.
+     */
+    const beat = async () => {
+      if (cancelled || !liveEnabledRef.current) return;
+      if (!heartbeatOverdue(lastKeptFixRef.current, Date.now())) return;
+      try {
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (cancelled) return;
+        recordFix({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          altitude: pos.coords.altitude,
+          speed: pos.coords.speed,
+          heading: pos.coords.heading,
+        });
+      } catch {
+        // No fix available. The gap is then real, and the server is right to score it as
+        // unobserved rather than have the device invent a position to fill it.
+      }
+    };
+
+    const heartbeat = setInterval(() => void beat(), HEARTBEAT_CHECK_MS);
+
+    const stop = () => {
+      subscription?.remove();
+      subscription = null;
+    };
+
+    const onAppStateChange = (state: AppStateStatus) => {
+      if (state === 'active') {
+        void start();
+        void beat();
+        void flushLocationQueue();
+        lastUploadAtRef.current = Date.now();
+      } else {
+        stop();
+        // The debounce in the queue is a small window, but the OS suspending the process is
+        // exactly when it would be open.
+        void persistQueue();
+        void flushLocationQueue();
+      }
+    };
+
+    void start();
+    // Anchor the window immediately rather than waiting on the platform's first callback.
+    void beat();
+    const sub = AppState.addEventListener('change', onAppStateChange);
+    return () => {
+      cancelled = true;
+      stop();
+      clearInterval(heartbeat);
+      sub.remove();
+      void persistQueue();
+    };
+    // `externalFeedActive` belongs here: when a navigation view takes over the effect re-runs, the
+    // cleanup drops our subscription, and `start` declines to open another. When it closes, the
+    // effect runs again and the watch resumes.
+  }, [liveTrackingEnabled, externalFeedActive, requestLocationPermission, recordFix]);
+
+  const setLiveTrackingEnabled = useCallback(
+    async (enabled: boolean): Promise<boolean> => {
+      const ok = await MobileApiService.setLiveTracking(enabled);
+      if (ok) {
+        liveEnabledRef.current = enabled;
+        setLiveTrackingEnabledState(enabled);
+        if (enabled) {
+          // Anchor the trail at the moment sharing started, so the window has a known first point
+          // rather than waiting on the OS for its first callback.
+          lastKeptFixRef.current = null;
+          const loc = await refreshLocation();
+          if (loc) recordFix(loc, { force: true });
+        }
+      }
+      return ok;
+    },
+    [refreshLocation, recordFix],
+  );
 
   // Haversine formula to compute distance in km
   const calculateDistanceKm = useCallback(
@@ -261,6 +491,8 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         liveTrackingReady,
         setLiveTrackingEnabled,
         liveTrackingFailures,
+        attachPositionSource,
+        reportPosition,
       }}
     >
       {children}

@@ -5,7 +5,7 @@ import { useCreateBillingInvoice } from '../../hooks/useBilling';
 import { useClientsList } from '../../hooks/useClients';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { InvoiceType } from '@fapoms/shared';
+import { InvoiceType, formatRupees } from '@fapoms/shared';
 
 const TYPES = Object.values(InvoiceType);
 
@@ -66,7 +66,7 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
   return (
     <Modal open onClose={onClose} title={<><FileText size={18} /> Create Invoice</>} width="620px" maxHeight="90vh" asForm onSubmit={handleSubmit} footer={
       <>
-        <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--text-secondary)' }}>Total: <strong>₹{total.toLocaleString('en-IN')}</strong> ({selectedIds.length} entries)</span>
+        <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--text-secondary)' }}>Total: <strong>{formatRupees(total)}</strong> ({selectedIds.length} entries)</span>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
         <button type="submit" disabled={create.isPending} className="btn btn-primary">{create.isPending ? 'Creating...' : 'Create Invoice'}</button>
       </>
@@ -91,7 +91,7 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
             <label key={en.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
               <input type="checkbox" checked={selectedIds.includes(en.id)} onChange={() => toggle(en.id)} />
               <span style={{ fontSize: 13, flex: 1 }}>{en.entryNumber}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>₹{en.totalAmount.toLocaleString('en-IN')}</span>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{formatRupees(en.totalAmount)}</span>
             </label>
           ))}
         </div>

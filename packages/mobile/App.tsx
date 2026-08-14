@@ -1123,6 +1123,8 @@ function AppMain() {
       {expenseModalVisible && (
         <ExpenseModal
           visible={expenseModalVisible}
+          quotedTravelFee={expenseAssignment?.quotedTravelFee}
+          quotedTransportMode={expenseAssignment?.quotedTransportMode}
           onClose={() => setExpenseModalVisible(false)}
           onAddExpense={async (category, amount, description) => {
             // Against the assignment chosen at the entry point, never assignments[0]. The old
@@ -1200,6 +1202,9 @@ function AppMain() {
           // counter-offer box for a non-positive fee on purpose; injecting 1800 here defeated
           // that guard and re-fabricated the phantom asking price it exists to prevent.
           currentFee={negotiateAssignment.proposedFee || 0}
+          quotedTravelFee={negotiateAssignment.quotedTravelFee}
+          quotedTransportMode={negotiateAssignment.quotedTransportMode}
+          quotedDistanceKm={negotiateAssignment.quotedDistanceKm}
           onCancel={() => {
             setNegotiateModalVisible(false);
             setNegotiateAssignment(null);

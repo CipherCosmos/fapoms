@@ -52,6 +52,26 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'agreed_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
   agreedFee: number | null;
 
+  /**
+   * The calculator's answer at offer time, frozen. `proposedFee`/`agreedFee` above move with
+   * negotiation; these do not, so what was recommended stays distinguishable from what was
+   * agreed. The distance is the routed home→branch figure the quote priced (NOT reduced by the
+   * same-day dedupe), the travel fee is the quote's travel component, and the mode is the
+   * transport rate card's recommendation when one applied. All nullable: offers made before
+   * these columns existed simply have no recorded quote, and consumers recompute-and-say-so.
+   */
+  @Column({ name: 'quoted_distance_km', type: 'decimal', precision: 8, scale: 2, nullable: true })
+  quotedDistanceKm: number | null;
+
+  @Column({ name: 'quoted_base_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
+  quotedBaseFee: number | null;
+
+  @Column({ name: 'quoted_travel_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
+  quotedTravelFee: number | null;
+
+  @Column({ name: 'quoted_transport_mode', type: 'varchar', length: 30, nullable: true })
+  quotedTransportMode: string | null;
+
   // ── Check-in evidence ───────────────────────────────────────────────────
   /**
    * Where the assayer actually was when they checked in.

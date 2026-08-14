@@ -404,6 +404,29 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * Operational limits the server enforces and this app must render.
+   *
+   * `maxNegotiationRounds` is the one that matters here. The counter-offer button used to be
+   * disabled at a hardcoded 3 while the server reads the cap from platform settings an admin can
+   * change — and exceeding it does not just refuse the counter, it auto-declines the whole offer.
+   * A stale copy on the phone either locks the assayer out of a negotiation the platform would
+   * allow, or invites a tap that loses them the job.
+   */
+  static async getPlatformLimits(): Promise<{ maxNegotiationRounds: number; checkInGeofenceMeters: number; maxSingleExpenseClaim: number }> {
+    // Shipped defaults, matching the server registry, so a failed lookup is never worse than the
+    // hardcoded values this replaced.
+    const fallback = { maxNegotiationRounds: 3, checkInGeofenceMeters: 2000, maxSingleExpenseClaim: 50_000 };
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/platform-settings/limits`);
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success && data.data) return { ...fallback, ...data.data };
+      return fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
   static async getAssayerProfile(assayerId: string): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/profile`);
@@ -1006,6 +1029,11 @@ export class MobileApiService {
           standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : null,
           agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
           agreedTravelFee: item.travelAllowance != null ? Number(item.travelAllowance) : 0,
+          // The quote breakdown recorded when the offer was priced. Grounding for display —
+          // "includes ₹X travel by bus" — never added to totals: proposedFee already holds it.
+          quotedTravelFee: item.quotedTravelFee != null ? Number(item.quotedTravelFee) : null,
+          quotedTransportMode: item.quotedTransportMode ?? null,
+          quotedDistanceKm: item.quotedDistanceKm != null ? Number(item.quotedDistanceKm) : null,
           distanceKm: (() => {
             const assayer = item.assayer;
             if (assayer && assayer.latitude != null && assayer.longitude != null && branch && branch.latitude != null && branch.longitude != null) {
@@ -1086,7 +1114,10 @@ export class MobileApiService {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/live-location`, {
         method: 'PUT',
-        body: JSON.stringify({ latitude: lat, longitude: lng }),
+        // `trailSelfManaged` tells the server not to mirror this into the movement trail: this
+        // build queues its own fixes and uploads them through `uploadLocationPings`, so mirroring
+        // would store the same position twice under two different clocks.
+        body: JSON.stringify({ latitude: lat, longitude: lng, trailSelfManaged: true }),
       });
       return response.ok;
     } catch {

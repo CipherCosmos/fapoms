@@ -129,6 +129,17 @@ export interface AssayerAssignment {
   agreedBaseFee: number;
   agreedTravelFee: number;
   distanceKm?: number;
+  /**
+   * The travel component INSIDE the offered fee, as the desk's calculator priced it —
+   * display-only grounding ("includes ₹240 travel by bus"). Never add it to a total:
+   * `proposedFee` already contains it. Null on offers made before the server recorded
+   * quote breakdowns.
+   */
+  quotedTravelFee?: number | null;
+  /** The transport mode that travel figure assumed (a shared TravelMode value), if any. */
+  quotedTransportMode?: string | null;
+  /** One-way routed km the quote priced, as recorded at offer time. */
+  quotedDistanceKm?: number | null;
   checkedInAt?: string;
   checkInGeoLat?: number;
   checkInGeoLng?: number;

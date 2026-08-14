@@ -6,6 +6,7 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentStatus, ProjectBranchStatus, businessTodayDateKey } from '@fapoms/shared';
 import { FEE_FLAG_MULTIPLIER } from '../pricing/fee-policy.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
  * The Operations Inbox: every assignment that needs a HUMAN decision right now, as one queue.
@@ -43,7 +44,7 @@ export interface InboxAssignment {
   agreedFee: number | null;
   /** The client's reference base fee, for the sanity guard below. */
   clientBaseFee: number | null;
-  /** True when the proposed fee exceeds FEE_FLAG_MULTIPLIER × the client reference — a
+  /** True when the proposed fee exceeds the configured multiple of the client reference — a
       mis-entered contract rate should be a visible warning, never silent money. */
   feeFlagged: boolean;
   negotiationCount: number;
@@ -71,7 +72,10 @@ export interface OperationsInbox {
 
 @Injectable()
 export class OperationsInboxService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly settings: PlatformSettingsService,
+  ) {}
 
   /**
    * Resolve each assayer's effective channel. Explicit APP/PHONE override wins; AUTO derives from
@@ -175,6 +179,17 @@ export class OperationsInboxService {
       : [];
     const clientBaseFees = new Map(rateRows.map((r) => [r.client_id, r.default_base_fee != null ? Number(r.default_base_fee) : null]));
 
+    /**
+     * The same threshold the quote path flags against.
+     *
+     * This read the compiled-in constant directly, so once the multiplier became configurable
+     * the inbox and the fee quote could disagree about whether the very same fee was unusual —
+     * one screen warning, the other silent. One number, resolved in one place.
+     */
+    const flagMultiplier = await this.settings
+      .getNumber('fees.flagMultiplier', FEE_FLAG_MULTIPLIER)
+      .catch(() => FEE_FLAG_MULTIPLIER);
+
     // Call attempts per assignment, via its assessment (call_logs are assessment-keyed), counted
     // only since the offer was made — a call about last month's audit is not a chase on this one.
     const assessmentIds = [...new Set(all.map((a) => a.assessmentId).filter(Boolean))] as string[];
@@ -211,7 +226,7 @@ export class OperationsInboxService {
         feeFlagged: (() => {
           const ref = clientBaseFees.get((a as any).project?.clientId);
           const fee = a.proposedFee != null ? Number(a.proposedFee) : null;
-          return ref != null && ref > 0 && fee != null && fee > ref * FEE_FLAG_MULTIPLIER;
+          return ref != null && ref > 0 && fee != null && fee > ref * flagMultiplier;
         })(),
         negotiationCount: a.negotiationCount ?? 0,
         scheduledDate: a.scheduledDate ? String(a.scheduledDate).slice(0, 10) : null,

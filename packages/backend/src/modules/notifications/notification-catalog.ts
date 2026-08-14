@@ -87,6 +87,18 @@ const ADMINS = ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR'];
 const VALIDATION = ['VALIDATION_MANAGER', 'VALIDATOR'];
 const BOTH_CHANNELS = [NotificationChannel.IN_APP, NotificationChannel.PUSH];
 const IN_APP = [NotificationChannel.IN_APP];
+/**
+ * Channel sets that also email.
+ *
+ * Email is reserved for events that force a decision or mean money/work has silently stopped
+ * — the ones whose "entire purpose is to provoke a human response" and which today land in a
+ * bell nobody has open at 2am (push is dead in production behind a placeholder
+ * google-services.json). Over-notification was a measured production bug twice; routine
+ * flow-following events must never grow an EMAIL channel. Email reaches internal users only —
+ * assayer recipients on these types are unaffected.
+ */
+const ALL_CHANNELS = [NotificationChannel.IN_APP, NotificationChannel.PUSH, NotificationChannel.EMAIL];
+const IN_APP_AND_EMAIL = [NotificationChannel.IN_APP, NotificationChannel.EMAIL];
 
 /**
  * `link` is what the web app calls `navigate()` with when a notification is clicked
@@ -191,7 +203,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.CRITICAL,
     roles: OPS,
     special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
+    channels: ALL_CHANNELS,
     title: 'Assignment cancelled',
     body: 'Your audit at ${branchName} on ${scheduledDate} has been cancelled. Reason: ${reason}',
     link: '/assignments?id=${assignmentId}',
@@ -216,7 +228,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: BOTH_CHANNELS,
+    channels: ALL_CHANNELS,
     title: 'SLA breached',
     body: '${branchName} has breached its ${slaType} SLA and needs attention.',
     link: '/assignments?id=${assignmentId}',
@@ -226,7 +238,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: BOTH_CHANNELS,
+    channels: ALL_CHANNELS,
     title: 'Assignment escalated',
     body: '${branchName} has been marked critical. ${reason}',
     link: '/assignments?id=${assignmentId}',
@@ -286,7 +298,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.HIGH,
     roles: OPS,
     special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
+    channels: ALL_CHANNELS,
     title: 'Offer expired',
     body: '${branchName} was not answered in time and has been withdrawn automatically.',
     link: '/planning',
@@ -337,7 +349,11 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'Validation complete',
     body: '${branchName} has passed validation.',
-    link: '/data-entry',
+    // `/assignments`, not `/data-entry`. Operations is notified because a branch has cleared the
+    // pipeline and its assignment can close — but `/data-entry` is the validation desk's screen
+    // and operations cannot open it, so every one of these bounced them to `/dashboard` with no
+    // explanation. Stage 3 is where they act on this.
+    link: '/assignments',
     skipActor: true,
   },
 
@@ -392,7 +408,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
     roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
-    channels: IN_APP,
+    channels: IN_APP_AND_EMAIL,
     title: 'Approved report not sent to client',
     body: '${branchName} was approved ${hours}h ago and still has not been submitted.',
     link: '/data-entry/reviews?status=APPROVED',
@@ -476,7 +492,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: BOTH_CHANNELS,
+    channels: ALL_CHANNELS,
     title: 'Field incident reported',
     body: '${severity} incident at ${branchName}: ${description}',
     link: '/assignments?id=${assignmentId}',
@@ -499,7 +515,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.PLANNING,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: BOTH_CHANNELS,
+    channels: ALL_CHANNELS,
     title: 'Branch cannot be covered',
     body: '${branchName} has no available assayer and needs a decision.',
     link: '/planning',
@@ -574,8 +590,12 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   BILLING_CONFLICT_RAISED: {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.HIGH,
-    roles: ['FINANCE_MANAGER', ...OPS, ...ADMINS],
-    channels: BOTH_CHANNELS,
+    // OPERATIONS_MANAGER, not all of OPS. OPERATIONS_EXECUTIVE is refused every billing read by
+    // BILLING_ROLES, so this sent them a HIGH-priority email about a conflict they could open
+    // neither in the UI nor through the API. Telling someone urgently about something they are
+    // not permitted to see is not a notification, it is noise they cannot act on.
+    roles: ['FINANCE_MANAGER', 'OPERATIONS_MANAGER', ...ADMINS],
+    channels: ALL_CHANNELS,
     title: 'Billing conflict raised',
     body: '${severity} conflict on ${branchName}: ${description}',
     link: '/billing',
@@ -609,7 +629,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   ASSAYER_ONBOARDED: {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.LOW,
-    roles: ['HR_MANAGER', ...OPS],
+    // HR and admins only. Operations was included and cannot open `/hr` — and new capacity
+    // reaches them where they use it, in the planning screen's candidate list, rather than as a
+    // bell item linking to a roster they are not permitted to see.
+    roles: ['HR_MANAGER', ...ADMINS],
     channels: IN_APP,
     title: 'New assayer onboarded',
     body: '${assayerName} is now active and available for assignment.',
@@ -692,7 +715,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.HIGH,
     roles: ['PRODUCT_SUPPORT', ...ADMINS],
-    channels: IN_APP,
+    channels: IN_APP_AND_EMAIL,
     title: 'Feedback awaiting first response',
     body: '"${title}" has waited ${hours}h with no reply from the team.',
     link: '/feedback?id=${threadId}',
@@ -702,10 +725,30 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.HIGH,
     roles: ['PRODUCT_SUPPORT', ...ADMINS],
     special: ['RECORD_OWNER'],
-    channels: IN_APP,
+    channels: IN_APP_AND_EMAIL,
     title: 'Feedback past its resolution SLA',
     body: '${severity} item "${title}" has been open ${hours}h, past its resolution target.',
     link: '/feedback?id=${threadId}',
+  },
+
+  // ── Security ──────────────────────────────────────────────────────────────
+  /**
+   * Lockouts used to be silent: five failed attempts flipped the account and nobody — not the
+   * admins, not the owner — was told until the user phoned in. A burst of these is also the
+   * cheapest intrusion signal this platform has (assayer brute-forcing was a real, exploited
+   * gap when 24 of 25 accounts shared a default password), which is why it emails: the people
+   * who can respond are precisely the ones not watching a dashboard when it happens.
+   */
+  ACCOUNT_LOCKED: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.CRITICAL,
+    roles: ADMINS,
+    channels: IN_APP_AND_EMAIL,
+    title: 'Account locked after failed sign-ins',
+    body: '${accountLabel} was locked for 15 minutes after ${attempts} failed sign-in attempts. Repeated lockouts may indicate someone probing credentials.',
+    link: '/users',
+    // The lock event itself is the news; the actor is the attacker, not a colleague.
+    skipActor: false,
   },
 };
 

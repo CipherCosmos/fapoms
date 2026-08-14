@@ -81,6 +81,41 @@ export class NotificationSweeper {
   }
 
   /**
+   * The email leg of the same guarantee. It needs its own query because email's lifecycle is a
+   * separate column: an IN_APP+EMAIL row is born with row-status DELIVERED (the bell already
+   * has it), so the push-oriented sweep above never sees it — only `email_status` knows an
+   * email is still owed.
+   */
+  async requeueStrandedEmails(): Promise<number> {
+    const cutoff = new Date(Date.now() - NotificationSweeper.STRANDED_AFTER_MINUTES * 60_000);
+
+    const stranded = await this.notificationRepo.find({
+      where: { emailStatus: NotificationStatus.PENDING, createdAt: LessThan(cutoff) },
+      take: NotificationSweeper.BATCH,
+      order: { createdAt: 'ASC' },
+    });
+    if (!stranded.length) return 0;
+
+    let requeued = 0;
+    for (const n of stranded) {
+      try {
+        await this.deliveryQueue.add(
+          'deliver-email',
+          { notificationId: n.id },
+          { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true },
+        );
+        requeued++;
+      } catch (err: any) {
+        this.logger.warn(`Sweeper could not re-queue email ${n.id}: ${err?.message}`);
+        break;
+      }
+    }
+
+    if (requeued) this.logger.log(`Re-queued ${requeued} stranded email(s).`);
+    return requeued;
+  }
+
+  /**
    * Stops `SENT` from being a permanent resting state.
    *
    * A row moves to `SENT` immediately before the FCM call. If the process is
@@ -104,6 +139,33 @@ export class NotificationSweeper {
 
     const n = result.affected ?? 0;
     if (n) this.logger.warn(`Marked ${n} abandoned send(s) as failed.`);
-    return n;
+
+    /**
+     * The same rescue for the email leg.
+     *
+     * `deliver-email` claims a row by flipping it PENDING → SENT before calling the provider,
+     * which is what stops two jobs sending the same message. The cost of that claim is this
+     * case: a process killed mid-send leaves the row SENT forever, invisible to the
+     * stranded-email sweep (which only looks for PENDING). An hour is far longer than any SMTP
+     * round trip, so anything still SENT by then plainly did not finish — and it is recorded as
+     * failed rather than left looking like a success nobody received.
+     */
+    const emailResult = await this.notificationRepo
+      .createQueryBuilder()
+      .update(NotificationEntity)
+      .set({
+        emailStatus: NotificationStatus.FAILED,
+        emailFailureReason: 'Email delivery did not complete; the sender stopped before confirming.',
+      })
+      .where('email_status = :sent', { sent: NotificationStatus.SENT })
+      // `emailed_at` is stamped by the claim and belongs to this send alone. `updated_at` is
+      // bumped by every write to the row — including the push settle two statements above —
+      // so keying off it let an unrelated write hide a stranded email for another hour.
+      .andWhere('emailed_at < :cutoff', { cutoff })
+      .execute();
+
+    const e = emailResult.affected ?? 0;
+    if (e) this.logger.warn(`Marked ${e} abandoned email send(s) as failed.`);
+    return n + e;
   }
 }

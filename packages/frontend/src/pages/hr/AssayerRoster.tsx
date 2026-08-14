@@ -10,6 +10,7 @@ import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
 import { UploadExcelControls } from '../../components/ui';
+import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
 import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
@@ -116,7 +117,16 @@ export const AssayerRoster: React.FC = () => {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'displayName', dir: 'asc' });
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [openId, setOpenId] = useState<string | null>(null);
+  /**
+   * Opened from the list, or landed on directly.
+   *
+   * `?assayer=<id>` exists because global search and the planning screen's excluded-candidates
+   * list used to link to a separate full-page assayer profile — a second implementation of this
+   * same drawer. They now arrive here instead, and this is what makes that link land on the
+   * person rather than the top of the roster.
+   */
+  const [searchParams] = useSearchParams();
+  const [openId, setOpenId] = useState<string | null>(searchParams.get('assayer'));
   const [editing, setEditing] = useState<Assayer | null>(null);
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');

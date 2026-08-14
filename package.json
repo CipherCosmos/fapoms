@@ -24,10 +24,17 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
+    "@types/react": "^19.0.0",
     "eslint": "^9.39.5",
     "react-native": "0.76.9"
   },
   "overrides": {
     "react-native": "0.76.9"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-arm64-gnu": "^4.0.0",
+    "@rollup/rollup-linux-arm64-musl": "^4.0.0",
+    "@rollup/rollup-linux-x64-gnu": "^4.0.0",
+    "@rollup/rollup-linux-x64-musl": "^4.0.0"
   }
 }

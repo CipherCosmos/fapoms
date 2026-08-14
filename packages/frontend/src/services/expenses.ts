@@ -23,6 +23,11 @@ export interface ExpenseClaim {
   reviewedBy: string | null;
   reviewedAt: string | null;
   reviewNotes: string | null;
+  /**
+   * The payable that will actually pay this claim. Approval raises one; null on an approved
+   * claim means the reimbursement never got raised and the money is not on its way.
+   */
+  reimbursementPayableId: string | null;
   createdAt: string;
   // Loaded by /expenses/pending (relations: assignment, assayer).
   assayer?: { id: string; displayName?: string; assayerCode?: string } | null;
@@ -41,6 +46,22 @@ export const reviewExpense = (expenseId: string, approve: boolean, notes?: strin
   api.request<ExpenseClaim>(`/expenses/${expenseId}/review`, {
     method: 'POST',
     body: JSON.stringify({ approve, notes }),
+  });
+
+/**
+ * Approved claims that never became a payable.
+ *
+ * Approval is supposed to raise a reimbursement payable immediately. When that write fails the
+ * approval still stands — the reviewer's decision is real and the assayer has been told — so the
+ * claim sits approved with nothing owing it. This is the queue that makes that visible instead
+ * of leaving an assayer waiting on money nobody is tracking.
+ */
+export const getUnpaidApprovals = () => api.request<ExpenseClaim[]>('/expenses/unpaid-approvals');
+
+/** Raises the missing payables. Idempotent — a claim that already has one is skipped. */
+export const retryUnpaidApprovals = () =>
+  api.request<{ attempted: number; raised: number }>('/expenses/unpaid-approvals/retry', {
+    method: 'POST',
   });
 
 /** One assayer's full claim history (optionally filtered by status). */

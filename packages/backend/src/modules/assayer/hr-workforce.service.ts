@@ -147,7 +147,7 @@ export class HrWorkforceService {
     `);
     const byEmployment = await this.dataSource.query(`
       SELECT COALESCE(employment_type, 'UNSPECIFIED') AS type, COUNT(*)::int AS count
-      FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
+      FROM assayers WHERE ${ON_ROSTER}
       GROUP BY 1 ORDER BY 2 DESC
     `);
     const tenure = await this.dataSource.query(`
@@ -157,14 +157,14 @@ export class HrWorkforceService {
         COUNT(*) FILTER (WHERE joining_date <= NOW() - INTERVAL '3 months'
                            AND joining_date > NOW() - INTERVAL '1 year')::int                      AS m3_to_1y,
         COUNT(*) FILTER (WHERE joining_date <= NOW() - INTERVAL '1 year')::int                     AS over_1y
-      FROM assayers WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
+      FROM assayers WHERE ${ON_ROSTER}
     `);
     const totals = await this.dataSource.query(`
       SELECT
         COUNT(*)::int                                                              AS total,
         COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int                   AS active,
         COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
-                           AND exit_date IS NULL AND termination_date IS NULL)::int AS onboarding,
+                           AND ${ON_ROSTER})::int AS onboarding,
         COUNT(*) FILTER (WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
       FROM assayers WHERE is_active = true
     `);
@@ -296,11 +296,27 @@ export class HrWorkforceService {
       FROM assayer_government_documents WHERE is_active = true GROUP BY 1
     `);
 
+    /**
+     * Both halves of every ratio count the same people.
+     *
+     * The numerators used to have no join to `assayers` at all — `is_active` in them was the
+     * DOCUMENT's flag, not the person's — while the denominator was the roster. So anyone who
+     * had left (exit date set, documents untouched) stayed in the numerator and dropped out of
+     * the denominator, and the tile could read "9/8" in green while roster members genuinely had
+     * no ID on file. A coverage figure whose two halves describe different populations is not a
+     * coverage figure.
+     */
     const [docCoverage] = await this.dataSource.query(`
       SELECT
         (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER}) AS roster,
-        (SELECT COUNT(DISTINCT assayer_id)::int FROM assayer_government_documents WHERE is_active = true) AS "withGovDoc",
-        (SELECT COUNT(DISTINCT assayer_id)::int FROM assayer_documents WHERE is_active = true) AS "withFile"
+        (SELECT COUNT(DISTINCT g.assayer_id)::int
+           FROM assayer_government_documents g
+           JOIN assayers a ON a.id = g.assayer_id
+          WHERE g.is_active = true AND ${ON_ROSTER_A}) AS "withGovDoc",
+        (SELECT COUNT(DISTINCT d.assayer_id)::int
+           FROM assayer_documents d
+           JOIN assayers a ON a.id = d.assayer_id
+          WHERE d.is_active = true AND ${ON_ROSTER_A}) AS "withFile"
     `);
 
     return {
@@ -330,7 +346,7 @@ export class HrWorkforceService {
       FROM assayer_government_documents g
       JOIN assayers a ON a.id = g.assayer_id
       WHERE g.is_active = true AND g.expiry_date IS NOT NULL
-        AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND ${ON_ROSTER_A}
         AND g.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
       ORDER BY g.expiry_date ASC
       LIMIT 200
@@ -349,7 +365,7 @@ export class HrWorkforceService {
       FROM workforce_attributes w
       JOIN assayers a ON a.id = w.assayer_id
       WHERE w.is_active = true AND w.expiry_date IS NOT NULL
-        AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND ${ON_ROSTER_A}
         AND w.expiry_date::date <= CURRENT_DATE + INTERVAL '180 days'
       ORDER BY w.expiry_date ASC
       LIMIT 100
@@ -363,7 +379,7 @@ export class HrWorkforceService {
       FROM assayer_government_documents g
       JOIN assayers a ON a.id = g.assayer_id
       WHERE g.is_active = true AND g.expiry_date IS NOT NULL
-        AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND ${ON_ROSTER_A}
         AND g.expiry_date::date <= CURRENT_DATE + INTERVAL '180 days'
       ORDER BY g.expiry_date ASC
       LIMIT 100
@@ -394,17 +410,26 @@ export class HrWorkforceService {
       SELECT w.type, w.name, COUNT(DISTINCT w.assayer_id)::int AS "assayerCount"
       FROM workforce_attributes w
       JOIN assayers a ON a.id = w.assayer_id
-      WHERE w.is_active = true AND a.exit_date IS NULL AND a.termination_date IS NULL
+      WHERE w.is_active = true AND ${ON_ROSTER_A}
       GROUP BY 1, 2
       ORDER BY 1, 3 DESC
     `);
 
+    // Same rule as the document coverage above: numerator and denominator must count the same
+    // people, or `unprofiled` goes negative and the "N assayers have no recorded skill" warning
+    // disappears exactly when the data is worst.
     const [coverage] = await this.dataSource.query(`
       SELECT
-        (SELECT COUNT(DISTINCT assayer_id)::int FROM workforce_attributes WHERE type='SKILL' AND is_active=true)         AS "withSkill",
-        (SELECT COUNT(DISTINCT assayer_id)::int FROM workforce_attributes WHERE type='LANGUAGE' AND is_active=true)      AS "withLanguage",
-        (SELECT COUNT(DISTINCT assayer_id)::int FROM workforce_attributes WHERE type='CERTIFICATION' AND is_active=true) AS "withCertification",
-        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER})                        AS roster
+        (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
+           JOIN assayers a ON a.id = w.assayer_id
+          WHERE w.type='SKILL' AND w.is_active=true AND ${ON_ROSTER_A})         AS "withSkill",
+        (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
+           JOIN assayers a ON a.id = w.assayer_id
+          WHERE w.type='LANGUAGE' AND w.is_active=true AND ${ON_ROSTER_A})      AS "withLanguage",
+        (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
+           JOIN assayers a ON a.id = w.assayer_id
+          WHERE w.type='CERTIFICATION' AND w.is_active=true AND ${ON_ROSTER_A}) AS "withCertification",
+        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER})                 AS roster
     `);
 
     const group = (t: string) => byType.filter((r: any) => r.type === t).slice(0, 20);
@@ -415,7 +440,9 @@ export class HrWorkforceService {
       languages: group('LANGUAGE'),
       certifications: group('CERTIFICATION'),
       // An assayer with no recorded capability cannot be matched on competency.
-      unprofiled: HrWorkforceService.num(coverage.roster) - HrWorkforceService.num(coverage.withSkill),
+      // Clamped at zero. It is a count of people, and a negative one is not a smaller problem
+      // than zero — it is a broken figure that also silences the warning gated on `> 0`.
+      unprofiled: Math.max(0, HrWorkforceService.num(coverage.roster) - HrWorkforceService.num(coverage.withSkill)),
     };
   }
 
@@ -432,7 +459,7 @@ export class HrWorkforceService {
       SELECT state, COUNT(*)::int AS assayers,
              COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int AS active
       FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
+      WHERE ${ON_ROSTER}
       GROUP BY 1
     `);
     const demandRaw = await this.dataSource.query(`
@@ -489,7 +516,7 @@ export class HrWorkforceService {
                   ELSE EXTRACT(DAY FROM NOW() - a.last_assignment_date)::int END AS "daysIdle"
       FROM assayers a
       WHERE a.lifecycle_status = 'ACTIVE'
-        AND a.exit_date IS NULL AND a.termination_date IS NULL
+        AND ${ON_ROSTER_A}
         AND a.is_active = true
         AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)
       ORDER BY a.last_assignment_date ASC NULLS FIRST
@@ -508,7 +535,7 @@ export class HrWorkforceService {
         SUM(cancelled_assignments)::int                                         AS "cancelledAssignments",
         SUM(on_time_completions)::int                                           AS "onTimeCompletions"
       FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
+      WHERE ${ON_ROSTER}
     `);
 
     const completed = HrWorkforceService.num(performance.completedAssignments);
@@ -532,7 +559,7 @@ export class HrWorkforceService {
                  AND asg.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})
              ) AS "currentAllocation"
       FROM assayers a
-      WHERE a.lifecycle_status = 'ACTIVE' AND a.exit_date IS NULL AND a.termination_date IS NULL
+      WHERE a.lifecycle_status = 'ACTIVE' AND ${ON_ROSTER_A}
         AND a.is_active = true
       ORDER BY a.display_name ASC
     `);
@@ -616,7 +643,7 @@ export class HrWorkforceService {
 
     const headcount = await this.dataSource.query(`
       SELECT COUNT(*)::int AS active FROM assayers
-      WHERE exit_date IS NULL AND termination_date IS NULL AND is_active = true
+      WHERE ${ON_ROSTER}
     `);
 
     const active = HrWorkforceService.num(headcount[0]?.active);
@@ -647,9 +674,15 @@ export class HrWorkforceService {
              ) AS "performedBy",
              act.remarks, act.occurred_at AS "occurredAt",
              a.id AS "assayerId", a.assayer_code AS "assayerCode", a.display_name AS "displayName"
+      -- soft-delete-exempt: an activity trail is history, and history does not stop being true
+      -- when someone leaves. Filtering deleted assayers out here would silently rewrite the
+      -- record of who did what — the same reason a CANCELLED assignment stays visible rather
+      -- than being flagged inactive.
       FROM assayer_activities act
       JOIN assayers a ON a.id = act.assayer_id
       LEFT JOIN users u ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND u.id = act.performed_by::uuid
+      -- soft-delete-exempt: the actor is here to name who performed the act, and an act does
+      -- not become anonymous because the person who did it has since left.
       LEFT JOIN assayers actor ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND actor.id = act.performed_by::uuid
       ORDER BY act.occurred_at DESC
       LIMIT 40

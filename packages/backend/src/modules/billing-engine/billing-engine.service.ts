@@ -46,6 +46,8 @@ import {
   PAYABLE_TRANSITIONS,
   isValidTransition,
 } from '@fapoms/shared';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { payableCost, entryRevenue, totalPayableCost, totalEntryRevenue, margin, assignmentFee, applyTaxes } from './billing-money';
 
 export interface CreateEntryDto {
   level: BillingLevel;
@@ -114,6 +116,7 @@ export class BillingEngineService implements OnModuleInit {
     private readonly cache: CacheService,
     private readonly uow: UnitOfWork,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly settings: PlatformSettingsService,
   ) {}
 
   /**
@@ -342,15 +345,14 @@ export class BillingEngineService implements OnModuleInit {
   private recompute(entry: BillingEntryEntity): BillingEntryEntity {
     const gross = round2(Number(entry.baseAmount) + Number(entry.travelAmount) + Number(entry.adjustmentAmount));
     const taxable = round2(gross - Number(entry.discountAmount));
-    const taxAmount = round2(taxable * (Number(entry.taxRate) / 100));
-    // Reads the dedicated rate column. This previously read `tdsAmount` — a rupee
+    // Reads the dedicated rate columns. TDS previously read `tdsAmount` — a rupee
     // figure — and divided it by 100 as though it were a percentage, which meant
     // TDS evaluated to 0 on every entry that had not already been given a TDS amount.
-    const tdsAmount = round2(taxable * (Number(entry.tdsRate ?? 0) / 100));
+    const settled = applyTaxes(taxable, { taxRate: entry.taxRate, tdsRate: entry.tdsRate });
     entry.taxableAmount = taxable;
-    entry.taxAmount = taxAmount;
-    entry.tdsAmount = tdsAmount;
-    entry.totalAmount = round2(taxable + taxAmount - tdsAmount);
+    entry.taxAmount = settled.taxAmount;
+    entry.tdsAmount = settled.tdsAmount;
+    entry.totalAmount = settled.totalAmount;
     return entry;
   }
 
@@ -370,9 +372,17 @@ export class BillingEngineService implements OnModuleInit {
       [clientId],
     );
     const row = rows?.[0];
+    // The client's own billing profile wins; the platform defaults below are configurable
+    // rather than literals, so all three tax numbers in this file have one home and one
+    // direction stated on the label. Both are snapshotted onto the entry at creation, so a
+    // later change never restates an issued invoice.
+    const [gstDefault, tdsDefault] = await Promise.all([
+      this.settings.getNumber('billing.defaultClientGstRate', 18).catch(() => 18),
+      this.settings.getNumber('billing.defaultClientTdsRate', 10).catch(() => 10),
+    ]);
     return {
-      gstRate: row ? Number(row.gst_rate) : 18,
-      tdsRate: row ? Number(row.tds_rate) : 10,
+      gstRate: row ? Number(row.gst_rate) : gstDefault,
+      tdsRate: row ? Number(row.tds_rate) : tdsDefault,
       paymentTerms: row?.payment_terms ?? null,
     };
   }
@@ -584,7 +594,7 @@ export class BillingEngineService implements OnModuleInit {
       if (existingIds.has(a.id)) { skipped += 1; continue; }
       const clientId = projectClient.get(a.projectId);
       if (!clientId) { errors.push({ assignmentId: a.id, reason: 'no project/client mapping' }); continue; }
-      const fee = Number(a.agreedFee ?? 0);
+      const fee = assignmentFee(a, 'REVENUE').fee;
       if (fee <= 0) { errors.push({ assignmentId: a.id, reason: 'no agreed fee' }); continue; }
 
       try {
@@ -634,7 +644,7 @@ export class BillingEngineService implements OnModuleInit {
       : undefined;
     if (!clientId) return { created: false, reason: 'no project/client mapping' };
 
-    const fee = Number(a.agreedFee ?? 0);
+    const fee = assignmentFee(a, 'REVENUE').fee;
     if (fee <= 0) return { created: false, reason: 'no agreed fee' };
 
     const entry = await this.createEntryFromAssignment(a, clientId, 'system');
@@ -662,16 +672,14 @@ export class BillingEngineService implements OnModuleInit {
     if (existing) return { created: false, reason: 'payable already exists', payableId: existing.id };
 
     // The agreed fee is what the assayer negotiated and accepted for this job.
-    const fee = Number(a.agreedFee ?? a.proposedFee ?? 0);
+    const resolvedFee = assignmentFee(a, 'COST');
+    const fee = resolvedFee.fee;
     if (fee <= 0) return { created: false, reason: 'no agreed fee' };
 
     const clientId = a.projectId
       ? (await this.projectRepository.findOne({ where: { id: a.projectId }, select: ['id', 'clientId'] }))?.clientId
       : undefined;
 
-    // Travel reimbursement comes from the assayer's active commercial profile, and
-    // the whole rate card is snapshotted so a later rate change never silently
-    // restates a historical payable.
     const profile = await this.payableRepository.manager.query(
       `SELECT base_fee, travel_reimbursement, daily_rate, currency
          FROM assayer_commercial_profiles
@@ -681,19 +689,42 @@ export class BillingEngineService implements OnModuleInit {
       [a.assayerId],
     );
     const rateCard = profile?.[0] ?? null;
-    const travel = rateCard ? Number(rateCard.travel_reimbursement ?? 0) : 0;
+
+    /**
+     * The agreed fee already CONTAINS travel — the quote that became `proposedFee` was
+     * base + travel, and the mobile app tells the assayer so in as many words ("Your fee for
+     * this assignment already includes ₹X for travel"). Assignments now record that travel
+     * component at offer time (`quotedTravelFee`), so the payable can carve the agreed total
+     * into base and travel instead of paying the fee whole AND adding the commercial
+     * profile's flat travel reimbursement on top — which paid travel twice for any assayer
+     * whose profile carried one.
+     *
+     * The carve keeps gross = agreed fee exactly: negotiation moves the total, and whatever
+     * was negotiated lands in the base component while the travel attribution stays what was
+     * quoted (clamped so a fee negotiated below the travel figure can never produce a
+     * negative base). Offers made before the column existed keep the legacy behaviour —
+     * their fee's travel share is unknowable, and restating history is worse than the known
+     * flaw.
+     */
+    const quotedTravel = a.quotedTravelFee != null ? Number(a.quotedTravelFee) : null;
+    const travel = quotedTravel != null
+      ? Math.min(Math.max(0, quotedTravel), fee)
+      : (rateCard ? Number(rateCard.travel_reimbursement ?? 0) : 0);
+    const base = quotedTravel != null ? fee - travel : fee;
 
     const payable = await this.createPayable({
       assayerId: a.assayerId,
       clientId: clientId ?? undefined,
       projectId: a.projectId ?? undefined,
       assignmentId: a.id,
-      baseAmount: fee,
+      baseAmount: base,
       travelAmount: travel,
       // Assayers are professional-service vendors: TDS is withheld from what we pay
-      // them, and no GST is added on our side unless they are registered.
+      // them, and no GST is added on our side unless they are registered. The withholding
+      // rate is configurable — it is set by tax law, which changes without this code changing
+      // — and it is captured on each payable, so a later change never restates an old one.
       taxRate: 0,
-      tdsRate: 10,
+      tdsRate: await this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
       // The snapshot must justify the amount actually booked. The payable is booked at the
       // assignment's agreed fee, so `baseFee` here is that fee — not the assayer's standard
       // profile rate, which was recorded before and disagreed with every payable (base_amount
@@ -701,23 +732,60 @@ export class BillingEngineService implements OnModuleInit {
       // context, clearly labelled, so "why did we pay this?" resolves to the agreed fee and the
       // profile it was compared against, both immutable on the payable.
       rateSnapshot: {
-        source: 'assignment.agreedFee',
-        baseFee: fee,
+        source: quotedTravel != null
+          ? 'assignment.agreedFee split by assignment.quotedTravelFee'
+          : 'assignment.agreedFee',
+        baseFee: base,
         travelReimbursement: travel,
         agreedFee: fee,
         proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
+        quotedTravelFee: quotedTravel,
+        quotedTransportMode: a.quotedTransportMode ?? null,
         profileStandardBaseFee: rateCard ? Number(rateCard.base_fee) : null,
+        profileTravelReimbursement: rateCard ? Number(rateCard.travel_reimbursement ?? 0) : null,
         profileDailyRate: rateCard ? Number(rateCard.daily_rate) : null,
         capturedAt: new Date().toISOString(),
       },
       remarks: `Auto-generated on completion of ${a.assignmentNumber}.`,
     }, userId);
 
+    /**
+     * The one-sided-ledger guard.
+     *
+     * A payable can be booked from the *proposed* fee when no agreed one exists, while the
+     * client-billing side refuses an entry without an agreed fee. So this exact case books the
+     * cost and never the revenue: the assayer is paid, the client is never invoiced, and margin
+     * is quietly short by the whole job with nothing anywhere saying so.
+     *
+     * Every accept path writes `agreedFee`, so this should be unreachable — which is precisely
+     * why it needs to be loud rather than trusted. Raised as a conflict against the payable that
+     * was just written, so it lands on the billing desk's existing exception queue instead of
+     * being discovered at month end.
+     */
+    if (!resolvedFee.settled) {
+      await this.raiseConflict({
+        severity: BillingConflictSeverity.CRITICAL,
+        entityType: BillingEntityType.PAYABLE,
+        entryIds: [payable.id],
+        description:
+          `${a.assignmentNumber} was paid ${'\u20B9'}${fee} from its PROPOSED fee — no fee was ever agreed. ` +
+          `The client will NOT be billed for this assignment, so its full cost falls to margin.`,
+        reason: 'ASSIGNMENT_COMPLETED_WITHOUT_AGREED_FEE',
+        blocksBilling: false,
+      }, userId).catch((err) => {
+        // Never let the guard's own failure lose the payable that was already written.
+        this.logger.error(
+          `Payable ${payable.id} was booked from an unagreed fee and the conflict could not be ` +
+          `raised: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }
+
     return { created: true, payableId: payable.id };
   }
 
   private async createEntryFromAssignment(a: AssignmentEntity, clientId: string, userId: string): Promise<BillingEntryEntity> {
-    const assayerFee = Number(a.agreedFee ?? 0);
+    const assayerFee = assignmentFee(a, 'REVENUE').fee;
     // What the CLIENT is billed comes from the client's own contracted rate card, not from
     // what the assayer was paid. Billing the client the assayer's fee made revenue equal cost
     // on every audit — margin was structurally zero. The spread between this rate and the
@@ -789,8 +857,17 @@ export class BillingEngineService implements OnModuleInit {
     const prefs = rows?.[0]?.planning_preferences ?? {};
     if (prefs?.rechargeTravel === false) return 0;
 
-    // Mirrors what the assayer is actually reimbursed, so the recharge and the
-    // cost cannot drift apart.
+    // Mirrors what the assayer is actually reimbursed, so the recharge and the cost cannot
+    // drift apart. That is the quoted travel component of the fee when the offer recorded one
+    // — the same figure the payable now carves out — and the legacy flat profile
+    // reimbursement for offers that predate the column.
+    if (a.quotedTravelFee != null) {
+      // COST, not REVENUE: this clamp exists to mirror the payable, so it has to resolve the fee
+      // the same way the payable does or the recharge could exceed what we actually paid out.
+      const fee = assignmentFee(a, 'COST').fee;
+      return Math.min(Math.max(0, Number(a.quotedTravelFee)), fee > 0 ? fee : Number(a.quotedTravelFee));
+    }
+
     const profile = await this.payableRepository.manager.query(
       `SELECT travel_reimbursement
          FROM assayer_commercial_profiles
@@ -1535,7 +1612,7 @@ export class BillingEngineService implements OnModuleInit {
     // the payable total is subtotal + GST − TDS. Previously `subtotal` was the sum
     // of entry *totals* (already tax-inclusive) while `taxAmount` was also listed
     // beside it, so the invoice appeared to double-count tax and ignored TDS entirely.
-    const subtotal = round2(entries.reduce((a, e) => a + Number(e.taxableAmount ?? e.baseAmount), 0));
+    const subtotal = totalEntryRevenue(entries);
     const tax = round2(entries.reduce((a, e) => a + Number(e.taxAmount), 0));
     const tds = round2(entries.reduce((a, e) => a + Number(e.tdsAmount), 0));
     const discount = round2(entries.reduce((a, e) => a + Number(e.discountAmount), 0));
@@ -1825,10 +1902,11 @@ export class BillingEngineService implements OnModuleInit {
     // not add up to the total.
     const fee = Number(dto.baseAmount);
     const travel = Number(dto.travelAmount || 0);
-    const gross = round2(fee + travel);
-    const tax = round2(gross * (Number(dto.taxRate || 0) / 100));
-    const tds = round2(gross * (Number(dto.tdsRate || 0) / 100));
-    const total = round2(gross + tax - tds);
+    // Same two helpers the dashboards read this payable back through, so what is stored and what
+    // is later reported can never disagree about the same row.
+    const gross = payableCost({ baseAmount: fee, travelAmount: travel });
+    const { taxAmount: tax, tdsAmount: tds, totalAmount: total } =
+      applyTaxes(gross, { taxRate: dto.taxRate, tdsRate: dto.tdsRate });
 
     return this.inTx(async (m) => {
     const payable = this.payableRepository.create({
@@ -2236,8 +2314,8 @@ export class BillingEngineService implements OnModuleInit {
 
     // Net revenue (taxable value, ex-GST) against gross assayer cost (fee + travel).
     // GST is a pass-through and TDS a withheld tax credit, so neither side is netted.
-    const assayerCost = round2(payables.reduce((a, p) => a + Number(p.baseAmount) + Number(p.travelAmount), 0));
-    const revenue = round2(entries.reduce((a, e) => a + Number(e.taxableAmount ?? e.baseAmount), 0));
+    const assayerCost = totalPayableCost(payables);
+    const revenue = totalEntryRevenue(entries);
 
     return {
       currency: 'INR',
@@ -2248,8 +2326,7 @@ export class BillingEngineService implements OnModuleInit {
         unbilledRevenue: pending,
         revenue,
         assayerCost,
-        margin: round2(revenue - assayerCost),
-        marginPct: revenue > 0 ? round2(((revenue - assayerCost) / revenue) * 100) : null,
+        ...margin(revenue, assayerCost),
       },
       aging: this.ageInvoices(invoices),
       byLevel,
@@ -2322,7 +2399,7 @@ export class BillingEngineService implements OnModuleInit {
         // Margin is measured on net revenue (the taxable value we actually earn).
         // GST is collected on the government's behalf and TDS is a withheld tax
         // credit, so neither belongs in a profitability figure.
-        cur.revenue = round2(cur.revenue + Number(e.taxableAmount ?? e.baseAmount));
+        cur.revenue = round2(cur.revenue + entryRevenue(e));
         cur.billedToClient = round2(cur.billedToClient + Number(e.totalAmount));
         cur.entryIds.push(e.id);
         cur.state = e.state;
@@ -2339,7 +2416,7 @@ export class BillingEngineService implements OnModuleInit {
         if (asn) {
           // Gross cost: fee + travel. The TDS we withhold is still money owed on
           // the assayer's behalf, so netting it out would understate what the job costs.
-          asn.cost = round2(asn.cost + Number(py.baseAmount) + Number(py.travelAmount));
+          asn.cost = round2(asn.cost + payableCost(py));
           asn.payableStatus = py.status;
         }
       }
@@ -2348,8 +2425,7 @@ export class BillingEngineService implements OnModuleInit {
     const projects = Array.from(byProject.values()).map((p) => {
       const assignments = Array.from(p.assignments.values()).map((a: any) => ({
         ...a,
-        margin: round2(a.revenue - a.cost),
-        marginPct: a.revenue > 0 ? round2(((a.revenue - a.cost) / a.revenue) * 100) : null,
+        ...margin(a.revenue, a.cost),
       }));
       const cost = round2(assignments.reduce((s: number, a: any) => s + a.cost, 0));
       const revenue = round2(assignments.reduce((s: number, a: any) => s + a.revenue, 0));
@@ -2364,8 +2440,8 @@ export class BillingEngineService implements OnModuleInit {
     });
 
     // Net revenue (ex-GST) against gross assayer cost — see the per-assignment note.
-    const totalRevenue = round2(entries.reduce((a, e) => a + Number(e.taxableAmount ?? e.baseAmount), 0));
-    const totalCost = round2(payables.reduce((a, p) => a + Number(p.baseAmount) + Number(p.travelAmount), 0));
+    const totalRevenue = totalEntryRevenue(entries);
+    const totalCost = totalPayableCost(payables);
 
     return {
       clientId,
@@ -2377,8 +2453,7 @@ export class BillingEngineService implements OnModuleInit {
         pending: round2(entries.filter((e) => UNBILLED_STATES.includes(e.state)).reduce((a, e) => a + Number(e.totalAmount), 0)),
         revenue: totalRevenue,
         assayerCost: totalCost,
-        margin: round2(totalRevenue - totalCost),
-        marginPct: totalRevenue > 0 ? round2(((totalRevenue - totalCost) / totalRevenue) * 100) : null,
+        ...margin(totalRevenue, totalCost),
         entryCount: entries.length,
       },
       projects,
@@ -2563,7 +2638,7 @@ export class BillingEngineService implements OnModuleInit {
 
     const n = (v: any) => Number(v ?? 0);
     const revenue = round2(entries.reduce((a: number, e: any) => a + n(e.taxable_amount), 0));
-    const cost = round2(payables.reduce((a: number, p: any) => a + n(p.base_amount) + n(p.travel_amount), 0));
+    const cost = totalPayableCost(payables);
     const inbound = payments.filter((p: any) => p.direction === PaymentDirection.INBOUND);
     const outbound = payments.filter((p: any) => p.direction === PaymentDirection.OUTBOUND);
 

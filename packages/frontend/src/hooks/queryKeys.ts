@@ -71,6 +71,8 @@ export const queryKeys = {
     list: (params: object) => ['clients', 'list', params] as const,
     detail: (id: string) => ['clients', 'detail', id] as const,
     contacts: (id: string) => ['clients', 'contacts', id] as const,
+    /** The unfiltered picker list — one key so five screens share one cache entry. */
+    options: ['clients', 'options'] as const,
     contracts: (id: string) => ['clients', 'contracts', id] as const,
     billing: (id: string) => ['clients', 'billing', id] as const,
     billingHistory: (id: string) => ['clients', 'billingHistory', id] as const,

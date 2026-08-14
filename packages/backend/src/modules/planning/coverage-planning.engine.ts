@@ -200,8 +200,14 @@ export class CoveragePlanningEngine {
             // Enforce the client's hard distance ceiling, matching what assignment creation checks —
             // so we never propose an assayer the deploy step will then reject as out of range.
             if (Number.isFinite(clientMaxDistanceKm)) {
-              const aLat = (c.assayer as any).effectiveLatitude;
-              const aLng = (c.assayer as any).effectiveLongitude;
+              // HOME coordinates, matching `assignment.create` — not `effectiveLatitude`, which
+              // returns the live GPS fix for any assayer who opted into sharing. The two measured
+              // different things, so for a live-enabled assayer whose phone happened to be near
+              // the branch this gate passed and the deploy step then refused with "out of range",
+              // landing the branch in `skipped`. Ranking may use where someone is now; a
+              // contractual ceiling has to use the same point the commit does.
+              const aLat = (c.assayer as any).homeLatitude ?? (c.assayer as any).latitude;
+              const aLng = (c.assayer as any).homeLongitude ?? (c.assayer as any).longitude;
               if (aLat != null && aLng != null && branch.latitude != null && branch.longitude != null) {
                 const d = calculateHaversineDistance(Number(branch.latitude), Number(branch.longitude), Number(aLat), Number(aLng));
                 if (d > clientMaxDistanceKm) {

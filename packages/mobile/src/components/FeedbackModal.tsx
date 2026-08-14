@@ -5,6 +5,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Card, Tappable, Badge, EmptyState } from './ui/primitives';
 import { MobileApiService } from '../services/api.service';
 
+import { FEEDBACK_STATUS_LABELS, feedbackCategoryLabel } from '@fapoms/shared';
 /**
  * The assayer's side of the two-way feedback & collaboration channel.
  *
@@ -22,17 +23,23 @@ interface Props {
 
 type ViewMode = 'list' | 'compose' | 'thread';
 
+/**
+ * Icons are a mobile concern; the WORDING comes from shared.
+ *
+ * These used to be written here, and the web triage desk had its own set — "Idea" and "Seen" on
+ * the phone against "Enhancement" and "Acknowledged" on the desk, for the same thread. An assayer
+ * would say their issue was marked "Seen" while the product team looked at "Acknowledged", and
+ * neither could tell they meant the same state.
+ */
 const CATEGORIES: { key: string; label: string; icon: string }[] = [
   { key: '', label: 'Auto', icon: 'sparkles-outline' },
-  { key: 'BUG', label: 'Bug', icon: 'bug-outline' },
-  { key: 'ENHANCEMENT', label: 'Idea', icon: 'bulb-outline' },
-  { key: 'PROCESS', label: 'Process', icon: 'git-branch-outline' },
-  { key: 'QUESTION', label: 'Question', icon: 'help-circle-outline' },
+  { key: 'BUG', label: feedbackCategoryLabel('BUG'), icon: 'bug-outline' },
+  { key: 'ENHANCEMENT', label: feedbackCategoryLabel('ENHANCEMENT'), icon: 'bulb-outline' },
+  { key: 'PROCESS', label: feedbackCategoryLabel('PROCESS'), icon: 'git-branch-outline' },
+  { key: 'QUESTION', label: feedbackCategoryLabel('QUESTION'), icon: 'help-circle-outline' },
 ];
 
-const STATUS_LABEL: Record<string, string> = {
-  OPEN: 'New', ACKNOWLEDGED: 'Seen', IN_PROGRESS: 'In progress', RESOLVED: 'Resolved', CLOSED: 'Closed',
-};
+const STATUS_LABEL: Record<string, string> = FEEDBACK_STATUS_LABELS;
 
 const fmtWhen = (d: string | null) =>
   d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
@@ -147,7 +154,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                       <AppText variant="bodyStrong">{th.title}</AppText>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, flexWrap: 'wrap' }}>
                         <Badge label={STATUS_LABEL[th.status] ?? th.status} tone={th.status === 'RESOLVED' ? 'success' : th.status === 'OPEN' ? 'warning' : 'primary'} />
-                        <AppText variant="caption" tone="faint">{th.category} · {fmtWhen(th.lastMessageAt)}</AppText>
+                        <AppText variant="caption" tone="faint">{feedbackCategoryLabel(th.category)} · {fmtWhen(th.lastMessageAt)}</AppText>
                       </View>
                     </Card>
                   </Tappable>
@@ -208,7 +215,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                 <View style={{ paddingHorizontal: t.space.xl, paddingBottom: t.space.sm, flexDirection: 'row', gap: t.space.sm, alignItems: 'center' }}>
                   <Badge label={STATUS_LABEL[activeThread.status] ?? activeThread.status} tone={activeThread.status === 'RESOLVED' ? 'success' : activeThread.status === 'OPEN' ? 'warning' : 'primary'} />
                   <AppText variant="caption" tone="faint">
-                    {activeThread.category}{activeThread.firstRespondedAt ? ' · team responded' : ' · awaiting first response'}
+                    {feedbackCategoryLabel(activeThread.category)}{activeThread.firstRespondedAt ? ' · team responded' : ' · awaiting first response'}
                   </AppText>
                 </View>
               )}

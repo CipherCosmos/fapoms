@@ -246,8 +246,21 @@ export class ProjectController {
     };
   }
 
+  /**
+   * Must admit every role the frontend `/projects` route allows, or the page's detail pane 403s.
+   *
+   * This listed five roles against the page's eleven, and `Projects.tsx` loads the project and
+   * its branches inside one `try`, so the 403 on the second call landed in a `catch` that does
+   * `setDetail(null)`. Six roles — validation, data entry, documents, finance, HR — could open
+   * `/projects`, click a project, and get an empty pane with nothing but a console error. The
+   * page's own comment says why they need it: "Everyone who works the book needs to see which
+   * project a branch belongs to."
+   *
+   * Reading which branches sit in a project is not a privileged act; `STAFF_ROLES` already gates
+   * `GET /projects` and `GET /projects/:id` on this same controller.
+   */
   @Get(':id/branches')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get unassigned and planning branches queue for project' })
   async getProjectBranches(
     @Param('id', ParseUUIDPipe) id: string,

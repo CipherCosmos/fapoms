@@ -8,6 +8,8 @@ import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity'
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { BillingEngineService } from '../billing-engine/billing-engine.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 const OWNER = 'assayer-owner';
 const INTRUDER = 'assayer-intruder';
@@ -17,6 +19,7 @@ describe('ExpenseService', () => {
   let expenseRepo: any;
   let assignmentRepo: any;
   let dispatch: any;
+  let billing: any;
 
   const assignment = (status: AssignmentStatus = AssignmentStatus.CHECKED_IN) => ({
     id: 'asn-1',
@@ -35,14 +38,28 @@ describe('ExpenseService', () => {
     };
     assignmentRepo = { findOne: jest.fn().mockResolvedValue(assignment()) };
     dispatch = { emitSafe: jest.fn(), emit: jest.fn() };
+    billing = { createPayable: jest.fn().mockResolvedValue({ id: 'pay-1' }) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        {
+          provide: PlatformSettingsService,
+          // Nothing configured in tests: every lookup falls through to the caller's fallback,
+          // which is the shipped constant.
+          useValue: {
+            get: jest.fn(async () => null),
+            getMany: jest.fn(async () => ({})),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            describeAll: jest.fn(async () => []),
+            onChange: jest.fn(),
+          },
+        },
         ExpenseService,
         { provide: getRepositoryToken(ExpenseEntity), useValue: expenseRepo },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         { provide: NotificationDispatchService, useValue: dispatch },
+        { provide: BillingEngineService, useValue: billing },
       ],
     }).compile();
 
@@ -135,6 +152,86 @@ describe('ExpenseService', () => {
       await expect(service.summaryForAssayer(OWNER)).resolves.toEqual({
         pending: 250, approved: 100.5, rejected: 75, totalClaimed: 425.5,
       });
+    });
+  });
+
+  describe('reimbursement — approval has to end in money', () => {
+    const approved = (over: any = {}) => ({
+      id: 'exp-1', assignmentId: 'asn-1', assayerId: OWNER, amount: 240,
+      category: ExpenseCategory.TOLL, description: 'NH-48 toll',
+      status: ExpenseStatus.PENDING, reimbursementPayableId: null, ...over,
+    });
+
+    beforeEach(() => {
+      expenseRepo.findOne.mockResolvedValue(approved());
+      expenseRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+    });
+
+    it('raises a payable when a claim is approved', async () => {
+      // Before this, APPROVED was the end of the road: nothing owed the assayer the money and
+      // there was no state that said it was still coming.
+      await service.review('exp-1', true, 'reviewer-1');
+      expect(billing.createPayable).toHaveBeenCalledWith(
+        expect.objectContaining({ assayerId: OWNER, baseAmount: 240, assignmentId: 'asn-1' }),
+        'reviewer-1',
+      );
+    });
+
+    it('links the claim to the payable that will pay it', async () => {
+      await service.review('exp-1', true, 'reviewer-1');
+      expect(expenseRepo.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({ reimbursementPayableId: 'pay-1' }),
+      );
+    });
+
+    it('withholds no tds, because a reimbursement is not income', async () => {
+      // The assayer is getting their own money back. Withholding would deduct tax on a sum
+      // they were never paid.
+      await service.review('exp-1', true, 'reviewer-1');
+      expect(billing.createPayable).toHaveBeenCalledWith(
+        expect.objectContaining({ tdsRate: 0, taxRate: 0 }),
+        expect.anything(),
+      );
+    });
+
+    it('books nothing as travel, so a travel claim is not paid twice', async () => {
+      // The transport rate card already puts a travel allowance in the assignment fee. Booking
+      // a toll claim as travel as well would reimburse the same journey through two channels.
+      await service.review('exp-1', true, 'reviewer-1');
+      expect(billing.createPayable).toHaveBeenCalledWith(
+        expect.objectContaining({ travelAmount: 0 }),
+        expect.anything(),
+      );
+    });
+
+    it('raises nothing when a claim is rejected', async () => {
+      await service.review('exp-1', false, 'reviewer-1', 'Duplicate of ASN-001');
+      expect(billing.createPayable).not.toHaveBeenCalled();
+    });
+
+    it('keeps the approval when the payable cannot be raised, and leaves it retryable', async () => {
+      // Rolling the approval back would leave the assayer told nothing at all. The claim stays
+      // approved with a null payable id — which is exactly what the unpaid-approvals queue looks
+      // for — rather than the decision silently disappearing.
+      billing.createPayable.mockRejectedValueOnce(new Error('db down'));
+      const result = await service.review('exp-1', true, 'reviewer-1');
+      expect(result.status).toBe(ExpenseStatus.APPROVED);
+      expect(result.reimbursementPayableId).toBeNull();
+    });
+
+    it('does not raise a second payable for a claim that already has one', async () => {
+      // The double-payment guard. A retry sweep must be safe to run as often as anyone likes.
+      expenseRepo.find.mockResolvedValueOnce([approved({ status: ExpenseStatus.APPROVED, reimbursementPayableId: 'pay-existing' })]);
+      const result = await service.retryUnpaidApprovals('reviewer-1');
+      expect(billing.createPayable).not.toHaveBeenCalled();
+      expect(result).toEqual({ attempted: 1, raised: 1 });
+    });
+
+    it('raises the missing payables when the queue is retried', async () => {
+      expenseRepo.find.mockResolvedValueOnce([approved({ status: ExpenseStatus.APPROVED })]);
+      const result = await service.retryUnpaidApprovals('reviewer-1');
+      expect(billing.createPayable).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ attempted: 1, raised: 1 });
     });
   });
 });

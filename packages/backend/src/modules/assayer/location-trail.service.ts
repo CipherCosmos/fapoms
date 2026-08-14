@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { AssayerLocationPingEntity, LocationPingSource } from './assayer-location-ping.entity';
 import { assessTravel, TravelAssessment, TrackFix } from './travel-track';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /** One position as offered by a client. Validated here before it becomes evidence. */
 export interface IncomingPing {
@@ -54,6 +55,7 @@ export class LocationTrailService {
   constructor(
     @InjectRepository(AssayerLocationPingEntity)
     private readonly pingRepository: Repository<AssayerLocationPingEntity>,
+    private readonly settings: PlatformSettingsService,
   ) {}
 
   /**
@@ -262,7 +264,8 @@ export class LocationTrailService {
   /**
    * Delete trail history older than the configured retention window.
    *
-   * **Does nothing unless configured.** `LOCATION_TRAIL_RETENTION_DAYS` has no default on purpose:
+   * **Does nothing unless configured.** Set at Administration → Platform Settings → Data retention
+   * (or `LOCATION_TRAIL_RETENTION_DAYS`). It has no default on purpose:
    * how long to keep continuous movement records of identifiable workers is a policy question —
    * it touches employment terms and data-protection duties — and choosing a number here would be
    * this service quietly making that decision on someone's behalf. Left unset, nothing is deleted
@@ -273,7 +276,14 @@ export class LocationTrailService {
    * lock. Returns the count so a caller can loop until it drains.
    */
   async purgeOlderThanRetention(batchSize = 5_000): Promise<{ configured: boolean; deleted: number }> {
-    const days = Number(process.env.LOCATION_TRAIL_RETENTION_DAYS);
+    // Through settings, not the environment alone — otherwise the retention field on the
+    // settings screen is a control that saves a value nothing reads, which is worse than
+    // having no field at all.
+    const days = Number(
+      await this.settings
+        .get<number>('locationTrail.retentionDays')
+        .catch(() => process.env.LOCATION_TRAIL_RETENTION_DAYS),
+    );
     if (!Number.isFinite(days) || days <= 0) return { configured: false, deleted: 0 };
 
     const cutoff = new Date(Date.now() - days * 86_400_000);

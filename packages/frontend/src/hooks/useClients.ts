@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from './queryKeys';
 import { clientApi } from '../services/clients';
+import { api } from '../services/api';
 import type { ClientListParams } from '../services/clients';
 import type { ClientLifecycleStatus } from '@fapoms/shared';
 
@@ -168,5 +169,33 @@ export function useAddBillingRemark() {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: queryKeys.clients.billingHistory(vars.clientId) });
     },
+  });
+}
+
+/**
+ * Every client, for a picker.
+ *
+ * Five screens each fetched this independently — Projects, Rules, Zones, Holidays and Branches
+ * — with three different local `ClientOption` types between them, two of which disagreed on
+ * whether the short code is called `code` or `clientCode`. Same list, five requests, five
+ * caches, and a shape that changed depending on which screen you were looking at.
+ *
+ * One hook, one query key, one type. React Query then serves all five from a single fetch.
+ */
+export interface ClientOption {
+  id: string;
+  name: string;
+  /** The short code. Both spellings are carried because the API has used both. */
+  code?: string;
+  clientCode?: string;
+}
+
+export function useClientOptions() {
+  return useQuery({
+    queryKey: queryKeys.clients.options,
+    queryFn: () => api.request<ClientOption[]>('/clients'),
+    // A picker list changes when someone onboards a client — rare, and a stale entry costs an
+    // extra scroll, not a wrong answer.
+    staleTime: 5 * 60_000,
   });
 }

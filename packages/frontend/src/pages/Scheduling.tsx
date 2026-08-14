@@ -5,7 +5,7 @@ import {
   Plus, Download, ChevronLeft, ChevronRight,
   X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight
 } from 'lucide-react';
-import { ScheduleStatus, SystemRole } from '@fapoms/shared';
+import { ScheduleStatus, SystemRole, formatRupees } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { scheduleStatusLabel, localDateKey, todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { api } from '../services/api';
@@ -16,6 +16,7 @@ import { useSocketInvalidation } from '../hooks/useSocketInvalidation';
 import { useScope, withScope } from '../context/ScopeContext';
 import { Modal, FilterSelect, AlertBanner } from '../components/ui';
 
+import { assignmentFee, assignmentFeeValue } from '../utils/money';
 interface Schedule {
   id: string;
   projectId: string;
@@ -92,7 +93,7 @@ export const Scheduling: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [assayerWorkload, setAssayerWorkload] = useState<{ count: number; schedules: any[] } | null>(null);
+  const [assayerWorkload, setAssayerWorkload] = useState<{ count: number; weeklyCapacity?: number; schedules: any[] } | null>(null);
   const [selectedSchId, setSelectedSchId] = useState<string | null>(null);
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [rescheduleSchId, setRescheduleSchId] = useState<string | null>(null);
@@ -176,7 +177,7 @@ export const Scheduling: React.FC = () => {
 
   const loadAssayerWorkload = async (assayerId: string, date: string) => {
     try {
-      const res = await api.request<{ count: number; schedules: any[] }>(`/schedules/assayer-workload?assayerId=${assayerId}&date=${date}`);
+      const res = await api.request<{ count: number; weeklyCapacity: number; schedules: any[] }>(`/schedules/assayer-workload?assayerId=${assayerId}&date=${date}`);
       setAssayerWorkload(res);
     } catch { setAssayerWorkload(null); }
   };
@@ -638,7 +639,7 @@ export const Scheduling: React.FC = () => {
               ) : (
                 timelineSchedules.map(sch => {
                   const days = Math.round((new Date(localDateKey(sch.scheduledDate) + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000);
-                  const fee = sch.assignment?.agreedFee ?? sch.assignment?.proposedFee;
+                  const fee = assignmentFeeValue(sch.assignment);
                   const branch = sch.assignment?.projectBranch?.branch;
                   return (
                   <div key={sch.id} onClick={() => { setSelectedSchId(sch.id); setSelectedDate(localDateKey(sch.scheduledDate)); }}
@@ -655,7 +656,7 @@ export const Scheduling: React.FC = () => {
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                      {fee != null && <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--warning)' }}>₹{Number(fee).toLocaleString('en-IN')}</span>}
+                      {fee != null && <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--warning)' }}>{formatRupees(fee)}</span>}
                       <div style={{ textAlign: 'right' }}>
                         <div style={{ fontSize: '11px', fontWeight: 700, color: days < 0 ? 'var(--text-muted)' : days === 0 ? 'var(--accent)' : 'var(--text-primary)' }}>
                           {formatDateOnly(sch.scheduledDate)}
@@ -813,7 +814,7 @@ export const Scheduling: React.FC = () => {
                       <div>
                         <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>FEE</div>
                         <div style={{ fontSize: '10px', color: 'var(--success)', fontWeight: 700 }}>
-                          ₹{selectedSch.assignment.agreedFee ?? selectedSch.assignment.proposedFee ?? '—'}
+                          {assignmentFee(selectedSch.assignment)}
                         </div>
                       </div>
                     </div>
@@ -878,13 +879,25 @@ export const Scheduling: React.FC = () => {
                 </option>
               ))}
             </select>
-            {assayerWorkload && (
-              <div style={{ fontSize: '10px', marginTop: '2px', padding: '4px 8px', borderRadius: '4px',
-                background: assayerWorkload.count >= 3 ? 'var(--status-cancelled-bg)' : 'var(--status-active-bg)',
-                color: assayerWorkload.count >= 3 ? 'var(--danger)' : 'var(--success)' }}>
-                Assayer Weekly Load: {assayerWorkload.count} schedule(s)
-              </div>
-            )}
+            {assayerWorkload && (() => {
+              /**
+               * The ceiling comes from the server with the count.
+               *
+               * This compared a WEEKLY count against a hardcoded 3 — which is the DAILY cap.
+               * The desk saw a red "over-booked" warning at a fifth of the real weekly limit of
+               * 15 and under-booked assayers the planning engines were recommending as having
+               * room for twelve more branches.
+               */
+              const cap = assayerWorkload.weeklyCapacity || 15;
+              const full = assayerWorkload.count >= cap;
+              return (
+                <div style={{ fontSize: '10px', marginTop: '2px', padding: '4px 8px', borderRadius: '4px',
+                  background: full ? 'var(--status-cancelled-bg)' : 'var(--status-active-bg)',
+                  color: full ? 'var(--danger)' : 'var(--success)' }}>
+                  Assayer Weekly Load: {assayerWorkload.count} of {cap} schedule(s)
+                </div>
+              );
+            })()}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

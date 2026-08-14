@@ -36,7 +36,7 @@ const OnboardingTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
             <span style={{ color: r.daysInStage > 30 ? 'var(--danger)' : 'var(--warning)', fontWeight: 600 }}>{r.daysInStage}d</span>,
             [r.district, r.state].filter(Boolean).join(', ') || '—',
             r.movedBy ?? '—',
-            <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} />,
+            <OpenLink onClick={() => navigate(`/hr/roster?assayer=${r.id}`)} />,
           ])}
         />
       )}

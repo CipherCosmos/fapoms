@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, CheckCheck, FileText, CheckCircle2, Calendar, Users, DollarSign, Info } from 'lucide-react';
+import { Bell, CheckCheck, FileText, CheckCircle2, Calendar, Users, DollarSign, Info, MessageSquare } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, WebNotification, NotificationCategory } from '../services/api';
 import { useToast } from './ui';
 import { connectSocket } from '../services/socket';
 
 const CATEGORY_META: Record<NotificationCategory, { icon: React.ElementType; tone: string }> = {
-  ASSIGNMENT: { icon: Calendar, tone: 'var(--accent)' },
-  VALIDATION: { icon: CheckCircle2, tone: 'var(--success)' },
-  DOCUMENT: { icon: FileText, tone: 'var(--accent)' },
-  PLANNING: { icon: Calendar, tone: 'var(--warning)' },
-  WORKFORCE: { icon: Users, tone: 'var(--accent)' },
-  BILLING: { icon: DollarSign, tone: 'var(--success)' },
-  SYSTEM: { icon: Info, tone: 'var(--text-secondary)' },
+  [NotificationCategory.ASSIGNMENT]: { icon: Calendar, tone: 'var(--accent)' },
+  [NotificationCategory.VALIDATION]: { icon: CheckCircle2, tone: 'var(--success)' },
+  [NotificationCategory.DOCUMENT]: { icon: FileText, tone: 'var(--accent)' },
+  [NotificationCategory.PLANNING]: { icon: Calendar, tone: 'var(--warning)' },
+  [NotificationCategory.WORKFORCE]: { icon: Users, tone: 'var(--accent)' },
+  [NotificationCategory.BILLING]: { icon: DollarSign, tone: 'var(--success)' },
+  [NotificationCategory.SYSTEM]: { icon: Info, tone: 'var(--text-secondary)' },
+  [NotificationCategory.FEEDBACK]: { icon: MessageSquare, tone: 'var(--accent)' },
 };
 
 function categoryIcon(category?: NotificationCategory) {
@@ -177,6 +178,10 @@ export const NotificationDropdown: React.FC = () => {
         return '/documents';
       case 'PLANNING':
         return '/planning';
+      case 'FEEDBACK':
+        // Without this a feedback notification landed on /notifications instead of the thread
+        // it is about — the one place the reader can actually answer it.
+        return '/feedback';
       case 'WORKFORCE':
         return '/hr';
       case 'BILLING':
@@ -411,6 +416,28 @@ export const NotificationDropdown: React.FC = () => {
                   );
                 })
               )}
+            </div>
+
+            {/**
+              * The way into the personal notification centre.
+              *
+              * It had none: the sidebar's notification entry goes to the org-wide rules page,
+              * which most roles cannot open and which cannot change anyone's own preferences
+              * anyway. Somebody trying to stop a category of email had nowhere to click.
+              */}
+            <div style={{ borderTop: '1px solid var(--border-color)', padding: '9px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+              <button
+                onClick={() => { setOpen(false); navigate('/notifications'); }}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: 'var(--accent)' }}
+              >
+                View all
+              </button>
+              <button
+                onClick={() => { setOpen(false); navigate('/notifications?tab=preferences'); }}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', color: 'var(--text-muted)', marginLeft: 'auto' }}
+              >
+                Choose what reaches me
+              </button>
             </div>
           </div>,
           document.body

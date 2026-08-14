@@ -37,6 +37,16 @@ export class NotificationPreferenceEntity extends BaseEntity {
   @Column({ type: 'boolean', default: true })
   push: boolean;
 
-  @Column({ type: 'boolean', default: false })
+  /**
+   * Default true, like the other two channels.
+   *
+   * It was false, which quietly contradicted the model the rest of the pipeline is built on:
+   * absence of an explicit `false` means opted in. The delivery worker sends when there is no
+   * row, the settings screen rendered the toggle as OFF, and — worst of the three — saving any
+   * OTHER switch created a row carrying this column's `false` default, silently muting every
+   * email in that category including CRITICAL escalations. A person turning push off for
+   * Assignments cannot have meant "and stop emailing me about SLA breaches".
+   */
+  @Column({ type: 'boolean', default: true })
   email: boolean;
 }

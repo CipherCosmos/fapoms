@@ -15,7 +15,7 @@ import {
   Sliders,
   Building2,
   Receipt,
-  UserCog, Inbox, Flag, MessageSquare } from 'lucide-react';
+  UserCog, Inbox, MessageSquare, Bus, BellRing, SlidersHorizontal } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { BrandLogo } from './BrandLogo';
@@ -46,7 +46,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Stage 1: Planning', path: '/planning', icon: Map },
         { name: 'Stage 2: Schedule Dispatch', path: '/scheduling', icon: CalendarDays },
         { name: 'Stage 3: Field Execution', path: '/assignments', icon: ClipboardList },
-        { name: 'Field Issues', path: '/field-issues', icon: Flag },
       ],
     },
     {
@@ -60,16 +59,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Data Entry & Validation', path: '/data-entry', icon: Inbox },
       ],
     },
+    /**
+     * Two groups, not one list in the order things were built.
+     *
+     * "Operational setup" is reference data operations maintain to do the work — dates that
+     * cannot be worked, territories, what travel costs, the scoring rules. "Administration" is
+     * the platform itself: how it behaves, who may use it, and the deliberate suspension of its
+     * controls. They were one accreted list, which is why "where do I change X" had no
+     * answerable shape.
+     */
     {
-      category: 'Administration',
+      category: 'Operational Setup',
       items: [
         { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
         { name: 'Territorial Zones', path: '/zones', icon: Map },
+        { name: 'Transport Costs', path: '/transport-costs', icon: Bus },
         { name: 'Rule Engine', path: '/rules', icon: Sliders },
+      ],
+    },
+    {
+      category: 'Administration',
+      items: [
+        { name: 'Platform Settings', path: '/admin/settings', icon: SlidersHorizontal },
+        { name: 'Notification Rules', path: '/admin/notifications', icon: BellRing },
+        { name: 'User Management', path: '/users', icon: Users },
         // Administrators only — filtered by canAccessRoute against route-permissions, same as
         // every other item here.
         { name: 'Rule Bypass (Testing)', path: '/admin/rule-bypass', icon: ShieldOff },
-        { name: 'User Management', path: '/users', icon: Users },
       ],
     },
   ];

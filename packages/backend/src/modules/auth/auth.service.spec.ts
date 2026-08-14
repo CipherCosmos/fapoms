@@ -11,6 +11,7 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -68,6 +69,7 @@ describe('AuthService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: CacheService, useValue: mockCache },
         { provide: DomainEventPublisher, useValue: mockEvents },
+        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn(), emit: jest.fn() } },
       ],
     }).compile();
 

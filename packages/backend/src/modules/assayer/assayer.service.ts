@@ -16,7 +16,7 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
@@ -105,24 +105,6 @@ async function assertAddressConsistent(dto: {
   }
 }
 
-const LIFECYCLE_TRANSITIONS: Record<string, string[]> = {
-  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [AssayerLifecycleStatus.TRAINING, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.TRAINING]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.ACTIVE]: [AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.SUSPENDED, AssayerLifecycleStatus.INACTIVE, AssayerLifecycleStatus.RESIGNED],
-  [AssayerLifecycleStatus.ON_LEAVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.INACTIVE],
-  [AssayerLifecycleStatus.SUSPENDED]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.TERMINATED],
-  [AssayerLifecycleStatus.INACTIVE]: [AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ARCHIVED],
-  [AssayerLifecycleStatus.RESIGNED]: [AssayerLifecycleStatus.ARCHIVED],
-  [AssayerLifecycleStatus.TERMINATED]: [AssayerLifecycleStatus.ARCHIVED],
-};
-
-function mapLifecycleToOperationalStatus(lifecycle: string): string {
-  if (lifecycle === AssayerLifecycleStatus.ACTIVE || lifecycle === AssayerLifecycleStatus.ON_LEAVE) return 'ACTIVE';
-  if (lifecycle === AssayerLifecycleStatus.SUSPENDED) return 'SUSPENDED';
-  return 'INACTIVE';
-}
 
 /**
  * What a roster upload actually did.
@@ -322,27 +304,10 @@ export class AssayerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.workflowEngine.registerWorkflow('assayer', [
-      { from: [AssayerLifecycleStatus.INVITED], to: AssayerLifecycleStatus.DOCUMENT_VERIFICATION },
-      { from: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: AssayerLifecycleStatus.BACKGROUND_VERIFICATION },
-      { from: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION], to: AssayerLifecycleStatus.INACTIVE },
-      { from: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: AssayerLifecycleStatus.TRAINING },
-      { from: [AssayerLifecycleStatus.BACKGROUND_VERIFICATION], to: AssayerLifecycleStatus.INACTIVE },
-      { from: [AssayerLifecycleStatus.TRAINING], to: AssayerLifecycleStatus.ACTIVE },
-      { from: [AssayerLifecycleStatus.TRAINING], to: AssayerLifecycleStatus.INACTIVE },
-      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.ON_LEAVE },
-      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.SUSPENDED },
-      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.INACTIVE },
-      { from: [AssayerLifecycleStatus.ACTIVE], to: AssayerLifecycleStatus.RESIGNED },
-      { from: [AssayerLifecycleStatus.ON_LEAVE], to: AssayerLifecycleStatus.ACTIVE },
-      { from: [AssayerLifecycleStatus.ON_LEAVE], to: AssayerLifecycleStatus.INACTIVE },
-      { from: [AssayerLifecycleStatus.SUSPENDED], to: AssayerLifecycleStatus.ACTIVE },
-      { from: [AssayerLifecycleStatus.SUSPENDED], to: AssayerLifecycleStatus.TERMINATED },
-      { from: [AssayerLifecycleStatus.INACTIVE], to: AssayerLifecycleStatus.ACTIVE },
-      { from: [AssayerLifecycleStatus.INACTIVE], to: AssayerLifecycleStatus.ARCHIVED },
-      { from: [AssayerLifecycleStatus.RESIGNED], to: AssayerLifecycleStatus.ARCHIVED },
-      { from: [AssayerLifecycleStatus.TERMINATED], to: AssayerLifecycleStatus.ARCHIVED },
-    ]);
+    // Derived from the one table, not typed out again. The engine gates
+    // `executeCommand` before the state machine runs, so a hand-written copy here
+    // silently outranks the real rules wherever the two drift apart.
+    this.workflowEngine.registerWorkflow('assayer', toWorkflowTransitions(ASSAYER_LIFECYCLE_TRANSITIONS));
   }
 
   async hydrateWorkforceAttributes(assayer: AssayerEntity): Promise<AssayerEntity> {
@@ -817,6 +782,15 @@ export class AssayerService implements OnModuleInit {
     );
 
     // Deactivate assayer government documents
+    // Skills, languages and certifications. Missing from this cascade, these outlived the person:
+    // the HR compliance queries join `assayers` and read `w.is_active`, so a deleted assayer's
+    // certifications kept appearing under "falling due" and their skills kept counting toward
+    // capability coverage — HR chasing renewals for someone who no longer exists.
+    await this.dataSource.query(
+      `UPDATE workforce_attributes SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+
     await this.dataSource.query(
       `UPDATE assayer_government_documents SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
       [userId, id],
@@ -1397,6 +1371,12 @@ export class AssayerService implements OnModuleInit {
       ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]),
       // The fallback for an assayer with no payables raised yet. Computed unconditionally so it
       // can share the round-trip; which of the two is used is decided below, as before.
+      //
+      // The COALESCE below is the SQL spelling of `assignmentFee(a, 'COST')` in
+      // billing-engine/billing-money.ts — this is money owed to the assayer, so it reads the
+      // proposed fee when none was agreed, exactly as the payable does. If that precedence ever
+      // changes, it has to change in both places or an assayer's earnings figure will stop
+      // matching the payables that eventually replace it.
       mgr.query(
         `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
            FROM assignments a

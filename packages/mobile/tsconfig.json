@@ -14,7 +14,20 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    // Pin React's types to this package's own copy.
+    //
+    // React Native 0.76 is built against React 18 types; the web app needs React 19. Both live in
+    // one npm workspace, so whichever version npm decides to hoist to the root `node_modules`
+    // becomes the default for everyone — and this package would then compile against React 19 and
+    // fail with "'View' cannot be used as a JSX component", because RN's own JSX element types no
+    // longer match. Naming the nested copy makes this package's answer independent of what the
+    // root happens to hold.
+    "paths": {
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
+    },
+    "baseUrl": "."
   },
   "include": [
     "src/**/*",

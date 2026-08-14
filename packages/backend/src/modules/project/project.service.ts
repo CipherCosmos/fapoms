@@ -20,7 +20,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, resolveRegion } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, resolveRegion, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
@@ -176,53 +176,10 @@ export class ProjectService implements OnModuleInit {
   }
 
   onModuleInit() {
-    this.workflowEngine.registerWorkflow('project', [
-      {
-        from: [ProjectStatus.DRAFT],
-        to: ProjectStatus.PLANNING,
-      },
-      {
-        from: [ProjectStatus.PLANNING],
-        to: ProjectStatus.SCHEDULING,
-      },
-      {
-        from: [ProjectStatus.SCHEDULING],
-        to: ProjectStatus.EXECUTION,
-      },
-      {
-        from: [ProjectStatus.EXECUTION],
-        to: ProjectStatus.VALIDATION,
-      },
-      {
-        from: [ProjectStatus.VALIDATION],
-        to: ProjectStatus.COMPLETED,
-      },
-      {
-        // ON_HOLD was missing, so a parked project had no abandon path — it had to
-        // be resumed into SCHEDULING or EXECUTION first just to be cancelled.
-        from: [
-          ProjectStatus.DRAFT, ProjectStatus.PLANNING, ProjectStatus.SCHEDULING,
-          ProjectStatus.EXECUTION, ProjectStatus.VALIDATION, ProjectStatus.ON_HOLD,
-        ],
-        to: ProjectStatus.CANCELLED,
-      },
-      {
-        from: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION],
-        to: ProjectStatus.ON_HOLD,
-      },
-      {
-        from: [ProjectStatus.ON_HOLD],
-        to: ProjectStatus.SCHEDULING,
-      },
-      {
-        from: [ProjectStatus.ON_HOLD],
-        to: ProjectStatus.EXECUTION,
-      },
-      {
-        from: [ProjectStatus.COMPLETED],
-        to: ProjectStatus.ARCHIVED,
-      },
-    ]);
+    // Derived from the one table, not typed out again. The engine gates
+    // `executeCommand` before the state machine runs, so a hand-written copy here
+    // silently outranks the real rules wherever the two drift apart.
+    this.workflowEngine.registerWorkflow('project', toWorkflowTransitions(PROJECT_TRANSITIONS));
   }
 
   async create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
