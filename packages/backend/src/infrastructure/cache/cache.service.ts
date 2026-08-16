@@ -71,16 +71,50 @@ export class CacheService {
   }
 
   /**
+   * In-flight loads, so concurrent misses of the same key run `load` once. Keyed by cache key;
+   * an entry lives only for the duration of one load.
+   */
+  private readonly inFlight = new Map<string, Promise<unknown>>();
+
+  /**
    * Read-through cache: return the cached value or load it, store it under `ttlSeconds`,
    * and return it. A loader that yields null/undefined is never cached (so a transient
    * empty result cannot pin a "nothing here" answer for the whole TTL).
+   *
+   * ## Single-flight
+   *
+   * Concurrent callers that miss the same key share one `load()`. Without this, the keys worth
+   * caching are exactly the keys that stampede: the operations dashboard (15 s), the command
+   * centre (20 s) and the HR overview (30 s) each run several heavy aggregates, and they expire
+   * while every operator has the page open — so the moment the TTL lapses, N simultaneous
+   * requests each ran the full query, N times the work, all to store the same answer. At the
+   * 09:00 peak that is the whole desk hitting the database at once, every TTL.
+   *
+   * The dedupe is per process, not cluster-wide. That is deliberate: it needs no lock, cannot
+   * wedge (a caller can only ever wait on a load that is actually running in front of it), and
+   * a burst lands on one replica anyway because it is one operator's page or one load
+   * balancer's connection. Across replicas the worst case is one load each, which is what the
+   * cache was already sized for. A failed load rejects every waiter and is not cached, so the
+   * next caller retries rather than inheriting an error.
    */
   async wrap<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
     const cached = await this.getJson<T>(key);
     if (cached !== null && cached !== undefined) return cached;
-    const fresh = await load();
-    await this.setJson(key, fresh, ttlSeconds);
-    return fresh;
+
+    const existing = this.inFlight.get(key);
+    if (existing) return existing as Promise<T>;
+
+    const pending = (async () => {
+      const fresh = await load();
+      await this.setJson(key, fresh, ttlSeconds);
+      return fresh;
+    })();
+    this.inFlight.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      this.inFlight.delete(key);
+    }
   }
 
   /**

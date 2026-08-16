@@ -37,6 +37,17 @@ interface CommandCenter {
   idleAssayers: Array<{ id: string; name: string; state: string; openAssignments: number; territoryPosture: string }>;
   branchPoints: BranchPoint[];
   assayerPoints: Array<{ id: string; name: string; state: string; latitude: number | null; longitude: number | null }>;
+  /**
+   * How much of the book the pin arrays actually carry. Every figure above — totals, territory
+   * rollups, coverage gaps — is computed over the whole scope regardless; only the pins are
+   * bounded, because a national book is tens of thousands of them and the browser draws one
+   * marker each. Optional so an older server response still renders.
+   */
+  meta?: {
+    branchPoints: { returned: number; total: number; truncated: boolean };
+    assayerPoints: { returned: number; total: number; truncated: boolean };
+    pointLimit: number;
+  };
 }
 
 /**
@@ -182,7 +193,16 @@ export const ExecutiveMap: React.FC = () => {
               </button>
             )}
             <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-muted)' }}>
-              showing {visibleBranches.length} of {data.branchPoints.length} branches
+              showing {visibleBranches.length} of {data.meta?.branchPoints.total ?? data.branchPoints.length} branches
+              {data.meta?.branchPoints.truncated && (
+                /* The map carries the most decision-relevant pins first — unreachable, then
+                   unassigned, then largest — but it is not the whole book, and saying so is the
+                   difference between a bounded map and a wrong one. */
+                <span style={{ color: 'var(--warning)' }}>
+                  {' '}· map shows the {data.meta.branchPoints.returned.toLocaleString('en-IN')} most
+                  critical pins; filter by client or state to see the rest
+                </span>
+              )}
             </span>
           </div>
 
