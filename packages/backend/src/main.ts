@@ -367,9 +367,42 @@ async function pauseLocalQueues(app: INestApplication, logger: Logger): Promise<
   }
 }
 
+/**
+ * A stray promise rejection must not take the process down with it.
+ *
+ * Node 20 terminates on an unhandled rejection by default. This codebase deliberately runs work
+ * fire-and-forget in several places — notification fan-out (`emitSafe`), assayer stats refresh,
+ * the socket gateway's region resolution, the outbox fast path — because none of them should be
+ * able to fail the request that triggered them. Every one of those guards itself today, but the
+ * pattern is one forgotten `.catch()` away from killing an API that is otherwise healthy, and
+ * `restart: unless-stopped` would then drop every in-flight request and socket to recover from a
+ * background task nobody was waiting on.
+ *
+ * Logged loudly rather than swallowed: an unhandled rejection is a real defect and must be
+ * findable. `uncaughtException` is different — the process state is genuinely unknown after one,
+ * so it exits, but only after the reason has been written down.
+ */
+function installProcessGuards(): void {
+  const logger = new Logger('Process');
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error(
+      `Unhandled promise rejection — a fire-and-forget task failed without a catch: ${
+        reason instanceof Error ? `${reason.message}\n${reason.stack}` : String(reason)
+      }`,
+    );
+  });
+
+  process.on('uncaughtException', (err: Error) => {
+    logger.error(`Uncaught exception — exiting so the supervisor restarts a known-good process: ${err.message}`, err.stack);
+    process.exit(1);
+  });
+}
+
 // Only start the server when this file is the entry point. Importing it (for example to unit
 // test the production-config guard above) must not boot the whole application.
 if (require.main === module) {
+  installProcessGuards();
   bootstrap().catch((err) => {
     // A boot failure must crash loudly, not become a swallowed unhandled rejection.
     console.error('Fatal: application failed to start', err);
