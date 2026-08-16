@@ -11,7 +11,10 @@ export interface ProjectBranchCandidates {
   branchName: string;
   city: string;
   state: string;
+  /** The shortlist — top N by score, N being the report's `candidatesPerBranch`. */
   candidates: AssayerRecommendation[];
+  /** How many candidates the engine actually ranked for this branch, before the shortlist. */
+  candidateCount: number;
 }
 
 export interface ProjectPlanningReport {
@@ -20,6 +23,8 @@ export interface ProjectPlanningReport {
   projectNumber: string;
   totalUnassignedBranches: number;
   branches: ProjectBranchCandidates[];
+  /** The shortlist depth each branch was trimmed to; compare against each `candidateCount`. */
+  candidatesPerBranch: number;
 }
 
 @Injectable()
@@ -28,6 +33,19 @@ export class ProjectPlanningService {
     private readonly projectQueryService: ProjectQueryService,
     private readonly planningService: PlanningService,
   ) {}
+
+  /**
+   * How many ranked candidates each branch carries in a project-wide report.
+   *
+   * The report ran the engine per unassigned branch and returned every ranked candidate for
+   * each, with its score breakdown and readable reasons: measured at 39 MB for a 200-branch
+   * project. Nobody triages a queue by reading the 40th-best assayer for the 87th branch — the
+   * shortlist is what the answer is for, and the full list is one branch-level call away.
+   * `candidateCount` on each branch reports how many were actually ranked, so a truncated
+   * shortlist never reads as "only five people were eligible".
+   */
+  private static readonly CANDIDATES_PER_BRANCH =
+    Number(process.env.PROJECT_CANDIDATES_PER_BRANCH) || 5;
 
   /**
    * Retrieves recommended candidates for all unassigned branches of a project.
@@ -71,7 +89,9 @@ export class ProjectPlanningService {
         branchName: pb.branch.name,
         city: pb.branch.city,
         state: pb.branch.state,
-        candidates,
+        // The shortlist, plus how deep the ranking actually went.
+        candidates: candidates.slice(0, ProjectPlanningService.CANDIDATES_PER_BRANCH),
+        candidateCount: candidates.length,
       });
     }
 
@@ -81,6 +101,7 @@ export class ProjectPlanningService {
       projectNumber: project.projectNumber,
       totalUnassignedBranches: unassignedPBs.length,
       branches: branchCandidatesList,
+      candidatesPerBranch: ProjectPlanningService.CANDIDATES_PER_BRANCH,
     };
   }
 }

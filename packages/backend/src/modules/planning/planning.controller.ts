@@ -482,6 +482,14 @@ export class PlanningController {
     };
   }
 
+  /**
+   * Throttled like the optimiser it is as expensive as. This runs the recommendation engine
+   * once per branch in the project, so one call is bounded by the size of the book rather than
+   * by anything the caller passes; a page that re-fires it on every socket event, or two
+   * operators refreshing together, is enough to hold connections for the whole pool. The POST
+   * variants have carried a limit since they were written — these GETs simply never did.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/coverage-plan')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Generate detailed coverage planning statistics, capacity analysis, and cluster plans' })
@@ -553,6 +561,8 @@ export class PlanningController {
     };
   }
 
+  /** Same shape of work as the coverage plan: the engine, once per unassigned branch. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/candidates')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Retrieve candidates for all unassigned branches of a project' })
@@ -671,6 +681,7 @@ export class PlanningController {
    * Each branch keeps its own client's audit-duration agreement and rate card, and the
    * conflict-of-interest floor applied is the strictest across the clients in scope.
    */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('day-plans')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Generate day plans spanning several projects, so one assayer can cover nearby branches across engagements' })
@@ -705,6 +716,8 @@ export class PlanningController {
     return { success: true, data: plan };
   }
 
+  /** Clustering plus the engine per branch per cluster, then a route optimisation per plan. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/day-plans')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
   @ApiOperation({ summary: 'Generate multi-branch day plans grouping nearby branches for single assayer coverage' })

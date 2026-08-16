@@ -169,6 +169,13 @@ export class PlanningService {
     const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights, undefined, options);
     const rates = await this.feePolicyService.getRates(branch.clientId ?? null);
 
+    // One query for every ranked candidate's contracted rate, instead of one per candidate.
+    const baseFees = await this.feePolicyService.resolveBaseFees(
+      results.map((r) => r.assayer.id),
+      rates,
+      scheduledDate,
+    );
+
     const recommendations: AssayerRecommendation[] = [];
     for (const r of results) {
       let distanceKm: number | null = null;
@@ -184,7 +191,8 @@ export class PlanningService {
       // the profile active *today* and fall back to a literal 1500, while assignment creation
       // fell back to 1200 and FeePolicyService falls back to the client's contracted rate — so
       // ops saw a figure on the candidate list that no part of the system would ever charge.
-      const { baseFee } = await this.feePolicyService.resolveBaseFee(r.assayer.id, rates, scheduledDate);
+      // Resolved for the whole pool above; same rule, one query.
+      const { baseFee } = baseFees.get(r.assayer.id) ?? { baseFee: rates.defaultBaseFee, usedFallback: true };
 
       const readableReasons = generateExplanation(r.breakdown, {
         displayName: r.assayer.displayName,

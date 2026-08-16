@@ -57,6 +57,9 @@ describe('PlanningService', () => {
             // otherwise, and a base fee resolved for the date the candidate is scored on.
             getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: false }),
             resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1500, usedFallback: false }),
+            // Batched variant: the candidate list resolves every ranked assayer's rate in one
+            // query. Same rule as resolveBaseFee, so the stub mirrors it per id.
+            resolveBaseFees: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, { baseFee: 1500, usedFallback: false }]))),
           },
         },
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },

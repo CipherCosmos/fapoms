@@ -243,6 +243,53 @@ export class FeePolicyService implements OnModuleInit {
   }
 
   /**
+   * The same rule as `resolveBaseFee`, answered for many assayers in one query.
+   *
+   * The candidate list called `resolveBaseFee` once per ranked assayer, which is one indexed
+   * round trip each — invisible for one branch and multiplied by every branch when a project-
+   * wide plan asks for candidates across a whole book. Selection is identical: among a
+   * candidate's active profiles that are in force on `onDate`, the one with the latest
+   * effective start; anything else falls back to the client's default rate. Deriving both from
+   * one loader keeps the batch and single-row paths from disagreeing about what an assayer costs.
+   */
+  async resolveBaseFees(
+    assayerIds: string[],
+    rates: FeeRates,
+    onDate?: Date,
+  ): Promise<Map<string, { baseFee: number; usedFallback: boolean }>> {
+    const at = onDate ?? new Date();
+    const result = new Map<string, { baseFee: number; usedFallback: boolean }>();
+    if (assayerIds.length === 0) return result;
+
+    const profiles = await this.commercialRepository
+      .createQueryBuilder('p')
+      .where('p.assayerId IN (:...assayerIds)', { assayerIds })
+      .andWhere('p.isActive = true')
+      .andWhere('p.effectiveStartDate <= :at', { at })
+      .andWhere('(p.effectiveEndDate IS NULL OR p.effectiveEndDate >= :at)', { at })
+      // Ascending, so the last write per assayer below is the latest start date — the same row
+      // `getOne()` returns for a DESC order.
+      .orderBy('p.effectiveStartDate', 'ASC')
+      .getMany()
+      .catch(() => []);
+
+    const winning = new Map<string, (typeof profiles)[number]>();
+    for (const profile of profiles) winning.set(profile.assayerId, profile);
+
+    for (const assayerId of assayerIds) {
+      const profile = winning.get(assayerId);
+      const fee = profile?.baseFee !== undefined && profile?.baseFee !== null ? Number(profile.baseFee) : NaN;
+      result.set(
+        assayerId,
+        Number.isFinite(fee) && fee > 0
+          ? { baseFee: fee, usedFallback: false }
+          : { baseFee: rates.defaultBaseFee, usedFallback: true },
+      );
+    }
+    return result;
+  }
+
+  /**
    * Travel allowance for a distance. The free commute allowance is deducted first —
    * this is the rule that the day-planner path used to skip entirely.
    */

@@ -362,6 +362,14 @@ export class DayPlannerService {
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 
+    /**
+     * The roster this method already loaded and hydrated, handed to the recommendation engine
+     * so it does not reload the same client and the same workforce once per branch in every
+     * cluster. The engine's own `preloadContext` narrows to deployable assayers; this list is
+     * the same filter (active, on-roster), which is why it can stand in for it.
+     */
+    const enginePreload = { client: client ?? null, assayers };
+
     // 5. Generate day plans for each cluster
     const clusterResults: ProjectDayPlan['clusters'] = [];
     const unclusteredBranches: ProjectDayPlan['unclusteredBranches'] = [];
@@ -424,7 +432,7 @@ export class DayPlannerService {
       }
 
       let { dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
-        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, false, clientByProjectBranchId,
+        cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, false, clientByProjectBranchId, enginePreload,
       );
 
       // Fallback: if no candidates found within client constraints, retry with relaxed
@@ -434,7 +442,7 @@ export class DayPlannerService {
       // every candidate is too close.
       if (dayPlans.length === 0) {
         ({ dayPlans, excludedAssayers } = await this.generateClusterDayPlans(
-          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true, clientByProjectBranchId,
+          cluster, assayers, client, scheduledDate, effectiveMinDistanceKm, true, clientByProjectBranchId, enginePreload,
         ));
       }
 
@@ -765,6 +773,12 @@ export class DayPlannerService {
      * route — is charged once for the day.
      */
     clientByProjectBranchId?: Map<string, ClientEntity | null>,
+    /**
+     * The client and hydrated roster the engine would otherwise load for itself, once per
+     * branch. Threading the shared copy through means a 20-branch plan loads the workforce
+     * once instead of twenty times.
+     */
+    preloaded?: Parameters<RecommendationEngine['recommend']>[3],
   ): Promise<{ dayPlans: DayPlanCandidate[]; excludedAssayers: ExcludedDayPlanCandidate[] }> {
     const planningPreferences = client?.planningPreferences || {};
     const requiredSkills: string[] = planningPreferences.requiredSkills || [];
@@ -795,7 +809,7 @@ export class DayPlannerService {
     for (const branch of cluster.branches) {
       const branchEntity = clusterBranchMap.get(branch.branchId);
       if (!branchEntity) continue;
-      const ranked = await this.recommendationEngine.recommend(branchEntity, scheduledDate);
+      const ranked = await this.recommendationEngine.recommend(branchEntity, scheduledDate, {}, preloaded);
       branchRecommendations.set(branch.branchId, {
         ranked,
         excluded: ((ranked as any).excluded as ExcludedDayPlanCandidate[]) || [],
