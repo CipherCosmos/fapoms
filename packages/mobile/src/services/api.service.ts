@@ -1127,18 +1127,12 @@ export class MobileApiService {
    * unreachable "we could not get your location" text: correct handling, made unreachable by a
    * swallow one layer down.
    */
-  static async getAssayerAssignments(assayerId?: string): Promise<AssayerAssignment[]> {
-    // Not a failure: there is genuinely nobody to fetch for yet.
-    if (!assayerId) return [];
-    try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/assayer/${assayerId}`);
-      if (!response.ok) {
-        throw new Error(`Assignments request failed with ${response.status}.`);
-      }
-      const data = await response.json();
-      const rawItems = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : (data?.items || []));
-
-      return rawItems.map((item: any, idx: number) => {
+  /**
+   * One place that turns a server assignment row into the app's model, shared by the live list
+   * and the paged history so the two can never disagree about what a job looks like.
+   */
+  private static mapAssignmentRows(rows: any[]): AssayerAssignment[] {
+    return (rows || []).map((item: any, idx: number) => {
         const branch = item.projectBranch?.branch;
         const project = item.projectBranch?.project;
         return {
@@ -1153,7 +1147,10 @@ export class MobileApiService {
           longitude: branch?.longitude != null ? Number(branch.longitude) : 0,
           scheduledDate: item.scheduledDate || '',
           sequenceOrder: idx + 1,
-          estimatedCustomerCount: item.customerCount || item.projectBranch?.packetCount || (item.customers && item.customers.length > 0 ? item.customers.length : 15),
+          // The server sends the count; it no longer ships the customer ROWS, which carried
+          // bank customers' account numbers and pledged weights into a plaintext cache file for
+          // jobs finished months ago, and which nothing on screen ever read.
+          estimatedCustomerCount: item.customerCount || item.projectBranch?.packetCount || 15,
           estimatedAuditHours: branch?.estimatedDurationHours != null ? Number(branch.estimatedDurationHours) : 0,
           // Unknown statuses surface as-is rather than being rewritten to PENDING; a status
           // the app does not recognise is a bug to see, not one to disguise as new work.
@@ -1161,7 +1158,9 @@ export class MobileApiService {
           proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
           // Null, not an invented 1200 — see utils/fees.ts. The server resolves this from the
           // assayer's commercial profile, so a missing value means "unknown", not "₹1200".
-          standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : null,
+          // `undefined`, not `null`: the model treats the field as optional, and extracting this
+          // mapper is what surfaced the mismatch the inline version had been widening away.
+          standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : undefined,
           agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
           agreedTravelFee: item.travelAllowance != null ? Number(item.travelAllowance) : 0,
           // The quote breakdown recorded when the offer was priced. Grounding for display —
@@ -1182,7 +1181,6 @@ export class MobileApiService {
           documentReadiness: item.documentReadiness ?? { state: 'NONE', dispatchedCount: 0, message: '' },
           negotiationCount: item.negotiationCount != null ? Number(item.negotiationCount) : 0,
           remarks: item.remarks || '',
-          customers: item.customers || [],
           queries: item.queries || [],
           // `amount` arrives as a decimal string ("180.00") — Postgres numerics serialise that
           // way. The earnings screen sums these with `+`, so leaving them as strings would
@@ -1190,6 +1188,56 @@ export class MobileApiService {
           expenses: (item.expenses || []).map((e: any) => ({ ...e, amount: Number(e.amount) || 0 })),
         };
       });
+  }
+
+  /**
+   * Older, settled work — the part of the book `scope=active` deliberately leaves behind.
+   *
+   * Paged with an opaque cursor rather than an offset, so a page boundary cannot repeat or skip
+   * a job as newer ones arrive. `nextCursor` is null once there is nothing older.
+   */
+  static async getAssayerAssignmentHistory(
+    assayerId: string,
+    before?: string,
+    limit = 20,
+  ): Promise<{ items: AssayerAssignment[]; nextCursor: string | null }> {
+    const params = new URLSearchParams({ scope: 'history', limit: String(limit) });
+    if (before) params.set('before', before);
+    const response = await this.fetchWithAuth(
+      `${API_BASE_URL}/assignments/assayer/${assayerId}?${params.toString()}`,
+    );
+    if (!response.ok) throw this.unavailable('Job history');
+    const data = await response.json();
+    return {
+      items: this.mapAssignmentRows(data.items || []),
+      nextCursor: data.meta?.hasMore ? (data.meta.nextCursor ?? null) : null,
+    };
+  }
+
+  /**
+   * The work list.
+   *
+   * `scope=active` is what the app runs on: everything in flight plus recently settled work, so
+   * the schedule's short history and the earnings totals still have what they need. It replaces
+   * a request that returned the assayer's entire career — every completed, rejected and
+   * cancelled job ever — on a list the app refetches on twelve socket events, every five
+   * minutes, after every mutation and twice on a cold start. Older work is paged through
+   * `getAssayerAssignmentHistory`.
+   */
+  static async getAssayerAssignments(assayerId?: string): Promise<AssayerAssignment[]> {
+    // Not a failure: there is genuinely nobody to fetch for yet.
+    if (!assayerId) return [];
+    try {
+      const response = await this.fetchWithAuth(
+        `${API_BASE_URL}/assignments/assayer/${assayerId}?scope=active`,
+      );
+      if (!response.ok) {
+        throw new Error(`Assignments request failed with ${response.status}.`);
+      }
+      const data = await response.json();
+      const rawItems = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : (data?.items || []));
+
+      return MobileApiService.mapAssignmentRows(rawItems);
     } catch (error) {
       // Re-thrown, not swallowed. The caller decides what an unreachable server looks like on
       // screen; this layer's job is to be honest that it could not answer.

@@ -277,6 +277,30 @@ function AppMain() {
     setPendingNotificationTarget(null);
   }, [pendingNotificationTarget, assignments, overlay.open]);
 
+  /**
+   * The next page of settled work older than the live list's window.
+   *
+   * The cursor lives here rather than in the screen so switching tabs does not restart paging,
+   * and it is opaque — a position in the server's ordering, not something to reconstruct.
+   * Returning an empty array is how the screen learns it has reached the end.
+   */
+  const historyCursor = useRef<string | null>(null);
+  const loadOlderHistory = useCallback(async () => {
+    if (!user?.id) return [];
+    try {
+      const { items, nextCursor } = await MobileApiService.getAssayerAssignmentHistory(
+        user.id,
+        historyCursor.current ?? undefined,
+      );
+      historyCursor.current = nextCursor;
+      // No cursor back means the server has nothing older; an empty page says the same thing.
+      return nextCursor === null && items.length === 0 ? [] : items;
+    } catch (err) {
+      feedback.error('Could not load older jobs', 'The connection dropped. Try again in a moment.');
+      return [];
+    }
+  }, [user?.id, feedback]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     await Promise.all([
@@ -647,6 +671,7 @@ function AppMain() {
             onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}
             onOpenMap={(a) => overlay.open({ name: 'navigate', assignment: a })}
             onCounterOffer={(a) => overlay.open({ name: 'negotiate', assignment: a })}
+            onLoadOlderHistory={loadOlderHistory}
           />
         )}
 

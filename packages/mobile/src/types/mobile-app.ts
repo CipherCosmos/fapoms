@@ -156,7 +156,6 @@ export interface AssayerAssignment {
    * not sent the paperwork yet) presented as a failed download.
    */
   documentReadiness?: { state: 'READY' | 'PREPARING' | 'NONE'; dispatchedCount: number; message: string };
-  customers: CustomerRecord[];
   queries: ValidationQuery[];
   expenses: AssayerExpense[];
 }

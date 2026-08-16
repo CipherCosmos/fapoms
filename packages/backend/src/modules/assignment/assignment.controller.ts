@@ -129,6 +129,14 @@ export class AssignmentController {
   async findByAssayer(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Req() req: any,
+    /**
+     * `active` is what the field app runs on — everything in flight plus recently settled work.
+     * `history` pages the rest, newest first, via `before`. Omitted, the whole list comes back
+     * as it always did, so a handset still on the previous bundle is unaffected by this deploy.
+     */
+    @Query('scope') listScope?: 'active' | 'history' | 'all',
+    @Query('limit') limit?: string,
+    @Query('before') before?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
@@ -140,8 +148,16 @@ export class AssignmentController {
     // returns an assayer's whole book, so a West operator must not be able to read the South's
     // people by id. Assayers reading their own work carry no assignment and are unaffected.
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
-    const items = await this.assignmentService.findByAssayer(assayerId);
-    return { success: true, items };
+    if (listScope && !['active', 'history', 'all'].includes(listScope)) {
+      throw new BadRequestException(`Unknown scope '${listScope}'. Use active, history or all.`);
+    }
+    const { assignments, hasMore, nextCursor } = await this.assignmentService.findByAssayer(assayerId, {
+      scope: listScope,
+      limit: limit ? Number(limit) : undefined,
+      before,
+    });
+    // `items` stays an array: that is the shape the shipped app reads, and paging is additive.
+    return { success: true, items: assignments, meta: { hasMore, nextCursor, scope: listScope ?? 'all' } };
   }
 
   // Was @Public(). JwtAuthGuard short-circuits public routes without running the JWT

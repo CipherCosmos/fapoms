@@ -21,6 +21,12 @@ interface ScheduleScreenProps {
   onCounterOffer?: (assignment: AssayerAssignment) => void;
   onOpenQueryChat?: (assignment: AssayerAssignment) => void;
   onOpenMap?: (assignment: AssayerAssignment) => void;
+  /**
+   * Loads the next page of settled work older than the app's active window, newest first.
+   * Returns an empty array when there is no more. Absent, the History tab simply shows what
+   * the active list already carries.
+   */
+  onLoadOlderHistory?: () => Promise<AssayerAssignment[]>;
 }
 
 type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
@@ -48,6 +54,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onCounterOffer,
   onOpenQueryChat,
   onOpenMap,
+  onLoadOlderHistory,
 }) => {
   /**
    * The negotiation cap, from the server that enforces it — not a copy on the phone.
@@ -110,7 +117,33 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   // CANCELLED was missing from this split, so a cancelled audit stayed under Active forever
   // while HomeScreen had already dropped it from current work.
   const active = assignments.filter((a) => !isAssignmentTerminal(a.status));
-  const done = assignments.filter((a) => isAssignmentTerminal(a.status));
+
+  /**
+   * History: the settled work the live list carries (the recent window the server sends), plus
+   * any older pages this screen has since pulled in. The server stopped sending an assayer's
+   * entire career on every refresh — that list is fetched on a dozen events a minute — so older
+   * jobs arrive on request instead, and the tab says so rather than quietly ending.
+   */
+  const [olderHistory, setOlderHistory] = useState<AssayerAssignment[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [noMoreHistory, setNoMoreHistory] = useState(false);
+
+  const loadOlder = async () => {
+    if (!onLoadOlderHistory || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const page = await onLoadOlderHistory();
+      if (page.length === 0) setNoMoreHistory(true);
+      else setOlderHistory((prev) => [...prev, ...page.filter((p) => !prev.some((x) => x.id === p.id))]);
+    } catch {
+      // Left to the caller's feedback; the button simply stays available to try again.
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  const recentDone = assignments.filter((a) => isAssignmentTerminal(a.status));
+  const done = [...recentDone, ...olderHistory.filter((o) => !recentDone.some((r) => r.id === o.id))];
   const shown = tab === 'ACTIVE' ? active : done;
 
   /**
@@ -329,6 +362,28 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             })}
           </View>
         ))
+      )}
+
+      {/*
+        Older jobs, on request. The live list carries recent settled work only — the server no
+        longer sends an assayer's whole career on a list that refreshes on every desk event — so
+        this says where the tab currently ends instead of letting it look like the whole record.
+      */}
+      {tab === 'DONE' && onLoadOlderHistory && (
+        noMoreHistory ? (
+          <AppText variant="small" tone="muted" style={{ textAlign: 'center', paddingVertical: t.space.md }}>
+            That&rsquo;s your complete job history.
+          </AppText>
+        ) : (
+          <Button
+            label={loadingOlder ? 'Loading older jobs…' : 'Show older jobs'}
+            icon="time-outline"
+            variant="neutral"
+            loading={loadingOlder}
+            disabled={loadingOlder}
+            onPress={loadOlder}
+          />
+        )
       )}
     </View>
   );

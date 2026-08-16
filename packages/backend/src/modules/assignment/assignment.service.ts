@@ -117,6 +117,38 @@ const DEFAULT_MAX_NEGOTIATION_ROUNDS = 3;
 const DEFAULT_CHECK_IN_GEOFENCE_METERS = 2000;
 
 
+/** Rows per page of the field app's work list, and the ceiling a caller may ask for. */
+const DEFAULT_ASSAYER_PAGE_SIZE = 50;
+const MAX_ASSAYER_PAGE_SIZE = 200;
+
+/**
+ * How far back `scope=active` still carries settled work. The earnings screen totals recent
+ * completions and the schedule shows a short history, so a strictly open-only list would empty
+ * both; everything older is reached through `scope=history`.
+ */
+const RECENT_TERMINAL_DAYS = Number(process.env.ASSAYER_RECENT_TERMINAL_DAYS) || 60;
+
+/**
+ * Keyset cursor over `(createdAt, id)` — the exact key the list is ordered by, so a page
+ * boundary inside rows created in the same millisecond neither repeats nor skips one.
+ * Opaque to the client on purpose: it is a position, not a filter to hand-edit.
+ */
+function encodeAssayerCursor(row: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${new Date(row.createdAt).toISOString()}|${row.id}`, 'utf8').toString('base64url');
+}
+
+function decodeAssayerCursor(cursor: string): [Date | null, string] {
+  try {
+    const [iso, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    const date = new Date(iso);
+    return [Number.isNaN(date.getTime()) ? null : date, id ?? ''];
+  } catch {
+    // A malformed cursor returns the first page rather than an error: the client's remedy is
+    // the same either way, and a paging bug must not lock an assayer out of their own list.
+    return [null, ''];
+  }
+}
+
 @Injectable()
 export class AssignmentService {
   private static readonly logger = new Logger(AssignmentService.name);
@@ -1587,21 +1619,89 @@ export class AssignmentService {
     return { assignments, total };
   }
 
-  async findByAssayer(assayerId: string): Promise<AssignmentEntity[]> {
-    const assignments = await this.assignmentRepository.find({
-      where: {
-        assayerId,
-        isActive: true,
-        status: In([
-          AssignmentStatus.PENDING,
-          AssignmentStatus.ACCEPTED,
-          AssignmentStatus.CHECKED_IN,
-          AssignmentStatus.IN_PROGRESS,
-          AssignmentStatus.COMPLETED,
-          AssignmentStatus.REJECTED,
-          AssignmentStatus.CANCELLED,
-        ]),
-      },
+  /**
+   * The field app's work list.
+   *
+   * ## Why this takes a scope
+   *
+   * It used to return every assignment the assayer had ever been given, in every status, with
+   * no limit — and the phone fetches it twice on a cold start, on each of twelve socket events,
+   * every five minutes, and after every mutation. At 6.4 KB a row that is roughly 3 MB per
+   * fetch for someone with 500 jobs behind them, over a rural link, to render a screen that
+   * shows the next few.
+   *
+   * `active` is what the app needs to operate: everything still in flight, plus recently
+   * settled work, because the earnings screen totals recent completions and the schedule shows
+   * a short history. `history` pages the rest, newest first, on a keyset cursor.
+   *
+   * Omitting `scope` keeps the old everything-at-once behaviour, bounded by a cap, so a handset
+   * still running the previous bundle is not broken by a server deploy. Once the fleet has the
+   * update the default can become `active`.
+   */
+  async findByAssayer(
+    assayerId: string,
+    options: { scope?: 'active' | 'history' | 'all'; limit?: number; before?: string } = {},
+  ): Promise<{ assignments: AssignmentEntity[]; hasMore: boolean; nextCursor: string | null }> {
+    const scope = options.scope ?? 'all';
+    const limit = Math.min(Math.max(Number(options.limit) || DEFAULT_ASSAYER_PAGE_SIZE, 1), MAX_ASSAYER_PAGE_SIZE);
+
+    const IN_FLIGHT = [
+      AssignmentStatus.PENDING,
+      AssignmentStatus.ACCEPTED,
+      AssignmentStatus.CHECKED_IN,
+      AssignmentStatus.IN_PROGRESS,
+    ];
+    const TERMINAL = [AssignmentStatus.COMPLETED, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED];
+
+    const query = this.assignmentRepository
+      .createQueryBuilder('a')
+      .where('a.assayerId = :assayerId', { assayerId })
+      .andWhere('a.isActive = true');
+
+    if (scope === 'active') {
+      // In flight, plus anything settled inside the recency window — the earnings screen totals
+      // recent completions and the schedule shows a short history, so "open only" would empty
+      // both. Anything older is `history`.
+      const since = new Date(Date.now() - RECENT_TERMINAL_DAYS * 24 * 60 * 60 * 1000);
+      query.andWhere(
+        '(a.status IN (:...inFlight) OR (a.status IN (:...terminal) AND a.updatedAt >= :since))',
+        { inFlight: IN_FLIGHT, terminal: TERMINAL, since },
+      );
+    } else if (scope === 'history') {
+      query.andWhere('a.status IN (:...terminal)', { terminal: TERMINAL });
+    } else {
+      query.andWhere('a.status IN (:...all)', { all: [...IN_FLIGHT, ...TERMINAL] });
+    }
+
+    // Keyset pagination on the same key the list is ordered by. `createdAt` alone is not unique,
+    // so the id breaks ties — without it a page boundary that lands inside a group of rows
+    // created in the same millisecond either repeats or skips one.
+    if (options.before) {
+      const [cursorDate, cursorId] = decodeAssayerCursor(options.before);
+      if (cursorDate) {
+        query.andWhere('(a.createdAt, a.id) < (:cursorDate, :cursorId)', { cursorDate, cursorId });
+      }
+    }
+
+    const rows = await query
+      .orderBy('a.createdAt', 'DESC')
+      .addOrderBy('a.id', 'DESC')
+      // One more than asked for, so "is there another page" needs no COUNT over the book.
+      .take(limit + 1)
+      .getMany();
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    if (scope === 'all' && hasMore) {
+      AssignmentService.logger.warn(
+        `Assayer ${assayerId} has more than ${limit} assignments; the compatibility (unscoped) list is truncated. ` +
+          `The field app should request scope=active and page history separately.`,
+      );
+    }
+
+    const assignments = page.length
+      ? await this.assignmentRepository.find({
+          where: { id: In(page.map((r) => r.id)) },
       // `expenses` feeds the mobile earnings screen's claim total, which had no data source.
       relations: {
         projectBranch: { branch: true },
@@ -1626,19 +1726,25 @@ export class AssignmentService {
         assayer: { id: true, latitude: true, longitude: true },
       },
       order: { createdAt: 'DESC' },
-    });
+        })
+      : [];
+
+    const nextCursor = hasMore && page.length ? encodeAssayerCursor(page[page.length - 1]) : null;
 
     const projectIds = [...new Set(assignments.map((a) => a.projectBranch!.projectId))];
     const versionRepo = this.dataSource.getRepository(CustomerMasterVersionEntity);
     const recordRepo = this.dataSource.getRepository(CustomerRecordEntity);
 
+    // One query for every project on the list, not one per project. Ordered ascending so the
+    // last row written per project below is the highest version — the same row the per-project
+    // `findOne(... 'DESC')` returned.
     const projectVersions = new Map<string, CustomerMasterVersionEntity | null>();
-    for (const projectId of projectIds) {
-      const version = await versionRepo.findOne({
-        where: { projectId, status: CustomerMasterStatus.APPROVED, isActive: true },
-        order: { versionNumber: 'DESC' },
+    if (projectIds.length) {
+      const versions = await versionRepo.find({
+        where: { projectId: In(projectIds), status: CustomerMasterStatus.APPROVED, isActive: true },
+        order: { versionNumber: 'ASC' },
       });
-      projectVersions.set(projectId, version);
+      for (const version of versions) projectVersions.set(version.projectId, version);
     }
 
     // The assayer's current going rate, resolved by the same calculator that prices the work.
@@ -1654,6 +1760,69 @@ export class AssignmentService {
 
     const queryRepo = this.dataSource.getRepository(ValidationQueryEntity);
     const caseRepo = this.dataSource.getRepository(ValidationCaseEntity);
+
+    /**
+     * Customer counts, validation cases and their queries — three queries for the whole list
+     * rather than three per assignment.
+     *
+     * The customer ROWS are deliberately not sent any more. Every record for the branch was
+     * being serialised onto each assignment, `raw_data` jsonb and all — the client's entire
+     * spreadsheet row per customer — so a phone held bank customers' account numbers and
+     * pledged weights for jobs finished months ago, in a plaintext cache file. Nothing in the
+     * app ever rendered them: one screen reads the count, and the count is what is sent.
+     */
+    const branchKeys = assignments
+      .map((a) => ({
+        versionId: projectVersions.get(a.projectBranch!.projectId)?.id,
+        branchId: a.projectBranch!.branchId,
+      }))
+      .filter((k): k is { versionId: string; branchId: string } => Boolean(k.versionId));
+
+    const customerCounts = new Map<string, number>();
+    if (branchKeys.length) {
+      const counts = await recordRepo
+        .createQueryBuilder('r')
+        .select('r.customerMasterVersionId', 'versionId')
+        .addSelect('r.branchId', 'branchId')
+        .addSelect('COUNT(*)::int', 'count')
+        .where('r.isActive = true')
+        .andWhere('r.customerMasterVersionId IN (:...versionIds)', {
+          versionIds: [...new Set(branchKeys.map((k) => k.versionId))],
+        })
+        .andWhere('r.branchId IN (:...branchIds)', {
+          branchIds: [...new Set(branchKeys.map((k) => k.branchId))],
+        })
+        .groupBy('r.customerMasterVersionId')
+        .addGroupBy('r.branchId')
+        .getRawMany();
+      for (const row of counts) customerCounts.set(`${row.versionId}:${row.branchId}`, Number(row.count) || 0);
+    }
+
+    const projectBranchIds = assignments.map((a) => a.projectBranchId).filter(Boolean) as string[];
+    const casesByProjectBranch = new Map<string, string[]>();
+    const queriesByCase = new Map<string, ValidationQueryEntity[]>();
+    if (projectBranchIds.length) {
+      const cases = await caseRepo.find({
+        where: { projectBranchId: In([...new Set(projectBranchIds)]), isActive: true },
+      });
+      for (const c of cases) {
+        const list = casesByProjectBranch.get(c.projectBranchId) ?? [];
+        list.push(c.id);
+        casesByProjectBranch.set(c.projectBranchId, list);
+      }
+      const caseIds = cases.map((c) => c.id);
+      if (caseIds.length) {
+        const queries = await queryRepo.find({
+          where: { validationCaseId: In(caseIds), isActive: true },
+          order: { createdAt: 'DESC' },
+        });
+        for (const q of queries) {
+          const list = queriesByCase.get(q.validationCaseId) ?? [];
+          list.push(q);
+          queriesByCase.set(q.validationCaseId, list);
+        }
+      }
+    }
 
     /**
      * Whether the branch's audit packet has actually been dispatched.
@@ -1676,39 +1845,18 @@ export class AssignmentService {
       // for reference, and must never be conflated with what was actually agreed historically.
       (assignment as any).currentStandardBaseFee = baseFeeAmount;
       const version = projectVersions.get(assignment.projectBranch!.projectId);
-      if (version) {
-        const branchId = assignment.projectBranch!.branchId;
-        const records = await recordRepo.find({
-          where: { customerMasterVersionId: version.id, branchId, isActive: true },
-        });
-        (assignment as any).customerCount = records.length > 0 ? records.length : (assignment.projectBranch?.packetCount || 15);
-        (assignment as any).customers = records;
-      } else {
-        (assignment as any).customerCount = assignment.projectBranch?.packetCount || 15;
-        (assignment as any).customers = [];
-      }
+      const counted = version
+        ? customerCounts.get(`${version.id}:${assignment.projectBranch!.branchId}`) ?? 0
+        : 0;
+      (assignment as any).customerCount = counted > 0 ? counted : assignment.projectBranch?.packetCount || 15;
 
-      // Fetch validation cases & queries for this assignment's projectBranchId
-      if (assignment.projectBranchId) {
-        const valCases = await caseRepo.find({
-          where: { projectBranchId: assignment.projectBranchId, isActive: true },
-        });
-        if (valCases.length > 0) {
-          const caseIds = valCases.map((c) => c.id);
-          const queries = await queryRepo.find({
-            where: { validationCaseId: In(caseIds), isActive: true },
-            order: { createdAt: 'DESC' },
-          });
-          (assignment as any).queries = queries;
-        } else {
-          (assignment as any).queries = [];
-        }
-      } else {
-        (assignment as any).queries = [];
-      }
+      const caseIds = assignment.projectBranchId
+        ? casesByProjectBranch.get(assignment.projectBranchId) ?? []
+        : [];
+      (assignment as any).queries = caseIds.flatMap((id) => queriesByCase.get(id) ?? []);
     }
 
-    return assignments;
+    return { assignments, hasMore, nextCursor };
   }
 
   /**
