@@ -1391,6 +1391,29 @@ table, .data-table, .financial, .tabular-nums, td, th {
   border-color: var(--border-color-hover);
 }
 
+/**
+ * A disabled button has to look disabled.
+ *
+ * There was no `:disabled` rule at all, so a disabled `.btn-primary` rendered pixel-identical to
+ * an enabled one — full brand fill, `cursor: pointer`, hover lift and all. Clicking it did
+ * nothing and said nothing, which reads as "the app is broken" rather than "you still have a
+ * field to fill in". Around 144 buttons across the app are gated this way, so this one rule is
+ * the whole fix: Create Client with an empty form, the type-to-confirm Delete before the code
+ * matches, Confirm Transition before a target is chosen, and so on.
+ *
+ * `pointer-events: none` is deliberate — it also suppresses the hover transform below, so the
+ * control does not animate at a person who cannot use it yet.
+ */
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+  box-shadow: none;
+  filter: none;
+  transform: none;
+}
+
 /* Table UI Components */
 .table-container {
   overflow-x: auto;

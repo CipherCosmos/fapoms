@@ -39,6 +39,18 @@ function saveCache() {
 }
 
 /**
+ * Whether the place lookup can actually answer anything right now.
+ *
+ * There is deliberately only one source, so with no API key configured every query returns an
+ * empty list. That is indistinguishable from "no such place" unless the caller asks — and a
+ * caller that reads it as "no such place" refuses every real address the moment this optional
+ * integration is absent. Anything that *rejects* on an empty result must check this first.
+ */
+export function isPlaceLookupConfigured(): boolean {
+  return Boolean(process.env.GOOGLE_MAPS_API_KEY);
+}
+
+/**
  * Search India for places matching `query`. `query` may be a 6-digit pincode, a
  * district, a city/town/village name, or "city, state" / "district, state".
  */

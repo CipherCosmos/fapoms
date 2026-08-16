@@ -600,7 +600,9 @@ export const Billing: React.FC = () => {
             <span key={h.id} style={{ fontSize: '12px' }}>{h.fromState ?? '—'}</span>,
             <span key={h.id} style={{ fontSize: '12px' }}>{h.toState ?? '—'}</span>,
             <span key={h.id} style={{ fontSize: '12px' }}>{h.userName ?? h.userId ?? '—'}</span>,
-            <span key={h.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(h.occurredAt).toLocaleString()}</span>,
+            // Billing history rows carry `createdAt`, not `occurredAt` — the whole WHEN column
+            // read "Invalid Date" while the correct timestamp sat unused in the response.
+            <span key={h.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(h.createdAt).toLocaleString()}</span>,
             <span key={h.id} style={{ fontSize: '12px' }}>{h.reason ?? '—'}</span>,
           ])}
           empty={history.data && history.data.length === 0}

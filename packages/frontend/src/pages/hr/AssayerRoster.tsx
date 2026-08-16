@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Search, X, ChevronUp, ChevronDown, ExternalLink, Edit2, Trash2,
   AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
@@ -40,6 +41,13 @@ const CRITICAL_FIELDS: { key: keyof Assayer; label: string }[] = [
   { key: 'emergencyContactPhone', label: 'Emergency contact' },
 ];
 
+/** Stages that mean the person has left, whatever the date fields say. */
+const EXITED_STAGES: string[] = [
+  AssayerLifecycleStatus.RESIGNED,
+  AssayerLifecycleStatus.TERMINATED,
+  AssayerLifecycleStatus.ARCHIVED,
+];
+
 const ONBOARDING_STAGES: string[] = [
   AssayerLifecycleStatus.INVITED,
   AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
@@ -60,7 +68,13 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
   { key: 'onboarding', label: 'Onboarding', match: (a) => ONBOARDING_STAGES.includes(a.lifecycleStatus) },
   { key: 'incomplete', label: 'Incomplete record', match: (a) => missingFields(a).length > 0 },
   { key: 'unprofiled', label: 'No skills', match: (a) => !a.skills || a.skills.length === 0 },
-  { key: 'exited', label: 'Exited', match: (a) => !!a.exitDate || !!a.terminationDate },
+  // Lifecycle status first, dates second — matching the server's headcount. Someone shown as
+  // RESIGNED on the row itself has to appear under "Exited", whether or not a date was captured.
+  {
+    key: 'exited',
+    label: 'Exited',
+    match: (a) => EXITED_STAGES.includes(a.lifecycleStatus) || !!a.exitDate || !!a.terminationDate,
+  },
 ];
 
 type SortKey = 'displayName' | 'assayerCode' | 'lifecycleStatus' | 'state' | 'experienceYears' | 'completeness' | 'joiningDate';
@@ -136,6 +150,7 @@ export const AssayerRoster: React.FC = () => {
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: string[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
   const RENDER_CHUNK = 200;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
+  const queryClient = useQueryClient();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,6 +165,20 @@ export const AssayerRoster: React.FC = () => {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * Reload the roster *and* the shared workforce overview.
+   *
+   * The overview is fetched once by `HrLayout` and feeds the header counts and every tab badge.
+   * Reloading only this list left the header asserting "26 active · 0 onboarding" — with a fresh
+   * "updated 11:02 am" beside it — straight after someone had added an assayer who was sitting in
+   * onboarding. Use this wherever the roster is changed; plain `load()` is for mount and for
+   * socket events, which do not need to re-fetch a summary the server is already pushing.
+   */
+  const refresh = useCallback(() => {
+    load();
+    queryClient.invalidateQueries({ queryKey: ['hr', 'workforce'] });
+  }, [load, queryClient]);
 
   // Lifecycle changes can come from anywhere — a bulk action here, an admin
   // elsewhere, a backend job. Keep the roster live rather than stale until reload.
@@ -256,7 +285,7 @@ export const AssayerRoster: React.FC = () => {
       setBusy(false);
       setBulkTarget('');
       setSelectedIds(new Set());
-      load();
+      refresh();
     }
   };
 
@@ -266,7 +295,7 @@ export const AssayerRoster: React.FC = () => {
       await api.request(`/assayers/${a.id}`, { method: 'DELETE' });
       setNotice({ tone: 'ok', text: `${a.displayName} deleted.` });
       setOpenId(null);
-      load();
+      refresh();
     } catch (e) {
       setNotice({ tone: 'err', text: (e as Error).message });
     }
@@ -349,12 +378,15 @@ export const AssayerRoster: React.FC = () => {
           text: imported === 0 && errors.length === 1
             ? errors[0]
             : imported > 0
-            ? `Imported ${breakdown} of ${imported + errors.length}${sheetNote}. ${errors.length} row(s) could not be imported.${phoneNote}`
+            // `breakdown` is phrased to follow "Roster imported — …", so dropping it straight
+            // into "Imported … of 6" produced "Imported 4 updated of 6". Keep the count and the
+            // make-up of it apart.
+            ? `Imported ${imported} of ${imported + errors.length} rows${sheetNote} (${breakdown}). ${errors.length} row(s) could not be imported.${phoneNote}`
             : `Imported ${imported} of ${imported + errors.length}. ${errors.length} row(s) could not be imported.`,
           details: errors,
         });
       }
-      load();
+      refresh();
     } catch (e) {
       setNotice({ tone: 'err', text: userMessage(e) });
     }
@@ -688,15 +720,14 @@ export const AssayerRoster: React.FC = () => {
       {creating && (
         <CreateAssayerModal
           onClose={() => setCreating(false)}
-          onCreated={() => { setCreating(false); load(); }}
-          existingAssayersCount={assayers.length}
+          onCreated={() => { setCreating(false); refresh(); }}
         />
       )}
       {editing && (
         <EditAssayerModal
           assayer={editing}
           onClose={() => setEditing(null)}
-          onUpdated={() => { setEditing(null); load(); }}
+          onUpdated={() => { setEditing(null); refresh(); }}
         />
       )}
     </div>

@@ -5,11 +5,12 @@ import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } 
 import { api } from '../services/api';
 import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
 import { PinCoordinateControl } from '../components/PinCoordinateControl';
-import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel } from '@fapoms/shared';
+import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel, canonicalStateName } from '@fapoms/shared';
 import { useScope, withScope } from '../context/ScopeContext';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
 import { userMessage } from '../services/errors';
+import { getZones } from '../services/planning';
 
 interface ClientOption {
   id: string;
@@ -543,7 +544,11 @@ export const Branches: React.FC = () => {
             solId: editingBranch.solId || '',
             name: editingBranch.name,
             address: editingBranch.address,
-            state: editingBranch.state,
+            // Branch states arrive from client spreadsheets in capitals ("MAHARASHTRA"); the
+            // canonical list is title case. A <select> matches its options by exact string, so
+            // every imported branch opened with State showing "Select…" — and State is required,
+            // which blocked the whole form until the user re-picked a state they had not changed.
+            state: canonicalStateName(editingBranch.state) ?? editingBranch.state,
             district: editingBranch.district,
             city: editingBranch.city,
             pincode: editingBranch.pincode || '',
@@ -592,6 +597,35 @@ const BranchFormModal: React.FC<{
   const { toast } = useToast();
   const [form, setForm] = useState<BranchFormData>(initial);
   const [submitting, setSubmitting] = useState(false);
+  // The zone was previously a free-text box labelled "Zone ID", which asked the operator to type a
+  // raw UUID. Zone ids are not shown anywhere in the application, so there was no way to know one;
+  // and anything that was not a UUID came back as a 500. Zones are few, so offer them by name.
+  const [zoneOptions, setZoneOptions] = useState<{ value: string; label: string }[]>([]);
+
+  useEffect(() => {
+    getZones()
+      .then((zs) => setZoneOptions(zs.map((z) => {
+        // Zone names repeat across clients by design — every bank has a "West Zone" — so a flat
+        // list of names alone offers the same label five times. Name the client alongside it.
+        const owner = clientOptions.find((c) => c.id === z.clientId);
+        return {
+          value: z.id,
+          label: z.clientId ? `${z.name} — ${owner?.name ?? 'client-specific'}` : `${z.name} — all clients`,
+        };
+      })))
+      .catch(() => setZoneOptions([]));   // the rest of the form still works without it
+  }, [clientOptions]);
+
+  /**
+   * A state that no spelling rule recognises — older imports carry names that are not states at
+   * all — is kept as an option of its own. Dropping it would silently rewrite the branch's state
+   * to whatever the user picked to get past a required field.
+   */
+  const stateOptions = React.useMemo(() => (
+    !form.state || INDIAN_STATES.some((s) => s.value === form.state)
+      ? INDIAN_STATES
+      : [...INDIAN_STATES, { value: form.state, label: `${form.state} (as recorded)` }]
+  ), [form.state]);
 
   const set = (key: keyof BranchFormData) => (v: string) => setForm(f => ({ ...f, [key]: v }));
 
@@ -675,7 +709,7 @@ const BranchFormModal: React.FC<{
         {field('Address', 'address', { full: true })}
         {field('City', 'city')}
         {field('District', 'district')}
-        {field('State *', 'state', { required: true, options: INDIAN_STATES })}
+        {field('State', 'state', { required: true, options: stateOptions })}
         {field('Pincode', 'pincode', { placeholder: 'e.g. 400001' })}
         {/* A closed list, not free text. Leaving it blank is fine and usually best — the
             server derives the region from the state, which is what keeps the column filterable. */}
@@ -684,7 +718,7 @@ const BranchFormModal: React.FC<{
           placeholder: 'Derived from state',
         })}
         {field('Territory', 'territory')}
-        {field('Zone ID', 'zoneId')}
+        {field('Zone', 'zoneId', { options: zoneOptions })}
 
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT</span>
         {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}

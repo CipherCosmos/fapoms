@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ValidationQueryEntity } from './validation-query.entity';
@@ -26,6 +26,8 @@ export interface CreateValidationQueryDto {
 
 @Injectable()
 export class ValidationQueryService {
+  private readonly logger = new Logger(ValidationQueryService.name);
+
   constructor(
     @InjectRepository(ValidationQueryEntity)
     private readonly queryRepository: Repository<ValidationQueryEntity>,
@@ -82,6 +84,38 @@ export class ValidationQueryService {
     });
 
     const saved = await this.queryRepository.save(query);
+
+    /**
+     * Seed the question as the thread's first message.
+     *
+     * The opening question lived only on `validation_queries.query_text`, while every thread view
+     * — CaseWorkspace, ThreadPanel, `GET :id/messages` — reads `validation_query_messages`. So a
+     * freshly-raised clarification showed "No messages yet in this clarification thread" to the
+     * very person who had just typed it, and once the assayer replied the thread read as an answer
+     * to nothing: a gross-weight figure with no visible question above it.
+     *
+     * The reply path already mirrors into the thread for exactly this reason (see `respond`
+     * below); the opening question was the half that never did. Best-effort, like that mirror:
+     * losing the message must not lose the clarification itself, which is still delivered to the
+     * assayer via `queryText` on their list endpoint.
+     */
+    try {
+      await this.threadService.postMessage(
+        saved.id,
+        QueryMessageAuthor.STAFF,
+        userId,
+        null,
+        {
+          body: dto.queryText,
+          attachments: rawAttachments.length > 0 ? rawAttachments : undefined,
+        } as any,
+      );
+    } catch (err: any) {
+      this.logger.error(
+        `Clarification ${saved.id} was raised but its opening question could not be seeded into ` +
+          `the thread: ${err?.message ?? err}. The assayer still receives it as queryText.`,
+      );
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.WORKFLOW,

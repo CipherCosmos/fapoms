@@ -51,6 +51,11 @@ const IMPORTS_TYPEORM = [
   // judgement can be tested and re-run over history without a database, and this service is only
   // the narrow read/write boundary underneath it.
   'modules/assayer/location-trail.service.ts',
+  // The boot-time self-check. Two read-only SELECTs against `roles` and `user_roles`, asking a
+  // question no domain aggregate owns: does this *deployment* have the rows it needs to work.
+  // Routing it through repositories would put a diagnostic inside the very layer it is checking,
+  // and it must be able to report on a database whose domain services cannot start.
+  'infrastructure/observability/startup-checks.service.ts',
   'infrastructure/ocr/ocr-processing.service.ts',
   // Read-only socket-room entitlement lookups (entity → branch region, users.regions);
   // three single-row queries, no writes, no transactions.
@@ -133,6 +138,8 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   // Read-only morning-digest aggregates (pending payables/expenses/overdue invoices) and the
   // role-holder audience query; queries only, no writes, no transactions.
   'infrastructure/scheduler/email-digest.service.ts',
+  // Boot-time self-check: two read-only SELECTs, no writes, no transaction.
+  'infrastructure/observability/startup-checks.service.ts',
   'core/audit/unified-audit.service.ts',
   // Holds a DataSource but never opens a transaction: read-only room entitlement lookups.
   'infrastructure/scope/region-guard.service.ts',

@@ -712,6 +712,27 @@ export class AssignmentService {
     const prevStatus = assignment.status;
 
     if (prevStatus === targetStatus && fee === undefined) {
+      /**
+       * Already in the target state: nothing to transition, so the state machine is not run again.
+       *
+       * A supplied reason is still worth keeping, though. Re-declining with a corrected reason used
+       * to return 201 and silently drop the correction — the caller was told it had worked while
+       * the original text (often the bare default "Rejected") stayed on the record. Persist it, so
+       * "success" and "saved" mean the same thing.
+       */
+      const trimmed = reason?.trim();
+      if (trimmed) {
+        if (targetStatus === AssignmentStatus.REJECTED && assignment.rejectReason !== trimmed) {
+          assignment.rejectReason = trimmed;
+          assignment.updatedBy = userId;
+          return { saved: await this.assignmentRepository.save(assignment), event: null };
+        }
+        if (targetStatus === AssignmentStatus.CANCELLED && assignment.cancelReason !== trimmed) {
+          assignment.cancelReason = trimmed;
+          assignment.updatedBy = userId;
+          return { saved: await this.assignmentRepository.save(assignment), event: null };
+        }
+      }
       return { saved: assignment, event: null };
     }
 
@@ -2137,7 +2158,24 @@ export class AssignmentService {
         .getNumber('field.checkInGeofenceMeters', DEFAULT_CHECK_IN_GEOFENCE_METERS)
         .catch(() => DEFAULT_CHECK_IN_GEOFENCE_METERS);
       if (distanceMeters != null) {
-        const allowance = GEOFENCE_METERS + Math.max(0, accuracyMeters ?? 0);
+        /**
+         * Widened by how well we actually know where the branch IS, not just by the device's fix.
+         *
+         * The 2 km figure assumes the branch coordinate is good to street level. Import does not
+         * guarantee that: an address it cannot resolve falls back to the city centroid
+         * (`geo_accuracy_meters = 15000`) or, for an unresolvable one, the centre of India
+         * (500000). An assayer standing in the doorway of a centroid-geocoded branch was then told
+         * they were "8.4 km from this branch… get clear sky for a GPS fix" — blamed for a
+         * coordinate the system already knew was only good to ±15 km, and unable to start the job.
+         *
+         * The branch's own recorded accuracy is the honest allowance, so a precisely-geocoded
+         * branch keeps a tight fence and a vague one is forgiving in proportion to how vague it is.
+         */
+        const branchAccuracyMeters = Math.max(
+          0,
+          Number(assignment.projectBranch?.branch?.geoAccuracyMeters ?? 0) || 0,
+        );
+        const allowance = GEOFENCE_METERS + Math.max(0, accuracyMeters ?? 0) + branchAccuracyMeters;
         if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
           /**
            * Let it through, and make sure the record says so.
@@ -2155,11 +2193,20 @@ export class AssignmentService {
           });
         } else if (distanceMeters > allowance) {
           const km = (distanceMeters / 1000).toFixed(1);
+          /**
+           * Only blame the device when the device is the likely culprit. If the branch itself is
+           * poorly geocoded, telling the assayer to find clear sky sends them chasing a fix they
+           * cannot make — the coordinate on file is the thing that is wrong, and ops has to correct
+           * it (Branches → the branch's location, or the geo-precision repair tools).
+           */
+          const branchGeoIsVague = branchAccuracyMeters >= 1000;
           return {
             success: false,
             assignment,
             error: 'TOO_FAR_FROM_BRANCH',
-            message: `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
+            message: branchGeoIsVague
+              ? `You appear to be ${km} km from this branch, but this branch's recorded location is only accurate to about ${Math.round(branchAccuracyMeters / 1000)} km — it was never pinned precisely. Ask operations to correct the branch's location; this is not something you can fix from here.`
+              : `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
           };
         }
       }
@@ -2175,11 +2222,28 @@ export class AssignmentService {
      * the row rather than something nobody can ever discover.
      */
     const now = new Date();
-    assignment.checkInLatitude = lat;
-    assignment.checkInLongitude = lng;
-    assignment.checkInAccuracyMeters = accuracyMeters ?? null;
-    assignment.checkedInAt = now;
-    assignment.checkInDistanceMeters = distanceMeters;
+    /**
+     * The FIRST check-in is the arrival record, and it is not overwritten.
+     *
+     * Every call used to replace `checked_in_at` and the coordinates, so checking in again later
+     * — from anywhere, at any time — silently moved the recorded arrival. Attendance evidence you
+     * can revise after the fact is not evidence: an assayer who arrived at 09:02 at the branch and
+     * re-checked-in at 16:40 a kilometre away left a row saying only the latter, with nothing on
+     * it to show it had ever said anything else.
+     *
+     * Re-check-ins remain accepted (the mobile app retries on flaky connections, and refusing
+     * would strand someone whose first attempt failed after it had actually saved). They simply do
+     * not rewrite the arrival — the position trail in `assayer_location_pings` already records
+     * where the person went afterwards.
+     */
+    const isFirstCheckIn = !assignment.checkedInAt;
+    if (isFirstCheckIn) {
+      assignment.checkInLatitude = lat;
+      assignment.checkInLongitude = lng;
+      assignment.checkInAccuracyMeters = accuracyMeters ?? null;
+      assignment.checkedInAt = now;
+      assignment.checkInDistanceMeters = distanceMeters;
+    }
 
     AssignmentStateMachine.checkIn(assignment, userId || assignment.assayerId || id);
     assignment.updatedBy = userId || assignment.assayerId || id;

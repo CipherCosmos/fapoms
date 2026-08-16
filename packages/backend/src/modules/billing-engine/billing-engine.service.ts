@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
@@ -795,12 +796,27 @@ export class BillingEngineService implements OnModuleInit {
     // client keeps the old pass-through behaviour rather than being billed a platform default
     // that might sit below cost. The Client Billing Settings page is where this rate is set.
     const clientBase = await this.clientContractedBaseFor(clientId);
-    const fee = clientBase ?? assayerFee;
     // Travel paid to the assayer is recovered from the client when their contract
     // says it is rechargeable. Without this the assayer's travel was a pure cost
     // absorbed on every job — the reason completed audits showed a negative margin
     // exactly equal to the travel reimbursement.
     const travel = await this.rechargeableTravelFor(a, clientId);
+    /**
+     * The two rates mean different things, and the base has to match the one in play.
+     *
+     * A client's contracted rate is a travel-exclusive audit fee, so `base + travel` is the
+     * correct invoice. The assayer fee is not: the agreed fee already CONTAINS travel (see the
+     * payable carve above, which splits the same figure into base + travel). Passing it through
+     * whole and then adding `travel` again billed the client for the journey twice — and the
+     * duplicate surfaced as margin, since revenue exceeded cost by exactly the travel amount, so
+     * the error read as profit rather than as a fault.
+     *
+     * On the fallback path we therefore carve the fee the same way the payable does, which keeps
+     * a genuine pass-through: base + travel === the agreed fee. Offers made before
+     * `quotedTravelFee` existed have no knowable split, so they keep the whole fee as base and
+     * `rechargeableTravelFor` returns the legacy profile figure for them.
+     */
+    const fee = clientBase ?? (a.quotedTravelFee != null ? Math.max(0, assayerFee - travel) : assayerFee);
     // Only finished work is billable-ready. An assignment still CHECKED_IN or
     // IN_PROGRESS is real revenue in the making, but invoicing it before the audit
     // is delivered would bill the client for work not yet done — so it is recorded
@@ -1077,6 +1093,134 @@ export class BillingEngineService implements OnModuleInit {
     }, m);
     emit('billing:entry-adjusted', { entryId: saved.id, delta, totalAmount: Number(saved.totalAmount) });
     return saved;
+    });
+  }
+
+  /**
+   * Credit an entry that has already been paid.
+   *
+   * `adjustEntry` refuses a line with money against it and tells the operator to issue a credit
+   * note — and until now there was nothing to issue. So the one case the engine explicitly
+   * directs people towards was the one case the product could not do, and an over-charged client
+   * stayed over-charged.
+   *
+   * What this does, and the reasoning behind each choice — all three are finance decisions and
+   * should be confirmed before this is relied on for real money:
+   *
+   *  1. **It reduces what is owed; it does not move money.** A credit note is a document, a
+   *     refund is a payment. The note lowers the entry's value, and where that falls below what
+   *     has already been collected the difference is reported as `refundDue` for the finance team
+   *     to settle however they settle things — offset against the next invoice or paid back.
+   *     Nothing here pretends to have returned any money.
+   *
+   *  2. **Tax reverses in proportion, at the entry's own rates.** The credit is applied as a
+   *     negative adjustment and the line is then recomputed through the same `recompute` used
+   *     everywhere else, so GST and TDS come off at exactly the rates that were charged. Hand-
+   *     computing the tax on a credit is how a credit note ends up disagreeing with the invoice
+   *     it corrects.
+   *
+   *  3. **Large credits are held for approval.** Above `billing.creditNoteApprovalThreshold`
+   *     (default ₹10,000) the note is refused rather than applied, because a credit is the one
+   *     operation that reduces revenue and no other control stands behind it.
+   */
+  async creditEntry(
+    entryId: string,
+    amount: number,
+    reason: string,
+    userId: string,
+  ): Promise<{ entry: BillingEntryEntity; creditedTotal: number; refundDue: number }> {
+    if (!(amount > 0)) {
+      throw new BadRequestException('A credit note must be for a positive amount.');
+    }
+    if (!reason?.trim()) {
+      throw new BadRequestException(
+        'Say why this credit is being issued — it is the record the client and the auditor both read.',
+      );
+    }
+
+    const threshold = await this.settings
+      .getNumber('billing.creditNoteApprovalThreshold', 10000)
+      .catch(() => 10000);
+
+    return this.inTx(async (m, emit) => {
+      const entry = await this.lockEntry(m, entryId);
+
+      // Only the taxable value can be credited; crediting more than was charged would invent a
+      // negative sale rather than correct an over-charge.
+      const creditableTaxable = round2(Number(entry.taxableAmount));
+      if (amount > creditableTaxable) {
+        throw new BadRequestException(
+          `Cannot credit ₹${round2(amount)} against ${entry.entryNumber}: only ₹${creditableTaxable} was charged.`,
+        );
+      }
+      if (amount > threshold) {
+        throw new ForbiddenException(
+          `A credit of ₹${round2(amount)} is above the ₹${threshold} limit that can be issued directly. `
+          + 'Raise it with finance, or change the limit in Platform Settings.',
+        );
+      }
+
+      const fromState = entry.state;
+      const previousTotal = round2(Number(entry.totalAmount));
+      const previousAdjustment = round2(Number(entry.adjustmentAmount));
+
+      entry.adjustmentAmount = round2(previousAdjustment - amount);
+      entry.adjustedAmount = round2(Number(entry.adjustedAmount) - amount);
+      entry.updatedBy = userId;
+      this.recompute(entry);
+
+      const newTotal = round2(Number(entry.totalAmount));
+      const paid = round2(Number(entry.paidAmount));
+      const refundDue = round2(Math.max(0, paid - newTotal));
+
+      /**
+       * The payment state follows the new total. There is deliberately no "overpaid" state used
+       * here: `PaymentState` has no such member, and adding one would have to be understood by
+       * every report, filter and invoice roll-up that reads it. An over-collection is instead
+       * reported as `refundDue` — returned to the caller and written into the history entry — so
+       * the money owed back is visible without changing the meaning of an existing state.
+       */
+      if (paid >= newTotal) {
+        entry.paymentState = PaymentState.PAID;
+      } else if (paid > 0) {
+        entry.paymentState = PaymentState.PARTIALLY_PAID;
+      } else {
+        entry.paymentState = PaymentState.UNPAID;
+      }
+
+      const saved = await m.save(entry);
+
+      await this.history(userId, {
+        clientId: saved.clientId,
+        projectId: saved.projectId,
+        assignmentId: saved.assignmentId,
+        assayerId: saved.assayerId,
+        entityType: BillingEntityType.ENTRY,
+        entityId: saved.id,
+        action: 'CREDIT_NOTE_ISSUED',
+        fromState,
+        toState: saved.state,
+        previousValue: { totalAmount: previousTotal, adjustmentAmount: previousAdjustment },
+        newValue: {
+          totalAmount: newTotal,
+          adjustmentAmount: round2(Number(saved.adjustmentAmount)),
+          creditAmount: round2(amount),
+          // What the client's bill actually fell by, tax and TDS included. Recorded rather than
+          // derived so the trail does not depend on re-deriving the rates later.
+          totalReduction: round2(previousTotal - newTotal),
+          refundDue,
+        },
+        reason,
+      }, m);
+
+      emit('billing:credit-note-issued', {
+        entryId: saved.id,
+        amount: round2(amount),
+        totalAmount: newTotal,
+        refundDue,
+      });
+
+      return { entry: saved, creditedTotal: round2(previousTotal - newTotal), refundDue };
     });
   }
 

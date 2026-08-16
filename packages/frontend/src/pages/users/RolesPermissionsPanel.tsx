@@ -142,7 +142,7 @@ export const RolesPermissionsPanel: React.FC = () => {
       setOpenRole(null);
       refetch();
     } catch (err: any) {
-      setError(`Could not save permissions ${userMessage(err)}`);
+      setError(`Could not save permissions. ${userMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -168,7 +168,7 @@ export const RolesPermissionsPanel: React.FC = () => {
       setNewName(''); setNewDisplay(''); setNewDesc('');
       refetch();
     } catch (err: any) {
-      setError(`Could not create the role ${userMessage(err)}`);
+      setError(`Could not create the role. ${userMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -183,7 +183,7 @@ export const RolesPermissionsPanel: React.FC = () => {
       setSuccess('Role deleted.');
       refetch();
     } catch (err: any) {
-      setError(`Could not delete the role ${userMessage(err)}`);
+      setError(`Could not delete the role. ${userMessage(err)}`);
     }
   };
 

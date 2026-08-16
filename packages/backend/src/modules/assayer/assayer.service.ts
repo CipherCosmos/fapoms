@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual, In, DataSource } from 'typeorm';
+import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm';
 import * as xlsx from 'xlsx';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
@@ -16,7 +16,7 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
@@ -77,8 +77,34 @@ async function assertAddressConsistent(dto: {
   state?: string;
   pincode?: string | null;
 }): Promise<void> {
+  /**
+   * The state has to be a real one, with or without a pincode to cross-check it against.
+   *
+   * Nothing checked this on any path — the form, the API and the Excel import all accepted
+   * "Freedonia" — and the consequences are quiet rather than loud: `region` is derived from the
+   * state, so an unreal one leaves it null, and a null region drops the assayer out of every
+   * region-scoped view and out of the territory rules that match on state. They stay on the
+   * roster looking ordinary while being unplannable.
+   *
+   * Checked before the pincode anchor below, which returns early when no pincode was supplied —
+   * which is exactly how an imported row with a bogus state got through.
+   */
+  if (dto.state?.trim()) {
+    // Both spellings are accepted, because both turn up in real rosters: `canonicalStateName`
+    // reads full names and run-together variants ("ANDRAPRADESH"), while `canonicalState` also
+    // resolves the two-letter codes ("MH", "TN"). Chained rather than reimplemented — a third
+    // list of state names is exactly how the first two drifted apart.
+    const known = canonicalStateName(dto.state) ?? canonicalStateName(canonicalState(dto.state));
+    if (!known) {
+      throw new BadRequestException(
+        `"${dto.state}" is not a state we recognise. It sets this assayer's region, zone and ` +
+        'holiday calendar, so it has to match a real state or union territory.',
+      );
+    }
+  }
+
   const pin = dto.pincode || (dto.address || '').match(/\b\d{6}\b/)?.[0] || '';
-  if (!/^\d{6}$/.test(pin)) return; // no pincode to anchor on — nothing to verify
+  if (!/^\d{6}$/.test(pin)) return; // no pincode to anchor on — nothing further to verify
   const authority = await fetchPincodeAuthority(pin);
   if (!authority) return; // couldn't verify — skip rather than block on a guess
 
@@ -133,7 +159,8 @@ export interface AssayerUploadReport {
 }
 
 export interface CreateAssayerDto {
-  assayerCode: string;
+  /** Omit to have the server allocate the next free code. */
+  assayerCode?: string;
   employeeId?: string;
   employeeCode?: string;
   firstName: string;
@@ -459,9 +486,31 @@ export class AssayerService implements OnModuleInit {
     return assayer;
   }
 
+  /**
+   * The next free `AS-nn` code, considering every assayer that has ever existed.
+   *
+   * Codes are permanent identifiers: a deleted assayer keeps hers, and her payables, assignments
+   * and audit trail still refer to it, so the number must never be handed out again. The scan
+   * therefore ignores `isActive` — the one place in this service that deliberately does.
+   *
+   * Codes that do not follow this shape are skipped rather than parsed: the seeded roster uses
+   * `AS0688`, and reading that as 688 would jump the sequence into the hundreds on first use.
+   */
+  private async allocateAssayerCode(): Promise<string> {
+    const rows = await this.assayerRepository.find({ select: ['assayerCode'], withDeleted: true } as any);
+    const highest = rows.reduce((max, r) => {
+      const m = /^AS-(\d+)$/.exec(r.assayerCode ?? '');
+      return m ? Math.max(max, Number(m[1])) : max;
+    }, 0);
+    return `AS-${String(highest + 1).padStart(2, '0')}`;
+  }
+
   async create(dto: CreateAssayerDto, userId: string, organizationId?: string | null): Promise<AssayerEntity> {
-    const existing = await this.assayerRepository.findOne({ where: { assayerCode: dto.assayerCode } });
-    if (existing) throw new ConflictException(`Assayer code ${dto.assayerCode} already exists.`);
+    const assayerCode = dto.assayerCode?.trim() || (await this.allocateAssayerCode());
+    dto = { ...dto, assayerCode };
+
+    const existing = await this.assayerRepository.findOne({ where: { assayerCode } });
+    if (existing) throw new ConflictException(`Assayer code ${assayerCode} already exists.`);
 
     await assertAddressConsistent(dto);
 
@@ -833,7 +882,30 @@ export class AssayerService implements OnModuleInit {
     });
   }
 
+  /**
+   * Moves that go on someone's employment record and need to say why.
+   *
+   * Progressing through onboarding is self-explanatory — "Moved to TRAINING" is the whole story.
+   * Being suspended, deactivated, resigned or terminated is not: those are the entries that get
+   * read back months later, in a dispute or a reference check, and a record that says only
+   * "Moved to TERMINATED" cannot answer anything. Same standard already applied to rejecting an
+   * assignment and to sending work back for rework.
+   */
+  private static readonly LIFECYCLE_MOVES_NEEDING_A_REASON = new Set<string>([
+    AssayerLifecycleStatus.SUSPENDED,
+    AssayerLifecycleStatus.INACTIVE,
+    AssayerLifecycleStatus.RESIGNED,
+    AssayerLifecycleStatus.TERMINATED,
+  ]);
+
   async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
+      throw new BadRequestException(
+        `Say why this assayer is being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. ` +
+        'This goes on their employment record and is what the decision will be judged on later.',
+      );
+    }
+
     if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
       return this.verifyDocuments(id, userId, reason);
     } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
@@ -882,6 +954,15 @@ export class AssayerService implements OnModuleInit {
     const validTargets = Object.values(AssayerLifecycleStatus);
     if (!validTargets.includes(targetStatus as AssayerLifecycleStatus)) {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
+    }
+
+    // Doing it to twenty people at once does not make the reason less necessary. This path calls
+    // `doTransitionLifecycle` directly, so the check in `transitionLifecycle` never saw it.
+    if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
+      throw new BadRequestException(
+        `Say why these assayers are being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. ` +
+        'It goes on each of their employment records.',
+      );
     }
 
     const succeeded: { id: string; from: string; to: string }[] = [];
@@ -1661,8 +1742,26 @@ export class AssayerService implements OnModuleInit {
 
   // ---- Workforce Attributes ----
 
+  /**
+   * Refuse a skill, language, certification or specialisation the person already holds.
+   *
+   * Adding the same one twice created two rows. Beyond reading as a mistake on screen, removing
+   * it then took the person only halfway: one row went, the other stayed, so an assayer whose
+   * skill HR had just deleted still satisfied a SKILL rule and still appeared as a candidate.
+   * Matching is case-insensitive because "Gold Assaying" and "gold assaying" are the same skill.
+   */
   async addWorkforceAttribute(assayerId: string, dto: any, userId: string): Promise<WorkforceAttributeEntity> {
     await this.findOne(assayerId);
+
+    const existing = await this.workforceAttributeRepository.findOne({
+      where: { assayerId, type: dto.type, name: ILike(String(dto.name ?? '').trim()), isActive: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `This assayer already has the ${String(dto.type).toLowerCase()} “${existing.name}”.`,
+      );
+    }
+
     const attr = this.workforceAttributeRepository.create({
       ...dto,
       assayerId,
@@ -1859,6 +1958,18 @@ export class AssayerService implements OnModuleInit {
       };
     }
 
+    /**
+     * Codes already seen in *this* workbook, and the row they came from.
+     *
+     * Re-importing a code deliberately updates that assayer, which is how a corrected roster is
+     * re-uploaded. Two rows carrying the same code inside one file is a different thing: it is a
+     * mistake in the file. Applied in order it silently overwrote the earlier row — including
+     * blanking fields the earlier row had filled — and reported both as ordinary updates, so
+     * nothing on screen said a row had been discarded. Same treatment the branch import gives a
+     * repeated branch code.
+     */
+    const firstRowForCode = new Map<string, number>();
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       // +1 for the header row itself, plus however many rows preceded it.
@@ -1873,6 +1984,17 @@ export class AssayerService implements OnModuleInit {
           errors.push(`Row ${rowNum}: no assayer code in this row`);
           continue;
         }
+
+        const codeKey = assayerCode.trim().toUpperCase();
+        const seenAt = firstRowForCode.get(codeKey);
+        if (seenAt !== undefined) {
+          errors.push(
+            `Row ${rowNum} (${assayerCode}): same assayer code as row ${seenAt} — only row ${seenAt} was used. ` +
+            'Merge the two rows into one and re-upload if both carry details you need.',
+          );
+          continue;
+        }
+        firstRowForCode.set(codeKey, rowNum);
 
         // Rosters carry one combined name column; the record stores first/last
         // separately. Split on whitespace, treating the final token as the surname

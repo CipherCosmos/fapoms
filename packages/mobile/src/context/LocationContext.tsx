@@ -15,6 +15,13 @@ import {
 import { MobileApiService } from '../services/api.service';
 import { calculateHaversineDistance } from '@fapoms/shared';
 
+/**
+ * How long to wait for a position before treating it as unobtainable. Long enough for a cold
+ * start under open sky, short enough that someone indoors is told what to do rather than left
+ * looking at a button that does nothing.
+ */
+const FIX_TIMEOUT_MS = 15000;
+
 export interface LocationCoords {
   latitude: number;
   longitude: number;
@@ -266,7 +273,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  const refreshLocation = useCallback(async (): Promise<LocationCoords | null> => {
+  const runRefreshLocation = useCallback(async (): Promise<LocationCoords | null> => {
     setLoadingLocation(true);
     setErrorMsg(null);
     try {
@@ -307,6 +314,40 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return null;
     }
   }, [requestLocationPermission, recordFix]);
+
+  /**
+   * The same call, but it always answers.
+   *
+   * Every await inside can hang indefinitely, not just the position request: asking the OS for a
+   * fix never settles where there is no usable signal, and the permission request can stall
+   * behind a system dialog. Whichever one stops, the effect is identical and it lands on the
+   * person using the app — `handleCheckIn` awaits a fix before doing anything, so an assayer
+   * standing in a bank vault, which is exactly where this app is used and exactly where GPS is
+   * worst, tapped "Check in at branch" and got nothing at all: no error, no spinner, no request.
+   * The button looked broken, and the message telling them to step outside — which this file
+   * already contains — could never be reached.
+   *
+   * Bounding the operation as a whole, rather than one await inside it, is what makes that
+   * impossible: the caller is promised an answer within `FIX_TIMEOUT_MS` whatever stalls. A
+   * timeout resolves to `null`, which is the same "no fix" the callers already handle.
+   */
+  const refreshLocation = useCallback(async (): Promise<LocationCoords | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        runRefreshLocation(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => {
+            setErrorMsg('Could not get your location in time. Move to open sky if you are indoors, then try again.');
+            setLoadingLocation(false);
+            resolve(null);
+          }, FIX_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }, [runRefreshLocation]);
 
   useEffect(() => {
     refreshLocation();

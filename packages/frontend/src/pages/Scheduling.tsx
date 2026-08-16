@@ -217,7 +217,7 @@ export const Scheduling: React.FC = () => {
       setScheduleRemarks('');
       invalidateAll();
     } catch (err: any) {
-      setError(`Failed to create schedule ${userMessage(err)}`);
+      setError(`Failed to create schedule. ${userMessage(err)}`);
     } finally { setIsCreating(false); }
   };
 
@@ -288,7 +288,7 @@ export const Scheduling: React.FC = () => {
       setSuccessMsg(`Schedule status set to ${scheduleStatusLabel(targetStatus)}`);
       invalidateAll();
     } catch (err: any) {
-      setError(`Failed to update schedule ${userMessage(err)}`);
+      setError(`Failed to update schedule. ${userMessage(err)}`);
     } finally {
       setTransitioningId(null);
     }
@@ -318,7 +318,7 @@ export const Scheduling: React.FC = () => {
       setCurrentYear(d.getFullYear());
       invalidateAll();
     } catch (err: any) {
-      setError(`Failed to reschedule ${userMessage(err)}`);
+      setError(`Failed to reschedule. ${userMessage(err)}`);
     } finally {
       setIsRescheduling(false);
     }

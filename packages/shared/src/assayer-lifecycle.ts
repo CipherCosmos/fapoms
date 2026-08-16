@@ -67,12 +67,38 @@ export function canTransitionAssayerLifecycle(from: string, to: string): boolean
 }
 
 /**
- * Shortest sequence of legal transitions from one state to another, or null when no path
- * exists. The roster uses this to carry out a bulk change that needs several hops — moving
- * someone from TRAINING to ARCHIVED, say — without inventing edges to get there.
+ * States that are an outcome, not a step on the way to somewhere else.
+ *
+ * Being deactivated, suspended, resigned or terminated is a thing that happened to someone; it is
+ * never a stage passed through en route to another. They remain valid destinations — just not
+ * waypoints.
+ */
+const NOT_A_WAYPOINT: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.INACTIVE,
+  AssayerLifecycleStatus.SUSPENDED,
+  AssayerLifecycleStatus.RESIGNED,
+  AssayerLifecycleStatus.TERMINATED,
+  AssayerLifecycleStatus.ARCHIVED,
+];
+
+/**
+ * Shortest sequence of legal transitions from one state to another, or null when no path exists.
+ * The roster uses this to carry out a bulk change that needs several hops, without inventing
+ * edges to get there.
+ *
+ * An outcome state may not be passed through on the way *back in*. A plain shortest-path search
+ * sent a new joiner to ACTIVE via INVITED → DOCUMENT_VERIFICATION → INACTIVE → ACTIVE, because
+ * that is three hops where the real onboarding chain is four — so moving a batch of new joiners
+ * to ACTIVE skipped background verification and training entirely, marking people field-ready who
+ * had passed neither, and recorded a deactivation and reinstatement that never happened.
+ *
+ * On the way *out* they are still traversable, because there they are the designed route rather
+ * than a shortcut: closing a trainee's file really does go TRAINING → INACTIVE → ARCHIVED, and
+ * nothing is skipped by taking it.
  */
 export function assayerLifecyclePath(from: string, to: string): AssayerLifecycleStatus[] | null {
   if (from === to) return [];
+  const leaving = NOT_A_WAYPOINT.includes(to as AssayerLifecycleStatus);
   const queue: Array<{ state: string; path: AssayerLifecycleStatus[] }> = [{ state: from, path: [] }];
   const seen = new Set<string>([from]);
 
@@ -82,6 +108,7 @@ export function assayerLifecyclePath(from: string, to: string): AssayerLifecycle
       if (seen.has(next)) continue;
       const nextPath = [...path, next];
       if (next === to) return nextPath;
+      if (!leaving && NOT_A_WAYPOINT.includes(next)) continue;
       seen.add(next);
       queue.push({ state: next, path: nextPath });
     }

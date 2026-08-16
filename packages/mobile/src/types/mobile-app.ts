@@ -169,6 +169,16 @@ export interface AppNotification {
   link: string | null;
   createdAt: string;
   assignmentId?: string;
+  /**
+   * The catalog event key (`ASSIGNMENT_OFFERED`, `QUERY_RAISED`, …).
+   *
+   * The list used to choose its icon by searching the *title* for English words. The title is
+   * an operator-editable template in the notification catalog, so rewording "Assignment offered"
+   * to "New work available" silently changed the icon to the generic bell — and the assayer
+   * language work makes that certain rather than hypothetical. The type is the stable identity
+   * of the event; the title is a presentation of it.
+   */
+  type?: string;
 }
 
 export interface AssayerProfile {

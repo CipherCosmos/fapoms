@@ -36,6 +36,14 @@ const PAGES = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null },
   { to: '/hr/roster', label: 'Roster', icon: Users, badge: (d: HrWorkforceOverview) => d.headcount.total },
   { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length },
+  /**
+   * Records was built, routed and kept in LEGACY_TABS, but was left out of this list — so the
+   * only ways in were an old `?tab=records` bookmark or typing the URL. Nothing in the app
+   * linked to it. That is the page which fixes exactly what the Overview shouts about
+   * ("26 of 26 missing Bank account — Blocks payouts"), so the alert had no reachable answer.
+   * Badge counts the incomplete records, matching how the other tabs quantify their own backlog.
+   */
+  { to: '/hr/records', label: 'Records', icon: ClipboardList, badge: (d: HrWorkforceOverview) => d.compliance.incompleteCount },
   { to: '/hr/compliance', label: 'Compliance', icon: ShieldCheck, badge: (d: HrWorkforceOverview) => d.compliance.incompleteCount },
   { to: '/hr/capability', label: 'Capability', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired },
   { to: '/hr/documents', label: 'Documents', icon: FileCheck, badge: (d: HrWorkforceOverview) => d.compliance.roster - d.compliance.governmentDocuments.withGovDoc },

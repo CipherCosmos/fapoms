@@ -418,7 +418,22 @@ export class AssignmentController {
         body.reason ?? body.remarks,
       );
     } else if (targetStatus === 'REJECTED') {
-      assignment = await this.assignmentService.rejectOffer(id, userId, body.reason ?? body.remarks);
+      /**
+       * A decline has to say why.
+       *
+       * Rejecting frees the branch and drops it back to CANDIDATE_SEARCH, so the next person to
+       * plan it needs to know whether the fee was too low, the date impossible, or the site too
+       * far — otherwise they re-offer the same thing and it is declined again. Without this the
+       * reason defaulted to the literal string "Rejected", which tells replanning nothing.
+       * `unable-to-cover`, the desk-side equivalent, already required one.
+       */
+      const rejectReason = (body.reason ?? body.remarks ?? '').trim();
+      if (!rejectReason) {
+        throw new BadRequestException(
+          'A reason is required when declining an assignment — the branch goes back into planning and the next person needs to know why.',
+        );
+      }
+      assignment = await this.assignmentService.rejectOffer(id, userId, rejectReason);
     } else if (targetStatus === 'CHECKED_IN') {
       // Second check-in path. The dedicated POST :id/check-in route validated coordinates, but
       // this one still defaulted to New Delhi (28.6315, 77.2167) — so the same fabricated

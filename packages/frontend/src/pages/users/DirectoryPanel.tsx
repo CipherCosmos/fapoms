@@ -115,7 +115,7 @@ export const DirectoryPanel: React.FC = () => {
       // Keep the open edit panel in sync after an action (e.g. unlock) refetches.
       setEditingUser((prev) => (prev ? list.find((u: UserProfile) => u.id === prev.id) ?? null : prev));
     } catch (err: any) {
-      setError(`Failed to retrieve users ${userMessage(err)}`);
+      setError(`Failed to retrieve users. ${userMessage(err)}`);
     } finally {
       setIsLoading(false);
     }
@@ -143,7 +143,7 @@ export const DirectoryPanel: React.FC = () => {
       setUsername(''); setEmail(''); setPassword(''); setFirstName(''); setLastName(''); setSelectedRoleIds([]);
       loadUsers();
     } catch (err: any) {
-      setError(`Failed to create user ${userMessage(err)}`);
+      setError(`Failed to create user. ${userMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -203,7 +203,7 @@ export const DirectoryPanel: React.FC = () => {
       await api.request(`/users/${user.id}`, { method: 'PUT', body: JSON.stringify({ status: activating ? 'ACTIVE' : 'SUSPENDED' }) });
       loadUsers();
     } catch (err: any) {
-      setError(`Failed to change account status ${userMessage(err)}`);
+      setError(`Failed to change account status. ${userMessage(err)}`);
     }
   };
 
@@ -221,7 +221,7 @@ export const DirectoryPanel: React.FC = () => {
       setBulkReport({ target: bulkStatus, succeeded: succeeded.length, skipped, failed });
       setNotice(`${succeeded.length} user(s) ${bulkStatus === 'ACTIVE' ? 'activated' : 'suspended'}.`);
     } catch (err: any) {
-      setError(`Bulk status change failed ${userMessage(err)}`);
+      setError(`Bulk status change failed. ${userMessage(err)}`);
     } finally {
       setBulkBusy(false);
       setBulkStatus('');
@@ -248,7 +248,7 @@ export const DirectoryPanel: React.FC = () => {
       setNotice(`Password reset for ${editingUser.displayName}.`);
       loadUsers();
     } catch (err: any) {
-      setError(`Failed to reset password ${userMessage(err)}`);
+      setError(`Failed to reset password. ${userMessage(err)}`);
     } finally {
       setResetting(false);
     }
@@ -263,7 +263,7 @@ export const DirectoryPanel: React.FC = () => {
       setNotice(`${editingUser.displayName}'s account unlocked — password unchanged.`);
       loadUsers();
     } catch (err: any) {
-      setError(`Failed to unlock account ${userMessage(err)}`);
+      setError(`Failed to unlock account. ${userMessage(err)}`);
     } finally {
       setUnlocking(false);
     }

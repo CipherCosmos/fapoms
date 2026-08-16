@@ -3,7 +3,7 @@ import {
   X, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import type { Assayer } from './assayer-shared';
@@ -38,6 +38,14 @@ const TABS = [
   { key: 'history', label: 'History', icon: Clock },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
+
+/** Mirrors the server's list in AssayerService — moves that must say why. */
+const LIFECYCLE_MOVES_NEEDING_A_REASON: string[] = [
+  AssayerLifecycleStatus.SUSPENDED,
+  AssayerLifecycleStatus.INACTIVE,
+  AssayerLifecycleStatus.RESIGNED,
+  AssayerLifecycleStatus.TERMINATED,
+];
 
 export const AssayerDetailDrawer: React.FC<{
   assayerId: string;
@@ -86,6 +94,13 @@ export const AssayerDetailDrawer: React.FC<{
   const missing = useMemo(() => missingCriticalFields(a), [a]);
 
   const transitions = a ? nextAssayerLifecycleStates(a.lifecycleStatus) : [];
+
+  /**
+   * Suspension, deactivation, resignation and termination go on an employment record and are
+   * what a later dispute or reference check is judged on, so the server refuses them without a
+   * reason. Say so here rather than letting someone press Move and be told no.
+   */
+  const reasonRequired = LIFECYCLE_MOVES_NEEDING_A_REASON.includes(target);
 
   const move = async () => {
     if (!target) return;
@@ -256,9 +271,10 @@ export const AssayerDetailDrawer: React.FC<{
                           <option value="">Choose…</option>
                           {transitions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
                         </select>
-                        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)"
-                          style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }} />
-                        <button onClick={move} disabled={!target || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 13px' }}>
+                        <input value={reason} onChange={(e) => setReason(e.target.value)}
+                          placeholder={reasonRequired ? 'Why? — goes on their record' : 'Reason (optional)'}
+                          style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: `1px solid ${reasonRequired && !reason.trim() ? 'var(--warning)' : 'var(--border-color)'}` }} />
+                        <button onClick={move} disabled={!target || busy || (reasonRequired && !reason.trim())} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 13px' }}>
                           {busy ? 'Moving…' : 'Move'}
                         </button>
                       </div>

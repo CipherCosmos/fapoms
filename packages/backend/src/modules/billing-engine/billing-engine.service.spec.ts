@@ -36,6 +36,7 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
  * and not the other.
  */
 describe('BillingEngineService', () => {
+  let settings: any;
   let service: BillingEngineService;
 
   const saved: any[] = [];
@@ -259,20 +260,22 @@ describe('BillingEngineService', () => {
     jest.clearAllMocks();
     managerQuery.mockImplementation(defaultManagerQuery);
     entryRepo.manager.query = managerQuery;
+    settings = {
+      get: jest.fn(async () => null),
+      getMany: jest.fn(async () => ({})),
+      getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+      describeAll: jest.fn(async () => []),
+      onChange: jest.fn(),
+    };
     payableRepo.manager.query = managerQuery;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         {
           provide: PlatformSettingsService,
           // Nothing configured in tests: every lookup falls through to the caller's fallback,
-          // which is the shipped constant.
-          useValue: {
-            get: jest.fn(async () => null),
-            getMany: jest.fn(async () => ({})),
-            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
-            describeAll: jest.fn(async () => []),
-            onChange: jest.fn(),
-          },
+          // which is the shipped constant. Held in a named `settings` so a test that cares about
+          // a specific limit — the credit-note approval threshold — can set one.
+          useValue: settings,
         },
         BillingEngineService,
         { provide: getRepositoryToken(BillingEntryEntity), useValue: entryRepo },
@@ -391,6 +394,67 @@ describe('BillingEngineService', () => {
     it('refuses to re-price an entry that already has money collected', async () => {
       entryRepo.findOne.mockResolvedValue({ id: 'entry-1', entryNumber: 'BE-1', paidAmount: 500, state: BillingState.INVOICED });
       await expect(service.adjustEntry('entry-1', -100, 'discount', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    /**
+     * `adjustEntry` refuses a paid line and tells the operator to issue a credit note. Until this
+     * existed there was nothing to issue, so the one route the engine points people down was the
+     * one it could not follow — and a client over-charged by a double-counted travel fee stayed
+     * over-charged.
+     */
+    describe('credit notes', () => {
+      /** The real over-charged line: travel counted twice, GST at 18%, TDS at 10%. */
+      const paidEntry = () => ({
+        id: 'entry-9',
+        entryNumber: 'BE-MST1U27K-106215',
+        state: BillingState.INVOICED,
+        paymentState: PaymentState.PAID,
+        clientId: 'client-1',
+        baseAmount: 2071,
+        travelAmount: 871,
+        adjustmentAmount: 0,
+        discountAmount: 0,
+        adjustedAmount: 2942,
+        taxableAmount: 2942,
+        taxRate: 18,
+        tdsRate: 10,
+        taxAmount: 529.56,
+        tdsAmount: 294.2,
+        totalAmount: 3177.36,
+        paidAmount: 3177.36,
+      });
+
+      it('reverses tax and TDS in proportion, and reports what must be refunded', async () => {
+        entryRepo.findOne.mockResolvedValue(paidEntry());
+
+        const { entry, refundDue } = await service.creditEntry('entry-9', 871, 'Travel billed twice', 'user-1');
+
+        // Taxable falls to the fee alone; tax and TDS come off at the entry's own rates.
+        expect(Number(entry.taxableAmount)).toBe(2071);
+        expect(Number(entry.taxAmount)).toBe(372.78);
+        expect(Number(entry.tdsAmount)).toBe(207.1);
+        expect(Number(entry.totalAmount)).toBe(2236.68);
+        // Already collected 3177.36 against a line now worth 2236.68.
+        expect(refundDue).toBe(940.68);
+      });
+
+      it('will not credit more than was charged', async () => {
+        entryRepo.findOne.mockResolvedValue(paidEntry());
+        await expect(service.creditEntry('entry-9', 5000, 'oops', 'user-1')).rejects.toThrow(/only ₹2942/);
+      });
+
+      it('insists on a reason, and on a positive amount', async () => {
+        entryRepo.findOne.mockResolvedValue(paidEntry());
+        await expect(service.creditEntry('entry-9', 100, '   ', 'user-1')).rejects.toThrow(/Say why/);
+        await expect(service.creditEntry('entry-9', 0, 'nothing', 'user-1')).rejects.toThrow(/positive amount/);
+      });
+
+      it('holds a credit above the approval limit rather than applying it', async () => {
+        settings.getNumber.mockResolvedValue(500);
+        entryRepo.findOne.mockResolvedValue(paidEntry());
+        await expect(service.creditEntry('entry-9', 871, 'Travel billed twice', 'user-1'))
+          .rejects.toThrow(/above the ₹500 limit/);
+      });
     });
 
     it('refuses to merge entries belonging to different clients', async () => {
@@ -807,6 +871,71 @@ describe('BillingEngineService', () => {
     });
 
     it('falls back to the assayer fee when the client has set no rate', async () => {
+      const q = async (sql: string): Promise<any[]> => {
+        if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
+        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
+        return [];
+      };
+      entryRepo.manager.query = q;
+      payableRepo.manager.query = q;
+      managerQuery.mockImplementation(q);
+      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
+
+      await service.syncFromAssignments('user-1');
+
+      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
+      expect(Number(entry.baseAmount)).toBe(2000);
+    });
+
+    /**
+     * The fallback is a PASS-THROUGH, so it must total the agreed fee — not the fee plus travel.
+     *
+     * The agreed fee already contains travel (the payable carves it back out using
+     * `quotedTravelFee`, and the mobile app tells the assayer as much). Billing the whole fee as
+     * base and then adding the rechargeable travel on top charged the client for the journey
+     * twice. It was invisible because the duplicate landed exactly on the margin line: revenue
+     * exceeded cost by precisely the travel figure, so a double-charge read as healthy profit.
+     */
+    it('does not bill travel twice on the fallback: base + travel equals the agreed fee', async () => {
+      const withTravel = { ...completedAssignment, agreedFee: 2000, quotedTravelFee: 500 };
+      assignmentRepo.find.mockResolvedValue([withTravel]);
+      assignmentRepo.findOne.mockResolvedValue(withTravel);
+
+      const q = async (sql: string): Promise<any[]> => {
+        // No client rate card — the pass-through path.
+        if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
+        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
+        return [];
+      };
+      entryRepo.manager.query = q;
+      payableRepo.manager.query = q;
+      managerQuery.mockImplementation(q);
+      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
+
+      await service.syncFromAssignments('user-1');
+
+      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
+      expect(Number(entry.travelAmount)).toBe(500);
+      // 2000 agreed = 1500 base + 500 travel. Before the fix this was 2000 + 500 = 2500.
+      expect(Number(entry.baseAmount)).toBe(1500);
+      expect(Number(entry.baseAmount) + Number(entry.travelAmount)).toBe(2000);
+    });
+
+    /**
+     * Offers made before `quotedTravelFee` existed have no knowable split, so they keep the whole
+     * fee as base. Restating history would be worse than the known flaw.
+     */
+    it('leaves legacy offers with no recorded travel component alone', async () => {
+      const noTravelQuote = { ...completedAssignment, agreedFee: 2000, quotedTravelFee: null };
+      assignmentRepo.find.mockResolvedValue([noTravelQuote]);
+      assignmentRepo.findOne.mockResolvedValue(noTravelQuote);
+
       const q = async (sql: string): Promise<any[]> => {
         if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
         if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];

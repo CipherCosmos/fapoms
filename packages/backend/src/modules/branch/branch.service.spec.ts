@@ -93,9 +93,11 @@ describe('BranchService', () => {
           },
           'user-1',
         ),
-        // Geocoding now reports the whole unresolvable address rather than blaming the state
-        // field alone — an unknown place is usually a typo in any of the three parts.
-      ).rejects.toThrow(/Could not verify .*UnknownState.* as a real place/);
+        // The state is now checked on its own, offline, against the canonical list of Indian
+        // states — so an unreal state is named as such instead of being reported as part of an
+        // unresolvable address. District and city are only cross-checked when the optional place
+        // lookup is configured to answer.
+      ).rejects.toThrow(/Could not verify 'UnknownState' as a real state/);
     });
 
     it('should successfully create a branch if geography validation passes', async () => {
@@ -126,6 +128,48 @@ describe('BranchService', () => {
       expect(result.branchCode).toBe('B-1');
       expect(mockBranchRepo.save).toHaveBeenCalled();
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+
+    /**
+     * The place lookup is optional, and when it is unconfigured it answers every query with an
+     * empty list. That used to be read as "no such place", so with the curated tables holding
+     * only 22 cities, every real branch — none of which matched them — was refused, and the
+     * message blamed the operator's spelling for a missing API key.
+     */
+    it('accepts a real address the optional place lookup cannot confirm', async () => {
+      delete process.env.GOOGLE_MAPS_API_KEY;
+      // Not in the curated reference tables, which is the normal case for a real branch.
+      mockStateRepo.findOne.mockResolvedValue(null);
+      mockDistrictRepo.findOne.mockResolvedValue(null);
+      mockCityRepo.findOne.mockResolvedValue(null);
+      mockBranchRepo.create.mockReturnValue({ id: 'b-2', branchCode: 'B-2' });
+      mockBranchRepo.save.mockResolvedValue({ id: 'b-2', branchCode: 'B-2' });
+
+      const result = await service.create(
+        {
+          branchCode: 'B-2',
+          name: 'Andheri West',
+          address: 'SV Road',
+          state: 'MAHARASHTRA',
+          district: 'MUMBAI',
+          city: 'MUMBAI',
+        },
+        'user-1',
+      );
+
+      expect(result.branchCode).toBe('B-2');
+    });
+
+    it('still refuses a state that is not a real state, with no lookup configured', async () => {
+      delete process.env.GOOGLE_MAPS_API_KEY;
+      mockStateRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.create(
+          { branchCode: 'B-3', name: 'Nowhere', address: 'X', state: 'NARNIA', district: 'D', city: 'C' },
+          'user-1',
+        ),
+      ).rejects.toThrow(/Could not verify 'NARNIA' as a real state/);
     });
   });
 

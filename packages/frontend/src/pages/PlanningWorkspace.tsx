@@ -62,6 +62,8 @@ interface ProjectOption {
   id: string;
   name: string;
   projectNumber: string;
+  /** Whose zones and branches this project draws on — see `loadZones`. */
+  clientId?: string;
 }
 
 
@@ -515,7 +517,15 @@ export const PlanningWorkspace: React.FC = () => {
   });
   const [dayPlanAssigning, setDayPlanAssigning] = useState<string | null>(null);
 
-  useEffect(() => { loadProjects(); loadZones(); }, []);
+  useEffect(() => { loadProjects(); }, []);
+
+  // Reload zones whenever the selected project changes, so the filter only ever offers zones
+  // belonging to that project's client (see `loadZones`).
+  useEffect(() => {
+    const clientId = projects.find(p => p.id === selectedProjectId)?.clientId;
+    loadZones(clientId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId, projects]);
 
   useEffect(() => {
     const socket = connectSocket();
@@ -649,9 +659,14 @@ export const PlanningWorkspace: React.FC = () => {
     } catch { console.error('Failed to load projects'); }
   };
 
-  const loadZones = async () => {
+  /**
+   * Only the selected project's client's zones — see `getZones`. Without the client filter the
+   * dropdown listed every client's zones under identical names, and the ones that did not belong
+   * to this project could never match a branch.
+   */
+  const loadZones = async (clientId?: string) => {
     try {
-      const data = await getZones();
+      const data = await getZones(clientId);
       setZones(data || []);
     } catch { console.error('Failed to load zones'); }
   };
@@ -1035,7 +1050,14 @@ export const PlanningWorkspace: React.FC = () => {
     e.preventDefault();
     if (!selectedBranchId || !selectedCandidate) return;
     setMessage(null);
-    setShowNegotiationModal(false);
+    /**
+     * The modal closes on success, not on submit.
+     *
+     * Closing it up-front threw away everything typed the moment the server refused — a fee
+     * rejected for being below zero, a date that turned out to be a holiday, a rule the assayer
+     * failed. The operator was left on the branch list with an error banner and had to reopen the
+     * candidate and re-enter the fee, the date and both checkboxes to correct one field.
+     */
     try {
       const created = await api.request<{ status?: string }>('/assignments', {
         method: 'POST',
@@ -1060,6 +1082,8 @@ export const PlanningWorkspace: React.FC = () => {
       // Reports what the server actually did, not what was asked for. Direct assignment can fall
       // back to a PENDING offer if the confirmation could not be applied, and telling ops the job
       // is locked when it is still waiting on someone is the failure this whole change is about.
+      // Only now is it safe to dismiss: the assignment exists.
+      setShowNegotiationModal(false);
       const confirmed = created?.status === 'ACCEPTED';
       setMessage({
         type: 'success',
@@ -1282,9 +1306,19 @@ export const PlanningWorkspace: React.FC = () => {
         text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'}${scheduledDate ? ` for ${scheduledDate}` : ''} (override recorded).`,
       });
       if (selectedProjectId) loadProjectBranches(selectedProjectId);
-      if (selectedBranchId) loadCandidates(selectedBranchId);
+      // `selectedBranchId` is a PROJECT-branch id; loadCandidates wants the branch id. Passing it
+      // raw made the refresh 404 ("Branch … not found"), and loadCandidates reports a failure by
+      // emptying the list — so a successful override was followed by a blank candidate panel.
+      // Every other call site already maps it this way.
+      {
+        const pb = branches.find((b) => b.id === selectedBranchId);
+        if (pb) loadCandidates(pb.branchId);
+      }
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.message || 'Override assignment failed.' });
+      // Rethrow so the panel can show the same refusal inline, beside the row that was clicked.
+      // The banner above is a thousand pixels up the page from that button.
+      throw err;
     } finally {
       setAssigningExcludedId(null);
     }

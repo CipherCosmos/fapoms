@@ -11,9 +11,9 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, resolveRegion } from '@fapoms/shared';
+import { EventCategory, resolveRegion, canonicalStateName } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
-import { autocompleteIndia } from '../geo/india-autocomplete.helper';
+import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
 import { geocodeIndia } from '../geo/india-geocoder';
 import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
 
@@ -677,18 +677,31 @@ export class BranchService {
    * its own is still checked; the finer geography is checked only when it is given.
    */
   private async validateGeography(state: string, district?: string, city?: string): Promise<void> {
-    if (!district?.trim() || !city?.trim()) {
-      // Nothing to cross-check the state against, so confirm the state alone is real.
+    // The state is checked offline. `canonicalStateName` knows every state and union territory
+    // under any spelling, and the state is the field that actually drives behaviour — it sets the
+    // region, the zone and the public-holiday calendar. Checking it here keeps the protection that
+    // matters without depending on an outside service.
+    if (!canonicalStateName(state)) {
       const stateKnown = await this.stateRepository.findOne({ where: { name: state } });
-      if (stateKnown) return;
-      const stateLive = await autocompleteIndia(state);
-      if (!stateLive.some((p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase())) {
+      if (!stateKnown) {
         throw new BadRequestException(
           `Could not verify '${state}' as a real state. Check the spelling — it sets the region, zone and holiday calendar for this branch.`,
         );
       }
-      return;
     }
+
+    if (!district?.trim() || !city?.trim()) return;
+
+    /**
+     * District and city can only be cross-checked against the live place lookup, and that lookup
+     * is optional: with no API key it answers every query with an empty list, which this code
+     * used to read as "no such place".
+     *
+     * The curated reference tables hold 22 cities, so in practice *no* real branch matched them
+     * and every create and edit was refused — with a message blaming the operator's spelling for
+     * a missing key. Verify when the lookup can answer; do not invent a failure when it cannot.
+     */
+    if (!isPlaceLookupConfigured()) return;
 
     const stateEntity = await this.stateRepository.findOne({ where: { name: state } });
     const districtEntity = stateEntity

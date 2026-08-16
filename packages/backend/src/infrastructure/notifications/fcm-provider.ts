@@ -70,6 +70,17 @@ export class FcmProvider implements PushProvider, OnModuleInit {
     }
   }
 
+  /**
+   * Whether a real credential loaded, matching `EmailProvider.isEnabled()`.
+   *
+   * Until now the only signal was a warning line at boot, which is why "push is blocked by a
+   * placeholder Firebase config" survived in this project's notes long after it had stopped
+   * being true. A deployment should be able to *ask*.
+   */
+  isEnabled(): boolean {
+    return this.initialized;
+  }
+
   private loadCredentials(): { projectId: string; clientEmail: string; privateKey: string } | null {
     const projectId = this.configService.get<string>('FCM_PROJECT_ID');
     const clientEmail = this.configService.get<string>('FCM_CLIENT_EMAIL');

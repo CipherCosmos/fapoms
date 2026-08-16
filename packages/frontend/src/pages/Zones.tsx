@@ -95,7 +95,7 @@ export const Zones: React.FC = () => {
       setShowModal(false);
       refetch();
     } catch (err: any) {
-      setError(`Could not save the zone ${userMessage(err)}`);
+      setError(`Could not save the zone. ${userMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -108,7 +108,7 @@ export const Zones: React.FC = () => {
       setSuccess('Zone deleted.');
       refetch();
     } catch (err: any) {
-      setError(`Delete failed ${userMessage(err)}`);
+      setError(`Delete failed. ${userMessage(err)}`);
     }
   };
 

@@ -233,9 +233,16 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 Quick Demo Login (dev only):
               </p>
               <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {/*
+                  These must match the accounts the seed actually creates
+                  (`infrastructure/database/seed.ts`): admin, admin2, manager, executive, validator —
+                  all on `admin123`. Two of these buttons used to prefill `ops_manager`/`ops123` and
+                  `hr_manager`/`hr123`, users that have never existed, so the only thing they did was
+                  produce "Invalid credentials".
+                */}
                 <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('admin', 'admin123')} style={{ fontSize: '11px', padding: '4px 10px' }}>Super Admin</button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('ops_manager', 'ops123')} style={{ fontSize: '11px', padding: '4px 10px' }}>Ops Manager</button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('hr_manager', 'hr123')} style={{ fontSize: '11px', padding: '4px 10px' }}>HR Manager</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('manager', 'admin123')} style={{ fontSize: '11px', padding: '4px 10px' }}>Ops Manager</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('validator', 'admin123')} style={{ fontSize: '11px', padding: '4px 10px' }}>Validator</button>
               </div>
             </div>
           )}

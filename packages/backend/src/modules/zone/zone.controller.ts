@@ -67,7 +67,16 @@ export class ZoneController {
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('zone:create:organization')
+  /**
+   * Zones are reference data, and `reference_data:*` is the permission that actually exists.
+   *
+   * This required `zone:create:organization` — a permission with no row in `permissions` and
+   * therefore held by nobody, including SUPER_ADMINISTRATOR. The role check above passed and the
+   * permission check then refused everyone, so creating a zone was impossible for every user in
+   * the system. Same for edit and delete below, and the holiday controller had the identical
+   * problem. `REFERENCE_DATA` carries VIEW/CREATE/EDIT/DELETE at exactly these scopes.
+   */
+  @RequirePermissions('reference_data:create:organization')
   @ApiOperation({ summary: 'Create an operational zone' })
   async create(@Body() dto: CreateZoneRequestDto, @Req() req: any) {
     const zone = await this.zoneService.create(dto, req.user.id);
@@ -113,7 +122,7 @@ export class ZoneController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('zone:edit:organization')
+  @RequirePermissions('reference_data:edit:organization')
   @ApiOperation({ summary: 'Update operational zone mappings' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -129,7 +138,7 @@ export class ZoneController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('zone:delete:organization')
+  @RequirePermissions('reference_data:delete:organization')
   @ApiOperation({ summary: 'Soft delete zone mapping' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.zoneService.remove(id, req.user.id);

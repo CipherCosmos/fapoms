@@ -20,8 +20,19 @@ module.exports = {
      * `fallbackToCacheTimeout: 0` means launch never blocks on the network — the app starts on
      * the bundle it has and fetches in the background, which matters on a handset in the field
      * with poor signal. The update applies on the NEXT launch.
+     *
+     * Written as a literal rather than `{ policy: 'appVersion' }`, because this project keeps its
+     * native `android/` directory in the repo — the bare workflow — and there the policy is not
+     * evaluated. Both `expo start` and `eas update` stop with "runtime version policies are not
+     * supported", so a dev client could not load the app at all and no OTA update could be
+     * published: the very feature this block exists for. Prebuild had already resolved it to the
+     * literal "1.0.0" in `android/app/src/main/res/values/strings.xml`, so the shipped binary was
+     * unaffected and the breakage was invisible until someone ran the tooling.
+     *
+     * Keep this in step with `version` above — bumping one without the other is what the policy
+     * was there to prevent.
      */
-    runtimeVersion: { policy: 'appVersion' },
+    runtimeVersion: '1.0.0',
     updates: {
       fallbackToCacheTimeout: 0,
       url: `https://u.expo.dev/${

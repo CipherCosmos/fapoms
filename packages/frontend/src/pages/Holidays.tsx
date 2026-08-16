@@ -139,7 +139,7 @@ export const Holidays: React.FC = () => {
       setShowModal(false);
       refetch();
     } catch (err: any) {
-      setError(`Operation failed ${userMessage(err)}`);
+      setError(`Operation failed. ${userMessage(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -152,7 +152,7 @@ export const Holidays: React.FC = () => {
       setSuccess('Holiday deleted.');
       refetch();
     } catch (err: any) {
-      setError(`Delete failed ${userMessage(err)}`);
+      setError(`Delete failed. ${userMessage(err)}`);
     }
   };
 

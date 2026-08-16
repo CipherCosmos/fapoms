@@ -85,6 +85,8 @@ export class MobileApiService {
   private static refreshInFlight: Promise<boolean> | null = null;
   static currentUserId: string | null = null;
   static currentUserName: string | null = null;
+  /** Set from the profile read during `validateSession`, so a restored session knows it too. */
+  static mustChangePassword = false;
 
   /** Returns the API origin URL (e.g., http://localhost:3000) for resolving relative attachment URLs */
   static getApiOrigin(): string {
@@ -145,6 +147,7 @@ export class MobileApiService {
     this.refreshToken = null;
     this.currentUserId = null;
     this.currentUserName = null;
+    this.mustChangePassword = false;
     ALL_TOKEN_KEYS.forEach((k) => void deleteToken(k));
   }
 
@@ -166,7 +169,22 @@ export class MobileApiService {
     if (!id || !this.authToken) return 'invalid';
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/profile`, {}, 5000);
-      if (response.ok) return 'valid';
+      if (response.ok) {
+        /**
+         * The profile is read anyway to decide whether the session is still good, so the answer
+         * to "does this person still owe us a password change" comes free with it. Keeping it
+         * lets a restored session be gated the same way a fresh sign-in is; the flag used to be
+         * known only at login, so restarting the app walked straight past the requirement.
+         */
+        try {
+          const body = await response.clone().json();
+          const profile = body?.data ?? body;
+          this.mustChangePassword = !!profile?.mustChangePassword;
+        } catch {
+          // A profile we cannot parse must not lock anyone out — leave the flag as it was.
+        }
+        return 'valid';
+      }
 
       // fetchWithAuth already tried a token refresh before surfacing a 401/403, so an auth
       // failure here means the credentials are genuinely finished.
@@ -1021,11 +1039,28 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * The assayer's work list.
+   *
+   * **Throws** when the list could not be fetched, and returns `[]` only when the server really
+   * says there is nothing. Those two are not the same fact and must not share a return value.
+   *
+   * This used to catch everything and `return []`. `AssignmentContext` already had the right
+   * behaviour for a failed refresh — keep the cached list, set `stale`, let the UI say the data
+   * is from cache — inside a `catch` that could therefore never run. The context instead took
+   * the empty array as truth, cleared the screen and set `stale = false`: an assayer standing in
+   * a vault with no signal was told, confidently, that they had no work today. Same shape as the
+   * unreachable "we could not get your location" text: correct handling, made unreachable by a
+   * swallow one layer down.
+   */
   static async getAssayerAssignments(assayerId?: string): Promise<AssayerAssignment[]> {
+    // Not a failure: there is genuinely nobody to fetch for yet.
+    if (!assayerId) return [];
     try {
-      if (!assayerId) return [];
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/assayer/${assayerId}`);
-      if (!response.ok) return [];
+      if (!response.ok) {
+        throw new Error(`Assignments request failed with ${response.status}.`);
+      }
       const data = await response.json();
       const rawItems = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : (data?.items || []));
 
@@ -1082,8 +1117,10 @@ export class MobileApiService {
         };
       });
     } catch (error) {
-      console.error('Failed to connect to backend REST API:', error);
-      return [];
+      // Re-thrown, not swallowed. The caller decides what an unreachable server looks like on
+      // screen; this layer's job is to be honest that it could not answer.
+      console.warn('Could not load assignments:', error);
+      throw error instanceof Error ? error : new Error('Could not load assignments.');
     }
   }
 
@@ -1513,6 +1550,9 @@ export class MobileApiService {
           link: n.link || null,
           createdAt: n.createdAt,
           assignmentId: n.link?.startsWith('/assignments/') ? n.link.replace('/assignments/', '') : undefined,
+          // Kept rather than discarded: the list picks its icon from this, not from English
+          // words in an operator-editable title. See AppNotification.type.
+          type: n.type ?? undefined,
         }));
       }
       return [];
@@ -1524,6 +1564,26 @@ export class MobileApiService {
   static async markNotificationRead(notificationId: string): Promise<boolean> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/${notificationId}/read`, {
+        method: 'POST',
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Clear the whole unread list in one call.
+   *
+   * `/notifications/read-all` has existed on the backend the whole time with nothing on the
+   * handset calling it. Without it the only way to clear the bell is to open every item one at
+   * a time — and an assayer coming back from a week in the field opens the app to a badge in the
+   * dozens (24 on the test handset), so in practice the badge is simply never cleared and stops
+   * carrying information.
+   */
+  static async markAllNotificationsRead(): Promise<boolean> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/read-all`, {
         method: 'POST',
       });
       return response.ok;
