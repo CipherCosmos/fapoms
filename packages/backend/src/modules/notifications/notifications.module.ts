@@ -10,6 +10,7 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { UserEntity } from '../user/user.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable-schedules';
 import { PushNotificationService } from './push-notification.service';
 import { NotificationDispatchService } from './notification-dispatch.service';
 import { AuditModule } from '../../core/audit/audit.module';
@@ -51,27 +52,18 @@ export class NotificationsModule implements OnModuleInit {
 
   constructor(@InjectQueue(NOTIFICATION_QUEUE) private readonly queue: Queue) {}
 
-  async onModuleInit() {
+  onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
 
-    // Bull keys repeatable jobs by their cron string, so changing a schedule
-    // adds a second one rather than replacing the first — the old cadence keeps
-    // firing forever alongside the new. Drop any stale schedule so this queue
-    // converges on exactly one of each, whatever a previous deploy registered.
-    const wanted: Record<string, string> = {
-      sweep: NotificationsModule.SWEEP_CRON,
-      'fail-abandoned': NotificationsModule.ABANDONED_CRON,
-    };
-    for (const job of await this.queue.getRepeatableJobs()) {
-      if (wanted[job.name] && job.cron !== wanted[job.name]) {
-        await this.queue.removeRepeatableByKey(job.key);
-        this.logger.warn(`Removed stale ${job.name} schedule: ${job.cron}`);
-      }
-    }
-
-    for (const [name, cron] of Object.entries(wanted)) {
-      await this.queue.add(name, {}, { repeat: { cron }, removeOnComplete: true, removeOnFail: false });
-    }
-    this.logger.log('Notification sweeper schedules registered');
+    // Non-blocking and non-fatal: a Redis that is down at boot must not stop the API from
+    // starting over a cron registration. See ensureRepeatableSchedules.
+    ensureRepeatableSchedules(
+      this.queue,
+      [
+        { name: 'sweep', cron: NotificationsModule.SWEEP_CRON },
+        { name: 'fail-abandoned', cron: NotificationsModule.ABANDONED_CRON },
+      ],
+      this.logger,
+    );
   }
 }

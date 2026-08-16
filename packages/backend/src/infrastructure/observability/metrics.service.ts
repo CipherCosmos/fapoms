@@ -69,6 +69,28 @@ export class MetricsService {
 
   readonly jobsFailed: Counter<'queue' | 'job'>;
 
+  /**
+   * Requests refused with 429. Guards run before the HTTP metrics interceptor, so without this a
+   * throttled request left no trace at all — the organisation-wide rate-limit ceiling of August
+   * 2026 could not have been seen on a dashboard even by someone looking for it.
+   */
+  readonly httpThrottled: Counter<'route' | 'tracker'> = new Counter({
+    name: 'http_throttled_total',
+    help: 'Requests refused by the rate limiter (429), by route and whether the budget was per-user or per-IP',
+    labelNames: ['route', 'tracker'],
+    registers: [this.registry],
+  });
+
+  /**
+   * Times the rate limiter admitted a request because its Redis storage was unreachable. Non-zero
+   * means limits are not being enforced right now — alert on it alongside Redis availability.
+   */
+  readonly throttlerFailOpen: Counter<string> = new Counter({
+    name: 'throttler_fail_open_total',
+    help: 'Requests admitted without rate limiting because the limiter storage was unavailable',
+    registers: [this.registry],
+  });
+
   scrape(): Promise<string> {
     return this.registry.metrics();
   }

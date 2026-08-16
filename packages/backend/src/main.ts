@@ -153,6 +153,29 @@ async function bootstrap() {
     return;
   }
 
+  /**
+   * Trust the reverse proxy so `req.ip` is the client, not Caddy.
+   *
+   * Without this Express ignores X-Forwarded-For and every request appears to come from the
+   * proxy's address: the rate limiter counted the whole organisation as one caller (300 req/min
+   * for everyone, 20 logins/min for everyone) and every login audit row recorded Caddy's IP.
+   *
+   * The value is a list of trusted RANGES, not a hop count, on purpose. Requests reach the API
+   * as `X-Forwarded-For: <client>, <caddy>` — Funnel sets the client, Caddy appends itself —
+   * and the trusted set (loopback, link-local, RFC 1918 / ULA) covers every hop this deployment
+   * puts in front of the API while excluding the client's own address, so the resolved IP is the
+   * rightmost UNtrusted entry: the real client. A spoofed X-Forwarded-For prepended by an
+   * attacker sits further left and is never reached. `TRUST_PROXY=false` disables it for a
+   * deployment with no proxy at all.
+   */
+  const trustProxy = process.env.TRUST_PROXY;
+  if (trustProxy !== 'false') {
+    app.getHttpAdapter().getInstance().set(
+      'trust proxy',
+      trustProxy && trustProxy !== 'true' ? trustProxy : ['loopback', 'linklocal', 'uniquelocal'],
+    );
+  }
+
   // Correlation id first — before anything can fail — so every request (including one that
   // errors before it reaches a handler) carries an id the exception filter and logs share.
   app.use(correlationIdMiddleware);

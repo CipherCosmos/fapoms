@@ -1,4 +1,5 @@
 import { Controller, Get, Inject, Optional } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { NoEnvelope } from './infrastructure/http/response.interceptor';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -19,6 +20,12 @@ import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 // Body shape is a deployment contract read by load balancers, container healthchecks and the
 // mobile "test this server address" button — none of which redeploy with the application.
 @NoEnvelope()
+/**
+ * Never rate-limited. The limiter's counters live in Redis; a liveness probe that touches Redis
+ * fails whenever Redis does, which is exactly when an orchestrator would then restart a healthy
+ * API. Liveness must depend on nothing but the process itself and the database it serves from.
+ */
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(

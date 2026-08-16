@@ -7,6 +7,7 @@ import { TypeOrmUnitOfWork } from './typeorm-unit-of-work';
 import { OutboxEntity } from './outbox.entity';
 import { OutboxRelay } from './outbox.relay';
 import { OutboxWorker } from './outbox.worker';
+import { ensureRepeatableSchedules } from '../queue/repeatable-schedules';
 
 /**
  * Global so a service can take a transaction boundary without its module having to import
@@ -35,24 +36,11 @@ export class PersistenceModule implements OnModuleInit {
 
   constructor(@InjectQueue('outbox') private readonly queue: Queue) {}
 
-  async onModuleInit() {
+  onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
 
-    // Bull keys repeatable jobs by cron string, so changing CRON registers an additional
-    // schedule rather than replacing the old one and both fire forever. Converge to one.
-    const existing = await this.queue.getRepeatableJobs();
-    for (const job of existing) {
-      if (job.name === 'drain' && job.cron !== PersistenceModule.CRON) {
-        await this.queue.removeRepeatableByKey(job.key);
-        this.logger.warn(`Removed stale outbox relay schedule: ${job.cron}`);
-      }
-    }
-
-    await this.queue.add(
-      'drain',
-      {},
-      { repeat: { cron: PersistenceModule.CRON }, removeOnComplete: true, removeOnFail: false },
-    );
-    this.logger.log('Outbox relay repeatable job registered (every minute)');
+    // Non-blocking and non-fatal: a Redis that is down at boot must not stop the API from
+    // starting over a cron registration. See ensureRepeatableSchedules.
+    ensureRepeatableSchedules(this.queue, [{ name: 'drain', cron: PersistenceModule.CRON }], this.logger);
   }
 }

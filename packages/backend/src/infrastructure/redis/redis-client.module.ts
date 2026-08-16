@@ -1,6 +1,7 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { failFastRedisOptions } from '../http/throttling/resilient-throttler-storage';
 
 export const REDIS_CLIENT = 'REDIS_CLIENT';
 
@@ -20,19 +21,21 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
       inject: [ConfigService],
       useFactory: (config: ConfigService): Redis => {
         const password = config.get<string>('REDIS_PASSWORD');
-        const client = new Redis({
-          host: config.get<string>('REDIS_HOST', 'localhost'),
-          port: config.get<number>('REDIS_PORT', 6379),
-          // Only include password in config when it is actually set.
-          ...(password ? { password } : {}),
-          // Reconnect forever with capped back-off. Returning null from an ioredis
-          // retryStrategy ENDS the connection permanently — so the previous "stop after 5
-          // tries" turned any brief Redis blip (failover, restart, network hiccup) into a
-          // dead client for the life of the process: chunked uploads, multi-node realtime
-          // and rate limiting all silently stopped until a redeploy. The Socket.IO Redis
-          // adapter already assumes an always-reconnecting client.
-          retryStrategy: (times: number) => Math.min(times * 200, 5000),
-        });
+        // Fail-fast, reconnect-forever. Every consumer of this client (cache, locks, upload
+        // sessions) has a fallback for "Redis said no", but none for "Redis said nothing":
+        // ioredis' defaults park each command in an offline queue and retry it twenty times, so
+        // a Redis outage turned every cache read into a 10–40 s stall before the fallback ran.
+        // Reconnect forever with capped back-off, because returning null from a retryStrategy
+        // ENDS the connection permanently and a brief blip becomes a dead client until redeploy.
+        // See resilient-throttler-storage.ts for the same choice on the limiter's client.
+        const client = new Redis(
+          failFastRedisOptions({
+            host: config.get<string>('REDIS_HOST', 'localhost'),
+            port: config.get<number>('REDIS_PORT', 6379),
+            // Only include password in config when it is actually set.
+            ...(password ? { password } : {}),
+          }),
+        );
         return client;
       },
     },

@@ -7,6 +7,7 @@ import { DocumentController } from './document.controller';
 import { DocumentDispatchWorker } from './document-dispatch.worker';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
+import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable-schedules';
 import { DocumentEntity } from './document.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
@@ -44,29 +45,12 @@ export class DocumentModule implements OnModuleInit {
   // and dispatching moves them to DISPATCHED, so a document is never sent twice.
   private static readonly CRON = '0 * * * *';
 
-  async onModuleInit() {
+  onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
 
     // DocumentDispatchWorker has existed and been correct for some time, but nothing ever
     // enqueued to this queue — so auto-dispatch had never once run. This is the missing
-    // producer.
-    //
-    // Same stale-schedule cleanup as SlaScannerModule: Bull keys repeatable jobs by cron
-    // string, so changing CRON would otherwise add a second schedule rather than replace the
-    // first, leaving both firing forever.
-    const existing = await this.dispatchQueue.getRepeatableJobs();
-    for (const job of existing) {
-      if (job.name === 'auto-dispatch' && job.cron !== DocumentModule.CRON) {
-        await this.dispatchQueue.removeRepeatableByKey(job.key);
-        this.logger.warn(`Removed stale auto-dispatch schedule: ${job.cron}`);
-      }
-    }
-
-    await this.dispatchQueue.add(
-      'auto-dispatch',
-      {},
-      { repeat: { cron: DocumentModule.CRON }, removeOnComplete: true, removeOnFail: false },
-    );
-    this.logger.log('Document auto-dispatch repeatable job registered (hourly)');
+    // producer. Non-blocking and non-fatal: see ensureRepeatableSchedules.
+    ensureRepeatableSchedules(this.dispatchQueue, [{ name: 'auto-dispatch', cron: DocumentModule.CRON }], this.logger);
   }
 }

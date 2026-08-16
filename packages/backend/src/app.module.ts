@@ -56,8 +56,10 @@ import { ExpenseModule } from './modules/expense/expense.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { CallsModule } from './modules/calls/calls.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { UserAwareThrottlerGuard } from './infrastructure/http/throttling/user-aware-throttler.guard';
+import { createResilientThrottlerStorage } from './infrastructure/http/throttling/resilient-throttler-storage';
+import { MetricsService } from './infrastructure/observability/metrics.service';
 import { APP_GUARD } from '@nestjs/core';
 import { PlatformSettingsModule } from './infrastructure/settings/platform-settings.module';
 
@@ -97,14 +99,19 @@ import { PlatformSettingsModule } from './infrastructure/settings/platform-setti
      */
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
+      inject: [ConfigService, MetricsService],
+      useFactory: (config: ConfigService, metrics: MetricsService) => ({
         throttlers: [{ ttl: 60_000, limit: 300 }],
-        storage: new ThrottlerStorageRedisService({
-          host: config.get<string>('REDIS_HOST', 'localhost'),
-          port: config.get<number>('REDIS_PORT', 6379),
-          password: config.get<string>('REDIS_PASSWORD'),
-        }),
+        // Fail-fast client, fail-open storage: a Redis outage stops rate limiting, not the API.
+        // See resilient-throttler-storage.ts for why the stock storage took the whole API down.
+        storage: createResilientThrottlerStorage(
+          {
+            host: config.get<string>('REDIS_HOST', 'localhost'),
+            port: config.get<number>('REDIS_PORT', 6379),
+            password: config.get<string>('REDIS_PASSWORD') || undefined,
+          },
+          () => metrics.throttlerFailOpen.inc(),
+        ),
       }),
     }),
 
@@ -193,7 +200,8 @@ import { PlatformSettingsModule } from './infrastructure/settings/platform-setti
   controllers: [HealthController],
   providers: [
     // Applied globally so a new controller cannot be added without throttling by omission.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Keyed per user (verified token) or per real client address, never per proxy — see the guard.
+    { provide: APP_GUARD, useClass: UserAwareThrottlerGuard },
   ],
 })
 export class AppModule {}
