@@ -1579,7 +1579,28 @@ export class AssignmentService {
         ]),
       },
       // `expenses` feeds the mobile earnings screen's claim total, which had no data source.
-      relations: ['projectBranch', 'projectBranch.branch', 'assayer', 'project', 'expenses'],
+      relations: {
+        projectBranch: { branch: true },
+        assayer: true,
+        project: true,
+        expenses: true,
+      },
+      /**
+       * The assayer relation is trimmed to the two columns the caller actually reads.
+       *
+       * This is one assayer's own work list, so the full `assayer` row was being serialised
+       * onto every assignment in it — the same ~2 KB record repeated. Measured on this account:
+       * 16 rows, 103 KB, of which roughly a third was that duplication. Nothing in this method
+       * touches the relation; the mobile client reads `latitude` and `longitude` from it and
+       * nothing else, to compute the distance shown on the card. On the rural data an assayer
+       * actually works over, that third is seconds.
+       *
+       * Selecting rather than dropping: the relation still has to be loaded for the distance,
+       * and the identity/banking columns it used to carry have no business crossing the wire.
+       */
+      select: {
+        assayer: { id: true, latitude: true, longitude: true },
+      },
       order: { createdAt: 'DESC' },
     });
 
