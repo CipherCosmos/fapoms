@@ -187,6 +187,22 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
    * on when a job is accepted and what refuses to let it off while that job is live.
    */
   const syncTrackingFlag = useCallback(async () => {
+    /**
+     * Nothing to sync until somebody is signed in — and, crucially, this must not consume the
+     * throttle window on the way out.
+     *
+     * Providers mount child-first, so this ran before `AuthProvider` had restored the session:
+     * `getSelfProfile()` returned "not authenticated" immediately, but the timestamp had
+     * already been stamped, so every foreground event for the next minute was throttled away.
+     * The permission-dialog background/foreground bounce that happens seconds later fell inside
+     * that window, and nothing re-ran on sign-in. The result was an assayer who accepted a job —
+     * which is what turns tracking ON server-side — and whose phone recorded no movement trail
+     * at all until they happened to background the app more than a minute after launch. The
+     * trail is the evidence behind travel claims, so "silently not recording" is the worst
+     * possible failure here.
+     */
+    if (!MobileApiService.currentUserId) return;
+
     const now = Date.now();
     if (now - lastTrackingSyncAtRef.current < TRACKING_SYNC_MIN_INTERVAL_MS) return;
     lastTrackingSyncAtRef.current = now;
@@ -209,7 +225,31 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') void syncTrackingFlag();
     });
-    return () => sub.remove();
+
+    /**
+     * And once the session actually exists.
+     *
+     * This provider cannot import the auth context (it sits above it in the tree), so it polls
+     * briefly for the id instead of subscribing to it: a few cheap checks at start-up, stopping
+     * the moment the flag is known. Without this the sync above returns immediately on a cold
+     * start and nothing asks again until the app is backgrounded.
+     */
+    let attempts = 0;
+    const waitForSession = setInterval(() => {
+      attempts += 1;
+      if (MobileApiService.currentUserId) {
+        clearInterval(waitForSession);
+        void syncTrackingFlag();
+      } else if (attempts >= 20) {
+        // ~20s: either nobody signed in, or they will, and the next foreground will catch it.
+        clearInterval(waitForSession);
+      }
+    }, 1000);
+
+    return () => {
+      sub.remove();
+      clearInterval(waitForSession);
+    };
   }, [syncTrackingFlag]);
 
   /** Drain the queue only when a batch has built up or the oldest fix has waited long enough. */

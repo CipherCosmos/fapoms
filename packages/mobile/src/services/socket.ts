@@ -4,6 +4,19 @@ import { MobileApiService } from './api.service';
 let socket: Socket | null = null;
 
 /**
+ * Which assayer the live socket belongs to.
+ *
+ * `connectMobileSocket` returned the EXISTING socket whenever one was open, and nothing closed
+ * it on sign-out — so on a shared handset the next person to sign in kept the previous
+ * person's connection, still joined to `user:<previousId>`. They received that assayer's offer,
+ * status and fee events (the app raises local notifications from them, carrying branch name and
+ * fee) and none of their own, until a reconnection happened to re-authenticate the room. This
+ * records the subject the socket was opened for so a change of user is detected and the
+ * connection rebuilt.
+ */
+let socketUserId: string | null = null;
+
+/**
  * Derived from the same origin the REST client uses, never hardcoded.
  *
  * This was pinned to `10.0.2.2` (the Android *emulator's* alias for the host loopback) and
@@ -20,10 +33,19 @@ let socket: Socket | null = null;
  */
 
 export function connectMobileSocket(): Socket | null {
+  const currentUserId = MobileApiService.currentUserId;
+
+  // A live socket belonging to someone else is worse than no socket: it delivers their work to
+  // this screen and never delivers this user's. Tear it down and open a fresh one.
+  if (socket && socketUserId && currentUserId && socketUserId !== currentUserId) {
+    disconnectMobileSocket();
+  }
+
   if (socket) return socket;
 
   const token = MobileApiService.getAuthToken();
   if (!token) return null;
+  socketUserId = currentUserId;
 
   const wsUrl = `${MobileApiService.getApiOrigin()}/events`;
   socket = io(wsUrl, {
@@ -73,11 +95,17 @@ export function connectMobileSocket(): Socket | null {
   return socket;
 }
 
+/**
+ * Close the live socket. Called on sign-out — and it had no callers at all, which is how one
+ * assayer's connection survived into the next assayer's session.
+ */
 export function disconnectMobileSocket() {
   if (socket) {
+    socket.removeAllListeners();
     socket.disconnect();
     socket = null;
   }
+  socketUserId = null;
 }
 
 export function getMobileSocket(): Socket | null {

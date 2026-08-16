@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { AppState, AppStateStatus } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { MobileApiService } from '../services/api.service';
+import { disconnectMobileSocket } from '../services/socket';
 import { clearCache } from '../services/token-store';
 import { clearQueue } from '../services/location-queue';
 import { getPreference } from '../services/preferences';
@@ -270,6 +271,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     MobileApiService.clearSession();
+    // The live socket is part of the session. Left open it stays joined to this assayer's room,
+    // so on a shared handset the next person to sign in would keep receiving the previous
+    // person's offers and fees — and none of their own.
+    disconnectMobileSocket();
     // One assayer's cached schedule must not survive into the next person's session on a
     // shared handset.
     void clearCache();
