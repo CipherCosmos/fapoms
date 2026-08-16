@@ -24,6 +24,9 @@ import { BillingLevel, BillingState, PaymentState, BillingPricingModel } from '@
 @Index(['assayerId'])
 @Index(['state'])
 @Index(['paymentState'])
+// `SELECT … FOR UPDATE WHERE invoice_id = …` in createInvoice/recordPayment — a sequential scan
+// held under a row lock without this. Also in 1790300000000-RestoreScaleIndexes.
+@Index('IDX_billing_entries_invoice_id', ['invoiceId'])
 export class BillingEntryEntity extends BaseEntity {
   @Column({ name: 'entry_number', length: 50, unique: true })
   entryNumber: string;

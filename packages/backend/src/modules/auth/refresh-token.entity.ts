@@ -10,6 +10,9 @@ import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 
 @Entity('refresh_tokens')
 @Index(['userId'])
 @Index(['expiresAt'])
+// Every token refresh looks a row up by hash. Unique because a hash is one. Also in
+// 1790300000000-RestoreScaleIndexes.
+@Index('IDX_refresh_tokens_token_hash', ['tokenHash'], { unique: true })
 export class RefreshTokenEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

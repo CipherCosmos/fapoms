@@ -41,6 +41,10 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 @Index(['category'])
 @Index(['entityType', 'entityId'])
 @Index(['userId', 'isRead', 'createdAt'])
+// The assayer half of the inbox (ordered by created_at) and the per-emit read-back by group_key.
+// Also in migration 1790300000000-RestoreScaleIndexes.
+@Index('IDX_notifications_assayer_created', ['assayerId', 'createdAt'])
+@Index('IDX_notifications_group_key', ['groupKey'], { where: '"group_key" IS NOT NULL' })
 @Index('UQ_notifications_dedupe', ['dedupeKey'], { unique: true, where: '"dedupe_key" IS NOT NULL' })
 // Serves the stranded-email sweep. Declared here AND in the migration — synchronize drops
 // migration-only indexes (see the class comment above; it has happened to this very table).

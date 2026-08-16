@@ -15,6 +15,9 @@ import { ProjectBranchStatus, Priority } from '@fapoms/shared';
 @Index(['projectId'])
 @Index(['branchId'])
 @Index(['status'])
+// The dashboard "due this week" window (`is_active AND scheduled_date BETWEEN …`). Also in
+// migration 1790300000000-RestoreScaleIndexes; declared here so a regenerated baseline keeps it.
+@Index('IDX_project_branches_scheduled_date_active', ['scheduledDate'], { where: '"is_active" = true AND "scheduled_date" IS NOT NULL' })
 export class ProjectBranchEntity extends BaseEntity {
   @Column({ name: 'project_id', type: 'uuid' })
   projectId: string;

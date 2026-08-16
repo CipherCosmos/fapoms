@@ -9,6 +9,10 @@ import { DocumentStatus, DocumentType, DispatchMethod } from '@fapoms/shared';
 @Index(['assessmentId'])
 @Index(['status'])
 @Index(['type'])
+// The data-entry desk queue: type + status + assignee, ordered by received_at. Also in
+// 1790300000000-RestoreScaleIndexes.
+@Index('IDX_documents_type_status_received', ['type', 'status', 'receivedAt'], { where: '"is_active" = true' })
+@Index('IDX_documents_assigned_to_user', ['assignedToUserId'], { where: '"is_active" = true AND "assigned_to_user_id" IS NOT NULL' })
 export class DocumentEntity extends BaseEntity {
   @Column({ name: 'project_branch_id', type: 'uuid', nullable: true })
   projectBranchId: string | null;

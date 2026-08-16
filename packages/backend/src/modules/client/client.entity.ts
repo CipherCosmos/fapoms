@@ -1,4 +1,4 @@
-import { Entity, Column, OneToOne, OneToMany } from 'typeorm';
+import { Entity, Column, OneToOne, OneToMany, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import type { ClientConfigurationEntity } from './client-configuration.entity';
 import type { ClientContactEntity } from './client-contact.entity';
@@ -6,6 +6,10 @@ import type { ClientContractEntity } from './client-contract.entity';
 import type { ClientBillingEntity } from './client-billing.entity';
 
 @Entity('clients')
+// The client list filters by lifecycle and tenancy scopes by organisation. Also in
+// 1790300000000-RestoreScaleIndexes.
+@Index('IDX_clients_organization', ['organizationId'])
+@Index('IDX_clients_lifecycle_status', ['lifecycleStatus'])
 export class ClientEntity extends BaseEntity {
   @Column({ name: 'client_code', unique: true, length: 50 })
   clientCode: string;

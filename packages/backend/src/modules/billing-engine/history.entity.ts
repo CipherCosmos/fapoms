@@ -10,6 +10,9 @@ import { BillingEntityType } from '@fapoms/shared';
  */
 @Entity('billing_history')
 @Index(['entityType', 'entityId'])
+// The unified audit trail reads one entity's history newest-first. Also in
+// 1790300000000-RestoreScaleIndexes.
+@Index('IDX_billing_history_entity_created', ['entityType', 'entityId', 'createdAt'])
 @Index(['clientId'])
 @Index(['projectId'])
 @Index(['assignmentId'])

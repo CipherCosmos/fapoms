@@ -1,8 +1,10 @@
-import { Entity, Column, OneToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, OneToOne, JoinColumn, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import type { ClientEntity } from './client.entity';
 
 @Entity('client_configurations')
+// "The configuration in force for this client on this date." Also in 1790300000000-RestoreScaleIndexes.
+@Index('IDX_client_configurations_client_effective', ['clientId', 'effectiveFrom'])
 export class ClientConfigurationEntity extends BaseEntity {
   @Column({ name: 'client_id', type: 'uuid' })
   clientId: string;

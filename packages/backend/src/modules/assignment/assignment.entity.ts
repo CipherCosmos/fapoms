@@ -13,9 +13,20 @@ import { AssignmentStatus, Priority } from '@fapoms/shared';
 @Index(['assessmentId'])
 @Index(['projectId'])
 @Index(['assayerId'])
-// Hot-path filters on status / (sla_status,status) / (assayer_id,scheduled_date,status) are indexed
-// as partial indexes in migration 1788100000000-IndexAssignmentHotFilters (migration-only, matching
-// how the project_branches.scheduled_date index is managed).
+/**
+ * The scale indexes — declared here as well as in `1790300000000-RestoreScaleIndexes`.
+ *
+ * They used to be migration-only. When the migration chain was regenerated from the entities,
+ * anything not declared on an entity silently disappeared, and the live database ran with
+ * sequential scans on the operations list, the inbox, the dashboard tiles and the 15-minute
+ * sweeps until an audit noticed. Declaring them here means a regenerated baseline carries them.
+ * Names match the migration exactly so the two never diverge under `migration:generate`.
+ */
+@Index('idx_assignments_active_status_created', ['isActive', 'status', 'createdAt'])
+@Index('idx_assignments_open_offers', ['slaDueDate'], { where: `"status" = 'PENDING' AND "is_active" = true` })
+@Index('idx_assignments_assayer_day', ['assayerId', 'scheduledDate', 'status'], { where: '"is_active" = true' })
+@Index('idx_assignments_branch_recent', ['projectBranchId', 'createdAt'])
+@Index('idx_assignments_sla_status_status_active', ['slaStatus', 'status'], { where: '"is_active" = true' })
 export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'assignment_number', length: 50, unique: true })
   assignmentNumber: string;

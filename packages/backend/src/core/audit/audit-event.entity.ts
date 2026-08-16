@@ -23,6 +23,9 @@ import {
 @Index(['occurredAt'])
 @Index(['userId'])
 @Index(['category'])
+// The inbox's field-issue list reads by event_type on every load; without this it was two full
+// scans of the widest table in the schema per page view. Also in 1790300000000-RestoreScaleIndexes.
+@Index('IDX_audit_events_event_type_occurred', ['eventType', 'occurredAt'])
 export class AuditEventEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

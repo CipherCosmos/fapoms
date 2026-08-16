@@ -110,6 +110,14 @@ export class AssayerEntity extends BaseEntity {
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   longitude: number | null;
 
+  /**
+   * Two indexes serve this column. The spatial GiST declared here covers geometry operators.
+   * The candidate prefilter (`ST_DWithin(a.location::geography, …)`, recommendation.engine.ts)
+   * needs a SECOND, functional GiST on `(location::geography)` — `idx_assayers_location_geography`,
+   * created by migration 1790300000000-RestoreScaleIndexes. TypeORM cannot declare a functional
+   * index, so that one is migration-only; `scale-indexes.spec.ts` asserts the migration still
+   * creates it. Do not "tidy" it away: without it the prefilter is a full scan of every assayer.
+   */
   @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 4326, nullable: true })
   @Index({ spatial: true })
   location: any | null;
