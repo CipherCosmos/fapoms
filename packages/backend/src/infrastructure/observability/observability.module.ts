@@ -6,6 +6,7 @@ import { MetricsInterceptor } from './metrics.interceptor';
 import { MetricsAuthGuard } from './metrics-auth.guard';
 import { JobFailureMonitor } from '../queue/job-failure.monitor';
 import { StartupChecksService } from './startup-checks.service';
+import { RuntimeMetricsService } from './runtime-metrics.service';
 
 /**
  * Observability wiring: the Prometheus registry, the `/metrics` endpoint, a
@@ -18,6 +19,9 @@ import { StartupChecksService } from './startup-checks.service';
   controllers: [MetricsController],
   providers: [
     MetricsService,
+    // Samples the pool, the queues and the socket count at scrape time — the three things the
+    // audit found impossible to diagnose from outside the process.
+    RuntimeMetricsService,
     MetricsAuthGuard,
     JobFailureMonitor,
     StartupChecksService,
