@@ -256,11 +256,11 @@ export class MobileApiService {
     const refreshToken = await this.getRefreshToken();
     if (!refreshToken) return false;
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      const response = await this.fetchWithTimeout(`${API_BASE_URL}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
-      });
+      }, 20_000);
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success && data.data?.accessToken) {
         this.authToken = data.data.accessToken;
@@ -282,7 +282,48 @@ export class MobileApiService {
     }
   }
 
-  static async fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 3000): Promise<Response> {
+  /**
+   * How long a single request may take, INCLUDING the body — React Native's fetch resolves only
+   * after the whole response has arrived, so this bounds RTT + server time + transfer.
+   *
+   * It was 3 000 ms. On a 2G-class link (~40–60 kbps) the gzipped assignments list alone needs
+   * 4–5 s, so every read timed out, on every attempt, and the readers below turned the abort
+   * into "no data" — Earnings showed ₹0 and the badge showed 0, for a network problem. Fifteen
+   * seconds is enough for the largest routine payload on a poor link and still short enough
+   * that a dead server is noticed within a screen's patience. Callers with a real reason to
+   * differ (health probe, uploads) pass their own.
+   */
+  static readonly DEFAULT_TIMEOUT_MS = 15_000;
+
+  /**
+   * True for the failures that mean "the server was never reached / never answered": the fetch
+   * polyfill's TypeError (DNS, TCP, TLS, connection reset) and our own AbortError (timeout).
+   * An HTTP status is not one of these — the server answered, however unhappily.
+   */
+  /**
+   * Turn "the server did not answer" and "the server answered with an error" into an exception
+   * a caller can catch and KEEP ITS PREVIOUS STATE on, instead of a value it might mistake for
+   * data. The readers below used to return `[]` / zeros / `null` in both cases, so a 3-second
+   * abort on a slow link emptied the Earnings screen and zeroed the notification badge — a
+   * network problem presented as a fact about the assayer's money.
+   */
+  static unavailable(what: string, cause?: unknown): Error {
+    const err = new Error(`${what} could not be loaded — no answer from the server.`);
+    err.name = 'ServerUnavailableError';
+    (err as { cause?: unknown }).cause = cause;
+    return err;
+  }
+
+  static isTransportError(err: unknown): boolean {
+    const name = (err as { name?: string } | null)?.name;
+    return name === 'AbortError' || name === 'TypeError' || err instanceof TypeError;
+  }
+
+  static async fetchWithTimeout(
+    url: string,
+    options: RequestInit = {},
+    timeoutMs = MobileApiService.DEFAULT_TIMEOUT_MS,
+  ): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -295,7 +336,38 @@ export class MobileApiService {
     }
   }
 
-  static async fetchWithAuth(url: string, options?: RequestInit, timeoutMs = 3000): Promise<Response> {
+  /**
+   * Authenticated request with a bounded budget, a 401→refresh→retry, and — for reads only —
+   * a couple of quick retries on transport failure.
+   *
+   * GET is idempotent, so a request that never reached the server (or whose response never
+   * came back) can be safely re-issued; a brief radio drop or a tunnel handoff often recovers
+   * within a second. Mutations are NOT retried here: a POST that the server processed but whose
+   * response was lost would be applied twice.
+   */
+  static async fetchWithAuth(
+    url: string,
+    options?: RequestInit,
+    timeoutMs = MobileApiService.DEFAULT_TIMEOUT_MS,
+  ): Promise<Response> {
+    const method = (options?.method ?? 'GET').toUpperCase();
+    const retriesLeft = method === 'GET' || method === 'HEAD' ? 2 : 0;
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        return await this.fetchWithAuthOnce(url, options, timeoutMs);
+      } catch (err) {
+        if (attempt >= retriesLeft || !this.isTransportError(err)) throw err;
+        attempt += 1;
+        // Short, jittered: long enough for a dropped connection to come back, short enough
+        // that a screen does not stall behind three full timeouts for one read.
+        await new Promise((r) => setTimeout(r, 400 + Math.random() * 600));
+      }
+    }
+  }
+
+  private static async fetchWithAuthOnce(url: string, options?: RequestInit, timeoutMs?: number): Promise<Response> {
     const cacheBust = `${url}${url.includes('?') ? '&' : '?'}_t=${Date.now()}`;
     // A FormData body needs the browser to set the multipart boundary itself; forcing
     // application/json here (the default for JSON calls) corrupts the upload and makes the
@@ -332,11 +404,11 @@ export class MobileApiService {
    */
   static async verifyAssayerIdentity(identifier: string): Promise<{ verified: boolean; assayer?: any; error?: string }> {
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/verify-assayer`, {
+      const response = await this.fetchWithTimeout(`${API_BASE_URL}/auth/verify-assayer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier }),
-      });
+      }, 20_000);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.success) {
         return { verified: false, error: data?.message || 'Unable to reach the server.' };
@@ -366,11 +438,11 @@ export class MobileApiService {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/biometric-login`, {
+      const response = await this.fetchWithTimeout(`${API_BASE_URL}/auth/biometric-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
-      });
+      }, 20_000);
       const data = await response.json().catch(() => ({}));
 
       if (response.ok && data.success && data.data?.accessToken) {
@@ -395,11 +467,11 @@ export class MobileApiService {
 
   static async login(username: string, password: string): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      const response = await this.fetchWithTimeout(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
-      });
+      }, 20_000);
       const data = await response.json().catch(() => ({}));
 
       if (response.ok && data.success && data.data?.accessToken) {
@@ -836,7 +908,7 @@ export class MobileApiService {
         `${API_BASE_URL}/billing-engine/assayers/${assayerId}/statement`,
       );
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success || !data.data) return null;
+      if (!response.ok || !data?.success || !data.data) throw this.unavailable('Statement');
 
       const d = data.data;
       const num = (v: any) => Number(v) || 0;
@@ -872,8 +944,9 @@ export class MobileApiService {
           notes: pm.notes,
         })),
       };
-    } catch {
-      return null;
+    } catch (err) {
+      // `null` meant "no statement"; a dropped connection is not that.
+      throw err instanceof Error && err.name === 'ServerUnavailableError' ? err : this.unavailable('Statement', err);
     }
   }
 
@@ -972,7 +1045,7 @@ export class MobileApiService {
       const qs = status ? `?status=${status}` : '';
       const response = await this.fetchWithAuth(`${API_BASE_URL}/expenses/mine${qs}`);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success) return [];
+      if (!response.ok || !data?.success) throw this.unavailable('Expense claims');
       return (data.data || []).map((e: any) => ({
         id: e.id,
         assignmentId: e.assignmentId,
@@ -985,18 +1058,18 @@ export class MobileApiService {
         receiptUrl: e.receiptUrl,
         createdAt: e.createdAt,
       }));
-    } catch {
-      return [];
+    } catch (err) {
+      // Unreachable is not "no claims": throw, and let the screen keep what it last knew.
+      throw err instanceof Error && err.name === 'ServerUnavailableError' ? err : this.unavailable('Expense claims', err);
     }
   }
 
   /** Claim totals, for the earnings screen. */
   static async getMyExpenseSummary(): Promise<ExpenseSummary> {
-    const empty: ExpenseSummary = { pending: 0, approved: 0, rejected: 0, totalClaimed: 0 };
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/expenses/mine/summary`);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success || !data.data) return empty;
+      if (!response.ok || !data?.success || !data.data) throw this.unavailable('Expense summary');
       const d = data.data;
       return {
         pending: Number(d.pending) || 0,
@@ -1004,8 +1077,9 @@ export class MobileApiService {
         rejected: Number(d.rejected) || 0,
         totalClaimed: Number(d.totalClaimed) || 0,
       };
-    } catch {
-      return empty;
+    } catch (err) {
+      // Zeros would read as "nothing claimed"; a network failure is not that.
+      throw err instanceof Error && err.name === 'ServerUnavailableError' ? err : this.unavailable('Expense summary', err);
     }
   }
 
@@ -1521,11 +1595,11 @@ export class MobileApiService {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const response = await fetch(`${API_BASE_URL}/validation-queries/upload-attachment`, {
+      const response = await this.fetchWithTimeout(`${API_BASE_URL}/validation-queries/upload-attachment`, {
         method: 'POST',
         headers,
         body: formData,
-      });
+      }, 60_000);
 
       if (response.ok) {
         const data = await response.json();
@@ -1555,9 +1629,10 @@ export class MobileApiService {
           type: n.type ?? undefined,
         }));
       }
-      return [];
-    } catch {
-      return [];
+      throw this.unavailable('Notifications');
+    } catch (err) {
+      // An empty list zeroes the badge; a network failure must not. The hook keeps its state.
+      throw err instanceof Error && err.name === 'ServerUnavailableError' ? err : this.unavailable('Notifications', err);
     }
   }
 

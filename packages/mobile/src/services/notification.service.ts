@@ -302,7 +302,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     const userId = MobileApiService.getCurrentUserId();
     if (userId && token) {
       try {
-        await fetch(`${MobileApiService.getBaseUrl()}/notifications/device-token`, {
+        await MobileApiService.fetchWithTimeout(`${MobileApiService.getBaseUrl()}/notifications/device-token`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -313,7 +313,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
             // iOS has already returned above — everything reaching here is Android.
             platform: 'android',
           }),
-        });
+        }, 20_000);
       } catch (e) {
         console.error('Failed to register push token', e);
       }
@@ -346,14 +346,14 @@ export async function unregisterPushNotificationsAsync(): Promise<boolean> {
     const token = tokenData?.data;
     if (!token) return false;
 
-    const response = await fetch(`${MobileApiService.getBaseUrl()}/notifications/device-token/unregister`, {
+    const response = await MobileApiService.fetchWithTimeout(`${MobileApiService.getBaseUrl()}/notifications/device-token/unregister`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${MobileApiService.getAuthToken()}`,
       },
       body: JSON.stringify({ token }),
-    });
+    }, 20_000);
     return response.ok;
   } catch (err) {
     if (__DEV__) console.log('Push unregister failed:', err);

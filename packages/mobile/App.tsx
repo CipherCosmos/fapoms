@@ -164,16 +164,25 @@ function AppMain() {
     save: handleSaveProfile,
   } = useAssayerProfile(user, location);
 
+  /**
+   * Refresh the earnings screen — keeping whatever it last knew for anything that fails.
+   *
+   * These readers used to return empties on a timeout, and this wrote them straight into state:
+   * one slow request on a 2G link and Earnings showed ₹0 claimed and no statement, for a network
+   * problem. Each read now throws when the server did not answer, and only the reads that
+   * succeeded update their slice; a failed one leaves the previous value on screen. On a first
+   * load with nothing previous the screen simply stays empty, which is honest.
+   */
   const loadExpenseSummary = useCallback(async () => {
     if (!user?.id) return;
-    const [summary, mine, stmt] = await Promise.all([
+    const [summary, mine, stmt] = await Promise.allSettled([
       MobileApiService.getMyExpenseSummary(),
       MobileApiService.getMyExpenses(),
       MobileApiService.getAssayerStatement(user.id),
     ]);
-    setExpenseSummary(summary);
-    setClaims(mine);
-    setStatement(stmt);
+    if (summary.status === 'fulfilled') setExpenseSummary(summary.value);
+    if (mine.status === 'fulfilled') setClaims(mine.value);
+    if (stmt.status === 'fulfilled') setStatement(stmt.value);
   }, [user?.id]);
 
   /**
@@ -370,6 +379,18 @@ function AppMain() {
       } else {
         feedback.error('Could not check in', res.error || 'Check-in failed. Please try again.');
       }
+    } catch (err) {
+      // There was no catch here: a timeout became an unhandled rejection — the spinner stopped
+      // and nothing was said, and if the server HAD recorded the check-in the assayer could not
+      // tell. Say what happened; the assignment reload will show the true status either way.
+      const transport = MobileApiService.isTransportError(err);
+      feedback.error(
+        'Could not reach the server',
+        transport
+          ? 'Your check-in was not confirmed — the connection dropped. Move to better signal and tap Check in again; if it already went through, it will show as checked in.'
+          : (err as Error)?.message || 'Check-in failed. Please try again.',
+      );
+      loadAssignments().catch(() => {});
     } finally {
       setBusyActionId(null);
     }
