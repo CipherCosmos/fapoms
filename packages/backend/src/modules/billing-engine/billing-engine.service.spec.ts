@@ -102,11 +102,24 @@ describe('BillingEngineService', () => {
     findOne: jest.fn(async () => null),
   };
 
+  // findFeePayable uses a query builder (it filters on a jsonb expression the repository API
+  // cannot express); a chainable stub that resolves to `payableRepo.feePayable` keeps the
+  // "does the fee payable already exist" branch testable.
   const payableRepo: any = {
     create: jest.fn((d) => d),
     save: jest.fn(async (d) => ({ id: 'payable-1', ...d })),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
+    feePayable: null as any,
+    createQueryBuilder: jest.fn(() => {
+      const qb: any = {
+        where: () => qb,
+        andWhere: () => qb,
+        orderBy: () => qb,
+        getOne: async () => payableRepo.feePayable,
+      };
+      return qb;
+    }),
     manager: { query: managerQuery },
   };
 
@@ -982,6 +995,96 @@ describe('BillingEngineService', () => {
       // The profile's standard rate is kept for context, clearly separated, never conflated
       // with the amount actually paid.
       expect(Number(captured.rateSnapshot.profileStandardBaseFee)).toBe(3406);
+    });
+  });
+
+  /**
+   * One receivable and one fee payable per assignment. Auto-sync runs from an at-least-once
+   * event under a fail-open lock, so the database's partial unique indexes (migration
+   * 1790500000000) are the guard; these pin how the service behaves around them.
+   */
+  describe('billing uniqueness per assignment', () => {
+    const completed = {
+      id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',
+      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000, proposedFee: 2100,
+    };
+    const uniqueViolation = (constraint: string) =>
+      Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505', constraint });
+
+    beforeEach(() => {
+      assignmentRepo.findOne.mockResolvedValue({ ...completed });
+      payableRepo.feePayable = null;
+      payableRepo.findOne.mockResolvedValue(null);
+      entryRepo.findOne.mockResolvedValue(null);
+      const q = async (sql: string): Promise<any[]> => {
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        return [];
+      };
+      (payableRepo.manager.query as jest.Mock).mockImplementation(q);
+      projectRepo.findOne = jest.fn(async () => ({ id: 'proj-1', clientId: 'client-1' }));
+    });
+
+    it('an approved expense reimbursement does NOT count as the fee payable already existing', async () => {
+      // A reimbursement raised before completion is a payable against the same assignment; the
+      // old `findOne({ assignmentId })` saw it and never raised the fee.
+      payableRepo.feePayable = null; // findFeePayable excludes EXPENSE_CLAIM rows by predicate
+      payableRepo.save.mockImplementation(async (d: any) => ({ id: 'payable-fee', ...d }));
+
+      const result = await service.syncPayableForAssignment('asn-1', 'user-1');
+
+      expect(result.created).toBe(true);
+    });
+
+    it('when a fee payable exists it is reported and nothing is inserted', async () => {
+      payableRepo.feePayable = { id: 'payable-existing' };
+      payableRepo.save.mockClear();
+
+      const result = await service.syncPayableForAssignment('asn-1', 'user-1');
+
+      expect(result).toMatchObject({ created: false, payableId: 'payable-existing' });
+      expect(payableRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('a lost race on the fee payable is reported as the winner, not an error', async () => {
+      // find said "none", then the insert hit the unique index because a concurrent sync won.
+      payableRepo.save.mockImplementationOnce(async () => {
+        throw uniqueViolation('UQ_assayer_payables_fee_per_assignment');
+      });
+      let calls = 0;
+      payableRepo.createQueryBuilder.mockImplementation(() => {
+        const qb: any = {
+          where: () => qb, andWhere: () => qb, orderBy: () => qb,
+          getOne: async () => (calls++ === 0 ? null : { id: 'payable-winner' }),
+        };
+        return qb;
+      });
+
+      const result = await service.syncPayableForAssignment('asn-1', 'user-1');
+
+      expect(result).toMatchObject({ created: false, payableId: 'payable-winner' });
+    });
+
+    it('a lost race on the billing entry is reported as the winner, not an error', async () => {
+      entryRepo.findOne
+        .mockResolvedValueOnce(null)                       // syncAssignment: "not billed yet"
+        .mockResolvedValueOnce({ id: 'entry-winner' });    // after the collision: the winner
+      entryRepo.save.mockImplementationOnce(async () => {
+        throw uniqueViolation('UQ_billing_entries_root_per_assignment');
+      });
+
+      const result = await service.syncAssignment('asn-1');
+
+      expect(result).toMatchObject({ created: false, entryId: 'entry-winner' });
+    });
+
+    it('a manual second fee payable is refused with a 409, not a 500', async () => {
+      payableRepo.save.mockImplementationOnce(async () => {
+        throw uniqueViolation('UQ_assayer_payables_fee_per_assignment');
+      });
+      await expect(
+        service.createPayable({ assayerId: 'as-1', assignmentId: 'asn-1', baseAmount: 100 } as any, 'user-1'),
+      ).rejects.toMatchObject({ status: 409 });
     });
   });
 

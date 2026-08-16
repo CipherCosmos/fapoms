@@ -10,6 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Between, EntityManager } from 'typeorm';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
 import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
@@ -93,6 +94,24 @@ const UNBILLED_STATES: BillingState[] = [
 ];
 
 @Injectable()
+/**
+ * A second root billing entry for an assignment was refused by the database.
+ * A ConflictException (409) for API callers; a distinguishable type for the auto-sync paths,
+ * which treat it as "the other sync won" rather than as an error.
+ */
+export class DuplicateBillingEntryError extends ConflictException {
+  constructor() {
+    super('This assignment already has a billing entry. Adjust or split the existing line rather than creating a second one.');
+  }
+}
+
+/** A second fee payable for an assignment was refused by the database. See DuplicateBillingEntryError. */
+export class DuplicateFeePayableError extends ConflictException {
+  constructor() {
+    super('This assignment already has a fee payable. Record an adjustment or an expense reimbursement rather than a second fee.');
+  }
+}
+
 export class BillingEngineService implements OnModuleInit {
   private readonly logger = new Logger(BillingEngineService.name);
 
@@ -468,6 +487,24 @@ export class BillingEngineService implements OnModuleInit {
     }
 
     return this.inTx(async (m, emit) => {
+      try {
+        return await this.createEntryInTx(dto, userId, m, emit);
+      } catch (err) {
+        if (isUniqueViolation(err, 'UQ_billing_entries_root_per_assignment')) {
+          throw new DuplicateBillingEntryError();
+        }
+        throw err;
+      }
+    });
+  }
+
+  private async createEntryInTx(
+    dto: CreateEntryDto,
+    userId: string,
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+  ): Promise<BillingEntryEntity> {
+    {
     // Tax treatment falls back to the client's contracted rates when the caller
     // does not state them, so auto-generated lines are taxed the same as manual
     // ones instead of silently going out at 0%.
@@ -534,7 +571,7 @@ export class BillingEngineService implements OnModuleInit {
     }
 
     return saved;
-    });
+    }
   }
 
   /**
@@ -648,8 +685,20 @@ export class BillingEngineService implements OnModuleInit {
     const fee = assignmentFee(a, 'REVENUE').fee;
     if (fee <= 0) return { created: false, reason: 'no agreed fee' };
 
-    const entry = await this.createEntryFromAssignment(a, clientId, 'system');
-    return { created: true, entryId: entry.id };
+    try {
+      const entry = await this.createEntryFromAssignment(a, clientId, 'system');
+      return { created: true, entryId: entry.id };
+    } catch (err) {
+      // Two syncs raced between the find above and this insert — the event bus delivers
+      // at-least-once and the lock around us fails open. The database's unique index on root
+      // entries per assignment (migration 1790500000000) is the real guard; the loser simply
+      // reports what the winner did. This is the double-invoice-line the audit found.
+      if (err instanceof DuplicateBillingEntryError || isUniqueViolation(err, 'UQ_billing_entries_root_per_assignment')) {
+        const winner = await this.entryRepository.findOne({ where: { assignmentId } });
+        return { created: false, entryId: winner?.id, reason: 'already billed (concurrent sync)' };
+      }
+      throw err;
+    }
   }
 
   /**
@@ -669,7 +718,11 @@ export class BillingEngineService implements OnModuleInit {
     if (a.status !== AssignmentStatus.COMPLETED) return { created: false, reason: 'assignment not completed' };
     if (!a.assayerId) return { created: false, reason: 'no assayer on assignment' };
 
-    const existing = await this.payableRepository.findOne({ where: { assignmentId } });
+    // The FEE payable only. Expense reimbursements are also payables against this assignment
+    // (one per approved claim, marked rate_snapshot.source = 'EXPENSE_CLAIM'); a claim approved
+    // before completion must not make the fee itself look "already paid" — that would leave the
+    // assayer's fee never raised.
+    const existing = await this.findFeePayable(assignmentId);
     if (existing) return { created: false, reason: 'payable already exists', payableId: existing.id };
 
     // The agreed fee is what the assayer negotiated and accepted for this job.
@@ -713,42 +766,54 @@ export class BillingEngineService implements OnModuleInit {
       : (rateCard ? Number(rateCard.travel_reimbursement ?? 0) : 0);
     const base = quotedTravel != null ? fee - travel : fee;
 
-    const payable = await this.createPayable({
-      assayerId: a.assayerId,
-      clientId: clientId ?? undefined,
-      projectId: a.projectId ?? undefined,
-      assignmentId: a.id,
-      baseAmount: base,
-      travelAmount: travel,
-      // Assayers are professional-service vendors: TDS is withheld from what we pay
-      // them, and no GST is added on our side unless they are registered. The withholding
-      // rate is configurable — it is set by tax law, which changes without this code changing
-      // — and it is captured on each payable, so a later change never restates an old one.
-      taxRate: 0,
-      tdsRate: await this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
-      // The snapshot must justify the amount actually booked. The payable is booked at the
-      // assignment's agreed fee, so `baseFee` here is that fee — not the assayer's standard
-      // profile rate, which was recorded before and disagreed with every payable (base_amount
-      // 2000 against a snapshot claiming 3406). The standard profile rate is kept alongside as
-      // context, clearly labelled, so "why did we pay this?" resolves to the agreed fee and the
-      // profile it was compared against, both immutable on the payable.
-      rateSnapshot: {
-        source: quotedTravel != null
-          ? 'assignment.agreedFee split by assignment.quotedTravelFee'
-          : 'assignment.agreedFee',
-        baseFee: base,
-        travelReimbursement: travel,
-        agreedFee: fee,
-        proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
-        quotedTravelFee: quotedTravel,
-        quotedTransportMode: a.quotedTransportMode ?? null,
-        profileStandardBaseFee: rateCard ? Number(rateCard.base_fee) : null,
-        profileTravelReimbursement: rateCard ? Number(rateCard.travel_reimbursement ?? 0) : null,
-        profileDailyRate: rateCard ? Number(rateCard.daily_rate) : null,
-        capturedAt: new Date().toISOString(),
-      },
-      remarks: `Auto-generated on completion of ${a.assignmentNumber}.`,
-    }, userId);
+    let payable: AssayerPayableEntity;
+    try {
+      payable = await this.createPayable({
+        assayerId: a.assayerId,
+        clientId: clientId ?? undefined,
+        projectId: a.projectId ?? undefined,
+        assignmentId: a.id,
+        baseAmount: base,
+        travelAmount: travel,
+        // Assayers are professional-service vendors: TDS is withheld from what we pay
+        // them, and no GST is added on our side unless they are registered. The withholding
+        // rate is configurable — it is set by tax law, which changes without this code changing
+        // — and it is captured on each payable, so a later change never restates an old one.
+        taxRate: 0,
+        tdsRate: await this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
+        // The snapshot must justify the amount actually booked. The payable is booked at the
+        // assignment's agreed fee, so `baseFee` here is that fee — not the assayer's standard
+        // profile rate, which was recorded before and disagreed with every payable (base_amount
+        // 2000 against a snapshot claiming 3406). The standard profile rate is kept alongside as
+        // context, clearly labelled, so "why did we pay this?" resolves to the agreed fee and the
+        // profile it was compared against, both immutable on the payable.
+        rateSnapshot: {
+          source: quotedTravel != null
+            ? 'assignment.agreedFee split by assignment.quotedTravelFee'
+            : 'assignment.agreedFee',
+          baseFee: base,
+          travelReimbursement: travel,
+          agreedFee: fee,
+          proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
+          quotedTravelFee: quotedTravel,
+          quotedTransportMode: a.quotedTransportMode ?? null,
+          profileStandardBaseFee: rateCard ? Number(rateCard.base_fee) : null,
+          profileTravelReimbursement: rateCard ? Number(rateCard.travel_reimbursement ?? 0) : null,
+          profileDailyRate: rateCard ? Number(rateCard.daily_rate) : null,
+          capturedAt: new Date().toISOString(),
+        },
+        remarks: `Auto-generated on completion of ${a.assignmentNumber}.`,
+      }, userId);
+    } catch (err) {
+      // Same race as syncAssignment: at-least-once delivery under a fail-open lock. The
+      // unique index on fee payables per assignment (migration 1790500000000) is the guard
+      // against a double payout; the loser reports the winner.
+      if (err instanceof DuplicateFeePayableError || isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')) {
+        const winner = await this.findFeePayable(assignmentId);
+        return { created: false, reason: 'payable already exists (concurrent sync)', payableId: winner?.id };
+      }
+      throw err;
+    }
 
     /**
      * The one-sided-ledger guard.
@@ -783,6 +848,23 @@ export class BillingEngineService implements OnModuleInit {
     }
 
     return { created: true, payableId: payable.id };
+  }
+
+  /**
+   * The fee payable for an assignment — never a reimbursement.
+   *
+   * Reimbursements are payables against the same assignment (one per approved expense claim),
+   * marked `rate_snapshot.source = 'EXPENSE_CLAIM'`. The predicate here is the same one the
+   * database enforces uniqueness on (`UQ_assayer_payables_fee_per_assignment`), so "does the fee
+   * payable exist" and "may another be inserted" can never disagree.
+   */
+  private findFeePayable(assignmentId: string): Promise<AssayerPayableEntity | null> {
+    return this.payableRepository
+      .createQueryBuilder('p')
+      .where('p.assignment_id = :assignmentId', { assignmentId })
+      .andWhere(`(p.rate_snapshot->>'source') IS DISTINCT FROM 'EXPENSE_CLAIM'`)
+      .orderBy('p.created_at', 'ASC')
+      .getOne();
   }
 
   private async createEntryFromAssignment(a: AssignmentEntity, clientId: string, userId: string): Promise<BillingEntryEntity> {
@@ -2053,6 +2135,7 @@ export class BillingEngineService implements OnModuleInit {
       applyTaxes(gross, { taxRate: dto.taxRate, tdsRate: dto.tdsRate });
 
     return this.inTx(async (m) => {
+    try {
     const payable = this.payableRepository.create({
       payableNumber: `PY-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
       assayerId: dto.assayerId,
@@ -2087,6 +2170,14 @@ export class BillingEngineService implements OnModuleInit {
       reason: dto.remarks ?? null,
     }, m);
     return saved;
+    } catch (err) {
+      // The auto-sync callers catch this themselves and report the winner; a manual creation
+      // through the API gets a clear refusal instead of a 500.
+      if (isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')) {
+        throw new DuplicateFeePayableError();
+      }
+      throw err;
+    }
     });
   }
 

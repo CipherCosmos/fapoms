@@ -16,6 +16,14 @@ import { AssayerPayableStatus } from '@fapoms/shared';
 @Index(['projectId'])
 @Index(['assignmentId'])
 @Index(['status'])
+// One FEE payable per assignment, enforced by the database. Expense reimbursements are payables
+// against the same assignment too (one per approved claim) and are marked by
+// rate_snapshot.source = 'EXPENSE_CLAIM', so they are excluded. Also in migration
+// 1790500000000-BillingUniquenessPerAssignment.
+@Index('UQ_assayer_payables_fee_per_assignment', ['assignmentId'], {
+  unique: true,
+  where: `"assignment_id" IS NOT NULL AND ("rate_snapshot"->>'source') IS DISTINCT FROM 'EXPENSE_CLAIM'`,
+})
 export class AssayerPayableEntity extends BaseEntity {
   @Column({ name: 'payable_number', length: 50, unique: true })
   payableNumber: string;

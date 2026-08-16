@@ -27,6 +27,14 @@ import { BillingLevel, BillingState, PaymentState, BillingPricingModel } from '@
 // `SELECT … FOR UPDATE WHERE invoice_id = …` in createInvoice/recordPayment — a sequential scan
 // held under a row lock without this. Also in 1790300000000-RestoreScaleIndexes.
 @Index('IDX_billing_entries_invoice_id', ['invoiceId'])
+// One root receivable per assignment, enforced by the database — split children share their
+// parent's assignment id and are excluded. Auto-billing runs from an at-least-once event under a
+// fail-open lock; without this a duplicate delivery could produce two lines for one job. Also in
+// migration 1790500000000-BillingUniquenessPerAssignment.
+@Index('UQ_billing_entries_root_per_assignment', ['assignmentId'], {
+  unique: true,
+  where: '"assignment_id" IS NOT NULL AND "parent_entry_id" IS NULL',
+})
 export class BillingEntryEntity extends BaseEntity {
   @Column({ name: 'entry_number', length: 50, unique: true })
   entryNumber: string;
