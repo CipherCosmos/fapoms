@@ -1,4 +1,22 @@
+import type { EntityManager } from 'typeorm';
 import { AuditEvent, AuditEventPage } from './audit-event';
+
+/**
+ * An open transaction an audit write should join.
+ *
+ * Without it the write goes out on its own pooled connection. Inside a business transaction
+ * that has two consequences the audit of 2026-08-16 found: the caller holds one connection and
+ * blocks for a second, so twenty concurrent transitions exhaust a twenty-connection pool and
+ * stall for the acquire timeout; and the audit row autocommits, so it survives a rollback of
+ * the very change it describes. Passing the transaction's manager makes the row commit or roll
+ * back with the change and takes no extra connection.
+ *
+ * Typed here rather than in `AuditService` so the service stays free of storage types; the
+ * TypeORM implementation is the only reader.
+ */
+export interface AuditWriteScope {
+  manager?: EntityManager;
+}
 
 /**
  * What the audit domain needs from storage, stated without reference to how storage works.
@@ -18,8 +36,11 @@ import { AuditEvent, AuditEventPage } from './audit-event';
  * directly, without a separate string symbol.
  */
 export abstract class AuditRepository {
-  /** Add one entry. There is deliberately no counterpart that removes or changes one. */
-  abstract append(event: AuditEvent): Promise<RecordedId>;
+  /**
+   * Add one entry. There is deliberately no counterpart that removes or changes one.
+   * With a scope, the entry joins that transaction — see AuditWriteScope.
+   */
+  abstract append(event: AuditEvent, scope?: AuditWriteScope): Promise<RecordedId>;
 
   abstract findForEntity(
     entityType: string,

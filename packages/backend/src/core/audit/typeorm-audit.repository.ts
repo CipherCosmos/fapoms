@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditEventEntity } from './audit-event.entity';
-import { AuditRepository, RecordedId } from './audit.repository';
+import { AuditRepository, AuditWriteScope, RecordedId } from './audit.repository';
 import { AuditEvent, AuditEventPage } from './audit-event';
 
 /**
@@ -22,8 +22,11 @@ export class TypeOrmAuditRepository extends AuditRepository {
     super();
   }
 
-  async append(event: AuditEvent): Promise<RecordedId> {
-    const row = this.events.create({
+  async append(event: AuditEvent, scope?: AuditWriteScope): Promise<RecordedId> {
+    // Inside a caller's transaction: write through its manager so the row shares the
+    // connection and the commit. Otherwise the injected repository (default connection).
+    const events = scope?.manager ? scope.manager.getRepository(AuditEventEntity) : this.events;
+    const row = events.create({
       category: event.category,
       eventType: event.eventType,
       entityType: event.entityType,
@@ -36,7 +39,7 @@ export class TypeOrmAuditRepository extends AuditRepository {
       remarks: event.remarks,
       metadata: event.metadata,
     });
-    const saved = await this.events.save(row);
+    const saved = await events.save(row);
     return { id: saved.id };
   }
 

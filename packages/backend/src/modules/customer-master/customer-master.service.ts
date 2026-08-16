@@ -176,7 +176,7 @@ export class CustomerMasterService {
         entityId: savedVersion.id,
         userId,
         remarks: `Uploaded Customer Master v${nextVersionNumber}. Total: ${totalRows}, Unique: ${accountSet.size}, Status: ${status}`,
-      });
+      }, { manager });
 
       return {
         versionId: savedVersion.id,
@@ -226,7 +226,7 @@ export class CustomerMasterService {
         entityId: saved.id,
         userId,
         remarks: `Approved Customer Master Version v${version.versionNumber} for project ${version.projectId}.`,
-      });
+      }, { manager });
 
       return saved;
     });

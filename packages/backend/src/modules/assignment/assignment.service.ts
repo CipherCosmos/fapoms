@@ -526,7 +526,7 @@ export class AssignmentService {
         remarks: isReassignment
           ? `Reassigned branch ${projectBranch.branch.name} to assayer ${assayer.displayName}. Proposed fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`
           : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`,
-      });
+      }, { manager });
 
       // Through the outbox rather than a post-commit publish: the event now commits with the
       // assignment and is redelivered if the process dies before it reaches the gateway. The
@@ -851,7 +851,7 @@ export class AssignmentService {
         newState: targetStatus,
         userId,
         remarks: reason ?? `Transitioned assignment to ${targetStatus}`,
-      });
+      }, { manager });
 
       // The status change is emitted through the outbox from inside the transaction, so it
       // commits atomically with the transition and survives a crash before delivery.

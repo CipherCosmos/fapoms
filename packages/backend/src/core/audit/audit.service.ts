@@ -11,7 +11,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import { AuditRepository } from './audit.repository';
+import { AuditRepository, AuditWriteScope } from './audit.repository';
 import { AuditEvent, AuditEventPage, RecordAuditEventInput } from './audit-event';
 
 export type CreateAuditEventDto = RecordAuditEventInput;
@@ -26,8 +26,8 @@ export class AuditService {
    * Record a business event in the audit trail.
    * This is an append-only operation.
    */
-  async recordEvent(dto: CreateAuditEventDto): Promise<{ id: string }> {
-    return this.repository.append(AuditEvent.record(dto));
+  async recordEvent(dto: CreateAuditEventDto, scope?: AuditWriteScope): Promise<{ id: string }> {
+    return this.repository.append(AuditEvent.record(dto), scope);
   }
 
   /**
@@ -40,9 +40,9 @@ export class AuditService {
    * trace anywhere, which for an audit business is the one failure that must never be silent.
    * This logs at error level instead, so a gap is detectable rather than invisible.
    */
-  async recordEventSafe(dto: CreateAuditEventDto): Promise<void> {
+  async recordEventSafe(dto: CreateAuditEventDto, scope?: AuditWriteScope): Promise<void> {
     try {
-      await this.recordEvent(dto);
+      await this.recordEvent(dto, scope);
     } catch (error) {
       this.logger.error(
         `AUDIT WRITE FAILED — ${dto.eventType} on ${dto.entityType}:${dto.entityId} was not recorded: ${
