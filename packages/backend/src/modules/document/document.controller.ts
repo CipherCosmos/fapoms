@@ -366,6 +366,37 @@ export class DocumentController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file content received.');
     }
+
+    /**
+     * The same content-type allow-list and size cap the presigned path applies.
+     *
+     * They were declared once and enforced only where a presigned URL is minted, so this route —
+     * the one the assayer app's "Scan & submit audited return" button actually uses, and the only
+     * upload path a field device takes — had neither. Verified against a running server: 60 MB of
+     * random bytes declared `application/zip` was accepted and stored as an AUDITED_RETURN_PDF,
+     * well over the documented 50 MB limit and a type that is not on the list at all.
+     *
+     * That matters twice over. The obvious half is storage: any signed-in assayer could fill the
+     * volume from a phone. The half that matters more is that everything here flows onward into
+     * OCR and data entry as though it were an audit return, so a file that is not what it claims
+     * enters the paperwork pipeline for a bank collateral audit.
+     *
+     * The declared type is still only a declaration — magic-byte sniffing remains the next layer,
+     * as the note on `ALLOWED_UPLOAD_TYPES` says. This closes the gap between the two upload
+     * routes; it does not pretend to be content verification.
+     */
+    const declaredType = (file.mimetype || 'application/pdf').toLowerCase();
+    if (!ALLOWED_UPLOAD_TYPES.has(declaredType)) {
+      throw new BadRequestException(
+        `${declaredType} files are not accepted here. Submit the audited return as a PDF or a photo.`,
+      );
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new BadRequestException(
+        `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB, over the ${(MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0)} MB limit. Scan at a lower quality, or split it.`,
+      );
+    }
+
     await this.assertMaySubmitReturnFor(req.user, assignmentId);
 
     let targetId = assessmentId || assignmentId;
