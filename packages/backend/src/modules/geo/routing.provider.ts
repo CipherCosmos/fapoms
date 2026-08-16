@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { CircuitBreaker } from '../../infrastructure/resilience/circuit-breaker';
+import { calculateHaversineDistance } from '@fapoms/shared';
 
 export type RoutingMode = 'driving' | 'walking' | 'cycling';
 
@@ -54,19 +55,33 @@ export class PostGISRoutingProvider implements RoutingProvider {
     return mode === 'walking' ? 5 : mode === 'cycling' ? 15 : 40;
   }
 
+  /**
+   * Great-circle distance and an implied duration.
+   *
+   * This used to ask Postgres — `SELECT ST_DistanceSphere(ST_MakePoint(...), ST_MakePoint(...))`
+   * — which touches no table at all: a pure trigonometric calculation sent over a socket, taken
+   * from the connection pool, and sent back. That is invisible for one call and ruinous for the
+   * pattern that actually uses it: the recommendation engine routes every candidate in the pool
+   * (hundreds), and the day planner builds a full distance matrix per assayer per cluster, so
+   * thousands of round trips competed for twenty pooled connections to compute arithmetic.
+   *
+   * `calculateHaversineDistance` from @fapoms/shared is the platform's one distance function —
+   * the geofence, the check-in record and the mobile app already measure with it. It differs
+   * from ST_DistanceSphere only in Earth radius (6371 vs PostGIS's 6371.008), which is 0.3 m
+   * over 233 km — a thousand times finer than the rounding this method already applies, and far
+   * below the accuracy of a geocoded branch address.
+   */
   async calculateRoute(
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     mode?: RoutingMode,
   ): Promise<RouteResult> {
-    const raw = await this.dataSource.query(
-      `SELECT ST_DistanceSphere(
-        ST_SetSRID(ST_MakePoint($1, $2), 4326),
-        ST_SetSRID(ST_MakePoint($3, $4), 4326)
-      ) / 1000 AS "distanceKm"`,
-      [origin.longitude, origin.latitude, destination.longitude, destination.latitude],
+    const distanceKm = calculateHaversineDistance(
+      origin.latitude,
+      origin.longitude,
+      destination.latitude,
+      destination.longitude,
     );
-    const distanceKm = raw[0]?.distanceKm ? parseFloat(raw[0].distanceKm) : 0;
     const speed = this.modeSpeed(mode);
     const durationMinutes = (distanceKm / speed) * 60;
     return {
@@ -80,6 +95,7 @@ export class PostGISRoutingProvider implements RoutingProvider {
     destinations: DestinationCoords[],
     mode?: RoutingMode,
   ): Promise<Record<string, RouteResult>> {
+    // In-process now, so this loop is arithmetic rather than one round trip per destination.
     const results: Record<string, RouteResult> = {};
     for (const dest of destinations) {
       results[dest.id] = await this.calculateRoute(origin, dest, mode);

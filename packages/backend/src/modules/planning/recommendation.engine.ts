@@ -6,6 +6,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, calculateHaversineDistance, businessDateKey, BypassableRule } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
@@ -146,6 +147,27 @@ export interface PlanningContext {
     doubleBookedByAssayer: Record<string, string>;
     /** Recent completed assignments per assayer, for the delivery-speed score. */
     completedByAssayer: Record<string, Array<{ completionDate: Date | null; createdAt: Date }>>;
+    /**
+     * The business rules that apply to this branch and client, loaded once.
+     *
+     * They do not depend on the assayer, yet the eligibility filter asked the database for them
+     * once per candidate — and again per blocked candidate when `explain()` re-ran the same
+     * evaluation for its reasons. On a pool of 300 that is 300+ identical queries per
+     * recommendation.
+     */
+    rules: BusinessRuleEntity[];
+    /** Times each assayer has already audited THIS branch (accepted or completed). */
+    priorVisitsByAssayer: Record<string, number>;
+    /**
+     * How many assignments each assayer has already ACCEPTED for the scheduled day, and where
+     * those branches are. Both were per-candidate queries that compared a `date` column against
+     * a JavaScript Date carrying a time — a comparison Postgres never satisfies — so the
+     * same-day overload penalty and the same-day grouping bonus have both been inert. Resolved
+     * here through the same date-only key the double-booking guard uses, which makes the two
+     * rules start applying; see the commit that introduced this.
+     */
+    sameDayAcceptedCountByAssayer: Record<string, number>;
+    sameDayBranchPointsByAssayer: Record<string, Array<{ latitude: number; longitude: number }>>;
   };
 }
 
@@ -443,7 +465,7 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       scheduledDate: context.scheduledDate,
       activeWorkload,
       restrictedAssayers: context.client?.restrictedAssayers,
-    });
+    }, context.branchFacts?.rules);
     // If any active rule block action fails, return false
     const blocked = results.some((r) => !r.passed && r.actionType === 'BLOCK');
     if (blocked && this.ruleBypass.isBypassedSync(BypassableRule.BUSINESS_RULE_ENGINE)) {
@@ -485,7 +507,7 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       scheduledDate: context.scheduledDate,
       activeWorkload,
       restrictedAssayers: context.client?.restrictedAssayers,
-    });
+    }, context.branchFacts?.rules);
     return results
       .filter((r) => !r.passed && r.actionType === 'BLOCK')
       .map((r) => r.message || 'Blocked by a business rule');
@@ -572,13 +594,17 @@ export class WorkloadScoreCalculator implements ScoreCalculator {
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
     // Committed work, matching every other capacity reader. Counting ACCEPTED alone treated an
     // assayer who was checked in at a branch, or mid-audit, as completely free.
-    const activeCount = await this.assignmentRepository.count({
-      where: {
-        assayerId: assayer.id,
-        status: In(COMMITTED_ASSIGNMENT_STATUSES),
-        isActive: true,
-      },
-    });
+    // The same grouped count the eligibility filter reads; the per-candidate count below is the
+    // standalone fallback.
+    const activeCount = context.branchFacts
+      ? (context.branchFacts.activeWorkloadByAssayer[assayer.id] ?? 0)
+      : await this.assignmentRepository.count({
+          where: {
+            assayerId: assayer.id,
+            status: In(COMMITTED_ASSIGNMENT_STATUSES),
+            isActive: true,
+          },
+        });
 
     const maxCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
     const remaining = Math.max(0, maxCapacity - activeCount);
@@ -881,37 +907,51 @@ export class BranchFamiliarityScoreCalculator implements ScoreCalculator {
     // 1. Branch History score — reward assayers who have previously audited this exact
     // branch (accepted or completed assignments only; the currently-open PENDING offer
     // being replaced is excluded since it isn't ACCEPTED/COMPLETED yet).
-    const priorVisits = await this.assignmentRepository.count({
-      where: {
-        assayerId: assayer.id,
-        projectBranch: { branchId: context.branch.id },
-        status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
-        isActive: true,
-      },
-      relations: ['projectBranch'],
-    });
+    // One grouped count for the whole pool arrives in context; the per-candidate count below
+    // remains for standalone use.
+    const priorVisits = context.branchFacts
+      ? (context.branchFacts.priorVisitsByAssayer[assayer.id] ?? 0)
+      : await this.assignmentRepository.count({
+          where: {
+            assayerId: assayer.id,
+            projectBranch: { branchId: context.branch.id },
+            status: In([AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED]),
+            isActive: true,
+          },
+          relations: ['projectBranch'],
+        });
     let score = 50 + Math.min(priorVisits, 3) * 15; // up to +45 for 3+ prior visits to this branch
 
     // 2. Same-Day Route Grouping Boost (for maximizing auditor utilization in one day)
     if (context.scheduledDate) {
-      const sameDayAssignments = await this.assignmentRepository.find({
-        where: {
-          assayerId: assayer.id,
-          scheduledDate: context.scheduledDate,
-          isActive: true,
-        },
-        relations: ['projectBranch', 'projectBranch.branch'],
-      });
+      // Where this assayer is already booked that day. Preloaded for the whole pool in one
+      // query; the per-candidate fallback keeps standalone use working. Note the fallback
+      // compares the `date` column against a Date carrying a time, which Postgres never
+      // matches — the preloaded path uses the date-only key and therefore actually fires.
+      const sameDayPoints = context.branchFacts
+        ? (context.branchFacts.sameDayBranchPointsByAssayer[assayer.id] ?? [])
+        : (
+            await this.assignmentRepository.find({
+              where: {
+                assayerId: assayer.id,
+                scheduledDate: context.scheduledDate,
+                isActive: true,
+              },
+              relations: ['projectBranch', 'projectBranch.branch'],
+            })
+          )
+            .map((assign) => assign.projectBranch?.branch)
+            .filter((br): br is NonNullable<typeof br> => Boolean(br?.latitude && br?.longitude))
+            .map((br) => ({ latitude: Number(br.latitude), longitude: Number(br.longitude) }));
 
       let hasNearbyGrouping = false;
-      for (const assign of sameDayAssignments) {
-        const otherBranch = assign.projectBranch?.branch;
-        if (otherBranch && otherBranch.latitude && otherBranch.longitude && context.branch.latitude && context.branch.longitude) {
+      for (const point of sameDayPoints) {
+        if (context.branch.latitude && context.branch.longitude) {
           const dist = calculateHaversineDistance(
             Number(context.branch.latitude),
             Number(context.branch.longitude),
-            Number(otherBranch.latitude),
-            Number(otherBranch.longitude)
+            point.latitude,
+            point.longitude,
           );
           if (dist <= 30) {
             hasNearbyGrouping = true;
@@ -961,14 +1001,18 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
 
     // 2. Same-Day Task Load (Overload increases SLA breach risk)
     if (context.scheduledDate) {
-      const activeSameDayCount = await this.assignmentRepository.count({
-        where: {
-          assayerId: assayer.id,
-          scheduledDate: context.scheduledDate,
-        status: In([AssignmentStatus.ACCEPTED]),
-          isActive: true,
-        },
-      });
+      // Preloaded for the whole pool; see sameDayAcceptedCountByAssayer for why the
+      // per-candidate fallback below never actually counted anything.
+      const activeSameDayCount = context.branchFacts
+        ? (context.branchFacts.sameDayAcceptedCountByAssayer[assayer.id] ?? 0)
+        : await this.assignmentRepository.count({
+            where: {
+              assayerId: assayer.id,
+              scheduledDate: context.scheduledDate,
+              status: In([AssignmentStatus.ACCEPTED]),
+              isActive: true,
+            },
+          });
 
       if (activeSameDayCount >= 3) {
         score -= 40; // Heavy schedule risks missing SLA target
@@ -1197,6 +1241,11 @@ export class RecommendationEngine {
     private readonly commercialRepositoryForFacts: Repository<AssayerCommercialProfileEntity>,
     @InjectRepository(ValidationQueryEntity)
     private readonly queryRepositoryForFacts: Repository<ValidationQueryEntity>,
+    /**
+     * Used only to preload this branch's rule set once per recommendation — the eligibility
+     * filter then evaluates every candidate against that same list instead of re-reading it.
+     */
+    private readonly ruleEngine: RuleEngine,
     private readonly engineRoutingService: RoutingService,
     private readonly assayerService: AssayerService,
   ) {
@@ -1591,7 +1640,17 @@ export class RecommendationEngine {
      * 4N round trips producing values that a single grouped query returns in one.
      */
     const assayerIds = assayers.map((a) => a.id);
-    const [profileRows, queryRows, totalRows, acceptedRows, doubleBookedRows, completedRows] = await Promise.all([
+    const [
+      profileRows,
+      queryRows,
+      totalRows,
+      acceptedRows,
+      doubleBookedRows,
+      completedRows,
+      rules,
+      priorVisitRows,
+      sameDayRows,
+    ] = await Promise.all([
       assayerIds.length
         ? this.commercialRepositoryForFacts.find({
             where: { assayerId: In(assayerIds), isActive: true },
@@ -1663,7 +1722,67 @@ export class RecommendationEngine {
             order: { createdAt: 'DESC' },
           }).catch(() => [])
         : Promise.resolve([]),
+      // The rules for this branch and client. Identical for every candidate, so loaded once —
+      // through the engine's own loader, so the two paths cannot drift apart.
+      this.ruleEngine
+        .loadRules({ id: branch.id, clientId: (branch as any).clientId })
+        .catch(() => [] as BusinessRuleEntity[]),
+      // Prior visits to THIS branch, per candidate.
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .innerJoin('a.projectBranch', 'pb')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('a.isActive = true')
+            .andWhere('pb.branchId = :branchId', { branchId: branch.id })
+            .andWhere('a.status IN (:...statuses)', {
+              statuses: [AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED],
+            })
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('a.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      // Everything each candidate is already booked for that day, with the branch coordinates
+      // the grouping bonus measures against. Matched on the date-only business key — the
+      // per-candidate versions of this compared the `date` column with a Date carrying a time,
+      // which Postgres never satisfies, so both same-day rules were inert.
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .innerJoin('a.projectBranch', 'pb')
+            .innerJoin('pb.branch', 'br')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('a.status', 'status')
+            .addSelect('br.latitude', 'latitude')
+            .addSelect('br.longitude', 'longitude')
+            .where('a.isActive = true')
+            .andWhere('a.scheduledDate = :day', { day: businessDateKey(scheduledDate) })
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
     ]);
+
+    const priorVisitsByAssayer = (priorVisitRows as any[]).reduce<Record<string, number>>((acc, r) => {
+      acc[r.assayerId] = Number(r.count) || 0;
+      return acc;
+    }, {});
+
+    const sameDayAcceptedCountByAssayer: Record<string, number> = {};
+    const sameDayBranchPointsByAssayer: Record<string, Array<{ latitude: number; longitude: number }>> = {};
+    for (const row of sameDayRows as any[]) {
+      if (row.status === AssignmentStatus.ACCEPTED) {
+        sameDayAcceptedCountByAssayer[row.assayerId] = (sameDayAcceptedCountByAssayer[row.assayerId] ?? 0) + 1;
+      }
+      if (row.latitude != null && row.longitude != null) {
+        (sameDayBranchPointsByAssayer[row.assayerId] ??= []).push({
+          latitude: Number(row.latitude),
+          longitude: Number(row.longitude),
+        });
+      }
+    }
 
     const doubleBookedByAssayer = (doubleBookedRows as any[]).reduce<Record<string, string>>((acc, r) => {
       acc[r.assayerId] = r.assignmentNumber ?? 'an existing assignment';
@@ -1715,6 +1834,10 @@ export class RecommendationEngine {
       assignmentTotalsByAssayer,
       doubleBookedByAssayer,
       completedByAssayer,
+      rules: rules as BusinessRuleEntity[],
+      priorVisitsByAssayer,
+      sameDayAcceptedCountByAssayer,
+      sameDayBranchPointsByAssayer,
     };
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this

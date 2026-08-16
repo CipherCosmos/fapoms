@@ -45,10 +45,15 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
 
-  /** Grouped-count query builder shape used by the engine's fact resolution. */
+  /**
+   * Grouped-count query builder shape used by the engine's fact resolution. `innerJoin` is here
+   * because the prior-visit and same-day preloads reach through project_branches to the branch.
+   */
   const groupedCountBuilder = () => ({
     select: jest.fn().mockReturnThis(),
     addSelect: jest.fn().mockReturnThis(),
+    innerJoin: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     groupBy: jest.fn().mockReturnThis(),
@@ -113,6 +118,9 @@ describe('RecommendationEngine', () => {
 
   const mockRuleEngine = {
     evaluate: jest.fn().mockResolvedValue([{ passed: true, actionType: 'ALERT' }]),
+    // The engine preloads this branch's rules once and hands them to every candidate's
+    // evaluation, instead of the filter re-reading them per assayer.
+    loadRules: jest.fn().mockResolvedValue([]),
   };
 
   /**

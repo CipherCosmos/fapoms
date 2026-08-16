@@ -40,14 +40,31 @@ export class RuleEngine {
   /**
    * Evaluates all applicable business rules for the given subject and target context.
    */
-  async evaluate(context: RuleEvaluationContext): Promise<RuleResult[]> {
-    const rules = await this.ruleRepository.find({
+  /**
+   * The rules that apply to one target, loaded from the database.
+   *
+   * Split out of `evaluate` so a caller that evaluates the SAME target many times — the
+   * recommendation engine asks these rules about every candidate assayer in the pool, and the
+   * rules do not depend on the assayer at all — can load them once and hand them back in.
+   * Sharing the loader rather than reimplementing the `where` keeps the two paths from drifting
+   * apart: a rule that a preloading caller misses is a rule that silently stops applying.
+   */
+  loadRules(target: RuleEvaluationTarget): Promise<BusinessRuleEntity[]> {
+    return this.ruleRepository.find({
       where: [
         { scope: 'GLOBAL', isActive: true },
-        { scope: 'CLIENT', targetId: context.target.clientId || undefined, isActive: true },
-        { scope: 'BRANCH', targetId: context.target.id, isActive: true },
+        { scope: 'CLIENT', targetId: target.clientId || undefined, isActive: true },
+        { scope: 'BRANCH', targetId: target.id, isActive: true },
       ],
     });
+  }
+
+  /**
+   * Evaluate every applicable rule. `preloadedRules` skips the lookup for callers that already
+   * hold this target's rules (see loadRules); omitted, the rules are fetched as before.
+   */
+  async evaluate(context: RuleEvaluationContext, preloadedRules?: BusinessRuleEntity[]): Promise<RuleResult[]> {
+    const rules = preloadedRules ?? (await this.loadRules(context.target));
 
     const results: RuleResult[] = [];
 

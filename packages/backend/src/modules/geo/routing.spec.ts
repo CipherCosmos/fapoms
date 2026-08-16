@@ -50,22 +50,18 @@ describe('Geo Routing & Optimization', () => {
         { id: 'branch-1', latitude: 1, longitude: 0 },
       ];
 
-      // Mock PostGIS distance query (ST_DistanceSphere returns meters)
-      // (0,0) to (0,1) = 111.3 * 1000 meters
-      // (0,0) to (0,2) = 222.6 * 1000 meters
-      // (0,1) to (0,2) = 111.3 * 1000 meters
-      mockDataSource.query.mockImplementation(async (sql, params) => {
-        const fromLat = params[1];
-        const toLat = params[3];
-        const distanceKm = Math.abs(fromLat - toLat) * 111.3;
-        return [{ distanceKm }];
-      });
-
+      // No mock: the provider computes great-circle distance in process rather than asking
+      // Postgres for arithmetic, so this now exercises the real maths. One degree of latitude
+      // is 111.19 km (R = 6371 km), and each leg is rounded to 2dp before being summed:
+      // 111.19 + 111.19 = 222.38. The old expectation of 222.6 came from this test's own mock,
+      // which invented 111.3 km per degree.
       const result = await postGISProvider.optimizeRoute(origin, destinations, false);
 
       expect(result.optimizedSequence).toEqual(['branch-1', 'branch-2']);
-      expect(result.totalDistanceKm).toBe(222.6);
+      expect(result.totalDistanceKm).toBe(222.38);
       expect(result.steps.length).toBe(2);
+      // And no database round trip was taken to work that out.
+      expect(mockDataSource.query).not.toHaveBeenCalled();
     });
 
     it('should include return path to origin when roundTrip is enabled', async () => {
@@ -74,12 +70,12 @@ describe('Geo Routing & Optimization', () => {
         { id: 'branch-1', latitude: 0, longitude: 1 },
       ];
 
-      mockDataSource.query.mockResolvedValue([{ distanceKm: 111.3 }]);
-
       const result = await postGISProvider.optimizeRoute(origin, destinations, true);
 
       expect(result.optimizedSequence).toEqual(['branch-1']);
-      expect(result.totalDistanceKm).toBe(222.6); // 111.3 to branch-1 + 111.3 back to origin
+      // 111.19 out to branch-1 on the equator + 111.19 back to origin, each rounded to 2dp.
+      expect(result.totalDistanceKm).toBe(222.38);
+      expect(mockDataSource.query).not.toHaveBeenCalled();
     });
   });
 });
