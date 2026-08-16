@@ -95,6 +95,8 @@ export class RuleBypassService {
       enabledByName: window.enabledByName,
       enabledAt: window.startsAt.toISOString(),
       expiresAt: window.expiresAt.toISOString(),
+      // What the window has actually waved through so far — see `RuleBypassState.usageCounts`.
+      usageCounts: (window.usageCounts ?? {}) as RuleBypassState['usageCounts'],
     };
   }
 

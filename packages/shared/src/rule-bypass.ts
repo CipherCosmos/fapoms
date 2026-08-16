@@ -190,6 +190,19 @@ export interface RuleBypassState {
   enabledByName: string | null;
   enabledAt: string | null;
   expiresAt: string | null;
+  /**
+   * How many times each suspended rule has actually been skipped in this window.
+   *
+   * "Suspended" and "already used to wave something through" are different facts, and the second
+   * is the one an administrator needs. A window that has been open an hour and skipped nothing is
+   * a forgotten switch; one that has accepted a check-in 900 km from the branch is a record that
+   * needs looking at. This was tracked from the first version but never returned by the state
+   * endpoint, so the screen offering to turn the bypass off could not show what it had already
+   * done — the only way to find out was to read the audit log or the database.
+   *
+   * Keyed by rule; absent keys mean that rule has not been reached yet.
+   */
+  usageCounts: Partial<Record<BypassableRule, number>>;
 }
 
 export const INACTIVE_BYPASS: RuleBypassState = {
@@ -200,6 +213,7 @@ export const INACTIVE_BYPASS: RuleBypassState = {
   enabledByName: null,
   enabledAt: null,
   expiresAt: null,
+  usageCounts: {},
 };
 
 /** True when `rule` is currently suspended by `state`. Expiry is enforced by the caller. */

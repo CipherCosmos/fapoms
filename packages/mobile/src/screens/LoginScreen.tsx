@@ -204,6 +204,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [focused, setFocused] = useState<'user' | 'pass' | 'server' | null>(null);
 
+
   // ── Server address ──────────────────────────────────────────────────────────
   const biometricsEnabled = getPreference('biometrics');
   const [showServerSettings, setShowServerSettings] = useState(false);
