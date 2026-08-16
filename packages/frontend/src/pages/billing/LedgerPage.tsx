@@ -126,7 +126,8 @@ const LedgerBody: React.FC<{ data: EntityLedger }> = ({ data }) => {
           <SimpleTable
             head={['When', 'Action', 'From', 'To', 'By', 'Reason']}
             rows={data.history.map((h) => [
-              new Date(h.occurredAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+              // `createdAt`, not `occurredAt` — see the billing history endpoint's response shape.
+              new Date(h.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
               h.action, h.fromState ?? '—', h.toState ?? '—', h.userName ?? 'System', h.reason ?? '',
             ])}
           />

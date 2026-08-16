@@ -388,13 +388,25 @@ export const OperationsInbox: React.FC = () => {
                       className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                       {busy ? 'Saving…' : `Accept ${inr(item.proposedFee)}`}
                     </button>
+                    {/*
+                      This inbox transcribes a phone call — every action here records what the
+                      assayer said, it does not send them anything. `counter()` posts the amount as
+                      the assayer's new asking price ("Fee requested on call, recorded by the desk")
+                      and the row then offers "Accept ₹X".
+
+                      Labelling it "Counter back…" with a "Counter ₹" placeholder said the opposite:
+                      that the desk was making its own counter-offer. An operator who typed the
+                      figure *they* wanted to pay had it filed as the assayer's demand, and one more
+                      click locked that fee in — with the call log and audit trail both recording
+                      that the assayer had asked for it.
+                    */}
                     <button onClick={() => { setFeeInput(''); setOpenForm({ id: item.id, kind: 'counter' }); }} disabled={busy}
                       className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--warning)' }}>
-                      Counter back…
+                      Record their ask…
                     </button>
                     {openForm?.id === item.id && openForm.kind === 'counter' && (
                       <>
-                        {miniInput('Counter ₹', feeInput, setFeeInput)}
+                        {miniInput('They asked ₹', feeInput, setFeeInput)}
                         <button onClick={() => counter(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--warning)', borderColor: 'var(--warning)' }}>Send</button>
                       </>
                     )}

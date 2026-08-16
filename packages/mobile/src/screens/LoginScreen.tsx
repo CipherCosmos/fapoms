@@ -6,7 +6,7 @@ import {
 import { useTheme } from '../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
-import { probeServerUrl, normaliseServerUrl } from '../services/server-config';
+import { probeServerUrl, normaliseServerUrl, isBlockedCleartext, CLEARTEXT_REFUSED } from '../services/server-config';
 import { getPreference } from '../services/preferences';
 
 interface LoginScreenProps {
@@ -148,17 +148,31 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  /** So the code field's "Next" key can hand focus on, rather than being decorative. */
+  const passwordRef = useRef<TextInput>(null);
 
   const handleLoginPress = async () => {
+    // A second tap while the first is in flight would issue a second sign-in, and on a slow
+    // field connection that is the normal reaction to a button that has not visibly responded.
+    if (authenticating) return;
+
     setErrorMsg(null);
-    if (!username || !password) {
+    /**
+     * Trimmed, because the code is never surrounded by spaces but frequently arrives that way:
+     * pasted from a roster message, or with the trailing space Android's keyboard adds after an
+     * autocorrect suggestion. Untrimmed it reaches the server as a code that does not exist and
+     * comes back "Invalid credentials", which sends the assayer hunting for a typo they cannot
+     * see. The password is deliberately NOT trimmed — leading or trailing spaces may be part of it.
+     */
+    const code = username.trim();
+    if (!code || !password) {
       setErrorMsg('Please enter both Assayer Code and Password.');
       return;
     }
     setInternalLoading(true);
     try {
       if (onLogin) {
-        const res: any = await onLogin(username, password);
+        const res: any = await onLogin(code, password);
         if (res === false || (typeof res === 'object' && res?.success === false)) {
           setErrorMsg(res?.error || 'Invalid credentials. Please try again.');
         }
@@ -218,6 +232,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   const handleSaveServer = async () => {
+    // Refused here as well as in Test, so an address this build will never be allowed to reach
+    // cannot be stored and then quietly fail at every sign-in afterwards.
+    if (isBlockedCleartext(serverUrl)) {
+      setProbeResult({ ok: false, message: CLEARTEXT_REFUSED });
+      return;
+    }
+
     try {
       const saved = await setApiBaseUrl(serverUrl);
       setServerUrl(saved.replace(/\/api\/v1$/, ''));
@@ -311,6 +332,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   autoCorrect={false}
                   style={inputStyle}
                   returnKeyType="next"
+                  /**
+                   * The keyboard has always shown a "Next" key here and nothing was wired to it,
+                   * so pressing it did nothing at all — the assayer had to dismiss the keyboard
+                   * and aim at the password field. `blurOnSubmit={false}` keeps the keyboard up
+                   * across the handover; without it the keyboard closes and reopens, which on
+                   * Android drops the focus this is trying to move.
+                   */
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => passwordRef.current?.focus()}
                 />
               </View>
             </View>
@@ -320,6 +350,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <View style={inputWrap(focused === 'pass')}>
                 <Icon name="lock-closed-outline" size={18} color={focused === 'pass' ? t.colors.primary : t.colors.textFaint} />
                 <TextInput
+                  ref={passwordRef}
                   value={password}
                   onChangeText={setPassword}
                   onFocus={() => setFocused('pass')}
@@ -333,7 +364,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   returnKeyType="go"
                   onSubmitEditing={handleLoginPress}
                 />
-                <Pressable onPress={() => setShowPassword((v) => !v)} hitSlop={10}>
+                <Pressable
+                  onPress={() => setShowPassword((v) => !v)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                >
                   <Icon name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
                 </Pressable>
               </View>
@@ -375,11 +411,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               unreachable exactly when it is needed. The address used to be fixed at build time,
               defaulting to an Android-emulator-only alias that no real handset can resolve. */}
           <View style={{ alignItems: 'center', gap: t.space.sm }}>
+            {/* The address itself, not just a way in to it.
+                Pointing at the wrong backend produces "Invalid credentials" — the same message a
+                mistyped password gives — so the one fact that distinguishes the two was hidden
+                behind a tap nobody takes until they are already stuck. Shown as the bare host so
+                a wrong port is visible at a glance, which is exactly how this was mis-set. */}
             <Tappable onPress={() => { setShowServerSettings((v) => !v); setProbeResult(null); }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: t.space.xs }}>
                 <Icon name="server-outline" size={14} color={t.colors.textFaint} />
                 <AppText variant="caption" tone="faint">
-                  {showServerSettings ? 'Hide server settings' : 'Server settings'}
+                  {showServerSettings
+                    ? 'Hide server settings'
+                    : serverUrl.replace(/^https?:\/\//, '') || 'Server settings'}
                 </AppText>
               </View>
             </Tappable>

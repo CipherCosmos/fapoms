@@ -23,6 +23,10 @@ export interface ProjectOption {
 export interface ZoneOption {
   id: string;
   name: string;
+  /** Null for a zone available to every client. Zone names repeat across clients — "West Zone"
+   *  exists once per bank — so anything offering zones in a flat list needs this to tell them
+   *  apart. */
+  clientId?: string | null;
 }
 
 export interface TravelRates {
@@ -32,7 +36,17 @@ export interface TravelRates {
 
 export const getProjects = () => api.request<ProjectOption[]>('/projects', { method: 'GET' });
 
-export const getZones = () => api.request<ZoneOption[]>('/zones?limit=100');
+/**
+ * Zones, optionally narrowed to one client's.
+ *
+ * Zones are per-client (`zones.client_id`) and the branch import creates a set for each client, so
+ * an unfiltered list shows "East Zone, East Zone, North Zone, South Zone, South Zone…" — the same
+ * names repeated with different ids and nothing on screen to tell them apart. In a view already
+ * scoped to one project, only that project's client's zones can match anything; picking one of the
+ * others silently returns nothing.
+ */
+export const getZones = (clientId?: string) =>
+  api.request<ZoneOption[]>(`/zones?limit=100${clientId ? `&clientId=${encodeURIComponent(clientId)}` : ''}`);
 
 /**
  * Branches for a project. Caller supplies its own ProjectBranch type.

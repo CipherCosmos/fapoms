@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Platform } from 'react-native';
+import Constants from 'expo-constants';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Icon } from './ui/primitives';
 import { MapRenderProps } from './MapWeb';
@@ -8,6 +9,30 @@ import { MapRenderProps } from './MapWeb';
 // Android: Google Maps provider with live traffic layer + follow-camera nav.
 // iOS: Apple Maps provider (free) with live traffic layer.
 const IS_ANDROID = Platform.OS === 'android';
+
+/**
+ * Whether this build actually carries a Google Maps key.
+ *
+ * `app.config.js` fills both of these from `GOOGLE_MAPS_API_KEY`, and when that variable is
+ * empty — which it is in this deployment — the key becomes `''` and prebuild writes no usable
+ * `com.google.android.geo.API_KEY` into the manifest at all. Confirmed by dumping the manifest
+ * out of the built APK: the meta-data entry is simply absent.
+ *
+ * Mounting `PROVIDER_GOOGLE` in that state does not degrade. `react-native-maps` fails to create
+ * the native map view, and it takes the Activity with it — so the map screen becomes a crash
+ * rather than a missing feature, and the assayer loses the app mid-journey.
+ *
+ * An empty string is not a key: `.trim()` before deciding, because `''` and `'   '` both arrive
+ * from an unset variable and both look truthy to a careless check.
+ */
+const GOOGLE_MAPS_KEY: string = (
+  (Constants.expoConfig as any)?.android?.config?.googleMaps?.apiKey
+  || (Constants.expoConfig as any)?.extra?.googleMapsApiKey
+  || ''
+).trim();
+
+/** Google Maps is only required on Android; iOS renders through Apple Maps, which needs no key. */
+const CAN_RENDER_MAP = !IS_ANDROID || GOOGLE_MAPS_KEY.length > 0;
 const MapViewComponent = MapView as unknown as React.ComponentType<any>;
 const MarkerComponent = Marker as unknown as React.ComponentType<any>;
 const PolylineComponent = Polyline as unknown as React.ComponentType<any>;
@@ -57,6 +82,40 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
   const passed = passedIndex != null && passedIndex >= 1 ? Math.min(passedIndex, routeCoords.length - 1) : -1;
   const travelled = passed >= 1 ? routeCoords.slice(0, passed + 1) : [];
   const upcoming = passed >= 0 ? routeCoords.slice(passed + 1) : routeCoords;
+
+  /**
+   * No key — say so, and keep the screen useful.
+   *
+   * The destination coordinates are the part an assayer can still act on: they can be read out,
+   * or pasted into whatever maps app is already on the handset. Losing the embedded map is an
+   * inconvenience; losing the Activity is the end of the journey.
+   */
+  if (!CAN_RENDER_MAP) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          padding: 24,
+          backgroundColor: '#090d16',
+        }}
+      >
+        <Icon name="map-outline" size={28} color="#64748b" />
+        <Text style={{ color: '#e2e8f0', fontSize: 15, fontWeight: '700', textAlign: 'center' }}>
+          Map unavailable in this build
+        </Text>
+        <Text style={{ color: '#94a3b8', fontSize: 12, lineHeight: 18, textAlign: 'center' }}>
+          This app was built without a Google Maps key, so the map cannot be shown. Everything else
+          works — including check-in.
+        </Text>
+        <Text style={{ color: '#64748b', fontSize: 12, marginTop: 6 }} selectable>
+          Destination: {destination.latitude.toFixed(5)}, {destination.longitude.toFixed(5)}
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>

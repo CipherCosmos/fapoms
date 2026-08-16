@@ -162,13 +162,21 @@ export const ReviewsQueue: React.FC = () => {
       {showBulk && (
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '12px' }}>
           <span style={{ color: 'var(--text-muted)' }}>{sel.size} selected</span>
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (optional)"
+          {/*
+            The note is optional to approve and required to reject. Sending work back without
+            saying what is wrong leaves the data-entry operator looking at a case marked
+            "CORRECTION REQUIRED" with nothing anywhere on the screen telling them what to fix —
+            and the case-level "Request correction" control has always required notes, so the same
+            decision had opposite rules depending on which screen you made it from.
+          */}
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (required to send back)"
             style={{ flex: '1 1 220px', padding: '6px 10px', fontSize: '12px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }} />
           <button onClick={() => bulkDecide('APPROVED')} disabled={sel.size === 0 || busy === '__bulk__'} className="btn btn-primary"
             style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto' }}>
             {busy === '__bulk__' ? 'Saving…' : 'Approve selected'}
           </button>
-          <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={sel.size === 0 || busy === '__bulk__'} className="btn btn-secondary"
+          <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={sel.size === 0 || busy === '__bulk__' || !note.trim()} className="btn btn-secondary"
+            title={!note.trim() ? 'Add a note saying what needs correcting' : undefined}
             style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}>
             Send back for rework
           </button>

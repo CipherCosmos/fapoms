@@ -28,7 +28,8 @@ import { FileScanInterceptor } from '../../infrastructure/security/file-scan.int
 
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -37,23 +38,51 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { UserEntity } from '../user/user.entity';
 
+/**
+ * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
+ *
+ * Without it `"   "` is a non-empty string to class-validator and to the browser's `required`
+ * attribute alike, and a project could be created whose name renders as a blank row in every list
+ * and as a nameless option in every picker.
+ */
+const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
+
+/**
+ * An audit window that ends before it starts is not a window.
+ *
+ * It was accepted, and the projects list then labelled the brand-new project "13d overdue" —
+ * a false alarm on the same screen operations uses to triage what is actually late.
+ */
+@ValidatorConstraint({ name: 'endsAfterStart', async: false })
+class EndsAfterStartConstraint implements ValidatorConstraintInterface {
+  validate(endDate: string | undefined, args: ValidationArguments) {
+    const startDate = (args.object as { startDate?: string }).startDate;
+    if (!endDate || !startDate) return true;
+    return new Date(endDate).getTime() >= new Date(startDate).getTime();
+  }
+
+  defaultMessage() {
+    return 'endDate must be on or after startDate';
+  }
+}
+
 export class CreateProjectRequestDto implements CreateProjectDto {
-  @IsString() @IsNotEmpty() name: string;
-  @IsString() @IsNotEmpty() projectNumber: string;
-  @IsOptional() @IsString() description?: string;
-  @IsString() @IsNotEmpty() clientId: string;
-  @IsString() @IsNotEmpty() priority: string;
-  @IsOptional() @IsString() startDate?: string;
-  @IsOptional() @IsString() endDate?: string;
-  @IsOptional() @IsNumber() budget?: number;
-  @IsOptional() @IsString() scope?: string;
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name: string;
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) projectNumber: string;
+  @IsOptional() @IsString() @MaxLength(2000) description?: string;
+  @IsUUID() clientId: string;
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority: string;
+  @IsOptional() @IsDateString() startDate?: string;
+  @IsOptional() @IsDateString() @Validate(EndsAfterStartConstraint) endDate?: string;
+  @IsOptional() @IsNumber() @Min(0) budget?: number;
+  @IsOptional() @IsString() @MaxLength(5000) scope?: string;
   @IsOptional() @IsArray() requiredSkills?: string[];
   @IsOptional() @IsArray() requiredCertifications?: string[];
   @IsOptional() @IsObject() sla?: Record<string, any>;
   @IsOptional() @IsObject() risks?: Record<string, any>;
   @IsOptional() @IsObject() milestones?: Record<string, any>;
   @IsOptional() @IsObject() dependencies?: Record<string, any>;
-  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() @MaxLength(50) status?: string;
 }
 
 /**
@@ -61,15 +90,16 @@ export class CreateProjectRequestDto implements CreateProjectDto {
  * resending — and without overwriting — the rest of the record.
  */
 class UpdateProjectRequestDto {
-  @IsOptional() @IsString() name?: string;
-  @IsOptional() @IsString() projectNumber?: string;
-  @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsString() clientId?: string;
-  @IsOptional() @IsString() priority?: string;
-  @IsOptional() @IsString() startDate?: string;
-  @IsOptional() @IsString() endDate?: string;
-  @IsOptional() @IsNumber() budget?: number;
-  @IsOptional() @IsString() scope?: string;
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name?: string;
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) projectNumber?: string;
+  @IsOptional() @IsString() @MaxLength(2000) description?: string;
+  @IsOptional() @IsUUID() clientId?: string;
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority?: string;
+  @IsOptional() @IsDateString() startDate?: string;
+  // Same window rule as create — an edit must not be able to invert what create refused.
+  @IsOptional() @IsDateString() @Validate(EndsAfterStartConstraint) endDate?: string;
+  @IsOptional() @IsNumber() @Min(0) budget?: number;
+  @IsOptional() @IsString() @MaxLength(5000) scope?: string;
   @IsOptional() @IsArray() requiredSkills?: string[];
   @IsOptional() @IsArray() requiredCertifications?: string[];
   @IsOptional() @IsObject() sla?: Record<string, any>;
@@ -373,6 +403,10 @@ export class ProjectController {
         updated: report.updated,
         linked: report.linked,
         skipped: report.skipped,
+        // Rows that imported but landed on a fallback coordinate. Distinct from `skipped` — these
+        // branches exist, they just cannot be planned or checked into until someone corrects
+        // where they are, so the operator has to be told while the import is still in front of them.
+        imprecise: report.imprecise,
       },
     };
   }

@@ -9,7 +9,7 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
-import { EventCategory, ScheduleStatus, ProjectBranchStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, ProjectBranchStatus, AssignmentStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
@@ -239,13 +239,43 @@ export class SchedulingService {
     if (targetStatus === ScheduleStatus.COMPLETED) {
       schedule.completedAt = new Date();
 
-      // Cascade: complete the parent assignment (sets completionDate, transitions branch to AUDIT_COMPLETED)
+      /**
+       * Cascade: complete the parent assignment (sets completionDate, transitions branch to
+       * AUDIT_COMPLETED, opens the validation case and books the payable).
+       *
+       * The cascade failure used to be swallowed with a `console.warn`, and the schedule was saved
+       * as COMPLETED regardless. Marking a visit complete before the assayer had checked in
+       * therefore left the schedule COMPLETED, the assignment stuck on ACCEPTED and the branch on
+       * ASSIGNMENT_CONFIRMED — an audit that reads as finished on every screen, never reaches
+       * validation, and is never billed. It could not even be repaired: the guard at the top of
+       * this method refuses to reschedule anything whose schedule is already COMPLETED, so the
+       * work was stranded permanently.
+       *
+       * The two now succeed or fail together. An assignment that is already COMPLETED (the
+       * document-upload path got there first) is the one benign case and stays idempotent.
+       */
       if (schedule.assignmentId) {
-        try {
-          await this.assignmentService.completeAssignment(schedule.assignmentId, userId, 'Completed via schedule dispatch');
-        } catch (err) {
-          // Assignment may already be completed (e.g., completed via document upload path)
-          console.warn('Assignment completion cascade skipped:', err.message);
+        const assignment = schedule.assignment ?? (await this.assignmentService.findOne(schedule.assignmentId));
+
+        if (assignment?.status !== AssignmentStatus.COMPLETED) {
+          try {
+            await this.assignmentService.completeAssignment(
+              schedule.assignmentId,
+              userId,
+              'Completed via schedule dispatch',
+            );
+          } catch (err) {
+            /**
+             * Refuse the whole transition rather than persist half of it. The message names the
+             * missing step, because the usual cause is a visit marked complete before anyone
+             * arrived on site.
+             */
+            throw new BadRequestException(
+              `This visit cannot be completed yet: the assignment is still ${assignment?.status ?? 'unavailable'}. ` +
+                'The assayer needs to check in on site first — completing the schedule on its own would leave the ' +
+                'audit unbilled and unable to reach validation.',
+            );
+          }
         }
       }
     }

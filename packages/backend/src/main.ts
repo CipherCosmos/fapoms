@@ -14,6 +14,7 @@ import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 import { correlationIdMiddleware } from './infrastructure/http/correlation-id.middleware';
 import { GlobalExceptionFilter } from './infrastructure/http/global-exception.filter';
 import { ResponseInterceptor } from './infrastructure/http/response.interceptor';
+import { TrimStringsPipe } from './infrastructure/http/trim-strings.pipe';
 import { Reflector } from '@nestjs/core';
 
 /**
@@ -206,8 +207,13 @@ async function bootstrap() {
   // Global prefix for all API routes
   app.setGlobalPrefix('api/v1');
 
-  // Global validation pipe — enforces DTO validation
+  // Global validation pipe — enforces DTO validation.
+  //
+  // TrimStringsPipe runs FIRST, so `@IsNotEmpty()` sees `""` rather than `"   "` and refuses it.
+  // Without it a field of spaces passed both the browser's `required` attribute and every
+  // non-empty check, and was stored as-is — see the pipe for the records that produced.
   app.useGlobalPipes(
+    new TrimStringsPipe(),
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,

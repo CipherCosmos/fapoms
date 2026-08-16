@@ -128,6 +128,18 @@ class ApiClient {
       return response.blob() as unknown as T;
     }
 
+    /**
+     * A successful response need not carry a body.
+     *
+     * `DELETE` handlers answer `204 No Content`, and calling `.json()` on an empty body throws
+     * `Unexpected end of JSON input`. The delete had already succeeded on the server, but the
+     * caller saw that raw parser message as its error and skipped its own refresh — so the record
+     * stayed on screen next to a JavaScript error, and the natural response was to try again.
+     */
+    if (response.status === 204 || response.headers.get('content-length') === '0') {
+      return undefined as unknown as T;
+    }
+
     const res = await response.json();
     if ((options as any)?.withMeta) {
       return res as T;

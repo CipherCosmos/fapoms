@@ -20,6 +20,17 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum, IsUUID, MaxLength, Matches } from 'class-validator';
+import { Transform } from 'class-transformer';
+
+/**
+ * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
+ *
+ * `"   "` satisfies both the browser's `required` attribute and class-validator's non-empty check.
+ * On a *username* that is worse than on most fields: it is the login identifier, so the account
+ * created is one nobody can realistically sign in as, and it renders in the staff directory as a
+ * bare "@" with a name beside it.
+ */
+const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
@@ -64,19 +75,19 @@ class SetRolePermissionsRequestDto {
 }
 
 class CreateUserRequestDto implements CreateUserDto {
-  @IsString() @IsNotEmpty()
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(100)
   username: string;
 
-  @IsEmail()
+  @IsEmail() @MaxLength(255)
   email: string;
 
   @IsString() @MinLength(8)
   password: string;
 
-  @IsString() @IsNotEmpty()
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(100)
   firstName: string;
 
-  @IsString() @IsNotEmpty()
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(100)
   lastName: string;
 
   @IsOptional() @IsString()
@@ -109,10 +120,11 @@ class BulkSetStatusDto {
  * rather than one of the real UserStatus values.
  */
 class UpdateUserRequestDto implements UpdateUserDto {
-  @IsOptional() @IsString()
+  // Same rules as create — an edit must not be able to blank a name that create refuses.
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(100)
   firstName?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(100)
   lastName?: string;
 
   @IsOptional() @IsString()

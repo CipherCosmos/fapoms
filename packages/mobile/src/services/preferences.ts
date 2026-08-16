@@ -40,7 +40,19 @@ export const DEFAULT_PREFERENCES: DevicePreferences = {
   // On by default: a field worker who misses an assignment offer loses the job, so the
   // audible cue is opt-out rather than opt-in.
   soundAlerts: true,
-  biometrics: true,
+  /**
+   * OFF by default, deliberately — the one preference here that is opt-in.
+   *
+   * Biometric sign-in binds this account to whatever fingerprints are enrolled on the handset,
+   * and an assayer's phone is not always exclusively theirs. Defaulting it on enrols people in
+   * that trade-off silently, at first launch, before they have been told it exists. It also
+   * changes what a locked app means: with biometrics on, `AuthContext` re-locks on resume and
+   * the sensor becomes the only way back in.
+   *
+   * Turning it on is one switch in Profile. Turning it off after it has already bound to
+   * someone else's finger is not a recovery any field user should need.
+   */
+  biometrics: false,
   haptics: true,
   pushEnabled: true,
 };

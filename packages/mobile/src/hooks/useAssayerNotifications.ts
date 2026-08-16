@@ -29,6 +29,8 @@ export interface AssayerNotifications {
   load: () => Promise<void>;
   /** Mark one read, optimistically. */
   markRead: (id: string) => void;
+  /** Mark every unread one read, optimistically. No-op when there is nothing unread. */
+  markAllRead: () => void;
 }
 
 /**
@@ -128,6 +130,36 @@ export function useAssayerNotifications(options: {
   }, []);
 
   /**
+   * Clear the whole unread list, with the same optimistic-then-revert discipline as `markRead`.
+   *
+   * The snapshot is taken before the optimistic update so a failure restores exactly which rows
+   * were unread, rather than guessing — a count-based revert would be wrong the moment a new
+   * notification arrives mid-flight.
+   */
+  const markAllRead = useCallback(() => {
+    let previouslyUnread: string[] = [];
+    setNotifications((prev) => {
+      previouslyUnread = prev.filter((n) => !n.isRead).map((n) => n.id);
+      return prev.map((n) => (n.isRead ? n : { ...n, isRead: true }));
+    });
+    const previousCount = previouslyUnread.length;
+    if (previousCount === 0) return;
+    setUnreadCount(0);
+
+    const revert = () => {
+      const ids = new Set(previouslyUnread);
+      setNotifications((prev) => prev.map((n) => (ids.has(n.id) ? { ...n, isRead: false } : n)));
+      setUnreadCount((c) => c + previousCount);
+    };
+
+    MobileApiService.markAllNotificationsRead()
+      .then((ok) => {
+        if (!ok) revert();
+      })
+      .catch(revert);
+  }, []);
+
+  /**
    * Push reliability across app state: registration, plus listeners for what happens afterwards.
    *
    * Registration alone was never enough — a token was registered and then nothing listened for
@@ -174,5 +206,5 @@ export function useAssayerNotifications(options: {
     );
   }, [isAuthenticated, load]);
 
-  return { notifications, unreadCount, load, markRead };
+  return { notifications, unreadCount, load, markRead, markAllRead };
 }

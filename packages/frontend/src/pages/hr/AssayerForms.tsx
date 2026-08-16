@@ -69,7 +69,8 @@ interface FieldDef { key: string; label: string; required?: boolean; type?: stri
  * makes an assayer plannable at all — it sets their region, zone and holiday calendar.
  */
 const CREATE_FIELDS: FieldDef[] = [
-  { key: 'assayerCode', label: 'Assayer Code', required: true },
+  // Not required: blank means "allocate the next free one", which is the normal case.
+  { key: 'assayerCode', label: 'Assayer Code', placeholder: 'Left blank, one is assigned for you' },
   { key: 'firstName', label: 'First Name', required: true },
   { key: 'lastName', label: 'Last Name', required: true },
   { key: 'email', label: 'Email', type: 'email' },
@@ -235,13 +236,15 @@ const renderFormField = (field: FieldDef, form: Record<string, string>, setForm:
   );
 };
 
-export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void; existingAssayersCount?: number }> = ({ onClose, onCreated, existingAssayersCount = 10 }) => {
+export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void }> = ({ onClose, onCreated }) => {
   const { toast } = useToast();
   const [mode, setMode] = useState<'express' | 'advanced'>('express');
   const [form, setForm] = useState<Record<string, string>>(() => {
-    const autoCode = `AS-${String(existingAssayersCount + 1).padStart(2, '0')}`;
+    // Deliberately blank: the server allocates the code, because it is the only side that can see
+    // the codes deleted assayers still hold and can settle a race between two people creating at
+    // once. Guessing it from the number of rows on screen produced a duplicate after any delete.
     return {
-      assayerCode: autoCode,
+      assayerCode: '',
       employmentType: 'FULL_TIME',
       department: 'Gold Testing',
       experienceYears: '5',
@@ -288,13 +291,18 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
       }
       const firstName = form.firstName?.trim() || '';
       const lastName = form.lastName?.trim() || '';
-      const autoCode = form.assayerCode?.trim() || `AS-${String(Math.floor(10 + Math.random() * 89))}`;
+      // Left blank, the server allocates the next free code. It used to be guessed here from the
+      // number of assayers on screen — a count of active people, blind to the codes that deleted
+      // assayers keep — so the first create after any delete was refused as a duplicate.
+      const autoCode = form.assayerCode?.trim();
 
       const rawPhone = form.phone?.replace(/\D/g, '') || '';
       const formattedPhone = rawPhone ? (rawPhone.startsWith('91') ? `+${rawPhone}` : `+91${rawPhone}`) : '';
 
       const body: any = {
-        assayerCode: autoCode,
+        // Omitted entirely when blank rather than sent as "", so the server takes it as "allocate
+        // one for me". An empty string is a value, and the DTO rejects it as empty.
+        ...(autoCode ? { assayerCode: autoCode } : {}),
         firstName: firstName,
         lastName: lastName,
         phone: formattedPhone,
@@ -435,7 +443,9 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
           <div style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Auto-Generated Assayer Code</span>
-              <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{form.assayerCode}</span>
+              <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>
+                {form.assayerCode || 'Assigned when you save'}
+              </span>
             </div>
             <div style={{ textAlign: 'right' }}>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Default Department</span>

@@ -13,7 +13,7 @@ const store = new Map<string, string>();
 
 jest.mock('./socket', () => ({ disconnectSocket: jest.fn() }));
 
-import { clearSession } from './session';
+import { clearSession, endSession } from './session';
 import { queryClient } from '../queryClient';
 import { disconnectSocket } from './socket';
 
@@ -79,5 +79,56 @@ describe('clearSession', () => {
   it('tears down the live socket so the next sign-in does not inherit its rooms', () => {
     clearSession();
     expect(disconnectSocket).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Signing out has to end the session on the SERVER, not just forget it on this device.
+ *
+ * `clearSession` alone left the refresh token valid until it expired, so a copy of it — from a
+ * shared machine, a synced browser profile, a disk image — could still be exchanged for a fresh
+ * access token after the user had pressed Sign Out. Refresh tokens rotate on use, so that access
+ * could be renewed indefinitely. The backend has always exposed `POST /auth/logout`; the web app
+ * simply never called it.
+ */
+describe('endSession', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    queryClient.clear();
+    (globalThis as any).fetch = jest.fn().mockResolvedValue({ ok: true });
+  });
+
+  it('revokes the refresh token server-side before tearing down locally', async () => {
+    localStorage.setItem('fapoms_token', 'jwt');
+    localStorage.setItem('fapoms_refresh_token', 'refresh');
+
+    await endSession();
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/v1/auth/logout',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer jwt' }),
+      }),
+    );
+    expect(localStorage.getItem('fapoms_token')).toBeNull();
+    expect(localStorage.getItem('fapoms_refresh_token')).toBeNull();
+  });
+
+  /**
+   * Best-effort by design: a failed revoke must never trap someone in a session they asked to
+   * leave. The local teardown happens either way.
+   */
+  it('still signs out locally when the revoke call fails', async () => {
+    localStorage.setItem('fapoms_token', 'jwt');
+    (globalThis as any).fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    await expect(endSession()).resolves.toBeUndefined();
+    expect(localStorage.getItem('fapoms_token')).toBeNull();
+  });
+
+  it('does not call the endpoint when there is no token to revoke', async () => {
+    await endSession();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

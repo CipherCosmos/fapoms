@@ -147,6 +147,7 @@ function AppMain() {
     unreadCount: unreadNotifCount,
     load: loadNotifications,
     markRead: markNotificationRead,
+    markAllRead: markAllNotificationsRead,
   } = useAssayerNotifications({ isAuthenticated, onTap: handleNotificationTap });
 
   // Profile data state
@@ -740,6 +741,7 @@ function AppMain() {
           unreadCount={unreadNotifCount}
           onClose={overlay.close}
           onMarkRead={markNotificationRead}
+          onMarkAllRead={markAllNotificationsRead}
           onTapNotification={(n) => {
             overlay.close();
             if (n.link) handleNotificationTap({ notificationId: n.id, entityId: n.assignmentId, link: n.link });

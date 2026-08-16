@@ -160,7 +160,12 @@ export interface ClientBillingReport {
     toState?: string | null;
     reason?: string | null;
     userName?: string | null;
-    occurredAt: string;
+    /**
+     * The API returns `createdAt` on billing history rows — there is no `occurredAt`.
+     * The declared-but-absent field is why every timestamp in the billing audit trail
+     * rendered as "Invalid Date": `new Date(undefined)`.
+     */
+    createdAt: string;
   }[];
 }
 
@@ -237,7 +242,8 @@ export interface EntityLedger {
   history: Array<{
     id: string; action: string; entityType: BillingEntityType;
     fromState: string | null; toState: string | null; reason: string | null;
-    userName: string | null; occurredAt: string;
+    // `createdAt` is the field the endpoint actually returns — see the note above.
+    userName: string | null; createdAt: string;
   }>;
 }
 

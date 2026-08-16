@@ -71,7 +71,9 @@ export class HolidayController {
 
   @Post()
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('holiday:create:organization')
+  // Reference data — see the note in ZoneController.create. `holiday:*` did not exist, so
+  // every role including SUPER_ADMINISTRATOR was refused and the calendar could never be edited.
+  @RequirePermissions('reference_data:create:organization')
   @ApiOperation({ summary: 'Register a national or regional holiday' })
   async create(@Body() dto: CreateHolidayRequestDto, @Req() req: any) {
     const holiday = await this.holidayService.create(dto, req.user.id);
@@ -126,7 +128,7 @@ export class HolidayController {
 
   @Put(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('holiday:edit:organization')
+  @RequirePermissions('reference_data:edit:organization')
   @ApiOperation({ summary: 'Update holiday record details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -142,7 +144,7 @@ export class HolidayController {
 
   @Delete(':id')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('holiday:delete:organization')
+  @RequirePermissions('reference_data:delete:organization')
   @ApiOperation({ summary: 'Soft delete holiday record' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.holidayService.remove(id, req.user.id);

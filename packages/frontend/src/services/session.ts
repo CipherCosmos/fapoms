@@ -51,3 +51,35 @@ export function clearSession(): void {
   queryClient.clear();
   disconnectSocket();
 }
+
+/**
+ * Sign out for real: revoke the refresh token on the server, then tear down locally.
+ *
+ * `clearSession` alone only forgets the tokens on this device — it leaves the refresh token
+ * valid until it expires. Anyone holding a copy (a shared or public machine, a browser profile
+ * that syncs, a disk image) could exchange it for a fresh access token *after* the user had
+ * pressed Sign Out, and because refresh tokens rotate on use they could keep doing so
+ * indefinitely. The backend has always exposed `POST /auth/logout` — "revoke all refresh tokens
+ * for this user" — the web app simply never called it.
+ *
+ * Best-effort by design: a failed or offline revoke must never trap someone in a session they
+ * asked to leave, so the local teardown happens either way. The two other `clearSession` callers
+ * deliberately do not come through here — sign-*in* clears stale state before authenticating,
+ * and the 401 handler is already holding a token the server has rejected.
+ */
+export async function endSession(): Promise<void> {
+  try {
+    const token = localStorage.getItem('fapoms_token');
+    if (token) {
+      await fetch('/api/v1/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+    }
+  } catch {
+    // Network down, token already expired, server unreachable — none of these should stop a
+    // person from signing out of this device.
+  } finally {
+    clearSession();
+  }
+}

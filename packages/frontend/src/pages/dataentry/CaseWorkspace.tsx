@@ -303,11 +303,18 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
             </div>
           ) : (
             <div style={{ padding: '11px 13px', borderBottom: '1px solid var(--border-color)' }}>
-              {validationCase.correctionNotes && (
+              {validationCase.correctionNotes ? (
                 <div style={{ fontSize: '12px', color: 'var(--danger)', marginBottom: '8px' }}>
                   <strong>Correction requested:</strong> {validationCase.correctionNotes}
                 </div>
-              )}
+              ) : status === 'CORRECTION_REQUIRED' ? (
+                // Bulk rework used to accept an empty note, so cases returned before that was
+                // fixed carry no reason at all. Say so, rather than showing a blank panel that
+                // leaves the operator guessing what to correct.
+                <div style={{ fontSize: '12px', color: 'var(--danger)', marginBottom: '8px' }}>
+                  <strong>Correction requested</strong> — no note was recorded. Ask the reviewer what needs changing.
+                </div>
+              ) : null}
               {validationCase.ocrResult && (
                 <details style={{ marginBottom: '8px' }}>
                   <summary style={{ ...label, cursor: 'pointer' }}>OCR extraction</summary>
@@ -330,11 +337,33 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                     }}
                   />
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {status !== 'APPROVED' && (
+                    {/*
+                      Approve is only reachable from HUMAN_REVIEW (see VALIDATION_TRANSITIONS).
+                      This used to render for every status except APPROVED, so a case sitting in
+                      PENDING or CORRECTION_REQUIRED showed Approve as its only action and clicking
+                      it always failed with a raw "Invalid Transition" — on a screen that offered
+                      nothing else to do. The sibling "Request correction" below was already gated
+                      this way; this now matches it.
+                    */}
+                    {status === 'HUMAN_REVIEW' && (
                       <button onClick={() => decide('APPROVED')} disabled={busy} className="btn btn-primary"
                         style={{ fontSize: '11.5px', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Check size={12} /> Approve
                       </button>
+                    )}
+                    {/*
+                      Earlier states have no decision to make here — say what moves the case on
+                      instead of leaving the panel blank or, worse, offering a button that cannot work.
+                    */}
+                    {(status === 'PENDING' || status === 'ASSIGNED' || status === 'OCR_PROCESSING') && (
+                      <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', alignSelf: 'center' }}>
+                        Not in review yet — hand the packet back from the Packets board to send it for review.
+                      </span>
+                    )}
+                    {status === 'CORRECTION_REQUIRED' && (
+                      <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', alignSelf: 'center' }}>
+                        Sent back for rework — hand the packet back from the Packets board once corrected.
+                      </span>
                     )}
                     {(status === 'HUMAN_REVIEW') && (
                       <button onClick={() => decide('CORRECTION_REQUIRED')} disabled={busy || !notes.trim()} className="btn btn-secondary"

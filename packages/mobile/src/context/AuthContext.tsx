@@ -97,6 +97,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser({
           id: session.userId || MobileApiService.getCurrentUserId() || '',
           name: session.userName || MobileApiService.getCurrentUserName() || 'Assayer',
+          /**
+           * Carried through the restore, not just set at sign-in.
+           *
+           * Rebuilding the user here without it left the flag `undefined`, so the "choose your
+           * own password" gate never rendered on a restored session — and restarting the app was
+           * enough to walk past a requirement that exists precisely because the current password
+           * is one an administrator issued and therefore already knows.
+           */
+          mustChangePassword: MobileApiService.mustChangePassword,
         });
       } else {
         setIsAuthenticated(false);
@@ -171,6 +180,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   /** Clears the forced-rotation flag locally once the server has accepted a new password. */
   const clearMustChangePassword = () => {
+    // Cleared on the service too, so the next session restore does not re-raise the gate from a
+    // stale flag captured before the change went through.
+    MobileApiService.mustChangePassword = false;
     setUser((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
   };
 

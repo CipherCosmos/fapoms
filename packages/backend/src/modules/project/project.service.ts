@@ -27,6 +27,7 @@ import * as xlsx from 'xlsx';
 // the exact-header bug that dropped every row has now been hit by both importers.
 import { parseSheet, rowReader, identifyTemplate } from '../../core/excel/sheet-reader';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
+import { needsBetterFix } from '../geo/coordinate-resolution';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 
@@ -92,6 +93,11 @@ export interface BranchUploadReport {
   /** Branches newly attached to this project (an already-attached branch is not counted). */
   linked: number;
   skipped: { row: number; branchCode?: string; reason: string }[];
+  /**
+   * Rows that imported but could not be located precisely — they need their coordinates corrected
+   * before planning or check-in will behave. Distinct from `skipped`: these branches exist.
+   */
+  imprecise: { row: number; branchCode?: string; reason: string }[];
 }
 
 /** Partial edit of a project. Lifecycle moves go through transition(). */
@@ -293,6 +299,19 @@ export class ProjectService implements OnModuleInit {
     if (dto.priority !== undefined) project.priority = dto.priority as any;
     if (dto.startDate) project.startDate = new Date(dto.startDate);
     if (dto.endDate) project.endDate = new Date(dto.endDate);
+    /**
+     * Re-check the window against what the project will actually hold.
+     *
+     * The DTO's ordering rule can only compare the two dates when BOTH are in the payload, so a
+     * partial edit that sends just `endDate` would slip past it and invert the window against the
+     * stored `startDate`. Checking here — after the merge, before the save — is the only place
+     * that sees the final pair, whichever half the caller supplied.
+     */
+    if (project.startDate && project.endDate && new Date(project.endDate) < new Date(project.startDate)) {
+      throw new BadRequestException(
+        'The project would end before it starts. Check the start and end dates.',
+      );
+    }
     if (dto.budget !== undefined) project.budget = dto.budget;
     if (dto.scope !== undefined) project.scope = dto.scope;
     if (dto.requiredSkills !== undefined) project.requiredSkills = dto.requiredSkills;
@@ -629,6 +648,22 @@ export class ProjectService implements OnModuleInit {
     const skipped: { row: number; branchCode?: string; reason: string }[] = [];
     let createdCount = 0;
     let updatedCount = 0;
+    /**
+     * Which row first used each branch code, so a repeat inside one file can be named.
+     *
+     * The loop upserts by `branchCode`, so a sheet listing the same code twice silently applied
+     * the later row over the earlier one — and because the two rows rarely agree on every column,
+     * what survived was a mixture of both: one row's name and address on top of the other's
+     * contact and risk data. The counts said "created 6, updated 1", which reads as an ordinary
+     * refresh of a pre-existing branch rather than "two of your rows collided".
+     */
+    const firstRowForCode = new Map<string, number>();
+    /**
+     * Rows that imported but landed on a fallback coordinate — a warning list, not a skip list.
+     * Kept separate from `skipped` because these branches DID import; they simply cannot be
+     * planned or checked into until someone corrects where they are.
+     */
+    const imprecise: { row: number; branchCode?: string; reason: string }[] = [];
 
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
@@ -653,6 +688,20 @@ export class ProjectService implements OnModuleInit {
         continue;
       }
 
+      // Same code twice in one sheet: keep the first occurrence and name the collision, rather
+      // than overwriting it with the later row and reporting the result as a routine "updated".
+      const codeKey = branchCode.trim().toUpperCase();
+      const firstRow = firstRowForCode.get(codeKey);
+      if (firstRow !== undefined) {
+        skipped.push({
+          row: rowNumber,
+          branchCode,
+          reason: `Duplicate of row ${firstRow} (branch code ${branchCode}) — the first row was kept.`,
+        });
+        continue;
+      }
+      firstRowForCode.set(codeKey, rowNumber);
+
       /**
        * One bad row must not cost the operator the other 399.
        *
@@ -672,6 +721,23 @@ export class ProjectService implements OnModuleInit {
           // State drives the region, the zone and the public-holiday calendar. A branch without
           // one is unplannable, so it is refused loudly rather than imported into limbo.
           skipped.push({ row: rowNumber, branchCode, reason: `No state for "${branchName}".` });
+          continue;
+        }
+
+        /**
+         * A pincode has to look like a pincode.
+         *
+         * `ABCDE` was stored verbatim and thereafter looked like a real postcode to anyone
+         * reading the record — and to the geocoder, which quietly ignored it and fell back to the
+         * city centroid. Six digits, first one non-zero, is the Indian format. Blank stays
+         * allowed: plenty of client exports omit it, and the address still geocodes.
+         */
+        if (pincodeStr && !/^[1-9][0-9]{5}$/.test(pincodeStr.trim())) {
+          skipped.push({
+            row: rowNumber,
+            branchCode,
+            reason: `"${pincodeStr}" is not a valid pincode for "${branchName}" — expected 6 digits.`,
+          });
           continue;
         }
 
@@ -710,6 +776,32 @@ export class ProjectService implements OnModuleInit {
         let branch = await this.branchQueryService.findOneByCode(branchCode, project.clientId);
         if (!branch) {
           const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
+
+          /**
+           * Say so when we could not really find the place.
+           *
+           * The geocoder is honest with itself — an address it cannot resolve comes back as the
+           * city centroid, the state centroid, or ultimately the geographic centre of India with
+           * `source: 'none'` and `accuracyMeters: 500000`. None of that reached the operator: the
+           * row imported like any other, drew a confident pin on the planning map, and then fed
+           * real-looking distances and travel quotes into assayer matching. It also made check-in
+           * impossible, since the assayer's true position is nowhere near the fallback point.
+           *
+           * Reported rather than skipped: the branch is still wanted, it just needs its location
+           * corrected before anyone plans against it. The assayer import already warns this way.
+           */
+          if (needsBetterFix(coords.geoSource, coords.geoAccuracyMeters)) {
+            const km = Math.round(coords.geoAccuracyMeters / 1000);
+            imprecise.push({
+              row: rowNumber,
+              branchCode,
+              reason:
+                coords.geoSource === 'none'
+                  ? `"${branchName}" could not be located from its address — it has been placed on a fallback point and needs its location set before planning.`
+                  : `"${branchName}" could only be placed to about ${km} km (${coords.geoSource}) — set its location for accurate travel costs and check-in.`,
+            });
+          }
+
           const zoneName = await this.resolveZoneName(state, project.clientId);
 
           const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
@@ -858,6 +950,7 @@ export class ProjectService implements OnModuleInit {
       updated: updatedCount,
       linked: addedBranches.length,
       skipped,
+      imprecise,
     };
   }
 

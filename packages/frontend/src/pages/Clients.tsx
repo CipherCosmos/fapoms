@@ -264,9 +264,17 @@ const Clients: React.FC = () => {
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ width: 260, maxWidth: '100%', flex: '1 1 200px' }}><SearchInput value={search} onChange={setSearch} placeholder="Search clients..." /></div>
-        <FilterSelect value={status} onChange={(v) => setStatus(v)} options={LIFECYCLE_FILTERS.map((s) => ({ value: s, label: clientLifecycleLabel(s) }))} label="Lifecycle" />
-        <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))} label="Type" />
-        <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={PRIORITY_FILTERS.map((p) => ({ value: p, label: p }))} label="Priority" />
+        {/*
+          Each filter leads with an explicit "All …" whose value is the empty string the state
+          actually holds. Without it the <select> had no option matching `''`, so the browser fell
+          back to displaying the *first* status — the page read "Lifecycle: Prospect" while listing
+          every lifecycle, and once a real value was chosen there was no way back to "all" except
+          the Clear button, which also wiped the search box. Every other filtered page in the app
+          already passes an "All …" option; this one was the exception.
+        */}
+        <FilterSelect value={status} onChange={(v) => setStatus(v)} options={[{ value: '', label: 'All lifecycles' }, ...LIFECYCLE_FILTERS.map((s) => ({ value: s, label: clientLifecycleLabel(s) }))]} label="Lifecycle" />
+        <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={[{ value: '', label: 'All types' }, ...CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))]} label="Type" />
+        <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={[{ value: '', label: 'All priorities' }, ...PRIORITY_FILTERS.map((p) => ({ value: p, label: p }))]} label="Priority" />
         {(status || clientType || priority || debouncedSearch) && (
           <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 12 }}>Clear</button>
         )}

@@ -120,7 +120,15 @@ export class RuleEngine {
     // the first meant a rule authored with the second silently never applied.
     if (rule.ruleType === 'CAPACITY') {
       const limit = cond.maxConcurrentAssignments ?? cond.maxWeeklyCapacity ?? cond.maxConcurrent;
-      if (limit) {
+      /**
+       * A limit of 0 is a real instruction, not an absent one.
+       *
+       * `if (limit)` treated 0 as "no limit configured", so a rule saying "nobody may hold an open
+       * assignment" — the way an operator freezes assignment during an incident or an audit
+       * pause — silently did nothing, with no warning and a rule that looked active on screen.
+       * Only `null`/`undefined`/`''` mean unset; 0 means zero.
+       */
+      if (limit !== undefined && limit !== null && limit !== '') {
         const currentLoad = activeWorkload || 0;
         if (currentLoad >= Number(limit)) {
           return {

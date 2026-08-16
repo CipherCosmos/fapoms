@@ -68,6 +68,8 @@ interface BranchUploadMeta {
   updated: number;
   linked: number;
   skipped: { row: number; branchCode?: string; reason: string }[];
+  /** Imported, but landed on a fallback coordinate and needs its location corrected. */
+  imprecise?: { row: number; branchCode?: string; reason: string }[];
 }
 
 interface FormData {
@@ -562,8 +564,33 @@ export const Projects: React.FC = () => {
             type: 'error',
             text: `${parts.join(', ')}. Skipped ${skipped.length} of ${meta.totalRows} row(s) — ${detailText}${skipped.length > 5 ? '…' : ''}`,
           });
+        } else if (meta.created === 0 && meta.updated === 0 && meta.linked === 0) {
+          /**
+           * Rows were read and nothing came of them, with no per-row reason to report — which is
+           * what a sheet with the wrong headers looks like from here. Reporting that in green as
+           * "3 row(s) read: 0 created, 0 updated, 0 newly linked" told the operator the upload had
+           * worked while their file had in fact been ignored wholesale.
+           */
+          setMessage({
+            type: 'error',
+            text: `Nothing was imported from this file. ${meta.totalRows} row(s) were read but no branch could be built from them — the column headings probably do not match. Download the template and fill in the Branch sheet.`,
+          });
         } else {
-          setMessage({ type: 'success', text: `${meta.totalRows} row(s) read: ${parts.join(', ')}.` });
+          // These rows DID import — they just cannot be planned or checked into until someone
+          // fixes where they are, so this is a warning on an otherwise successful upload rather
+          // than a failure. Left silent, a branch pinned on a city centroid (or the fallback point
+          // for an address that would not resolve at all) looks identical to one pinned at its
+          // front door, and only shows up later as an assayer who cannot check in.
+          const vague = meta.imprecise ?? [];
+          if (vague.length > 0) {
+            const vagueText = vague.slice(0, 3).map((v) => `row ${v.row}: ${v.reason}`).join('; ');
+            setMessage({
+              type: 'error',
+              text: `${parts.join(', ')}. ${vague.length} branch(es) could not be located precisely — ${vagueText}${vague.length > 3 ? '…' : ''}`,
+            });
+          } else {
+            setMessage({ type: 'success', text: `${meta.totalRows} row(s) read: ${parts.join(', ')}.` });
+          }
         }
       } else {
         setMessage({ type: 'success', text: 'Branches uploaded.' });

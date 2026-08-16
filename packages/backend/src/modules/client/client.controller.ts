@@ -14,8 +14,18 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
-  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, IsUUID,
+  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, IsUUID, MaxLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
+
+/**
+ * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
+ *
+ * `"   "` satisfies both the browser's `required` attribute and class-validator's non-empty check,
+ * which let a client be created with a blank code and name. It rendered as an empty row in the
+ * clients list and, worse, as a selectable "( )" entry in every downstream client picker.
+ */
+const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -41,20 +51,24 @@ class CreateClientConfigDto {
 }
 
 class CreateClientRequestDto implements CreateClientDto {
-  @IsString() @IsNotEmpty() clientCode: string;
-  @IsString() @IsNotEmpty() name: string;
-  @IsString() @IsNotEmpty() displayName: string;
-  @IsOptional() @IsString() website?: string;
-  @IsOptional() @IsString() industry?: string;
-  @IsOptional() @IsString() clientType?: string;
-  @IsOptional() @IsString() registrationNumber?: string;
-  @IsOptional() @IsString() taxId?: string;
-  @IsOptional() @IsString() contactPerson?: string;
-  @IsOptional() @IsString() contactEmail?: string;
-  @IsOptional() @IsString() contactPhone?: string;
+  // Lengths mirror the columns (see the clients table): over-long input used to reach Postgres and
+  // come back as a 500 telling the operator something had gone wrong "on our side" and to try
+  // again — advice that could never work, since the fix was to shorten the field.
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) clientCode: string;
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name: string;
+  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) displayName: string;
+  @IsOptional() @IsString() @MaxLength(500) website?: string;
+  @IsOptional() @IsString() @MaxLength(100) industry?: string;
+  @IsOptional() @IsString() @MaxLength(50) clientType?: string;
+  @IsOptional() @IsString() @MaxLength(100) registrationNumber?: string;
+  @IsOptional() @IsString() @MaxLength(100) taxId?: string;
+  @IsOptional() @IsString() @MaxLength(200) contactPerson?: string;
+  @IsOptional() @IsString() @MaxLength(255) contactEmail?: string;
+  @IsOptional() @IsString() @MaxLength(20) contactPhone?: string;
   @IsOptional() @IsString() address?: string;
-  @IsOptional() @IsString() priority?: string;
-  @IsOptional() @IsNumber() budget?: number;
+  @IsOptional() @IsString() @MaxLength(50) priority?: string;
+  // A negative budget is not a budget. It was stored verbatim and rendered as "₹-5000.00".
+  @IsOptional() @IsNumber() @Min(0) budget?: number;
   @IsOptional() @IsArray() preferredAssayers?: string[];
   @IsOptional() @IsArray() restrictedAssayers?: string[];
   @IsOptional() @IsObject() planningPreferences?: Record<string, any>;
@@ -62,19 +76,20 @@ class CreateClientRequestDto implements CreateClientDto {
 }
 
 class UpdateClientRequestDto implements UpdateClientDto {
-  @IsOptional() @IsString() name?: string;
-  @IsOptional() @IsString() displayName?: string;
-  @IsOptional() @IsString() website?: string;
-  @IsOptional() @IsString() industry?: string;
-  @IsOptional() @IsString() clientType?: string;
-  @IsOptional() @IsString() registrationNumber?: string;
-  @IsOptional() @IsString() taxId?: string;
-  @IsOptional() @IsString() contactPerson?: string;
-  @IsOptional() @IsString() contactEmail?: string;
-  @IsOptional() @IsString() contactPhone?: string;
+  // Same rules as create — an edit must not be able to write what create refuses.
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name?: string;
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) displayName?: string;
+  @IsOptional() @IsString() @MaxLength(500) website?: string;
+  @IsOptional() @IsString() @MaxLength(100) industry?: string;
+  @IsOptional() @IsString() @MaxLength(50) clientType?: string;
+  @IsOptional() @IsString() @MaxLength(100) registrationNumber?: string;
+  @IsOptional() @IsString() @MaxLength(100) taxId?: string;
+  @IsOptional() @IsString() @MaxLength(200) contactPerson?: string;
+  @IsOptional() @IsString() @MaxLength(255) contactEmail?: string;
+  @IsOptional() @IsString() @MaxLength(20) contactPhone?: string;
   @IsOptional() @IsString() address?: string;
-  @IsOptional() @IsString() priority?: string;
-  @IsOptional() @IsNumber() budget?: number;
+  @IsOptional() @IsString() @MaxLength(50) priority?: string;
+  @IsOptional() @IsNumber() @Min(0) budget?: number;
   @IsOptional() @IsArray() preferredAssayers?: string[];
   @IsOptional() @IsArray() restrictedAssayers?: string[];
   @IsOptional() @IsObject() planningPreferences?: Record<string, any>;

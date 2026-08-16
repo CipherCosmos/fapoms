@@ -165,7 +165,11 @@ export class HrWorkforceService {
         COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int                   AS active,
         COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
                            AND ${ON_ROSTER})::int AS onboarding,
-        COUNT(*) FILTER (WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
+        -- Lifecycle status first, dates second. Active and onboarding are both counted from
+        -- lifecycle_status; counting departures from the dates alone meant a resigned assayer
+        -- appeared in none of the three until someone happened to fill a date field in by hand.
+        COUNT(*) FILTER (WHERE lifecycle_status IN ('RESIGNED','TERMINATED','ARCHIVED')
+                            OR exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
       FROM assayers WHERE is_active = true
     `);
 

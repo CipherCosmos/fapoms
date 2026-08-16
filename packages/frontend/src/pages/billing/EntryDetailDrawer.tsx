@@ -156,7 +156,9 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
             <div key={h.id} style={{ background: 'var(--bg-tertiary)', padding: 10, borderRadius: 'var(--radius-sm)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{h.action}</span>
-                <span style={{ color: 'var(--text-muted)' }}>{new Date(h.occurredAt).toLocaleString()}</span>
+                {/* `createdAt` is what /billing-engine/history returns; there is no `occurredAt`
+                    on billing history rows, so reading it produced "Invalid Date" on every entry. */}
+                <span style={{ color: 'var(--text-muted)' }}>{new Date(h.createdAt).toLocaleString()}</span>
               </div>
               {(h.fromState || h.toState) && (
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>

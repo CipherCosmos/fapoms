@@ -112,8 +112,16 @@ const HR_MAINTAINED_FIELDS: string[] = [
 ];
 
 class CreateAssayerRequestDto implements CreateAssayerDto {
-  @IsString() @IsNotEmpty()
-  assayerCode: string;
+  /**
+   * Optional: leave it out and the server allocates the next free code.
+   *
+   * The web form used to derive one from the number of assayers it had listed, which is a count
+   * of *active* people. Deleted assayers keep their codes, so the first create after any delete
+   * proposed a code that was already taken and was refused — and two people creating at the same
+   * moment were handed the same code. Only the server can see every code that exists.
+   */
+  @IsOptional() @IsString() @IsNotEmpty()
+  assayerCode?: string;
 
   @IsString() @IsNotEmpty()
   firstName: string;

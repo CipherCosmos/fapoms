@@ -5,9 +5,9 @@
  * Helps group regional operations.
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, Not, ILike, IsNull } from 'typeorm';
 
 import { ZoneEntity } from './zone.entity';
 import { AuditService } from '../../core/audit/audit.service';
@@ -40,7 +40,36 @@ export class ZoneService {
     private readonly dataSource: DataSource,
   ) {}
 
+  /**
+   * A zone is chosen by name — in the branch form, in the planning filter, in the scope switcher —
+   * and never by id, so two zones sharing a name within the same scope are indistinguishable at
+   * every point of use.
+   *
+   * The check is deliberately per-client rather than global: "West Zone" legitimately exists once
+   * for each bank, and the Client Scope column is what tells those apart. It is only a collision
+   * when the scope matches too, which includes two unscoped zones of the same name.
+   */
+  private async assertNameIsFree(name: string, clientId: string | null, excludeId?: string): Promise<void> {
+    const clash = await this.zoneRepository.findOne({
+      where: {
+        name: ILike(name.trim()),
+        clientId: clientId ?? IsNull(),
+        isActive: true,
+        ...(excludeId ? { id: Not(excludeId) } : {}),
+      },
+    });
+    if (clash) {
+      throw new ConflictException(
+        clientId
+          ? `A zone called "${clash.name}" already exists for this client. Give this one a different name.`
+          : `An unscoped zone called "${clash.name}" already exists. Give this one a different name, or scope it to a client.`,
+      );
+    }
+  }
+
   async create(dto: CreateZoneDto, userId: string): Promise<ZoneEntity> {
+    await this.assertNameIsFree(dto.name, dto.clientId ?? null);
+
     const zone = this.zoneRepository.create({
       name: dto.name,
       description: dto.description ?? null,
@@ -100,6 +129,10 @@ export class ZoneService {
 
   async update(id: string, dto: UpdateZoneDto, userId: string): Promise<ZoneEntity> {
     const zone = await this.findOne(id);
+
+    if (dto.name !== undefined && dto.name.trim() !== zone.name) {
+      await this.assertNameIsFree(dto.name, zone.clientId, id);
+    }
 
     if (dto.name !== undefined) zone.name = dto.name;
     if (dto.description !== undefined) zone.description = dto.description;

@@ -11,6 +11,8 @@ interface NotificationsModalProps {
   onClose: () => void;
   onMarkRead: (id: string) => void;
   onTapNotification: (notification: AppNotification) => void;
+  /** Clear the whole unread list. Optional so existing callers keep compiling. */
+  onMarkAllRead?: () => void;
 }
 
 const relative = (iso: string) => {
@@ -26,7 +28,31 @@ const relative = (iso: string) => {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 };
 
-const iconFor = (title: string): string => {
+/**
+ * Icon for a notification, chosen from its catalog event key.
+ *
+ * This used to search the *title* for English words. Titles are operator-editable templates in
+ * the notification catalog, so rewording one silently downgraded its icon to the generic bell —
+ * and nothing failed, so nobody would know. The type is the event's stable identity.
+ *
+ * The title search is kept only as a fallback, for rows written before the type was carried
+ * through to the handset.
+ */
+const iconForType = (type?: string): string | null => {
+  if (!type) return null;
+  if (type.startsWith('ASSIGNMENT_') || type.startsWith('BRANCH_')) return 'clipboard-outline';
+  if (type.startsWith('QUERY_') || type.startsWith('DESK_') || type.startsWith('FEEDBACK_')) {
+    return 'chatbubble-ellipses-outline';
+  }
+  if (type.startsWith('BILLING_') || type.startsWith('PAYMENT_') || type.startsWith('PAYABLE_')) {
+    return 'wallet-outline';
+  }
+  if (type.startsWith('DOCUMENT_') || type.startsWith('VALIDATION_')) return 'document-text-outline';
+  if (type.startsWith('FIELD_') || type.startsWith('ACCOUNT_')) return 'alert-circle-outline';
+  return null;
+};
+
+const iconForTitle = (title: string): string => {
   const s = title.toLowerCase();
   if (s.includes('assign') || s.includes('audit')) return 'clipboard-outline';
   if (s.includes('quer') || s.includes('clarif')) return 'chatbubble-ellipses-outline';
@@ -34,6 +60,8 @@ const iconFor = (title: string): string => {
   if (s.includes('document') || s.includes('pdf')) return 'document-text-outline';
   return 'notifications-outline';
 };
+
+const iconFor = (n: AppNotification): string => iconForType(n.type) ?? iconForTitle(n.title);
 
 /**
  * The notification list shown when the bell is tapped.
@@ -49,6 +77,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   onClose,
   onMarkRead,
   onTapNotification,
+  onMarkAllRead,
 }) => {
   const t = useTheme();
 
@@ -62,6 +91,21 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             </AppText>
             <IconButton icon="close" onPress={onClose} />
           </View>
+
+          {/* Clearing the badge was previously one tap per item. An assayer back from a week in
+              the field opens this to a badge in the dozens, so in practice it was never cleared
+              and the number stopped meaning anything. Shown only when there is something to
+              clear, so it does not sit there as a dead control. */}
+          {unreadCount > 0 && onMarkAllRead ? (
+            <Tappable accessibilityLabel="Mark all notifications as read" onPress={onMarkAllRead}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, paddingVertical: t.space.xs }}>
+                <Icon name="checkmark-done-outline" size={15} color={t.colors.accent} />
+                <AppText variant="small" style={{ color: t.colors.accent, fontWeight: '600' }}>
+                  Mark all read
+                </AppText>
+              </View>
+            </Tappable>
+          ) : null}
 
           <Divider spacing={t.space.sm} />
 
@@ -94,7 +138,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                             backgroundColor: n.isRead ? t.colors.surfaceAlt : t.colors.accentSoft,
                             alignItems: 'center', justifyContent: 'center',
                           }}>
-                            <Icon name={iconFor(n.title)} size={16} color={n.isRead ? t.colors.textFaint : t.colors.accent} />
+                            <Icon name={iconFor(n)} size={16} color={n.isRead ? t.colors.textFaint : t.colors.accent} />
                           </View>
                           <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
                             <AppText variant={n.isRead ? 'body' : 'bodyStrong'} numberOfLines={2}>{n.title}</AppText>

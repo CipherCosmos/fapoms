@@ -812,4 +812,153 @@ describe('AssayerService', () => {
       expect(mockAssayerRepo.save).not.toHaveBeenCalled();
     });
   });
+  /**
+   * A skill, language or certification the person already holds must not be added twice.
+   *
+   * Two identical rows read as a mistake on screen, but the real damage was on removal: deleting
+   * the skill took away one row and left the other, so an assayer whose skill HR had just removed
+   * still satisfied a SKILL rule and still came back as an eligible candidate.
+   */
+  describe('addWorkforceAttribute', () => {
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', assayerCode: 'AS-1', isActive: true });
+    });
+
+    it('refuses one the assayer already holds, whatever the casing', async () => {
+      mockWorkforceRepo.findOne.mockResolvedValue({ id: 'w-1', type: 'SKILL', name: 'Gold Assaying' });
+
+      await expect(
+        service.addWorkforceAttribute('as-1', { type: 'SKILL', name: 'gold assaying' }, 'user-1'),
+      ).rejects.toThrow(/already has the skill/);
+
+      expect(mockWorkforceRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('adds one the assayer does not yet hold', async () => {
+      mockWorkforceRepo.findOne.mockResolvedValue(null);
+      mockWorkforceRepo.create.mockReturnValue({ id: 'w-2', type: 'SKILL', name: 'Silver Assaying' });
+      mockWorkforceRepo.save.mockResolvedValue({ id: 'w-2', type: 'SKILL', name: 'Silver Assaying' });
+
+      const saved = await service.addWorkforceAttribute('as-1', { type: 'SKILL', name: 'Silver Assaying' }, 'user-1');
+
+      expect(saved.id).toBe('w-2');
+      expect(mockWorkforceRepo.save).toHaveBeenCalled();
+    });
+  });
+  /**
+   * Codes are permanent identifiers — a deleted assayer's payables and audit trail still refer to
+   * hers — so a code must never be reissued. The web form used to guess the next one from the
+   * number of assayers it had listed, which counts only active people, so the first create after
+   * any delete proposed a code that was already taken and was refused outright.
+   */
+  describe('assayer code allocation', () => {
+    it('skips codes held by deleted assayers rather than reusing them', async () => {
+      // AS-27 was deleted; only AS-26 is still active. The next code must be AS-28.
+      mockAssayerRepo.find.mockResolvedValue([
+        { assayerCode: 'AS-26' }, { assayerCode: 'AS-27' },
+      ]);
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'as-new' }));
+
+      await service.create(
+        { firstName: 'Nita', lastName: 'Rao', state: 'Maharashtra' } as any,
+        'user-1',
+      );
+
+      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS-28' }));
+    });
+
+    /** The seeded roster uses `AS0688`; reading that as 688 would jump the sequence. */
+    it('ignores codes that do not follow the AS-nn shape', async () => {
+      mockAssayerRepo.find.mockResolvedValue([{ assayerCode: 'AS0688' }, { assayerCode: 'AS-03' }]);
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'as-new' }));
+
+      await service.create(
+        { firstName: 'Ravi', lastName: 'Kumar', state: 'Kerala' } as any,
+        'user-1',
+      );
+
+      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS-04' }));
+    });
+
+    it('honours a code the caller supplied', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'as-new' }));
+
+      await service.create(
+        { assayerCode: 'AS-99', firstName: 'Asha', lastName: 'Devi', state: 'Goa' } as any,
+        'user-1',
+      );
+
+      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS-99' }));
+    });
+  });
+  /**
+   * Progressing through onboarding explains itself; leaving does not. A record that says only
+   * "Moved to TERMINATED" cannot answer anything in a later dispute or reference check, so the
+   * adverse moves must carry a reason — the same standard already applied to rejecting an
+   * assignment and to sending work back for rework.
+   */
+  describe('transitionLifecycle — reasons on the record', () => {
+    it.each(['SUSPENDED', 'INACTIVE', 'RESIGNED', 'TERMINATED'])(
+      'refuses to move someone to %s with no reason',
+      async (target) => {
+        await expect(service.transitionLifecycle('as-1', target, 'user-1')).rejects.toThrow(/Say why/);
+        await expect(service.transitionLifecycle('as-1', target, 'user-1', '   ')).rejects.toThrow(/Say why/);
+      },
+    );
+
+    it('asks for nothing extra when someone simply progresses through onboarding', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'as-1', assayerCode: 'AS-1', lifecycleStatus: 'INVITED', isActive: true,
+      });
+      mockAssayerRepo.save.mockImplementation(async (v: any) => v);
+      mockWorkforceRepo.find.mockResolvedValue([]);
+
+      await expect(
+        service.transitionLifecycle('as-1', 'DOCUMENT_VERIFICATION', 'user-1'),
+      ).resolves.toBeDefined();
+    });
+  });
+  /**
+   * An assayer's state sets their region, zone and holiday calendar, and territory rules match on
+   * it — but nothing checked it on any path. The form, the API and the Excel import all accepted
+   * "Freedonia", and the damage was quiet: `region` came out null, which drops the person out of
+   * every region-scoped view and out of territory matching, while they sit on the roster looking
+   * perfectly ordinary.
+   */
+  describe('create — the state has to be a real one', () => {
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.find.mockResolvedValue([]);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'as-new' }));
+    });
+
+    it('refuses a state that is not a state', async () => {
+      await expect(
+        service.create({ assayerCode: 'AS-90', firstName: 'A', lastName: 'B', state: 'Freedonia' } as any, 'user-1'),
+      ).rejects.toThrow(/is not a state we recognise/);
+    });
+
+    /** Both spellings turn up in real rosters, so both have to be accepted. */
+    it.each(['Maharashtra', 'MAHARASHTRA', 'MH', 'ANDRAPRADESH', 'Tamil Nadu'])(
+      'accepts %s',
+      async (state) => {
+        await expect(
+          service.create({ assayerCode: 'AS-91', firstName: 'A', lastName: 'B', state } as any, 'user-1'),
+        ).resolves.toBeDefined();
+      },
+    );
+
+    it('says nothing when no state was supplied at all', async () => {
+      await expect(
+        service.create({ assayerCode: 'AS-92', firstName: 'A', lastName: 'B' } as any, 'user-1'),
+      ).resolves.toBeDefined();
+    });
+  });
 });

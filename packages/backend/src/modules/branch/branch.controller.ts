@@ -20,7 +20,7 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject, IsUUID } from 'class-validator';
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -46,7 +46,7 @@ class CreateBranchRequestDto implements CreateBranchDto {
   @IsOptional() @IsString() pincode?: string;
   @IsOptional() @IsString() region?: string;
   @IsOptional() @IsString() territory?: string;
-  @IsOptional() @IsString() zoneId?: string;
+  @IsOptional() @IsUUID() zoneId?: string;
   @IsOptional() @IsString() branchType?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() email?: string;
@@ -64,6 +64,12 @@ class CreateBranchRequestDto implements CreateBranchDto {
   @IsOptional() @IsObject() operatingHours?: Record<string, any>;
 }
 
+/**
+ * `zoneId` is validated as a UUID rather than a bare string on both DTOs. A malformed id used to
+ * reach Postgres and come back as a 500 "Internal server error"; the id of a zone that does not
+ * exist has always been answered properly ("Zone … not found."), and a value that is not an id at
+ * all should be answered the same way rather than as a crash.
+ */
 class UpdateBranchRequestDto implements UpdateBranchDto {
   @IsOptional() @IsString() branchCode?: string;
   @IsOptional() @IsString() solId?: string;
@@ -75,7 +81,7 @@ class UpdateBranchRequestDto implements UpdateBranchDto {
   @IsOptional() @IsString() pincode?: string;
   @IsOptional() @IsString() region?: string;
   @IsOptional() @IsString() territory?: string;
-  @IsOptional() @IsString() zoneId?: string;
+  @IsOptional() @IsUUID() zoneId?: string;
   @IsOptional() @IsString() branchType?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() email?: string;

@@ -60,6 +60,12 @@ class AdjustEntryDto {
   @IsString() @IsNotEmpty() reason: string;
 }
 
+class CreditEntryDto {
+  /** Taxable value to credit back. Tax and TDS come off with it, at the entry's own rates. */
+  @IsNumber() @Min(0.01) amount: number;
+  @IsString() @IsNotEmpty() reason: string;
+}
+
 class SplitEntryRequestDto implements SplitEntryDto {
   @IsArray() @IsNumber({}, { each: true }) amounts: number[];
   @IsOptional() @IsString() notes?: string;
@@ -217,6 +223,20 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'Apply an adjustment to a billing entry' })
   async adjustEntry(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AdjustEntryDto, @Req() req: any) {
     return { success: true, data: await this.service.adjustEntry(id, dto.delta, dto.reason, req.user.id) };
+  }
+
+  /**
+   * Issue a credit note against an entry that has already been paid.
+   *
+   * Separate from `adjust` on purpose: adjusting re-prices a line that nobody has paid yet, while
+   * crediting corrects one that has been settled and therefore owes the client money back. The
+   * engine has always told operators to do this — it just had nowhere to send them.
+   */
+  @Post('entries/:id/credit-note')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Issue a credit note against a paid billing entry' })
+  async creditEntry(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreditEntryDto, @Req() req: any) {
+    return { success: true, data: await this.service.creditEntry(id, dto.amount, dto.reason, req.user.id) };
   }
 
   @Post('entries/:id/split')

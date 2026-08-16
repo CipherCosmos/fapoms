@@ -1,12 +1,12 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { defaultRouteForRoles } from './config/route-permissions';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { api } from './services/api';
-import { clearSession } from './services/session';
+import { clearSession, endSession } from './services/session';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 import { CallProvider } from './components/calls/CallProvider';
 
@@ -61,6 +61,64 @@ const ReviewsQueue = React.lazy(() => import('./pages/dataentry/ReviewsQueue'));
 const DataEntryCasePage = React.lazy(() => import('./pages/dataentry/CasePage'));
 const DataEntryLayout = React.lazy(() => import('./pages/dataentry/DataEntryLayout').then((m) => ({ default: m.DataEntryLayout })));
 const ClarificationsPage = React.lazy(() => import('./pages/dataentry/ClarificationsPage').then((m) => ({ default: m.ClarificationsPage })));
+
+/**
+ * Where an unauthenticated visitor was trying to go, held until they have signed in.
+ *
+ * sessionStorage rather than localStorage: it belongs to this tab and this attempt, and must not
+ * outlive the browser session or leak between tabs.
+ */
+const RETURN_TO_KEY = 'fapoms_return_to';
+
+/**
+ * Records the requested path, then sends the visitor to sign in.
+ *
+ * A component rather than an inline `<Navigate>` because the write has to happen as an effect —
+ * doing it during render would be a side effect in the render phase.
+ */
+/**
+ * Sends a just-signed-in person to wherever they were originally headed, or to their role's home.
+ *
+ * The destination is captured once, in a `useState` initialiser, and cleared in an effect — never
+ * read-and-cleared inline in the element expression. React StrictMode double-invokes render in
+ * development, so an inline consume returned the path on the first pass and `null` on the second,
+ * and it was the second result the router actually used. Reading once fixes that, and clearing in
+ * an effect keeps the render itself free of side effects.
+ */
+const PostLoginRedirect: React.FC<{ fallback: string }> = ({ fallback }) => {
+  const [returnTo] = useState<string | null>(() => {
+    try {
+      const target = sessionStorage.getItem(RETURN_TO_KEY);
+      return target && target !== '/login' ? target : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(RETURN_TO_KEY);
+    } catch {
+      // Non-fatal: the worst case is landing on the role's home page.
+    }
+  }, []);
+
+  // ProtectedRoute still guards the destination, so a deep link into a section this role may not
+  // open is refused exactly as it would be if they had clicked through to it.
+  return <Navigate to={returnTo ?? fallback} replace />;
+};
+
+const RememberAndRedirectToLogin: React.FC = () => {
+  const location = useLocation();
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(RETURN_TO_KEY, `${location.pathname}${location.search}`);
+    } catch {
+      // Storage unavailable (private mode, quota) — fall back to the role home after sign-in.
+    }
+  }, [location.pathname, location.search]);
+  return <Navigate to="/login" replace />;
+};
 
 /** Lightweight fallback shown while a route chunk is fetched. Mirrors ProtectedRoute's loader. */
 const RouteFallback: React.FC = () => (
@@ -129,20 +187,38 @@ export const App: React.FC = () => {
   const handleLoginSuccess = (jwtToken: string, refreshToken: string) => {
     // Belt and braces: a sign-in that follows a crash, a back-button return, or any path that
     // skipped handleLogout must not start on top of someone else's cached data or scope.
+    // The pending return path lives in sessionStorage, which clearSession does not touch.
     clearSession();
     localStorage.setItem('fapoms_token', jwtToken);
     localStorage.setItem('fapoms_refresh_token', refreshToken);
+    /**
+     * Mark the profile as loading in the same batch as the token, so the render between
+     * "token set" and "/users/me returned" is a loader rather than an authenticated user with no
+     * roles — which ProtectedRoute would otherwise bounce to the dashboard.
+     */
+    setIsLoadingUser(true);
     setToken(jwtToken);
-    // Land on the role's home rather than a fixed page — the '/' route resolves it once the
-    // profile (and therefore the roles) has loaded.
+    /**
+     * Always land on '/' and let that route decide.
+     *
+     * Navigating straight to the remembered path from here raced the token state flip: the
+     * router moved to /billing while the unauthenticated route table was still mounted, so it
+     * matched a catch-all and was bounced before the real /billing route existed. Resolving the
+     * destination inside the authenticated tree — once roles are known — removes the race.
+     */
     navigate('/');
   };
 
   const handleLogout = () => {
-    // Clears storage *and* the React Query cache — this navigates rather than reloading, so
-    // without the cache clear the next person to sign in on this machine is served the
-    // previous user's branches, assignments and dashboard.
-    clearSession();
+    // Revokes the refresh token server-side *and* clears storage and the React Query cache.
+    // The revoke matters on shared machines: without it "Sign Out" only forgot the tokens here
+    // while they stayed valid on the server. The cache clear matters because this navigates
+    // rather than reloading, so otherwise the next person to sign in on this machine is served
+    // the previous user's branches, assignments and dashboard.
+    //
+    // Local state is torn down immediately rather than awaiting the revoke — the person asked to
+    // leave, and a slow or failed network call must not keep them signed in on screen.
+    void endSession();
     setToken(null);
     setCurrentUser(null);
     navigate('/login');
@@ -152,7 +228,13 @@ export const App: React.FC = () => {
     return (
       <Routes>
         <Route path="/login" element={<Login onLoginSuccess={handleLoginSuccess} />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        {/*
+          Remember where they were headed. A bookmarked or shared link to, say, /billing used to
+          bounce to /login and then drop the person on their role's home page, leaving them to
+          navigate back by hand — and a link pasted into a chat never landed anywhere useful.
+          `RETURN_TO_KEY` is read once by handleLoginSuccess and cleared.
+        */}
+        <Route path="*" element={<RememberAndRedirectToLogin />} />
       </Routes>
     );
   }
@@ -192,7 +274,7 @@ export const App: React.FC = () => {
           element={
             isLoadingUser && userRoles.length === 0
               ? <RouteFallback />
-              : <Navigate to={defaultRouteForRoles(userRoles)} replace />
+              : <PostLoginRedirect fallback={defaultRouteForRoles(userRoles)} />
           }
         />
         <Route path="/dashboard" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Dashboard /></ProtectedRoute>} />

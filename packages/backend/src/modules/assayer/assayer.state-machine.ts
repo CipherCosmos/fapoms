@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { AssayerEntity } from './assayer.entity';
-import { AssayerLifecycleStatus, AssayerStatus, ASSAYER_LIFECYCLE_TRANSITIONS } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus, ASSAYER_LIFECYCLE_TRANSITIONS, assayerLifecyclePath } from '@fapoms/shared';
 import {
   AssayerDocumentVerificationStartedEvent,
   AssayerBackgroundCheckInitiatedEvent,
@@ -25,25 +25,17 @@ function mapLifecycleToOperationalStatus(lifecycle: string): AssayerStatus {
 }
 
 export class AssayerStateMachine {
-  /** Ordered path of lifecycle states from `from` to `target`, walking only
-   *  allowed transitions (BFS). Returns [] when already there, or null when the
-   *  target is unreachable through the state machine — used by bulk operations
-   *  to walk a batch forward to a single destination without invalid jumps. */
+  /**
+   * Ordered path of lifecycle states from `from` to `target`, or null when the target is
+   * unreachable — used by bulk operations to walk a batch to a single destination without
+   * inventing edges.
+   *
+   * Delegates to the shared implementation, which the roster also uses to decide which bulk
+   * targets to offer. This was a second, identical breadth-first search; keeping both meant the
+   * screen could offer a destination the server would then decline to reach.
+   */
   static findPathTo(from: string, target: string): string[] | null {
-    if (from === target) return [];
-    const queue: { stage: string; path: string[] }[] = [{ stage: from, path: [] }];
-    const visited = new Set<string>([from]);
-    while (queue.length) {
-      const { stage, path } = queue.shift()!;
-      for (const next of LIFECYCLE_TRANSITIONS[stage] ?? []) {
-        if (next === target) return [...path, next];
-        if (!visited.has(next)) {
-          visited.add(next);
-          queue.push({ stage: next, path: [...path, next] });
-        }
-      }
-    }
-    return null;
+    return assayerLifecyclePath(from, target);
   }
 
   private static validateTransition(assayer: AssayerEntity, targetStatus: AssayerLifecycleStatus) {
@@ -59,6 +51,24 @@ export class AssayerStateMachine {
     assayer.status = mapLifecycleToOperationalStatus(targetStatus);
     assayer.updatedBy = userId;
     if (targetStatus === AssayerLifecycleStatus.ARCHIVED) assayer.isActive = false;
+
+    /**
+     * Record the day someone left, on the way out.
+     *
+     * Leaving was recorded only in `lifecycleStatus`, while every count and filter of departures
+     * reads `exitDate`/`terminationDate` — which nothing set. So the roster's "Exited" chip and
+     * the workforce header's "0 exited" stayed at zero however many people left, and a resigned
+     * assayer was counted in neither Active nor Exited while plainly showing RESIGNED on screen.
+     *
+     * An existing date is never overwritten: HR may already have entered the real last working
+     * day, and that is better information than the day the record was updated.
+     */
+    if (targetStatus === AssayerLifecycleStatus.RESIGNED && !assayer.exitDate) {
+      assayer.exitDate = new Date();
+    }
+    if (targetStatus === AssayerLifecycleStatus.TERMINATED && !assayer.terminationDate) {
+      assayer.terminationDate = new Date();
+    }
   }
 
   static verifyDocuments(assayer: AssayerEntity, userId: string): AssayerDocumentVerificationStartedEvent {

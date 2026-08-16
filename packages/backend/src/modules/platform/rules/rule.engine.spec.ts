@@ -82,6 +82,20 @@ describe('RuleEngine', () => {
 
       expect(result.passed).toBe(true);
     });
+
+    /**
+     * A limit of zero is how an operator freezes assignment — during an incident, an audit pause,
+     * or while a client relationship is on hold. `if (limit)` treated it as "no limit configured",
+     * so the rule sat on screen looking active and blocked nobody.
+     */
+    it('treats a limit of 0 as "nobody may hold an open assignment", not as unset', async () => {
+      mockRuleRepository.find.mockResolvedValue([capacityRule({ maxConcurrentAssignments: 0 })]);
+
+      const [result] = await engine.evaluate(contextWith({ activeWorkload: 0 }));
+
+      expect(result.passed).toBe(false);
+      expect(result.message).toMatch(/reached the limit of 0/);
+    });
   });
 
   describe('CERTIFICATION rules', () => {
