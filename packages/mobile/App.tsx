@@ -296,9 +296,31 @@ function AppMain() {
   const handleConfirmReject = async () => {
     const pending = overlay.current('reject');
     if (!pending || rejectSubmitting) return;
+
+    /**
+     * A decline needs a real reason, and this is where that gets enforced.
+     *
+     * The server already refuses an empty one — "the branch goes back into planning and the
+     * next person needs to know why" — because a decline with no cause makes the desk re-offer
+     * the same fee, the same date, the same distance, and get declined again. This screen used
+     * to send `reason || 'Declined by assayer'`, which satisfied that check with a string
+     * carrying no information, so the guard could never fire and replanning learned nothing.
+     *
+     * Caught here rather than at the server so the assayer keeps what they typed and gets an
+     * answer immediately, instead of a round trip that returns a validation error.
+     */
+    const reason = (pending.reason ?? '').trim();
+    if (!reason) {
+      feedback.error(
+        'Add a reason',
+        'Tell the desk why you are declining — too far, fee too low, date impossible. They need it to re-plan the branch.',
+      );
+      return;
+    }
+
     setRejectSubmitting(true);
     try {
-      const res = await rejectAssignment(pending.assignmentId, pending.reason || 'Declined by assayer');
+      const res = await rejectAssignment(pending.assignmentId, reason);
       if (res.success) {
         overlay.close();
       } else {
