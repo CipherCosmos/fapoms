@@ -61,7 +61,9 @@ export function setupBullBoard(app: any) {
   const serverAdapter = new ExpressAdapter();
   serverAdapter.setBasePath('/bull-board');
 
-  const queues = ['background-jobs', 'ocr', 'sla-scanner']
+  // Every queue, not three of them: the busiest (notification delivery, document dispatch and
+  // the outbox relay) were invisible on the board that exists to make queues visible.
+  const queues = ['background-jobs', 'ocr', 'sla-scanner', 'document-dispatch', 'notification-delivery', 'outbox']
     .map((name) => {
       try {
         return app.get(`BullQueue_${name}`, { strict: false });

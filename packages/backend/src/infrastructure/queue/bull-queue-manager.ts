@@ -19,8 +19,18 @@ export class BullQueueManager implements BackgroundQueueManager {
       priority: job.priority ?? 0,
       attempts: job.retryAttempts ?? 3,
       backoff: { type: 'exponential', delay: 1000 },
-      removeOnComplete: false,
-      removeOnFail: false,
+      /**
+       * Retention, not "keep everything forever".
+       *
+       * `false` on both meant every job this queue ever ran stayed in Redis — the completed set
+       * and the failed set growing without bound on the same instance that holds the cache, the
+       * rate-limit counters and every other queue. Redis now runs with `maxmemory` and
+       * `noeviction` in production, so an unbounded set does not silently evict a cache key: it
+       * refuses writes. Keep a day of successes and a week of failures, which is long enough to
+       * investigate one and short enough to bound the memory.
+       */
+      removeOnComplete: { age: 24 * 60 * 60, count: 1000 },
+      removeOnFail: { age: 7 * 24 * 60 * 60, count: 500 },
     });
     this.logger.log(`Enqueued job ${job.name} with id ${bullJob.id}`);
     return bullJob.id!.toString();

@@ -12,6 +12,9 @@ const QUEUE_NAMES = [
   'sla-scanner',
   'document-dispatch',
   'notification-delivery',
+  // The outbox relay was missing, so a relay job that exhausted its retries — meaning domain
+  // events had stopped being recovered — dead-lettered with nothing watching.
+  'outbox',
 ];
 
 /** A job is dead-lettered once it has used up every configured attempt. */
