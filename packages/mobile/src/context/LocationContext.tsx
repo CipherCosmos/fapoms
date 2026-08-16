@@ -22,6 +22,44 @@ import { calculateHaversineDistance } from '@fapoms/shared';
  */
 const FIX_TIMEOUT_MS = 15000;
 
+/**
+ * A simulated position, for development only. Never reachable in a shipped build.
+ *
+ * Android emulators cannot always be given a location — `geo fix` reports OK while every
+ * provider still answers `last location=null` — and without one the whole authenticated journey
+ * downstream of check-in cannot be exercised at all.
+ *
+ * This is deliberately narrow, because the thing it stands in for is evidence. A check-in is the
+ * record that proves an assayer physically stood inside a bank branch during a collateral audit.
+ * An earlier version of this app fell back to the *branch's own* coordinates when no fix arrived,
+ * which "proved" presence without the worker leaving home and was indistinguishable from a real
+ * reading. That was removed as a defect and must not come back by another door.
+ *
+ * Three properties keep it from becoming that:
+ *
+ *   1. `__DEV__` is a compile-time constant. Release bundles strip this branch entirely, so no
+ *      shipped build can produce a simulated fix however the variable is set.
+ *   2. It is off unless `EXPO_PUBLIC_DEV_LOCATION` is explicitly set to "lat,lng". Absent or
+ *      malformed means no simulation — never a silent default coordinate.
+ *   3. The fix it returns carries `isSimulated: true`, so anything recording or displaying it can
+ *      tell the difference. Real fixes never carry the flag.
+ */
+function devSimulatedFix(): LocationCoords | null {
+  if (!__DEV__) return null;
+
+  const raw = process.env.EXPO_PUBLIC_DEV_LOCATION;
+  if (!raw) return null;
+
+  const [lat, lng] = raw.split(',').map((n: string) => Number(n.trim()));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    console.warn(`EXPO_PUBLIC_DEV_LOCATION is not "lat,lng": ${raw} — ignoring it.`);
+    return null;
+  }
+
+  console.warn(`[dev] Using a SIMULATED location ${lat}, ${lng} — this cannot happen in a release build.`);
+  return { latitude: lat, longitude: lng, accuracy: 5, isSimulated: true };
+}
+
 export interface LocationCoords {
   latitude: number;
   longitude: number;
@@ -29,6 +67,14 @@ export interface LocationCoords {
   altitude?: number | null;
   speed?: number | null;
   heading?: number | null;
+  /**
+   * Set only by `devSimulatedFix`, and therefore only ever in a development build.
+   *
+   * A real fix never carries this. It exists so a simulated position cannot be mistaken for a
+   * measured one by anything that later reads the fix — the point of the original defect was
+   * that a fabricated location was *indistinguishable* from a genuine reading.
+   */
+  isSimulated?: boolean;
 }
 
 interface LocationContextType {
@@ -276,6 +322,17 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const runRefreshLocation = useCallback(async (): Promise<LocationCoords | null> => {
     setLoadingLocation(true);
     setErrorMsg(null);
+
+    // Checked before the platform is asked at all, so a machine that cannot produce a fix does
+    // not have to wait out the timeout first. Returns null in every shipped build — see above.
+    const simulated = devSimulatedFix();
+    if (simulated) {
+      setLocation(simulated);
+      setLoadingLocation(false);
+      recordFix(simulated);
+      return simulated;
+    }
+
     try {
       let perm = hasPermissionRef.current;
       if (perm !== true) {

@@ -196,6 +196,10 @@ services:
       - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
       - REACT_NATIVE_PACKAGER_HOSTNAME=${REACT_NATIVE_PACKAGER_HOSTNAME:-10.23.68.233}
       - EXPO_PUBLIC_API_URL=http://${REACT_NATIVE_PACKAGER_HOSTNAME:-10.23.68.233}:3000/api/v1
+      # Development only: a simulated device position as "lat,lng", for emulators that cannot
+      # be given a real fix. Stripped from release bundles by the __DEV__ guard in
+      # LocationContext; unset means no simulation.
+      - EXPO_PUBLIC_DEV_LOCATION=${EXPO_PUBLIC_DEV_LOCATION:-}
     env_file:
       - .env.docker
     volumes:
