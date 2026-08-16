@@ -164,6 +164,10 @@ const mockNotificationService = {
       work(
         {
           save: jest.fn((arg: any) => Promise.resolve(arg)),
+          // The assignment-number sequence. Returns a fixed value so the number is deterministic.
+          query: jest.fn(async (sql: string) =>
+            /nextval\('assignment_number_seq'\)/.test(sql) ? [{ n: '42' }] : [],
+          ),
           getRepository: jest.fn().mockReturnValue({
             findOne: jest.fn(),
             save: jest.fn((arg: any) => Promise.resolve(arg)),
@@ -283,6 +287,24 @@ const mockNotificationService = {
       mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
       mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing', status: AssignmentStatus.ACCEPTED });
       await expect(service.create(validDto, 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('numbers a new assignment from the database sequence, six digits, never a random suffix', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1', branch: { name: 'Test', state: 'MH' }, project: {},
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', skills: [], certifications: [] });
+      mockConstraintEvaluator.checkSkillsAndCertifications.mockReturnValue({ passed: true });
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      // create() returns the object it is given, so the number the service assigns inside the
+      // transaction is the one we read back.
+      mockAssignmentRepo.create.mockImplementation((arg: any) => ({ id: 'asn-new', ...arg }));
+
+      const result = await service.create(validDto, 'user-1');
+      const year = new Date().getFullYear();
+      expect(result.assignmentNumber).toBe(`ASN-${year}-000042`);
+      // Legacy numbers were four random digits; the two families must not share a width.
+      expect(result.assignmentNumber).toMatch(/^ASN-\d{4}-\d{6}$/);
     });
 
     it('should create assignment in PENDING status', async () => {

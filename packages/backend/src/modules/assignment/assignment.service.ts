@@ -208,6 +208,27 @@ export class AssignmentService {
     }
   }
 
+  /**
+   * The next assignment number, from the database sequence.
+   *
+   * Numbers used to be `ASN-<year>-<four random digits>` against a UNIQUE constraint with no
+   * collision handling — nine thousand values a year, so past a few hundred assignments creates
+   * started failing with a rolled-back transaction, and past nine thousand they could not
+   * succeed at all. `nextval` is atomic and never repeats. Six zero-padded digits so the new
+   * family can never textually collide with a legacy four-digit number; the year is kept
+   * because operators read it, but the sequence is global (see the migration for why).
+   */
+  private async nextAssignmentNumber(manager: EntityManager): Promise<string> {
+    const rows: Array<{ n: string | number }> = await manager.query(
+      `SELECT nextval('assignment_number_seq') AS n`,
+    );
+    const n = Number(rows?.[0]?.n);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error('assignment_number_seq did not return a value — has migration 1790400000000 run?');
+    }
+    return `ASN-${new Date().getFullYear()}-${String(n).padStart(6, '0')}`;
+  }
+
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
     const projectBranch = await this.projectQueryService.findProjectBranchById(dto.projectBranchId);
 
@@ -448,10 +469,10 @@ export class AssignmentService {
       assignment.updatedBy = userId;
       assignment.isActive = true;
     } else {
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      const assignmentNumber = `ASN-${new Date().getFullYear()}-${randomSuffix}`;
       assignment = this.assignmentRepository.create({
-        assignmentNumber,
+        // Allocated from the database sequence inside the transaction below — see
+        // nextAssignmentNumber. Placeholder here only so the entity type-checks.
+        assignmentNumber: '',
         projectBranchId: projectBranch.id,
         assessmentId: assessment?.id || null,
         projectId: projectBranch.projectId,
@@ -483,6 +504,9 @@ export class AssignmentService {
       if (projectBranch && !projectBranch.scheduledDate && scheduledDateObj) {
         projectBranch.scheduledDate = scheduledDateObj;
         await manager.save(projectBranch);
+      }
+      if (!isReassignment) {
+        assignment.assignmentNumber = await this.nextAssignmentNumber(manager);
       }
       const savedAssignment = await manager.save(assignment);
 
