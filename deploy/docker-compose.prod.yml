@@ -7,6 +7,22 @@
 #
 #   Internet → Tailscale Funnel :443 → 127.0.0.1:8080 → caddy → frontend / backend
 
+# Resource limits, health checks and stop grace periods were added on 2026-08-16. Sized for
+# the current host (4 vCPU / 11.5 GB) with headroom for the image builds auto-deploy runs on
+# this same machine; raise `mem_limit`s together if the host grows. A container that exceeds
+# its limit is OOM-killed and restarted rather than taking Postgres down with it.
+#
+# Memory only, no `cpus:`. Rootless podman can only enforce the cgroup controllers systemd
+# delegates to the user session, and on this host that is `memory pids` (checked with
+# `podman info --format '{{.Host.CgroupControllers}}'`) — a `cpus:` line would make
+# `compose up` fail outright. To add CPU limits later, delegate the controller (needs root):
+#   /etc/systemd/system/user@.service.d/delegate.conf → [Service] Delegate=cpu cpuset io memory pids
+#   systemctl daemon-reload, then log out and in; re-check `podman info` before adding `cpus:`.
+#
+# NOTE: neither podman nor docker restarts a container merely for failing its healthcheck —
+# only for exiting. The healthchecks feed `podman ps` / `depends_on` and the deploy script's
+# wait; a hung-but-alive API still needs the process to exit (it does on unhandled errors).
+
 services:
   postgres:
     # PostGIS, not stock Postgres: three columns are geometry and the planning engines are built
@@ -19,25 +35,53 @@ services:
       POSTGRES_DB: ${DB_DATABASE}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Postgres uses shared memory for parallel query and hash joins; the container default
+    # (64 MB) makes larger plans fail with "could not resize shared memory segment".
+    shm_size: 512m
+    mem_limit: ${PG_MEM_LIMIT:-3g}
+    # Enough for a checkpoint to complete; killing Postgres mid-checkpoint just makes the
+    # next start replay WAL.
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME}"]
       interval: 5s
       timeout: 5s
       retries: 30
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
 
   redis:
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # maxmemory with noeviction: Redis holds queues and rate-limit counters as well as caches,
+    # and silently evicting a Bull job would lose work; better to refuse writes loudly (the
+    # cache and limiter fail open on that) than to grow until the host swaps. Bull's failed-job
+    # retention is what fills this — see the notification and OCR queue options.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-384mb}
+      - --maxmemory-policy
+      - noeviction
     volumes:
       - redisdata:/data
+    mem_limit: ${REDIS_MEM_LIMIT:-512m}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 20
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   minio:
-    image: docker.io/minio/minio:latest
+    # Pinned to the release that is running today. `:latest` meant every `pull` could change
+    # the object store under the audit evidence; MinIO has removed features between releases.
+    # Bump deliberately, after reading the release notes.
+    image: docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -45,10 +89,15 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - miniodata:/data
+    mem_limit: ${MINIO_MEM_LIMIT:-1g}
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
       retries: 30
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   backend:
     build:
@@ -56,16 +105,43 @@ services:
       dockerfile: packages/backend/Dockerfile
     restart: unless-stopped
     env_file: [../.env.docker]
+    environment:
+      # Cap the V8 heap below the container limit so Node degrades (GC pressure, then a clean
+      # heap-out-of-memory exit that restart policy recovers) instead of being SIGKILLed by
+      # the cgroup with no log line. Keep ~500 MB between the two for buffers, sockets, TLS
+      # and the file uploads that pass through this process.
+      NODE_OPTIONS: ${BACKEND_NODE_OPTIONS:---max-old-space-size=1024}
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
+    # A deploy or restart used to get podman's default 10 s before SIGKILL, against a
+    # request timeout of 300 s: field uploads, Excel imports and OCR jobs in flight were cut
+    # every time. The app closes its pools, queues and sockets on SIGTERM; give it time to.
+    stop_grace_period: 60s
+    healthcheck:
+      # Liveness only: the process is up and can reach its database. Deliberately not the
+      # readiness probe (which includes Redis) — Redis being away must not make the API
+      # look dead to the deploy script.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
 
   frontend:
     build:
       context: ..
       dockerfile: packages/frontend/Dockerfile
     restart: unless-stopped
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   caddy:
     image: docker.io/library/caddy:2-alpine
@@ -79,6 +155,10 @@ services:
     # front one, and a second URL that anything pointed at it would silently depend on.
     ports:
       - "127.0.0.1:8080:8080"
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
       - caddydata:/data
