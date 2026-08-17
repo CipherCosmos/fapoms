@@ -49,9 +49,9 @@
  * upgraded afterwards by the backfill.
  */
 
-import * as fs from 'fs';
 import * as path from 'path';
 import { calculateHaversineDistance } from '@fapoms/shared';
+import { JsonFileCache } from './geo-cache-store';
 
 export interface Coord {
   lat: number;
@@ -114,39 +114,27 @@ export interface AddressParts {
  * cannot remember how precise an entry was. Reusing it would silently promote a 15 km centroid
  * to whatever tier the caller assumed.
  */
-const CACHE_FILE = path.join(__dirname, '../../infrastructure/database/osm-geocoding-cache.json');
-let cache: Record<string, OsmGeocodeResult> = {};
-try {
-  if (fs.existsSync(CACHE_FILE)) cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-} catch {
-  /* start empty — a corrupt cache must not stop the app booting */
-}
+/**
+ * The debounce this cache already had is now the shared one in geo-cache-store.ts, which the
+ * other two geocoding caches were missing entirely. The move also gets the file out of `dist/`:
+ * `__dirname/../../infrastructure/database/` resolves inside the build output, which `nest build`
+ * never populates and every deploy replaces — so this cache started cold in every container and
+ * nothing it learned survived a release.
+ */
+const cache = new JsonFileCache<OsmGeocodeResult>(
+  'osm-geocoding-cache.json',
+  path.join(__dirname, '../../infrastructure/database/osm-geocoding-cache.json'),
+);
 
-let cacheDirty = false;
-let flushTimer: NodeJS.Timeout | null = null;
 function rememberResult(key: string, value: OsmGeocodeResult): void {
-  cache[key] = value;
-  cacheDirty = true;
   // Debounced: a backfill resolves hundreds of rows, and writing the whole file per row turns
   // an I/O convenience into the slowest part of the job.
-  if (!flushTimer) {
-    flushTimer = setTimeout(flushCache, 2000);
-    flushTimer.unref?.();
-  }
+  cache.set(key, value);
 }
 
+/** Settle any pending cache write immediately. Kept exported — it is the shutdown escape hatch. */
 export function flushCache(): void {
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  if (!cacheDirty) return;
-  try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
-    cacheDirty = false;
-  } catch {
-    /* non-fatal: the cache is an optimisation, not a source of truth */
-  }
+  cache.flush();
 }
 
 function cacheKey(kind: string, parts: AddressParts): string {
@@ -664,7 +652,7 @@ export async function pincodeCentroid(
 ): Promise<OsmGeocodeResult | null> {
   if (!/^\d{6}$/.test(pincode)) return null;
   const key = `pin|${pincode}|${normalisePlace(district)}`;
-  const cached = cache[key];
+  const cached = cache.get(key);
   if (cached) return cached;
 
   const params = new URLSearchParams({
@@ -724,7 +712,7 @@ export async function resolveFreely(
   anchor: VerificationAnchor | null = null,
 ): Promise<OsmGeocodeResult | null> {
   const key = cacheKey('free', parts);
-  const cached = cache[key];
+  const cached = cache.get(key);
   if (cached) return cached;
 
   const brandAndName = [parts.brand, parts.name].filter(Boolean).join(' ').trim();

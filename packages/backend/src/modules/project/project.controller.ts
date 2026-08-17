@@ -31,6 +31,7 @@ import { In, Repository } from 'typeorm';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
+import { ImportJobService } from './import-job.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
@@ -134,6 +135,7 @@ class MarkUnableToCoverRequestDto {
 export class ProjectController {
   constructor(
     private readonly projectService: ProjectService,
+    private readonly importJobService: ImportJobService,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly regionGuard: RegionGuardService,
@@ -374,15 +376,41 @@ export class ProjectController {
     };
   }
 
+  /**
+   * Upload a branch list.
+   *
+   * ## Why one route with a threshold, rather than a second "async" route
+   *
+   * A small file still imports synchronously and returns *exactly* what it always returned — the
+   * branch list in `data`, the counts and the skipped/imprecise rows in `meta`. That path is what
+   * operations uses every day (the largest client on the platform has 72 branches) and it works,
+   * so it is left alone.
+   *
+   * A large file no longer runs in the request. It could not: geocoding is rate-limited to about
+   * one lookup per second, so a 2,000-branch file is 17 minutes at best against a 300-second
+   * `requestTimeout` — the socket died, the operator saw a failure, the server carried on
+   * importing regardless, and the operator's natural response (upload it again) started a second
+   * import of the same file. Adding a separate opt-in route would have left that trap armed for
+   * anyone who did not know to use the new one, which is the wrong default for the case that is
+   * already broken. The threshold is the file's own shape, not a flag the caller has to set.
+   *
+   * The queued response deliberately carries **no `meta`**: the existing web client reads
+   * `meta.created`/`meta.updated`/`meta.linked` and, seeing three zeros, would tell the operator
+   * "nothing was imported — your column headings probably do not match", which would be a lie
+   * about a job that is running perfectly well. With `meta` absent it falls through to its
+   * neutral "Branches uploaded." message instead. The job id is in `data`, for a client that
+   * knows to poll `GET /projects/:id/branches/import-jobs/:jobId`.
+   */
   @Post(':id/branches/upload')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('project:create:organization')
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
-  @ApiOperation({ summary: 'Upload branches from Excel spreadsheet and associate with project' })
+  @ApiOperation({ summary: 'Upload branches from Excel spreadsheet; large files are queued and return 202 with a job id' })
   async uploadBranches(
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: any,
-    @Req() req: any
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
   ) {
     // A submitted form with no file attached reaches here as `undefined`, and reading
     // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
@@ -390,6 +418,44 @@ export class ProjectController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
+
+    /**
+     * The file is validated in the request either way.
+     *
+     * Enqueuing an unreadable file, or the assayer roster uploaded to the wrong screen, would
+     * turn an immediate and specific 400 into a 202 followed by a failure the operator has to go
+     * looking for. Preflight parses the workbook and applies the same rejections the synchronous
+     * import always did, before any routing decision is made.
+     */
+    const preflight = await this.projectService.preflightBranchExcel(id, file.buffer);
+
+    if (ImportJobService.shouldQueue(preflight)) {
+      const job = await this.importJobService.enqueueBranchImport({
+        projectId: id,
+        userId: req.user.id,
+        fileBuffer: file.buffer,
+        fileName: file.originalname ?? null,
+        totalRows: preflight.totalRows,
+        rowsNeedingGeocode: preflight.rowsNeedingGeocode,
+      });
+
+      // 202: accepted, not done. The body says where to watch.
+      res.status(202);
+      return {
+        success: true,
+        data: {
+          ...job,
+          queued: true,
+          statusUrl: `/projects/${id}/branches/import-jobs/${job.jobId}`,
+          message:
+            `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
+            `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
+            `import is running in the background — it does not need this page kept open. Check its progress at ` +
+            `the status URL.`,
+        },
+      };
+    }
+
     const report = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
     return {
       success: true,
@@ -408,6 +474,33 @@ export class ProjectController {
         // where they are, so the operator has to be told while the import is still in front of them.
         imprecise: report.imprecise,
       },
+    };
+  }
+
+  /**
+   * Poll a queued branch import.
+   *
+   * Reads Bull directly rather than a table of our own: the queue already records state, progress,
+   * return value and failure reason durably, and a second copy in Postgres would be one more thing
+   * to keep in step with it. Retention is bounded (see `ImportJobService.JOB_OPTIONS`), so this
+   * answers 404 for a job old enough to have been cleared — which the message says explicitly,
+   * because "not found" alone reads as "your import vanished".
+   *
+   * Same roles as the upload itself: whoever may start an import may read what it did.
+   */
+  @Get(':id/branches/import-jobs/:jobId')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @RequirePermissions('project:create:organization')
+  @ApiOperation({ summary: 'State, progress and result of a queued branch import' })
+  async getBranchImportJob(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('jobId') jobId: string,
+  ) {
+    // The project id is passed through and checked against the job's own payload — Bull ids are a
+    // per-queue counter, so without that check they are trivially enumerable across projects.
+    return {
+      success: true,
+      data: await this.importJobService.getBranchImportStatus(id, jobId),
     };
   }
 

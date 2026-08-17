@@ -1,19 +1,24 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { resolveFreely, pincodeCentroid, VerificationAnchor, GeoPrecision, networkAllowed } from './osm-geocoder';
+import { JsonFileCache } from './geo-cache-store';
 
-// Shared on-disk cache with the branch/assayer geocoders: one lookup paid,
-// every record in the same place free. Persisted so a restart does not re-hit
-// the geocoding API for the same pin/district.
-const GEO_CACHE_FILE = path.join(__dirname, '../../infrastructure/database/geocoding-cache.json');
-let geoCache: Record<string, { lat: number; lng: number }> = {};
-try {
-  if (fs.existsSync(GEO_CACHE_FILE)) geoCache = JSON.parse(fs.readFileSync(GEO_CACHE_FILE, 'utf8'));
-} catch { /* start with an empty cache */ }
-function saveGeoCache() {
-  try { fs.writeFileSync(GEO_CACHE_FILE, JSON.stringify(geoCache, null, 2), 'utf8'); } catch { /* non-fatal */ }
-}
+/**
+ * Shared on-disk cache with the branch/assayer geocoders: one lookup paid, every record in the
+ * same place free. Persisted so a restart does not re-hit the geocoding API for the same
+ * pin/district.
+ *
+ * Every write used to be `fs.writeFileSync(<the whole file>)`, run once per cache miss with no
+ * debounce at all — so a branch import blocked the event loop for the entire platform once per
+ * row, and the block got longer as the cache grew. `JsonFileCache` batches the writes and moves
+ * the file out of `dist/`, where it was being discarded on every deploy. See geo-cache-store.ts.
+ */
+const geoCache = new JsonFileCache<{ lat: number; lng: number }>(
+  'geocoding-cache.json',
+  // Where this cache used to be written. Read once at startup so an existing deployment or dev
+  // checkout carries its warm entries across rather than re-geocoding everything it already knew.
+  path.join(__dirname, '../../infrastructure/database/geocoding-cache.json'),
+);
 
 export interface Coord { lat: number; lng: number }
 /**
@@ -162,7 +167,7 @@ async function googleGeocode(
 
   const coords = { lat: location.lat, lng: location.lng };
   const cacheKey = `${address} ${city} ${pin || ''}`.replace(/\s+/g, ' ').trim();
-  if (cacheKey.length > 6) { geoCache[cacheKey] = coords; saveGeoCache(); }
+  if (cacheKey.length > 6) geoCache.set(cacheKey, coords);
   return { ...coords, accuracyMeters: accuracy, source: 'geocoder' };
 }
 
@@ -237,8 +242,9 @@ async function pincodeFallback(pin: string): Promise<GeocodeResult | null> {
   if (!/^\d{6}$/.test(pin)) return null;
   // Check cache first
   const cacheKey = `pincode:${pin}`;
-  if (geoCache[cacheKey]) {
-    return { ...geoCache[cacheKey], accuracyMeters: 5000, source: 'pincode' };
+  const cachedPin = geoCache.get(cacheKey);
+  if (cachedPin) {
+    return { ...cachedPin, accuracyMeters: 5000, source: 'pincode' };
   }
   // The only geo lookup that was not behind this gate, so any spec creating an assayer or branch
   // whose address contained a 6-digit pincode became a live call to api.postalpincode.in —
@@ -272,8 +278,7 @@ async function pincodeFallback(pin: string): Promise<GeocodeResult | null> {
       lat: offices.reduce((s, o) => s + o.lat, 0) / offices.length,
       lng: offices.reduce((s, o) => s + o.lng, 0) / offices.length,
     };
-    geoCache[cacheKey] = avg;
-    saveGeoCache();
+    geoCache.set(cacheKey, avg);
     return { ...avg, accuracyMeters: 5000, source: 'pincode' };
   } catch {
     return null;

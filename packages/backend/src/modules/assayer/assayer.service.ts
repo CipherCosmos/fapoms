@@ -1970,6 +1970,52 @@ export class AssayerService implements OnModuleInit {
      */
     const firstRowForCode = new Map<string, number>();
 
+    /**
+     * Every assayer this roster might already know about, resolved in one query.
+     *
+     * This was a `findOne({ where: { assayerCode } })` inside the loop, so a 200-person roster
+     * issued 200 queries to answer a question one `In(codes)` answers — the same shape of fault
+     * the branch importer had. Read before the loop because none of it depends on what an earlier
+     * row did: the duplicate-code guard above means each code is worked at most once, so an
+     * assayer this import creates can never also be matched by it.
+     *
+     * No `isActive` filter, matching the per-row lookup exactly. Re-importing a roster is meant
+     * to update the person it names even if their record has been deactivated; filtering here
+     * would quietly create a second record for them instead.
+     */
+    const codesInFile = Array.from(new Set(
+      rows.map((r: Record<string, any>) => rowReader(r)(...CODE_ALIASES)).filter(Boolean),
+    ));
+    const existingAssayers = codesInFile.length
+      ? await this.assayerRepository.find({ where: { assayerCode: In(codesInFile) } })
+      : [];
+    const assayerByCode = new Map(existingAssayers.map((a) => [a.assayerCode, a]));
+
+    /**
+     * And their current commercial profiles, for the rows that carry rates.
+     *
+     * Only assayers who already existed can have one, so this covers every case the per-row
+     * `findOne` did: a person this import is creating has no profile by definition, and that path
+     * now issues no query at all rather than one that is guaranteed to return nothing.
+     *
+     * Sorted ascending and written into the map in order, so the last write per assayer is the
+     * latest `effectiveStartDate` — the same record `order: { effectiveStartDate: 'DESC' }` with
+     * `findOne` picked. The whole preload is best-effort for the same reason the per-row lookup
+     * had `.catch(() => null)`: a missing profile must not fail the roster import.
+     */
+    const activeProfileByAssayerId = new Map<string, AssayerCommercialProfileEntity>();
+    if (existingAssayers.length > 0) {
+      try {
+        const profiles = await this.commercialRepository.find({
+          where: { assayerId: In(existingAssayers.map((a) => a.id)), isActive: true },
+          order: { effectiveStartDate: 'ASC' },
+        });
+        for (const profile of profiles) activeProfileByAssayerId.set(profile.assayerId, profile);
+      } catch {
+        /* best-effort: the import proceeds and simply writes a fresh profile */
+      }
+    }
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       // +1 for the header row itself, plus however many rows preceded it.
@@ -2110,8 +2156,8 @@ export class AssayerService implements OnModuleInit {
           dto.workingHours = { start: whStart, end: whEnd };
         }
 
-        // Check if assayer exists by code
-        const existing = await this.assayerRepository.findOne({ where: { assayerCode } });
+        // Resolved from the batch loaded before the loop, not a query per row.
+        const existing = assayerByCode.get(assayerCode) ?? null;
         const saved = existing
           ? await this.update(existing.id, dto, userId)
           : await this.create(dto, userId);
@@ -2158,10 +2204,9 @@ export class AssayerService implements OnModuleInit {
           mealAllowance: num(get('Meal Allowance')),
         };
         if (Object.values(rates).some((v) => v !== undefined)) {
-          const activeProfile = await this.commercialRepository.findOne({
-            where: { assayerId: saved.id, isActive: true },
-            order: { effectiveStartDate: 'DESC' },
-          }).catch(() => null);
+          // From the preload. A brand-new assayer cannot have a profile, so that case no longer
+          // pays for a query whose answer is known.
+          const activeProfile = existing ? activeProfileByAssayerId.get(saved.id) ?? null : null;
 
           const payload = {
             baseFee: rates.baseFee ?? activeProfile?.baseFee ?? 0,

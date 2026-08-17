@@ -25,7 +25,8 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
 // the exact-header bug that dropped every row has now been hit by both importers.
-import { parseSheet, rowReader, identifyTemplate } from '../../core/excel/sheet-reader';
+import { parseSheet, rowReader, identifyTemplate, ParsedSheet, RowReader } from '../../core/excel/sheet-reader';
+import { BranchEntity } from '../branch/branch.entity';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
 import { needsBetterFix } from '../geo/coordinate-resolution';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -82,8 +83,7 @@ function getStateZone(stateName: string): string {
  * message and a list that had not changed. The counts and the `skipped` rows are the answer to
  * "did that work?", so they travel with the result.
  */
-export interface BranchUploadReport {
-  branches: ProjectBranchEntity[];
+export interface BranchImportOutcome {
   /** Data rows found in the first sheet. */
   totalRows: number;
   /** Branches created in the branch master. */
@@ -98,6 +98,62 @@ export interface BranchUploadReport {
    * before planning or check-in will behave. Distinct from `skipped`: these branches exist.
    */
   imprecise: { row: number; branchCode?: string; reason: string }[];
+}
+
+/**
+ * The outcome plus the project's resulting branch list.
+ *
+ * Split from `BranchImportOutcome` because the queued path must NOT carry the entity list: a job
+ * return value is serialised into Redis, and 2,000 hydrated `ProjectBranchEntity` rows (each with
+ * its branch and assignments) is megabytes of duplicated state that the caller is about to refetch
+ * from `GET /projects/:id/branches` anyway. The synchronous path keeps returning it, because the
+ * existing endpoint's `data` field is that list and callers depend on it.
+ */
+export interface BranchUploadReport extends BranchImportOutcome {
+  branches: ProjectBranchEntity[];
+}
+
+/**
+ * Live counters for an import in flight, published onto the Bull job so the poll endpoint can
+ * answer "how far has it got?".
+ *
+ * Counts only, never the `skipped`/`imprecise` detail arrays: progress is written repeatedly
+ * during the run, and re-serialising a growing list of failure reasons on every update would make
+ * the reporting cost grow with the number of problems in the file — exactly the shape of the
+ * whole-file cache rewrite this work is removing elsewhere. The detail arrives once, in the
+ * result, when the job finishes.
+ */
+export interface BranchImportProgress {
+  processed: number;
+  total: number;
+  created: number;
+  updated: number;
+  linked: number;
+  skipped: number;
+  imprecise: number;
+}
+
+/**
+ * What the request can determine about an upload before committing to do it.
+ *
+ * This exists so the HTTP request can still reject a wrong or empty file *synchronously* — with
+ * the same messages it always gave — while handing the slow part to a queue. Without it, an
+ * operator who uploaded the assayer roster to the branch importer would get a cheerful 202 and a
+ * job id, and only discover the mistake by polling.
+ */
+export interface BranchImportPreflight {
+  totalRows: number;
+  /**
+   * Rows with no usable Latitude/Longitude, i.e. the rows that will each cost a geocode.
+   *
+   * The honest predictor of how long an import takes. The free OSM tiers are rate-limited to
+   * about one lookup per second, so 400 unlocated rows is ~7 minutes regardless of how quick the
+   * database work is, whereas 2,000 rows that carry their own coordinates never touch the
+   * network. Row count alone would push the second case onto the queue for no reason and, worse,
+   * would let a 60-row file with no coordinates run synchronously for a minute.
+   */
+  rowsNeedingGeocode: number;
+  sheetName: string;
 }
 
 /** Partial edit of a project. Lifecycle moves go through transition(). */
@@ -150,6 +206,14 @@ export class ProjectService implements OnModuleInit {
       private readonly clientRepository: Repository<ClientEntity>,
       @InjectRepository(ZoneEntity)
       private readonly zoneRepository: Repository<ZoneEntity>,
+      /**
+       * Used only by the Excel import, to resolve every branch code in the file with one
+       * `In(codes)` query instead of one `BranchQueryService.findOneByCode` per row.
+       * `BranchQueryService` has no batched equivalent and lives in another module's ownership,
+       * so the batched read is issued here rather than by widening its API.
+       */
+      @InjectRepository(BranchEntity)
+      private readonly branchRepository: Repository<BranchEntity>,
       private readonly branchQueryService: BranchQueryService,
       private readonly branchService: BranchService,
       private readonly auditService: AuditService,
@@ -592,30 +656,24 @@ export class ProjectService implements OnModuleInit {
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
-  async uploadBranchesFromExcel(
-    projectId: string,
-    fileBuffer: Buffer,
-    userId: string,
-  ): Promise<BranchUploadReport> {
-    const project = await this.findOne(projectId);
-
-    // Read client planning preferences for hours-per-packet rate
-    const client = project.clientId
-      ? await this.clientRepository.findOne({ where: { id: project.clientId } })
-      : null;
-    const planningPrefs = client?.planningPreferences || {};
-    const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15; // default 15min per packet
-
+  /**
+   * Parse a branch workbook and refuse the files that are not one.
+   *
+   * Lifted out of `uploadBranchesFromExcel` unchanged so that the synchronous endpoint and the
+   * request that *enqueues* a background import reject a bad file identically, and in the
+   * request. A wrong template or an empty sheet has to fail while the operator is still looking
+   * at the upload dialog — learning it from a job record several minutes later, after the file
+   * has been accepted with a 202, is precisely the regression queueing could introduce.
+   */
+  private parseBranchSheet(fileBuffer: Buffer): ParsedSheet {
     // Finds the header row rather than assuming row 1 — client branch lists routinely open with
     // a merged title and a blank line, which otherwise makes every column `__EMPTY` and drops
     // the whole file. See core/excel/sheet-reader.
     const sheet = parseSheet(fileBuffer, ['BRANCH', 'BRANCH_NAME', 'STATE']);
-    const sheetName = sheet.sheetName;
-    const rows = sheet.rows;
 
-    if (rows.length === 0) {
+    if (sheet.rows.length === 0) {
       throw new BadRequestException(
-        `The first sheet of this file ("${sheetName ?? 'none'}") has no data rows. ` +
+        `The first sheet of this file ("${sheet.sheetName ?? 'none'}") has no data rows. ` +
           `Download the template, fill in the Branch sheet, and upload that.`,
       );
     }
@@ -635,6 +693,60 @@ export class ProjectService implements OnModuleInit {
           `Upload it under ${identified.where} instead — importing it here would create branches out of the wrong data.`,
       );
     }
+
+    return sheet;
+  }
+
+  /**
+   * Validate an upload and measure how much work it is, without doing any of it.
+   *
+   * The routing decision between "run it now" and "queue it" is made from this, so it must be
+   * cheap and must not touch the network: it parses the workbook (milliseconds, even for
+   * thousands of rows) and counts the rows that will each cost a rate-limited geocode.
+   */
+  async preflightBranchExcel(projectId: string, fileBuffer: Buffer): Promise<BranchImportPreflight> {
+    // Settled in the request, so an upload against a project that does not exist still 404s
+    // immediately rather than being accepted and failing inside a job nobody is watching.
+    await this.findOne(projectId);
+    const sheet = this.parseBranchSheet(fileBuffer);
+
+    let rowsNeedingGeocode = 0;
+    for (const row of sheet.rows) {
+      const get = rowReader(row);
+      // The same blank-trailing-row test the importer uses, so the estimate counts the rows that
+      // will actually be worked rather than the empty ones Excel leaves at the bottom of a sheet.
+      if (!get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name') && !get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId')) {
+        continue;
+      }
+      const lat = parseFloat(get('Latitude', 'Lat'));
+      const lng = parseFloat(get('Longitude', 'Lng', 'Long'));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) rowsNeedingGeocode++;
+    }
+
+    return { totalRows: sheet.rows.length, rowsNeedingGeocode, sheetName: sheet.sheetName };
+  }
+
+  /**
+   * @param onProgress Called as rows are worked, so a queued import can publish how far it has
+   *   got. Absent on the synchronous path, where nothing can observe it mid-flight.
+   */
+  async uploadBranchesFromExcel(
+    projectId: string,
+    fileBuffer: Buffer,
+    userId: string,
+    onProgress?: (progress: BranchImportProgress) => void,
+  ): Promise<BranchUploadReport> {
+    const project = await this.findOne(projectId);
+
+    // Read client planning preferences for hours-per-packet rate
+    const client = project.clientId
+      ? await this.clientRepository.findOne({ where: { id: project.clientId } })
+      : null;
+    const planningPrefs = client?.planningPreferences || {};
+    const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15; // default 15min per packet
+
+    const sheet = this.parseBranchSheet(fileBuffer);
+    const rows = sheet.rows;
 
     const addedBranches: ProjectBranchEntity[] = [];
     /**
@@ -664,6 +776,38 @@ export class ProjectService implements OnModuleInit {
      * planned or checked into until someone corrects where they are.
      */
     const imprecise: { row: number; branchCode?: string; reason: string }[] = [];
+
+    /**
+     * ## Why this is two passes rather than one
+     *
+     * Everything below the sheet — reading a cell, checking a pincode, canonicalising a region —
+     * is pure. Everything that touches the database or the network is not. The original loop
+     * interleaved them, which meant every read it needed was issued one row at a time: a
+     * `findOneByCode`, a `project_branches` lookup, an `assessments` lookup and two zone queries
+     * per row, so a 2,000-branch file spent 10,000 round trips answering questions that four
+     * queries answer for the whole file. The reads that do not depend on the row's own result are
+     * now hoisted between the passes and served from memory.
+     *
+     * Pass 1 also gives the queued path something the old shape could not: the full set of rows
+     * worth working is known before the first write, so progress can be reported against a real
+     * denominator instead of "rows in the sheet, some of which are blank".
+     */
+    interface PreparedRow {
+      rowNumber: number;
+      /** The remaining columns, read lazily in pass 2 — see rowReader for the alias handling. */
+      get: RowReader;
+      branchName: string;
+      branchCode: string;
+      district: string;
+      state: string;
+      address: string;
+      pincodeStr: string;
+      packetCount: number;
+      calculatedHours: number | null;
+      suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null;
+      region: string | null;
+    }
+    const prepared: PreparedRow[] = [];
 
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
@@ -705,11 +849,10 @@ export class ProjectService implements OnModuleInit {
       /**
        * One bad row must not cost the operator the other 399.
        *
-       * Nothing here was guarded, so a single failure — a geography check that cannot verify a
-       * district, a geocoder timeout, a constraint violation — threw straight out of the
-       * endpoint as a 500. Rows already imported stayed in the database, the rest never ran,
-       * and the operator was shown a crash with no way to tell how far it got. Each row now
-       * either lands or is reported by number.
+       * Nothing here was guarded, so a single failure — a malformed cell, a number where a date
+       * was expected — threw straight out of the endpoint as a 500 and the operator was shown a
+       * crash with no way to tell how far it got. Each row now either lands or is reported by
+       * number. Pass 2 carries the same guard for the failures only it can hit.
        */
       try {
         const district = get('DISTRICT', 'District', 'DistrictName').toUpperCase();
@@ -770,10 +913,122 @@ export class ProjectService implements OnModuleInit {
          */
         const region = resolveRegion(state);
 
-        // Scoped to this project's client. Branch codes are the client's own numbering and
-        // collide across clients constantly, so an unscoped lookup attached another client's
-        // branch — with its address, coordinates and region — to this project.
-        let branch = await this.branchQueryService.findOneByCode(branchCode, project.clientId);
+        prepared.push({
+          rowNumber, get, branchName, branchCode, district, state, address, pincodeStr,
+          packetCount, calculatedHours, suppliedCoords, region,
+        });
+      } catch (err: any) {
+        skipped.push({
+          row: rowNumber,
+          branchCode,
+          reason: err?.message || 'Unexpected error importing this row.',
+        });
+      }
+    }
+
+    /**
+     * ## The reads hoisted out of the row loop
+     *
+     * Each of these used to run once per row. They are all answerable for the whole file up
+     * front because none of them depends on what an earlier row did: a branch's existence is a
+     * fact about the database before the import starts, and a branch created *by* this import
+     * cannot also be matched by it — the duplicate-code guard above means each code appears once.
+     */
+
+    /**
+     * Every branch this file might already know about, in one query instead of one per row.
+     *
+     * Scoped to this project's client, exactly as the per-row `findOneByCode` was. Branch codes
+     * are the client's own numbering and collide across clients constantly — every bank has a
+     * branch "1" — so an unscoped lookup attached another client's branch, with its address,
+     * coordinates and region, to this project. Keyed on the code verbatim rather than a
+     * normalised form, again matching what `findOneByCode` did: a sheet saying `br-1` against a
+     * stored `BR-1` created a second branch before this change and must keep doing so, because
+     * silently merging them here would be a behaviour change wearing a performance change's
+     * clothes.
+     */
+    const codes = prepared.map((p) => p.branchCode);
+    const existingBranches = codes.length
+      ? await this.branchRepository.find({
+          where: {
+            branchCode: In(codes),
+            isActive: true,
+            ...(project.clientId ? { clientId: project.clientId } : {}),
+          },
+        })
+      : [];
+    const branchByCode = new Map(existingBranches.map((b) => [b.branchCode, b]));
+
+    // Which branches this project already carries, and which already have an assessment. Both
+    // were per-row `findOne`s whose answer is a single query over one project.
+    const existingProjectBranches = await this.projectBranchRepository.find({
+      where: { projectId: project.id, isActive: true },
+    });
+    const projectBranchByBranchId = new Map(existingProjectBranches.map((pb) => [pb.branchId, pb]));
+
+    const existingAssessments = await this.assessmentRepository.find({
+      where: { projectId: project.id, isActive: true },
+      select: ['id', 'branchId'],
+    });
+    const branchIdsWithAssessment = new Set(existingAssessments.map((a) => a.branchId));
+
+    /**
+     * One zone resolution per distinct state, not per row.
+     *
+     * `resolveZoneName` loads every zone visible to the client and scans it, and
+     * `findOrCreateZone` then issues its own lookup — so a 2,000-row file in four states ran
+     * 4,000 zone queries to reach four answers. Memoised for the life of this import only, which
+     * is short enough that a zone created concurrently elsewhere is not a concern the cache
+     * introduces.
+     */
+    const zoneByState = new Map<string, ZoneEntity | null>();
+    const resolveZoneForState = async (state: string): Promise<ZoneEntity | null> => {
+      const key = state.toUpperCase();
+      if (zoneByState.has(key)) return zoneByState.get(key) ?? null;
+      const zoneName = await this.resolveZoneName(state, project.clientId);
+      const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [key]);
+      zoneByState.set(key, zone ?? null);
+      return zone ?? null;
+    };
+
+    /**
+     * Progress is published on a throttle, not per row.
+     *
+     * Each publication is a Redis write; doing one per row would add a round trip to rows that
+     * are otherwise pure database work, and nobody is watching a progress bar closely enough to
+     * need every increment. Every 10 rows, plus a final one, keeps a long import visibly moving.
+     */
+    const publishProgress = (processed: number, force = false) => {
+      if (!onProgress) return;
+      if (!force && processed % 10 !== 0) return;
+      onProgress({
+        processed,
+        total: prepared.length,
+        created: createdCount,
+        updated: updatedCount,
+        linked: addedBranches.length,
+        skipped: skipped.length,
+        imprecise: imprecise.length,
+      });
+    };
+
+    // ---- Pass 2: the writes, and the geocoding that makes this slow ------------------------
+    for (let position = 0; position < prepared.length; position++) {
+      const {
+        rowNumber, get, branchName, branchCode, district, state, address, pincodeStr,
+        packetCount, calculatedHours, suppliedCoords, region,
+      } = prepared[position];
+
+      /**
+       * One bad row must not cost the operator the other 399.
+       *
+       * A geography check that cannot verify a district, a geocoder timeout, a constraint
+       * violation — any of these threw straight out of the endpoint as a 500. Rows already
+       * imported stayed in the database, the rest never ran, and the operator was shown a crash
+       * with no way to tell how far it got. Each row now either lands or is reported by number.
+       */
+      try {
+        let branch = branchByCode.get(branchCode) ?? null;
         if (!branch) {
           const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
 
@@ -802,9 +1057,8 @@ export class ProjectService implements OnModuleInit {
             });
           }
 
-          const zoneName = await this.resolveZoneName(state, project.clientId);
-
-          const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [state.toUpperCase()]);
+          // Memoised per state for the life of this import — see resolveZoneForState.
+          const zone = await resolveZoneForState(state);
 
           const pincode = pincodeStr || address.match(/\b\d{6}\b/)?.[0] || null;
           const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
@@ -896,12 +1150,12 @@ export class ProjectService implements OnModuleInit {
           }
         }
 
-        let pb = await this.projectBranchRepository.findOne({
-          where: { projectId: project.id, branchId: branch.id, isActive: true },
-        });
+        // Served from the maps loaded before the loop rather than a query per row. A branch this
+        // import just created cannot be in either map, which is the correct answer for it.
+        const pb = projectBranchByBranchId.get(branch.id) ?? null;
 
         if (!pb) {
-          pb = this.projectBranchRepository.create({
+          const created = this.projectBranchRepository.create({
             projectId: project.id,
             branchId: branch.id,
             zoneId: branch.zoneId,
@@ -910,13 +1164,14 @@ export class ProjectService implements OnModuleInit {
             createdBy: userId,
             updatedBy: userId,
           });
-          const savedPb = await this.projectBranchRepository.save(pb);
+          const savedPb = await this.projectBranchRepository.save(created);
           addedBranches.push(savedPb);
+          // Recorded so that a file listing the same branch under two different codes cannot
+          // create two links to it — the per-row `findOne` this replaces would have seen the
+          // first one, so dropping the write-back here would be a regression, not a speed-up.
+          projectBranchByBranchId.set(branch.id, savedPb);
 
-          const existingAsmt = await this.assessmentRepository.findOne({
-            where: { projectId: project.id, branchId: branch.id, isActive: true },
-          });
-          if (!existingAsmt) {
+          if (!branchIdsWithAssessment.has(branch.id)) {
             const asmt = this.assessmentRepository.create({
               projectId: project.id,
               branchId: branch.id,
@@ -927,6 +1182,7 @@ export class ProjectService implements OnModuleInit {
               updatedBy: userId,
             });
             await this.assessmentRepository.save(asmt);
+            branchIdsWithAssessment.add(branch.id);
           }
         } else if (!isNaN(packetCount) && packetCount > 0) {
           // Update packet count on existing project-branch
@@ -941,7 +1197,13 @@ export class ProjectService implements OnModuleInit {
           reason: err?.message || 'Unexpected error importing this row.',
         });
       }
+
+      publishProgress(position + 1);
     }
+
+    // Forced, so the last partial batch of rows is always reflected before the job completes —
+    // otherwise an import of 2,004 rows would sit at 2,000 in the UI until the result appeared.
+    publishProgress(prepared.length, true);
 
     return {
       branches: await this.findProjectBranches(project.id),
@@ -952,6 +1214,24 @@ export class ProjectService implements OnModuleInit {
       skipped,
       imprecise,
     };
+  }
+
+  /**
+   * The same import, minus the branch list.
+   *
+   * What the queue worker calls. See `BranchUploadReport` for why the entity list must not travel
+   * into a job's return value.
+   */
+  async runBranchImport(
+    projectId: string,
+    fileBuffer: Buffer,
+    userId: string,
+    onProgress?: (progress: BranchImportProgress) => void,
+  ): Promise<BranchImportOutcome> {
+    const { branches: _branches, ...outcome } = await this.uploadBranchesFromExcel(
+      projectId, fileBuffer, userId, onProgress,
+    );
+    return outcome;
   }
 
   async removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]> {

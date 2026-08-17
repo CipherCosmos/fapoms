@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { ProjectService } from './project.service';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
@@ -47,8 +47,19 @@ describe('ProjectService', () => {
     findOne: jest.fn(),
   };
 
+  const mockAssessmentRepo = {
+    findOne: jest.fn(),
+    // Preloaded once per import: which branches on this project already have an assessment.
+    find: jest.fn(),
+    save: jest.fn(),
+    create: jest.fn((dto: any) => dto),
+  };
+
   const mockBranchRepo = {
     findOne: jest.fn(),
+    // The importer resolves every branch code in a file with one `In(codes)` query rather than a
+    // `findOneByCode` per row, so the upload specs drive this rather than the query service.
+    find: jest.fn(),
   };
 
   const mockBranchService = {
@@ -101,7 +112,11 @@ describe('ProjectService', () => {
         },
         {
           provide: getRepositoryToken(AssessmentEntity),
-          useValue: { findOne: jest.fn(), save: jest.fn(), create: jest.fn((dto: any) => dto) },
+          useValue: mockAssessmentRepo,
+        },
+        {
+          provide: getRepositoryToken(BranchEntity),
+          useValue: mockBranchRepo,
         },
         {
           provide: getRepositoryToken(ClientEntity),
@@ -263,12 +278,15 @@ describe('ProjectService', () => {
       });
       mockProjectQueryService.findProjectBranches.mockResolvedValue([]);
       mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', planningPreferences: {} });
-      mockBranchQueryService.findOneByCode.mockResolvedValue(null);
+      // Nothing in the branch master, no branches on the project, no assessments — the three
+      // batched reads the importer now issues once for the whole file instead of once per row.
+      mockBranchRepo.find.mockResolvedValue([]);
+      mockProjectBranchRepo.find.mockResolvedValue([]);
+      mockAssessmentRepo.find.mockResolvedValue([]);
       mockBranchService.findOrCreateZone.mockResolvedValue({ id: 'z-1' });
       mockBranchService.registerImportedBranch.mockImplementation(async (dto: any) => ({
         id: 'b-new', zoneId: dto.zoneId, ...dto,
       }));
-      mockProjectBranchRepo.findOne.mockResolvedValue(null);
       mockProjectBranchRepo.create.mockImplementation((dto: any) => dto);
       mockProjectBranchRepo.save.mockImplementation(async (pb: any) => ({ id: 'pb-1', ...pb }));
     });
@@ -334,10 +352,49 @@ describe('ProjectService', () => {
      * branch "1". Resolving one without saying whose it is attached another client's branch,
      * with its address and coordinates, to this project.
      */
-    it('resolves an existing branch code within this project\'s client', async () => {
-      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+    it('resolves existing branch codes within this project\'s client, in one query for the file', async () => {
+      const buffer = sheetBuffer([templateRow(), templateRow({ BRANCH: 'BR-2' }), templateRow({ BRANCH: 'BR-3' })]);
 
-      expect(mockBranchQueryService.findOneByCode).toHaveBeenCalledWith('BR-1', 'c-1');
+      await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      /**
+       * Two things at once, and both matter.
+       *
+       * The client scope: branch codes are the client's own numbering and collide constantly —
+       * every bank has a branch "1" — so an unscoped lookup attached another client's branch,
+       * with its address and coordinates, to this project.
+       *
+       * The batching: this was one `findOneByCode` per row, so a 2,000-branch file issued 2,000
+       * queries to answer a question one `In(codes)` answers. Asserting the call count is the
+       * only way that stays true — a future edit that puts the lookup back inside the loop still
+       * passes every behavioural test in this file.
+       */
+      expect(mockBranchRepo.find).toHaveBeenCalledTimes(1);
+      expect(mockBranchRepo.find).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          branchCode: In(['BR-1', 'BR-2', 'BR-3']),
+          clientId: 'c-1',
+          isActive: true,
+        }),
+      });
+    });
+
+    /**
+     * The zone lookups were the other per-row read: `resolveZoneName` loads every zone the client
+     * can see and scans it, then `findOrCreateZone` issues its own query — 2,000 rows in one
+     * state ran 4,000 queries to reach one answer.
+     */
+    it('resolves a zone once per state, not once per row', async () => {
+      const buffer = sheetBuffer([
+        templateRow({ BRANCH: 'BR-1' }),
+        templateRow({ BRANCH: 'BR-2' }),
+        templateRow({ BRANCH: 'BR-3', STATE: 'Maharashtra', DISTRICT: 'Pune' }),
+      ]);
+
+      await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+
+      // Two distinct states across three rows.
+      expect(mockBranchService.findOrCreateZone).toHaveBeenCalledTimes(2);
     });
 
     /**
@@ -346,10 +403,10 @@ describe('ProjectService', () => {
      * missing region was read and thrown away.
      */
     it('corrects an existing branch from the sheet', async () => {
-      mockBranchQueryService.findOneByCode.mockResolvedValue({
-        id: 'b-old', name: 'Old Name', address: 'Old address', state: 'Kerala',
+      mockBranchRepo.find.mockResolvedValue([{
+        id: 'b-old', branchCode: 'BR-1', name: 'Old Name', address: 'Old address', state: 'Kerala',
         district: 'PALAKKAD', region: null, latitude: null, longitude: null,
-      });
+      }]);
       mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
 
       const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
@@ -369,10 +426,10 @@ describe('ProjectService', () => {
     });
 
     it('does not blank fields a sparse correction sheet omits', async () => {
-      mockBranchQueryService.findOneByCode.mockResolvedValue({
-        id: 'b-old', name: 'Thenkurissi', address: 'Keep me', state: 'Kerala',
+      mockBranchRepo.find.mockResolvedValue([{
+        id: 'b-old', branchCode: 'BR-1', name: 'Thenkurissi', address: 'Keep me', state: 'Kerala',
         district: 'PALAKKAD', region: 'SOUTH', latitude: 10.7867, longitude: 76.6548,
-      });
+      }]);
       mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
 
       // Only the code and name — everything else absent.
