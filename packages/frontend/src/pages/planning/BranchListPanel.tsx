@@ -10,6 +10,14 @@ export interface ProjectBranch {
   status: string;
   priority: string;
   zoneId: string | null;
+  /**
+   * Packets to be audited at this branch. Already on the API payload; it was simply never shown.
+   *
+   * It belongs next to the name because it is the size of the job — the difference between a
+   * branch someone clears before lunch and one that takes two days — and the planner was
+   * choosing which branch to staff without it.
+   */
+  packetCount: number | null;
   scheduledDate: string | null;
   remarks: string | null;
   branch: {
@@ -153,7 +161,17 @@ export const BranchListPanel: React.FC<{
                 </span>
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{pb.branch.city}, {pb.branch.state}</span>
+                <span>
+                  {pb.branch.city}, {pb.branch.state}
+                  {pb.packetCount != null && (
+                    // Nothing rather than "0 packets" when the count is absent: an unknown volume
+                    // and a genuinely empty branch are different facts, and the import leaves the
+                    // column null when the client's file did not carry one.
+                    <span style={{ marginLeft: '6px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      · {pb.packetCount.toLocaleString('en-IN')} packet{pb.packetCount === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </span>
                 {pb.assignment?.assayer?.displayName && (
                   <span style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
                 )}
