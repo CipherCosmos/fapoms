@@ -3,6 +3,7 @@
  */
 
 import { Module, forwardRef } from '@nestjs/common';
+import { BullModule } from '@nestjs/bull';
 import { PricingModule } from '../pricing/pricing.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -20,6 +21,9 @@ import { OperationsControlCenterService } from './operations-control-center.serv
 import { OperationsExecutionService } from './operations-execution.service';
 import { FieldOperationsService } from './field-operations.service';
 import { DayPlannerService } from './day-planner.service';
+import { PlanningJobsService } from './planning-jobs.service';
+import { PlanningJobsWorker } from './planning-jobs.worker';
+import { PLANNING_QUEUE } from './planning-jobs.contract';
 import { PlanningAntiCorruptionLayer } from './planning-acl.adapter';
 import { OperationsAntiCorruptionLayer } from './operations-acl.adapter';
 import { OperationsProjectMetricsAdapter } from './operations-project-metrics.adapter';
@@ -80,6 +84,21 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
 @Module({
   imports: [
     PricingModule,
+    /**
+     * Planning's own queue, deliberately not the shared 'background-jobs' one.
+     *
+     * Two reasons. First, isolation: a coverage plan holds its worker for seconds, and sharing a
+     * queue with short operational jobs (document dispatch, notification delivery) would put
+     * those behind it. Second, and more immediately, 'background-jobs' does not currently
+     * deliver anything — `BullQueueManager` adds *named* jobs while `BullProcessor` declares a
+     * bare `@Process()`, which in Bull only ever matches unnamed jobs, so everything routed
+     * through it stalls. `PlanningJobsWorker` names its handlers from the same constants the
+     * enqueue side uses, which is what stops that from recurring here.
+     *
+     * `BullModule.forRoot` (Redis connection) is configured once in app.module.ts and applies to
+     * every queue registered anywhere, so nothing outside this module needs to change.
+     */
+    BullModule.registerQueue({ name: PLANNING_QUEUE }),
     TypeOrmModule.forFeature([
       BranchEntity,
       AssayerEntity,
@@ -124,6 +143,8 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
     OperationsExecutionService,
     FieldOperationsService,
     DayPlannerService,
+    PlanningJobsService,
+    PlanningJobsWorker,
     ConstraintEvaluator,
     PlanningAntiCorruptionLayer,
     OperationsAntiCorruptionLayer,

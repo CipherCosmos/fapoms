@@ -11,6 +11,8 @@ import {
   Req,
   ParseUUIDPipe,
   BadRequestException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -24,6 +26,7 @@ import { OptimizationEngine } from './optimization.engine';
 import { ScenarioPlanningService } from './scenario-planning.service';
 import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { DayPlannerService } from './day-planner.service';
+import { PlanningJobsService } from './planning-jobs.service';
 import { OperationsPlanningService, PlanOverrideDto } from './operations-planning.service';
 import { OperationsControlCenterService } from './operations-control-center.service';
 import { OperationsExecutionService, GroupPackageDto } from './operations-execution.service';
@@ -250,6 +253,7 @@ export class PlanningController {
     private readonly executionService: OperationsExecutionService,
     private readonly fieldService: FieldOperationsService,
     private readonly dayPlannerService: DayPlannerService,
+    private readonly planningJobsService: PlanningJobsService,
     private readonly regionGuard: RegionGuardService,
   ) {}
 
@@ -504,6 +508,40 @@ export class PlanningController {
     };
   }
 
+  /**
+   * The same coverage plan as the GET above, run on the queue instead of in the request.
+   *
+   * Additive on purpose. The GET stays exactly as it is because the web app calls it today and
+   * this must be deployable without a coordinated frontend release; a client migrates to the
+   * queued pair when it is ready to, and a project small enough to answer in half a second has
+   * no reason to.
+   *
+   * POST rather than GET despite being a read: it creates a job resource, it is not cacheable,
+   * and it must not be replayed by a browser prefetch or a proxy.
+   *
+   * Roles are copied from the GET rather than from the sibling `POST …/coverage-plan`. What this
+   * returns is the read-only plan, so requiring `planning:create:organization` (which that route
+   * needs because it *persists* a plan version) would refuse operations executives access to a
+   * report they can already open synchronously.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('projects/:projectId/coverage-plan/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Queue coverage plan generation; returns a job id to poll' })
+  async queueProjectCoveragePlan(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // The scope resolved here — region already intersected against `users.regions` and refused
+    // if not held — is frozen into the job payload. The worker has no request and so no
+    // principal of its own; without this the queued run would be unscoped and would hand a
+    // regional operator the national plan.
+    const enqueued = await this.planningJobsService.enqueueCoveragePlan(projectId, scope ?? null, req.user?.id);
+    return { success: true, data: enqueued };
+  }
+
   @Post('projects/:projectId/coverage-plan')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
   @RequirePermissions('planning:create:organization')
@@ -575,6 +613,25 @@ export class PlanningController {
       success: true,
       data: report,
     };
+  }
+
+  /**
+   * The queued twin of the candidates report — the slowest of the three at a measured 12.2 s for
+   * a 200-branch project, because it runs the whole recommendation engine once per unassigned
+   * branch. Same roles, same scope handling, same answer; only the waiting moves.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('projects/:projectId/candidates/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Queue the project-wide candidates report; returns a job id to poll' })
+  async queueProjectCandidates(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const enqueued = await this.planningJobsService.enqueueProjectCandidates(projectId, scope ?? null, req.user?.id);
+    return { success: true, data: enqueued };
   }
 
   @Post('projects/:projectId/optimize')
@@ -690,6 +747,25 @@ export class PlanningController {
     @Query('targetDate') targetDate?: string,
     @Query('minDistanceKm') minDistanceKm?: string,
   ) {
+    const ids = this.parseProjectIds(projectIds);
+    const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+    const plan = await this.dayPlannerService.generateDayPlans(
+      ids,
+      targetDate,
+      Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+    );
+    return { success: true, data: plan };
+  }
+
+  /**
+   * Parses and validates the comma-separated `projectIds` query parameter.
+   *
+   * Extracted so the synchronous route and its queued twin below cannot validate differently.
+   * A malformed id that only the GET rejects would reach the worker, hit Postgres inside
+   * `In(...)`, and surface as a job that failed with a driver-level cast error — the same
+   * unhelpful 500 this validation was written to prevent, just an hour later and in a log.
+   */
+  private parseProjectIds(projectIds: string): string[] {
     const ids = (projectIds ?? '')
       .split(',')
       .map((id) => id.trim())
@@ -699,21 +775,36 @@ export class PlanningController {
       throw new BadRequestException('projectIds is required — pass one or more comma-separated project ids.');
     }
 
-    // Without this, a malformed id reaches Postgres inside In(...) and comes back as a 500
-    // with a driver-level cast error, which tells the caller nothing about what they got wrong.
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const malformed = ids.filter((id) => !UUID.test(id));
     if (malformed.length > 0) {
       throw new BadRequestException(`Not a valid project id: ${malformed.join(', ')}`);
     }
 
+    return ids;
+  }
+
+  /** The queued twin of the multi-project day planner. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('day-plans/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Queue multi-project day plan generation; returns a job id to poll' })
+  async queueMultiProjectDayPlans(
+    @Query('projectIds') projectIds: string,
+    @Req() req: any,
+    @Query('targetDate') targetDate?: string,
+    @Query('minDistanceKm') minDistanceKm?: string,
+  ) {
+    const ids = this.parseProjectIds(projectIds);
     const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
-    const plan = await this.dayPlannerService.generateDayPlans(
+    const enqueued = await this.planningJobsService.enqueueDayPlans(
       ids,
       targetDate,
       Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+      req.user?.id,
     );
-    return { success: true, data: plan };
+    return { success: true, data: enqueued };
   }
 
   /** Clustering plus the engine per branch per cluster, then a route optimisation per plan. */
@@ -739,6 +830,50 @@ export class PlanningController {
       success: true,
       data: plan,
     };
+  }
+
+  /** The queued twin of the single-project day planner. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('projects/:projectId/day-plans/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Queue day plan generation for one project; returns a job id to poll' })
+  async queueDayPlans(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Req() req: any,
+    @Query('targetDate') targetDate?: string,
+    @Query('minDistanceKm') minDistanceKm?: string,
+  ) {
+    const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
+    const enqueued = await this.planningJobsService.enqueueDayPlans(
+      [projectId],
+      targetDate,
+      Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
+      req.user?.id,
+    );
+    return { success: true, data: enqueued };
+  }
+
+  /**
+   * Poll one planning job.
+   *
+   * One route for all three job types, because a client that has a job id does not need to
+   * remember which endpoint produced it, and because the polling loop is identical in every
+   * case: keep going while `state` is `queued` or `running`, then read `result` or `error`.
+   *
+   * No `ParseUUIDPipe` — Bull job ids are a per-queue incrementing integer, not a UUID. That is
+   * also exactly why `PlanningJobsService.status` refuses any job whose payload does not name
+   * this account as its requester: these ids are guessable and the results behind them are
+   * region-scoped.
+   *
+   * Not throttled beyond the global default. Polling is the intended access pattern here, and a
+   * poll is one Redis read; throttling it would break the very clients this exists to serve.
+   */
+  @Get('jobs/:jobId')
+  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @ApiOperation({ summary: 'Poll a queued planning job for progress and, once done, its result' })
+  async getPlanningJob(@Param('jobId') jobId: string, @Req() req: any) {
+    return { success: true, data: await this.planningJobsService.status(jobId, req.user?.id) };
   }
 
   // Rule Engine Management REST Endpoints

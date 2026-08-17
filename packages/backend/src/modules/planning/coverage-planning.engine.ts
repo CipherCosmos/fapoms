@@ -8,6 +8,9 @@ import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider }
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { calculateHaversineDistance } from '@fapoms/shared';
+// Type-only, so nothing about queues is linked into this engine at runtime. The engine reports
+// "branch N of M" and stays ignorant of what, if anything, is watching.
+import type { ProgressCallback } from './queued-job';
 
 export interface CoverageWarning {
   type: string;
@@ -82,9 +85,17 @@ export class CoveragePlanningEngine {
     private readonly workloadProvider: WorkloadProvider,
   ) {}
 
+  /**
+   * @param onProgress Optional "branch N of M" hook. Present when this runs as a queued job, so
+   *   the poll endpoint can show something truer than a spinner: the per-branch loop below is
+   *   where essentially all of the measured 6.8 s (200-branch project, scale database) is spent,
+   *   and it is the only phase whose remaining work is knowable in advance. Omitted by the
+   *   synchronous route, which has nobody to report to.
+   */
   async generateCoveragePlan(
     projectId: string,
     scope?: Partial<GlobalScope>,
+    onProgress?: ProgressCallback,
   ): Promise<CoveragePlanOutput> {
     const project = await this.projectQueryService.findOne(projectId);
     const planningBranches = await this.branchProvider.getBranchesForPlanning(projectId, scope);
@@ -163,6 +174,12 @@ export class CoveragePlanningEngine {
     // a branch on the cluster edge, or with different familiarity/risk, can have a genuinely
     // different top assayer than the cluster centre, and the plan must honour that. The old code
     // scored once against the centroid and stamped that single assayer onto every branch.
+    // Progress is counted over branches rather than clusters, because clusters vary from one
+    // branch to dozens: a bar that jumps a tenth when a one-branch cluster finishes and then sits
+    // still through a forty-branch one is worse than no bar.
+    const branchesToScore = clusters.reduce((sum, c) => sum + c.branches.length, 0);
+    let branchesScored = 0;
+
     for (const cluster of clusters) {
       const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }> = [];
       const assayerCountInCluster = new Map<string, number>();
@@ -252,6 +269,9 @@ export class CoveragePlanningEngine {
         }
 
         branchAssignments.push({ branchId: branch.id, branchName: branch.name, assayerId, assayerName, fee, rank, selectionNote });
+
+        branchesScored += 1;
+        await onProgress?.(branchesScored, branchesToScore, 'Scoring branches');
       }
 
       // Cluster-level display fields summarise the per-branch decisions: the assayer covering the

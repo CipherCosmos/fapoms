@@ -3,6 +3,8 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectQueryService } from '../project/project-query.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { PlanningService, AssayerRecommendation } from './planning.service';
+// Type-only: the report counts branches, and stays ignorant of whether a queue is watching.
+import type { ProgressCallback } from './queued-job';
 
 export interface ProjectBranchCandidates {
   projectBranchId: string;
@@ -49,10 +51,16 @@ export class ProjectPlanningService {
 
   /**
    * Retrieves recommended candidates for all unassigned branches of a project.
+   *
+   * @param onProgress Optional "branch N of M" hook, supplied when this runs as a queued job.
+   *   The loop below runs the whole recommendation engine once per unassigned branch and is
+   *   where all of the measured 12.2 s (200-branch project, scale database) goes, so it is the
+   *   only phase worth reporting. The synchronous route passes nothing and behaves as before.
    */
   async getProjectPlanningCandidates(
     projectId: string,
     scope?: Partial<GlobalScope>,
+    onProgress?: ProgressCallback,
   ): Promise<ProjectPlanningReport> {
     const project = await this.projectQueryService.findOne(projectId);
     if (!project) {
@@ -93,6 +101,8 @@ export class ProjectPlanningService {
         candidates: candidates.slice(0, ProjectPlanningService.CANDIDATES_PER_BRANCH),
         candidateCount: candidates.length,
       });
+
+      await onProgress?.(branchCandidatesList.length, unassignedPBs.length, 'Ranking candidates');
     }
 
     return {

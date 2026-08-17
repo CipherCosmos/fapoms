@@ -11,12 +11,34 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { scopeAssayerListForRoles, rolesOf } from '../assayer/assayer-visibility';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { buildWorkbook, inr, toDate } from './excel-export';
+// Type-only: these methods report which phase they are in and stay ignorant of whether a queue
+// is watching. See `ReportJobsWorker` for the only adapter onto a Bull job.
+import type { ProgressCallback } from '../planning/queued-job';
+
+/**
+ * Why progress here is phase-based rather than row-based.
+ *
+ * Each export is three steps: hydrate, map rows, serialise. The mapping step is the one with a
+ * countable loop in it and the one that costs almost nothing — a few thousand array entries.
+ * Essentially all of the wall clock is in the other two: the hydration query (`findAll` at the
+ * 5000-row page cap, `commandCenterService.overview` across every branch and assayer) and
+ * `xlsx.write`, which is synchronous CPU with no yield point inside it.
+ *
+ * A per-row bar would therefore sprint from 0 to 100 during the cheap step and then sit at 100
+ * for the expensive one, which is a worse lie than three honest phases. `EXPORT_PHASES` is what
+ * the fractions below are out of.
+ */
+const EXPORT_PHASES = 3;
 
 /**
  * Spreadsheet exports for operational reporting. Each method returns an .xlsx Buffer built
  * from the same live data the matching screens show, so an exported figure equals the one
  * on screen and both trace to the same source. Follows the "download a workbook" pattern the
  * branch/assayer template endpoints already use (xlsx library, attachment response).
+ *
+ * Every method takes an optional `onProgress`. Supplied, this export is running as a queued job
+ * and something is watching a progress bar; omitted, it is the original synchronous route and
+ * behaves exactly as it always did.
  */
 @Injectable()
 export class ReportsService {
@@ -98,7 +120,8 @@ export class ReportsService {
     projectBranchStatus?: string;
     priority?: string;
     scope?: Partial<GlobalScope>;
-  }): Promise<Buffer> {
+  }, onProgress?: ProgressCallback): Promise<Buffer> {
+    await onProgress?.(0, EXPORT_PHASES, 'Loading assignments');
     const { assignments } = await this.assignmentService.findAll(
       q.page ?? 1,
       q.limit ?? 5000,
@@ -109,6 +132,7 @@ export class ReportsService {
       q.priority,
       q.scope,
     );
+    await onProgress?.(1, EXPORT_PHASES, 'Building rows');
 
     const rows = assignments.map((a) => [
       a.assignmentNumber,
@@ -130,6 +154,10 @@ export class ReportsService {
       a.isActive === false ? 'DELETED' : 'ACTIVE',
     ]);
 
+    // Reported before the call, not after: `buildWorkbook` is synchronous, so nothing this
+    // method could write afterwards would reach Redis until the serialisation had finished —
+    // which is exactly the phase the bar is meant to be reporting.
+    await onProgress?.(2, EXPORT_PHASES, 'Writing workbook');
     return buildWorkbook([
       {
         name: 'Assignments',
@@ -160,7 +188,11 @@ export class ReportsService {
   // ── Billing ──────────────────────────────────────────────────────────────
 
   /** Billing entries and invoices, matching the finance screens. */
-  async billing(q: { clientId?: string; projectId?: string; assayerId?: string; state?: string }): Promise<Buffer> {
+  async billing(
+    q: { clientId?: string; projectId?: string; assayerId?: string; state?: string },
+    onProgress?: ProgressCallback,
+  ): Promise<Buffer> {
+    await onProgress?.(0, EXPORT_PHASES, 'Loading billing entries and invoices');
     const entries = await this.billingService.findEntriesEnriched({
       clientId: q.clientId,
       projectId: q.projectId,
@@ -171,6 +203,7 @@ export class ReportsService {
       clientId: q.clientId,
       projectId: q.projectId,
     });
+    await onProgress?.(1, EXPORT_PHASES, 'Building rows');
 
     const entryRows = entries.map((e: any) => [
       e.entryNumber,
@@ -216,6 +249,7 @@ export class ReportsService {
       inv.notes ?? '',
     ]);
 
+    await onProgress?.(2, EXPORT_PHASES, 'Writing workbook');
     return buildWorkbook([
       {
         name: 'Entries',
@@ -273,8 +307,13 @@ export class ReportsService {
   // ── Command Center / territory summary ──────────────────────────────────
 
   /** Executive geographic summary: territories, per-branch points, per-assayer points. */
-  async commandCenter(scope: Partial<GlobalScope> = {}): Promise<Buffer> {
+  async commandCenter(scope: Partial<GlobalScope> = {}, onProgress?: ProgressCallback): Promise<Buffer> {
+    // By far the longest phase of this export: `overview` computes territory aggregates, nearest
+    // assayer per branch and realised revenue across the whole book. It was measured at 5m22s
+    // before it was batched and cached, and at 6.4s after — which is still most of this method.
+    await onProgress?.(0, EXPORT_PHASES, 'Computing territory overview');
     const data = await this.commandCenterService.overview(scope);
+    await onProgress?.(1, EXPORT_PHASES, 'Building rows');
 
     const totals = data?.totals ?? {};
     const territoryRows = (data?.territories ?? []).map((t: any) => [
@@ -338,6 +377,7 @@ export class ReportsService {
       totals.statesCovered ?? 0,
     ];
 
+    await onProgress?.(2, EXPORT_PHASES, 'Writing workbook');
     return buildWorkbook([
       {
         name: 'Summary',
@@ -413,8 +453,16 @@ export class ReportsService {
    * Roster prior to the same role-based PII scoping the assayer list applies, plus a payroll
    * sheet with the in-force commercial rate per assayer.
    */
-  async assayerRoster(user: any, q: { page?: number; limit?: number; scope?: Partial<GlobalScope> }): Promise<Buffer> {
+  async assayerRoster(
+    user: any,
+    q: { page?: number; limit?: number; scope?: Partial<GlobalScope> },
+    onProgress?: ProgressCallback,
+  ): Promise<Buffer> {
+    await onProgress?.(0, EXPORT_PHASES, 'Loading roster');
     const { assayers } = await this.assayerService.findAll(q.page ?? 1, q.limit ?? 5000, q.scope);
+    // `rolesOf` reads only `user.roles`, so a queued run can pass a `{ id, roles }` snapshot
+    // rather than storing a whole user record — with its PAN, bank and contact columns — in
+    // Redis for the life of the job. See `PrincipalSnapshot`.
     const scoped = scopeAssayerListForRoles(assayers as any[], rolesOf(user)) as any[];
 
     const rosterRows = scoped.map((a) => [
@@ -435,6 +483,7 @@ export class ReportsService {
       a.averageRating ?? '',
     ]);
 
+    await onProgress?.(1, EXPORT_PHASES, 'Loading rate cards');
     const profiles = await this.assayerService.getRosterCommercialProfiles();
     const byId = new Map<string, any>();
     for (const a of scoped) byId.set(a.id, a);
@@ -458,6 +507,7 @@ export class ReportsService {
       ];
     });
 
+    await onProgress?.(2, EXPORT_PHASES, 'Writing workbook');
     return buildWorkbook([
       {
         name: 'Roster',

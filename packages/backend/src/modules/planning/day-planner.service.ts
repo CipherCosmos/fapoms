@@ -27,6 +27,8 @@ import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { calculateHaversineDistance, AssayerStatus } from '@fapoms/shared';
+// Type-only: the planner counts clusters, and stays ignorant of whether a queue is watching.
+import type { ProgressCallback } from './queued-job';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -259,10 +261,17 @@ export class DayPlannerService {
    * agreement and rate card. The conflict-of-interest floor is taken as the strictest across
    * the clients in scope, so a branch is never offered to someone its own client excludes.
    */
+  /**
+   * @param onProgress Optional "cluster N of M" hook, supplied when this runs as a queued job.
+   *   Clusters are the unit here rather than branches, because the expensive step — engine per
+   *   branch, then intersect, then a route optimisation per candidate — is per cluster and does
+   *   not decompose into equal per-branch pieces. The synchronous route passes nothing.
+   */
   async generateDayPlans(
     projectIdOrIds: string | string[],
     targetDate?: string,
     manualMinDistanceKm?: number,
+    onProgress?: ProgressCallback,
   ): Promise<ProjectDayPlan> {
     const projectIds = Array.isArray(projectIdOrIds) ? [...new Set(projectIdOrIds)] : [projectIdOrIds];
     if (projectIds.length === 0) {
@@ -376,7 +385,16 @@ export class DayPlannerService {
     const underutilizedBranches: ProjectDayPlan['underutilizedBranches'] = [];
     const multiDayBranches: ProjectDayPlan['multiDayBranches'] = [];
 
+    // Counted on entry rather than on completion: the infeasible and unclustered paths below
+    // `continue` out of the body, so a report placed at the end of the loop would stall the bar
+    // for every cluster that is too large for one day — which on a badly-sized project is most
+    // of them.
+    let clustersEntered = 0;
+
     for (const cluster of clusters) {
+      clustersEntered += 1;
+      await onProgress?.(clustersEntered, clusters.length, 'Planning clusters');
+
       if (!cluster.feasibleForOneDay) {
         // A lone branch that is itself larger than a working day is not a clustering failure —
         // it is a branch that needs several assayer-days. Say so, with the number.

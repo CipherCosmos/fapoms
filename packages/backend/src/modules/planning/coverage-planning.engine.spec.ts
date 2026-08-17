@@ -164,4 +164,50 @@ describe('CoveragePlanningEngine', () => {
       ]);
     });
   });
+
+  /**
+   * The per-branch loop is where essentially all of the measured 6.8 s (200-branch project,
+   * scale database) is spent, and it is the only phase of this method whose remaining work is
+   * knowable in advance. When the plan runs as a queued job that count is what the poll endpoint
+   * turns into a progress bar.
+   */
+  describe('progress reporting', () => {
+    const twelveBranches = Array.from({ length: 12 }, (_, i) => ({
+      branchId: { value: `b-${i}` },
+      name: `Branch ${i}`,
+      location: { latitude: 19.0, longitude: 72.0 },
+      requiredSkills: { values: ['Gold'] },
+    }));
+
+    it('counts branches, not clusters', async () => {
+      // Clusters run from one branch to dozens: a bar that jumps a tenth when a one-branch
+      // cluster finishes and then sits still through a forty-branch one is worse than no bar.
+      mockBranchProvider.getBranchesForPlanning.mockResolvedValueOnce(twelveBranches);
+      const onProgress = jest.fn();
+
+      const plan = await engine.generateCoveragePlan('p-1', undefined, onProgress);
+
+      expect(plan.clusters.length).toBe(1);
+      expect(onProgress).toHaveBeenCalledTimes(12);
+      expect(onProgress).toHaveBeenLastCalledWith(12, 12, 'Scoring branches');
+    });
+
+    it('still reports a branch that could not be scored at all', async () => {
+      // A branch with no coordinates skips the engine entirely. Not counting it would stall the
+      // bar short of 100% on exactly the projects with the worst data.
+      mockBranchProvider.getBranchesForPlanning.mockResolvedValueOnce([
+        { branchId: { value: 'b-1' }, name: 'Branch 1', location: { latitude: null, longitude: null }, requiredSkills: { values: [] } },
+      ]);
+      const onProgress = jest.fn();
+
+      const plan = await engine.generateCoveragePlan('p-1', undefined, onProgress);
+
+      expect(plan.uncoveredBranches).toHaveLength(1);
+      expect(onProgress).toHaveBeenCalledWith(1, 1, 'Scoring branches');
+    });
+
+    it('is optional, so the synchronous route is unchanged', async () => {
+      await expect(engine.generateCoveragePlan('p-1')).resolves.toBeDefined();
+    });
+  });
 });

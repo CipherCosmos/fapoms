@@ -326,4 +326,50 @@ describe('DayPlannerService', () => {
     });
   });
 
+  /**
+   * When the planner runs as a queued job, this count is what the poll endpoint renders. The
+   * unit is the cluster because the expensive step — engine per branch, intersect, then a route
+   * optimisation per surviving candidate — is per cluster and does not decompose into equal
+   * per-branch pieces.
+   */
+  describe('progress reporting', () => {
+    it('reports once per cluster, against the cluster total', async () => {
+      mockProjectBranchRepo.find.mockResolvedValue([projectBranch(branchA, 12), projectBranch(branchB, 8)]);
+      const onProgress = jest.fn();
+
+      const plan = await service.generateDayPlans(PROJECT.id, '2026-08-20', undefined, onProgress);
+
+      // These two branches are close enough to share a cluster, and it fits a working day, so
+      // the planner produces exactly one — one report, against a total of one.
+      expect(plan.clusters).toHaveLength(1);
+      expect(onProgress).toHaveBeenCalledTimes(1);
+      expect(onProgress).toHaveBeenCalledWith(1, 1, 'Planning clusters');
+    });
+
+    it('keeps counting through clusters that are too large for one day', async () => {
+      // Those paths `continue` out of the loop body. Reporting at the end of the body would
+      // stall the bar for exactly the projects with the worst-sized clusters.
+      mockProjectBranchRepo.find.mockResolvedValue([projectBranch(branchA, null), projectBranch(branchB, null)]);
+      const onProgress = jest.fn();
+
+      // 8h + 6h against a 10h day: the cluster cannot be worked in one day, so the loop takes
+      // the `continue` path and produces no plan for it — but it was still entered and counted.
+      const plan = await service.generateDayPlans(PROJECT.id, '2026-08-20', undefined, onProgress);
+
+      expect(plan.clusters).toHaveLength(0);
+      // No plan survives — and every cluster is still counted. With no packet counts these two
+      // branches are estimated from the branch default and land in a cluster each, so the check
+      // that matters is that the reported total covers them both and neither is skipped: a bar
+      // that stalls on exactly the projects whose clusters do not fit a day is worse than none.
+      expect(onProgress).toHaveBeenCalledTimes(2);
+      expect(onProgress).toHaveBeenNthCalledWith(1, 1, 2, 'Planning clusters');
+      expect(onProgress).toHaveBeenNthCalledWith(2, 2, 2, 'Planning clusters');
+    });
+
+    it('is optional, so the synchronous route is unchanged', async () => {
+      mockProjectBranchRepo.find.mockResolvedValue([projectBranch(branchA, 12), projectBranch(branchB, 8)]);
+      await expect(service.generateDayPlans(PROJECT.id, '2026-08-20')).resolves.toBeDefined();
+    });
+  });
+
 });
