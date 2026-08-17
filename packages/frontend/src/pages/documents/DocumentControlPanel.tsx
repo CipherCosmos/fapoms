@@ -40,19 +40,24 @@ export interface DocRow {
   };
 }
 
+/**
+ * One branch card.
+ *
+ * `branchId`, `projectId`, `projectNumber`, `branchStatus` and `assessmentStatus` used to ride
+ * along on every row and no view ever read one of them; they are no longer sent. If something
+ * here needs them again, widen the SELECT in `document.service.ts` rather than reinstating the
+ * whole projection — the branch list is 40k rows on the scale book.
+ */
 export interface BranchGroup {
   projectBranchId: string;
-  branchId: string;
   branchName: string;
   branchCode: string | null;
-  projectId: string;
   projectName: string;
-  projectNumber: string | null;
   clientName: string | null;
-  branchStatus: string;
-  assessmentStatus: string | null;
   scheduledDate: string | null;
   daysUntilAudit: number | null;
+  /** Audit confirmed, no packet prepared at all. Decided server-side, per row. */
+  neverPrepared: boolean;
   documentCount: number;
   documentsByType: Record<string, DocRow[]>;
 }
@@ -66,7 +71,14 @@ export interface OverviewData {
   };
   awaitingDispatch: DocRow[];
   blockingFieldWork: DocRow[];
+  /**
+   * ONE PAGE of branches, not every branch. The count of the set it was cut from arrives in
+   * `meta.pagination.total`, so anything that needs "how many are there" must read that and
+   * never `branches.length`.
+   */
   branches: BranchGroup[];
+  branchPagination: { page: number; limit: number; total: number };
+  /** Capped alert list; `totals.neverPrepared` is the true count. */
   neverPrepared: BranchGroup[];
 }
 

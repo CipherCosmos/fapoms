@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle } from 'lucide-react';
+import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 
 /**
  * What still has to happen for a branch on this audit date. Ordered as the day
@@ -60,18 +62,20 @@ const tomorrowISO = () => {
  * each branch in it with the one thing that still has to happen for it. It
  * replaces having to infer a day's progress from a flat list of files that had no
  * concept of an audit date or of which run a PDF belonged to.
+ *
+ * Calls the shared API client directly rather than taking fetch helpers as props. The parent used
+ * to inject its own `apiGet`/`apiUpload`/`apiUploadRaw`, which is how this panel ended up on a
+ * private copy of the client that could not refresh an expired token — the injection point was the
+ * thing that let a second implementation exist at all.
  */
 export const DailyRunPanel: React.FC<{
   projectId: string;
-  apiGet: <T,>(e: string) => Promise<T>;
-  apiUpload: (e: string, f: FormData) => Promise<any>;
-  apiUploadRaw: (e: string, f: FormData) => Promise<any>;
   onDispatch: (ids: string[]) => Promise<void>;
   onSendToOcr: (docId: string) => Promise<void>;
   onDownload: (docId: string) => void;
   onError: (m: string) => void;
   onSuccess: (m: string) => void;
-}> = ({ projectId, apiGet, apiUpload, apiUploadRaw, onDispatch, onSendToOcr, onDownload, onError, onSuccess }) => {
+}> = ({ projectId, onDispatch, onSendToOcr, onDownload, onError, onSuccess }) => {
   const [auditDate, setAuditDate] = useState(tomorrowISO());
   const [run, setRun] = useState<DailyRun | null>(null);
   const [loading, setLoading] = useState(false);
@@ -82,13 +86,13 @@ export const DailyRunPanel: React.FC<{
     if (!projectId || !auditDate) return;
     setLoading(true);
     try {
-      setRun(await apiGet<DailyRun>(`/customer-master/projects/${projectId}/daily-run?auditDate=${auditDate}`));
-    } catch (e: any) {
-      onError(e.message);
+      setRun(await api.request<DailyRun>(`/customer-master/projects/${projectId}/daily-run?auditDate=${auditDate}`));
+    } catch (e) {
+      onError(userMessage(e));
     } finally {
       setLoading(false);
     }
-  }, [projectId, auditDate, apiGet, onError]);
+  }, [projectId, auditDate, onError]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -102,11 +106,12 @@ export const DailyRunPanel: React.FC<{
   const uploadBatch = async (file: File) => {
     await withActing('batch', async () => {
       try {
-        await apiUpload(`/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`, (() => {
-          const fd = new FormData(); fd.append('file', file); return fd;
-        })());
+        await api.request(`/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`, {
+          method: 'POST',
+          body: (() => { const fd = new FormData(); fd.append('file', file); return fd; })(),
+        });
         onSuccess(`Client batch "${file.name}" uploaded and reconciled.`);
-      } catch (e: any) { onError(e.message); }
+      } catch (e) { onError(userMessage(e)); }
     });
   };
 
@@ -114,12 +119,12 @@ export const DailyRunPanel: React.FC<{
     await withActing(branch.projectBranchId, async () => {
       try {
         const batchParam = run?.batch ? `&customerMasterVersionId=${run.batch.id}` : '';
-        await apiUpload(
+        await api.request(
           `/documents/upload?assessmentId=${branch.projectBranchId}&type=PRE_FIELD_AUDIT_PDF${batchParam}`,
-          (() => { const fd = new FormData(); fd.append('file', file); return fd; })(),
+          { method: 'POST', body: (() => { const fd = new FormData(); fd.append('file', file); return fd; })() },
         );
         onSuccess(`Audit packet uploaded for ${branch.branchName}.`);
-      } catch (e: any) { onError(e.message); }
+      } catch (e) { onError(userMessage(e)); }
     });
   };
 
@@ -134,12 +139,19 @@ export const DailyRunPanel: React.FC<{
         const fd = new FormData();
         Array.from(files).forEach((f) => fd.append('files', f));
         const batchParam = run?.batch ? `&customerMasterVersionId=${run.batch.id}` : '';
-        const res = await apiUploadRaw(
-          `/documents/upload-generated-batch?projectId=${projectId}&auditDate=${auditDate}${batchParam}`, fd,
+        // `withMeta` because this is the one call on the page that needs the envelope itself: the
+        // per-file outcomes are in `data`, the summary sentence the operator reads is the
+        // envelope's own `message`, and unwrapping to `data` would drop the latter.
+        const res = await api.request<{
+          data?: { unmatched?: Array<{ fileName: string; reason: string }> };
+          message?: string;
+        }>(
+          `/documents/upload-generated-batch?projectId=${projectId}&auditDate=${auditDate}${batchParam}`,
+          { method: 'POST', body: fd, withMeta: true },
         );
         setUnmatched(res?.data?.unmatched ?? []);
         onSuccess(res?.message || 'Packets uploaded.');
-      } catch (e: any) { onError(e.message); }
+      } catch (e) { onError(userMessage(e)); }
     });
   };
 

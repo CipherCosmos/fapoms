@@ -13,6 +13,32 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod } from '@fapoms/shared';
 
+/** Branch rows returned when the caller names no window. */
+const BRANCH_PAGE_DEFAULT = 25;
+
+/**
+ * The most branch rows one overview request can return.
+ *
+ * The branch list used to have no LIMIT at all: it sorted and serialised every active
+ * project-branch in the system — 40,087 rows and 17.0 MB of JSON on the 200k book, for a panel
+ * that renders twenty-five cards. A ceiling the caller cannot raise is what stops a future
+ * `?limit=999999` from quietly restoring exactly the behaviour being removed here.
+ */
+const BRANCH_PAGE_MAX = 100;
+
+/**
+ * Cap on the never-prepared alert list.
+ *
+ * This is an alert banner, not a worklist — it names branches whose audit is confirmed with no
+ * packet prepared at all. Six on the scale book today, but it is derived from a filter, not a
+ * fixed set, so it needs its own bound rather than inheriting "however many there happen to be".
+ * `totals.neverPrepared` carries the true count so the banner can say so when it is truncated.
+ */
+const NEVER_PREPARED_MAX = 50;
+
+/** The pseudo-stage the branch panel uses for "confirmed audit, nothing prepared at all". */
+const NEVER_PREPARED_STAGE = 'NEVER_PREPARED';
+
 export interface CreateDocumentDto {
   assessmentId: string;
   fileName: string;
@@ -473,7 +499,15 @@ export class DocumentService {
    * of the dispatched/received/sent-to-OCR timestamps the row already carries — so
    * "where is branch X's paperwork right now" could not be answered from it.
    */
-  async operationsOverview(filters: { projectId?: string; status?: string; type?: string } = {}): Promise<any> {
+  async operationsOverview(filters: {
+    projectId?: string; status?: string; type?: string;
+    /** Window over the branch list only — the other arrays in this payload are bounded by their own filters. */
+    page?: number | string; limit?: number | string;
+    /** Server-side branch search. 40k branches is past the point where "scroll to find one" is a feature. */
+    search?: string;
+    /** A `DocumentStatus` the branch must have a document sitting at, or `NEVER_PREPARED`. */
+    stage?: string;
+  } = {}): Promise<any> {
     const where: string[] = ['d.is_active = true'];
     const params: any[] = [];
     if (filters.projectId) { params.push(filters.projectId); where.push(`a.project_id = $${params.length}`); }
@@ -566,25 +600,120 @@ export class DocumentService {
     // different stages — reading as a duplicate rather than two files for one
     // branch. This groups by branch instead, and — critically — includes branches
     // that have *no* documents at all, which the flat list could never show.
-    const branchWhere: string[] = ['pb.is_active = true'];
-    const branchParams: any[] = [];
-    if (filters.projectId) { branchParams.push(filters.projectId); branchWhere.push(`pb.project_id = $${branchParams.length}`); }
+    //
+    // The list is a WINDOW, not the table. It used to have no LIMIT: every active
+    // project-branch was sorted and serialised on every load — 40,087 rows and 17.0 MB of JSON
+    // on the 200k book — for a panel that shows twenty-five cards. Phase 5 paginated the billing
+    // and documents *lists* and missed this one.
+    //
+    // Search and the stage filter move into SQL with it. They cannot stay in the browser: a
+    // client-side filter over one page searches the page, not the book, so typing a branch name
+    // would silently "find" nothing for 40,062 of the 40,087 branches.
+    const page = Math.max(1, Math.trunc(Number(filters.page)) || 1);
+    const limit = Math.min(BRANCH_PAGE_MAX, Math.max(1, Number(filters.limit) || BRANCH_PAGE_DEFAULT));
 
-    const branchRows = await this.documentRepository.manager.query(
-      `SELECT pb.id AS project_branch_id, pb.status AS pb_status, pb.scheduled_date,
-              b.id AS branch_id, b.name AS branch_name, b.branch_code,
-              p.id AS project_id, p.name AS project_name, p.project_number,
-              c.name AS client_name,
-              a.status AS assessment_status
-         FROM project_branches pb
+    /**
+     * "Audit confirmed, nothing prepared at all" as a SQL predicate.
+     *
+     * Written once and used three ways — to filter the list, to flag each row, and to build the
+     * alert list — because these three used to be one JS `.filter()` over the whole table and
+     * must not drift now that they are separate queries. Takes the params array so the branch
+     * type stays a bound parameter rather than an interpolated string.
+     */
+    const neverPreparedSql = (params: any[]): string => {
+      params.push(DocumentType.PRE_FIELD_AUDIT_PDF);
+      return `pb.scheduled_date IS NOT NULL
+              AND pb.status IN ('ASSIGNMENT_CONFIRMED', 'SCHEDULED')
+              AND NOT EXISTS (SELECT 1 FROM documents d2
+                                JOIN assessments a2 ON a2.id = d2.assessment_id
+                               WHERE d2.is_active = true AND d2.type = $${params.length}
+                                 AND a2.project_id = pb.project_id AND a2.branch_id = pb.branch_id)`;
+    };
+
+    /** The filter every branch query below shares, so the page, its count and the flag agree. */
+    const buildBranchWhere = (params: any[]): string => {
+      const clauses = ['pb.is_active = true'];
+      if (filters.projectId) { params.push(filters.projectId); clauses.push(`pb.project_id = $${params.length}`); }
+      const search = (filters.search ?? '').trim();
+      if (search) {
+        params.push(`%${search}%`);
+        const q = `$${params.length}`;
+        // The same four fields the panel's own search box used to match on, so moving it to the
+        // server changes where it runs, not what it finds.
+        clauses.push(`(b.name ILIKE ${q} OR b.branch_code ILIKE ${q} OR p.name ILIKE ${q} OR c.name ILIKE ${q})`);
+      }
+      const stage = (filters.stage ?? '').trim();
+      if (stage === NEVER_PREPARED_STAGE) {
+        clauses.push(`(${neverPreparedSql(params)})`);
+      } else if (stage) {
+        params.push(stage);
+        clauses.push(`EXISTS (SELECT 1 FROM documents d2
+                                JOIN assessments a2 ON a2.id = d2.assessment_id
+                               WHERE d2.is_active = true AND d2.status = $${params.length}
+                                 AND a2.project_id = pb.project_id AND a2.branch_id = pb.branch_id)`);
+      }
+      return clauses.join(' AND ');
+    };
+
+    // `b.name` alone is not a stable sort here: 40,087 active branches share only 20,086 distinct
+    // names, so almost every name is a two-row tie. Under LIMIT/OFFSET an unbroken tie lets rows
+    // swap between pages — an operator paging through would see one branch twice and never see
+    // the other. `pb.id` breaks it.
+    const BRANCH_ORDER = 'ORDER BY b.name, pb.id';
+    const BRANCH_FROM = `FROM project_branches pb
          JOIN branches b ON b.id = pb.branch_id
          JOIN projects p ON p.id = pb.project_id
-         LEFT JOIN clients c ON c.id = p.client_id
-         LEFT JOIN assessments a ON a.project_id = pb.project_id AND a.branch_id = pb.branch_id AND a.is_active = true
-        WHERE ${branchWhere.join(' AND ')}
-        ORDER BY b.name`,
-      branchParams,
-    );
+         LEFT JOIN clients c ON c.id = p.client_id`;
+
+    const listParams: any[] = [];
+    const listWhere = buildBranchWhere(listParams);
+    const listFlag = neverPreparedSql(listParams);
+    listParams.push(limit, (page - 1) * limit);
+
+    const countParams: any[] = [];
+    const countWhere = buildBranchWhere(countParams);
+
+    const gapParams: any[] = [];
+    // Deliberately NOT filtered by `search` or `stage`: this banner answers "what has no paperwork
+    // at all", which is a property of the book, not of whatever the operator has typed. It tracked
+    // the whole set before pagination and still does. `projectId` does apply — that scopes the
+    // whole page, not just the list.
+    if (filters.projectId) gapParams.push(filters.projectId);
+    const gapWhere = filters.projectId ? `pb.is_active = true AND pb.project_id = $1` : 'pb.is_active = true';
+
+    const [branchRows, countRows, gapRows] = await Promise.all([
+      this.documentRepository.manager.query(
+        `SELECT pb.id AS project_branch_id, pb.scheduled_date,
+                b.name AS branch_name, b.branch_code,
+                p.name AS project_name,
+                c.name AS client_name,
+                (${listFlag}) AS never_prepared
+           ${BRANCH_FROM}
+          WHERE ${listWhere}
+          ${BRANCH_ORDER}
+          LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+        listParams,
+      ),
+      this.documentRepository.manager.query(
+        `SELECT COUNT(*)::int AS n ${BRANCH_FROM} WHERE ${countWhere}`,
+        countParams,
+      ),
+      this.documentRepository.manager.query(
+        `SELECT pb.id AS project_branch_id, pb.scheduled_date,
+                b.name AS branch_name, b.branch_code,
+                p.name AS project_name,
+                c.name AS client_name,
+                true AS never_prepared,
+                COUNT(*) OVER() AS gap_total
+           ${BRANCH_FROM}
+          WHERE ${gapWhere} AND (${neverPreparedSql(gapParams)})
+          ORDER BY pb.scheduled_date ASC, pb.id
+          LIMIT ${NEVER_PREPARED_MAX}`,
+        gapParams,
+      ),
+    ]);
+
+    const branchTotal = Number(countRows?.[0]?.n ?? 0);
 
     const docsByBranch = new Map<string, any[]>();
     for (const d of documents) {
@@ -593,52 +722,59 @@ export class DocumentService {
       docsByBranch.get(d.projectBranchId)!.push(d);
     }
 
-    const branches = branchRows.map((r: any) => {
+    /**
+     * One branch card.
+     *
+     * The projection stops here on purpose. `branchId`, `projectId`, `projectNumber`,
+     * `branchStatus` and `assessmentStatus` were selected and serialised for all 40,087 rows and
+     * no consumer reads any of them — `assessmentStatus` was the only reason the query joined
+     * `assessments` (200k rows) at all, and that join is now gone. `branchStatus` still exists,
+     * as the SQL predicate above, which is the only place it was ever used.
+     */
+    const toBranchGroup = (r: any) => {
       const docs = docsByBranch.get(r.project_branch_id) ?? [];
       const documentsByType: Record<string, any[]> = {};
       for (const d of docs) {
         (documentsByType[d.type] ??= []).push(d);
       }
-      const daysUntilAudit = r.scheduled_date
-        ? Math.round((new Date(r.scheduled_date).getTime() - new Date(today).getTime()) / 86400000)
-        : null;
       return {
         projectBranchId: r.project_branch_id,
-        branchId: r.branch_id,
         branchName: r.branch_name,
         branchCode: r.branch_code,
-        projectId: r.project_id,
         projectName: r.project_name,
-        projectNumber: r.project_number,
         clientName: r.client_name,
-        branchStatus: r.pb_status,
-        assessmentStatus: r.assessment_status,
         scheduledDate: r.scheduled_date,
-        daysUntilAudit,
+        daysUntilAudit: r.scheduled_date
+          ? Math.round((new Date(r.scheduled_date).getTime() - new Date(today).getTime()) / 86400000)
+          : null,
+        // Carried per row so the panel can flag a gap without holding the whole gap list — which
+        // is what `neverPrepared.some(...)` in the browser used to require.
+        neverPrepared: r.never_prepared === true,
         documentCount: docs.length,
         documentsByType,
       };
-    });
+    };
+
+    const branches = branchRows.map(toBranchGroup);
 
     // An assayer is confirmed and a date is set, but the packet that they need to
     // do the audit was never even created — worse than "prepared but not sent",
     // this is "not prepared at all". Invisible to `awaitingDispatch` above because
     // that only looks at documents that already exist.
-    const neverPrepared = branches
-      .filter((br: any) =>
-        br.scheduledDate
-        && ['ASSIGNMENT_CONFIRMED', 'SCHEDULED'].includes(br.branchStatus)
-        && !br.documentsByType[DocumentType.PRE_FIELD_AUDIT_PDF]?.length)
-      .sort((a: any, b: any) => (a.daysUntilAudit ?? 9999) - (b.daysUntilAudit ?? 9999));
+    const neverPrepared = gapRows.map(toBranchGroup);
+    const neverPreparedTotal = Number(gapRows?.[0]?.gap_total ?? 0);
 
     return {
       documents,
       pipeline,
       branches,
+      /** The window `branches` was cut from. The controller turns this into `meta.pagination`. */
+      branchPagination: { page, limit, total: branchTotal },
       totals: {
         total: documents.length,
         awaitingDispatch: awaitingDispatch.length,
-        neverPrepared: neverPrepared.length,
+        // The true count, not `neverPrepared.length` — that list is capped at NEVER_PREPARED_MAX.
+        neverPrepared: neverPreparedTotal,
         // Sent to the field but the completed paperwork has not come back.
         outstandingReturns: documents.filter((d: any) =>
           d.status === DocumentStatus.DISPATCHED && d.type === DocumentType.PRE_FIELD_AUDIT_PDF).length,

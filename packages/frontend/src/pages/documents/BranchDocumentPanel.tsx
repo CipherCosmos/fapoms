@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import {
   AlertTriangle, FileText, Send, CheckCircle2, Clock, Search, ChevronRight, ChevronDown,
   UploadCloud, Inbox, ArrowRightCircle,
 } from 'lucide-react';
+import { Pagination } from '../../components/ui';
 import type { BranchGroup } from './DocumentControlPanel';
 
 const TYPE_META: Record<string, { label: string; short: string }> = {
@@ -48,8 +49,21 @@ const fmtDateTime = (d?: string | null) => (d ? new Date(d).toLocaleString(undef
  * hard to tell what was actually done versus still pending.
  */
 export const BranchDocumentPanel: React.FC<{
+  /** One page of branches. Never the whole set — see `total`. */
   branches: BranchGroup[];
   neverPrepared: BranchGroup[];
+  /** True count of branches matching the current search/stage, across all pages. */
+  total: number;
+  /** True count of never-prepared branches; `neverPrepared` itself is a capped list. */
+  neverPreparedTotal: number;
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  search: string;
+  onSearchChange: (search: string) => void;
+  stage: string;
+  onStageChange: (stage: string) => void;
+  loading?: boolean;
   pipeline: Array<{ stage: string; count: number }>;
   onDispatch: (ids: string[]) => Promise<void>;
   onDownload: (id: string) => void;
@@ -58,9 +72,11 @@ export const BranchDocumentPanel: React.FC<{
   onSendToOcr: (docId: string) => Promise<void>;
   onUploadExcel: (assessmentId: string, file: File) => Promise<void>;
   busy?: boolean;
-}> = ({ branches, neverPrepared, pipeline, onDispatch, onDownload, onUpload, onMarkReceived, onSendToOcr, onUploadExcel, busy }) => {
-  const [search, setSearch] = useState('');
-  const [stageFilter, setStageFilter] = useState<string>('ALL');
+}> = ({
+  branches, neverPrepared, total, neverPreparedTotal, page, pageSize, onPageChange,
+  search, onSearchChange, stage: stageFilter, onStageChange, loading,
+  pipeline, onDispatch, onDownload, onUpload, onMarkReceived, onSendToOcr, onUploadExcel, busy,
+}) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Tracks which specific document/branch is mid-action, so only that row shows
   // a busy state instead of freezing the whole page on every click.
@@ -71,20 +87,16 @@ export const BranchDocumentPanel: React.FC<{
     try { await fn(); } finally { setActing((s) => { const n = new Set(s); n.delete(key); return n; }); }
   };
 
-  const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return branches.filter((b) => {
-      if (stageFilter === 'NEVER_PREPARED') {
-        return neverPrepared.some((n) => n.projectBranchId === b.projectBranchId);
-      }
-      if (stageFilter !== 'ALL') {
-        const hasStage = Object.values(b.documentsByType).some((docs) => docs.some((d) => d.status === stageFilter));
-        if (!hasStage) return false;
-      }
-      if (!q) return true;
-      return [b.branchName, b.branchCode, b.projectName, b.clientName].some((v) => v?.toLowerCase().includes(q));
-    });
-  }, [branches, search, stageFilter, neverPrepared]);
+  /**
+   * `branches` IS the result — there is no filtering left to do here.
+   *
+   * Search and the stage filter used to be a `useMemo` over the full branch list, which worked
+   * only because the server sent all 40,087 of them (17 MB) on every load. Filtering one page in
+   * the browser would search 25 rows and confidently report "no branches match" for the other
+   * 40,062, so both moved into SQL with the pagination.
+   */
+  const rows = branches;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const toggle = (id: string) =>
     setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -94,17 +106,18 @@ export const BranchDocumentPanel: React.FC<{
       {/* Pipeline strip: click a stage to see only branches with a document sitting
           there right now — the fast way to answer "what's stuck and where". */}
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-        <StageChip active={stageFilter === 'ALL'} onClick={() => setStageFilter('ALL')} label="All branches" count={branches.length} color="var(--text-secondary)" bg="var(--bg-surface-2)" />
+        {/* `total`, not `branches.length` — that is one page, so the chip would read "25". */}
+        <StageChip active={stageFilter === 'ALL'} onClick={() => onStageChange('ALL')} label="All branches" count={total} color="var(--text-secondary)" bg="var(--bg-surface-2)" />
         {STAGE_ORDER.map((stage) => {
           const count = pipeline.find((p) => p.stage === stage)?.count ?? 0;
           if (count === 0) return null;
           const meta = STAGE_META[stage];
           return (
-            <StageChip key={stage} active={stageFilter === stage} onClick={() => setStageFilter(stageFilter === stage ? 'ALL' : stage)} label={meta.label} count={count} color={meta.color} bg={meta.bg} />
+            <StageChip key={stage} active={stageFilter === stage} onClick={() => onStageChange(stageFilter === stage ? 'ALL' : stage)} label={meta.label} count={count} color={meta.color} bg={meta.bg} />
           );
         })}
-        {neverPrepared.length > 0 && (
-          <StageChip active={stageFilter === 'NEVER_PREPARED'} onClick={() => setStageFilter(stageFilter === 'NEVER_PREPARED' ? 'ALL' : 'NEVER_PREPARED')} label="Nothing prepared" count={neverPrepared.length} color="var(--danger)" bg="var(--status-cancelled-bg)" />
+        {neverPreparedTotal > 0 && (
+          <StageChip active={stageFilter === 'NEVER_PREPARED'} onClick={() => onStageChange(stageFilter === 'NEVER_PREPARED' ? 'ALL' : 'NEVER_PREPARED')} label="Nothing prepared" count={neverPreparedTotal} color="var(--danger)" bg="var(--status-cancelled-bg)" />
         )}
       </div>
 
@@ -112,7 +125,14 @@ export const BranchDocumentPanel: React.FC<{
         <div style={{ background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', padding: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
             <AlertTriangle size={15} />
-            {neverPrepared.length} branch{neverPrepared.length === 1 ? '' : 'es'} confirmed with no paperwork prepared at all
+            {neverPreparedTotal} branch{neverPreparedTotal === 1 ? '' : 'es'} confirmed with no paperwork prepared at all
+            {/* The list below is capped. Say so, rather than showing 50 under a heading that
+                claims there are 137. */}
+            {neverPreparedTotal > neverPrepared.length && (
+              <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>
+                — showing the {neverPrepared.length} most urgent
+              </span>
+            )}
           </div>
           {neverPrepared.map((b) => (
             <div key={b.projectBranchId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', fontSize: 12.5, flexWrap: 'wrap', gap: 6 }}>
@@ -127,24 +147,31 @@ export const BranchDocumentPanel: React.FC<{
         </div>
       )}
 
-      <div style={{ position: 'relative', maxWidth: 420 }}>
-        <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-        <input
-          value={search} onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by branch, client or project…"
-          style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13 }}
-        />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: '1 1 320px', maxWidth: 420 }}>
+          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          <input
+            value={search} onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search by branch, client or project…"
+            style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13 }}
+          />
+        </div>
+        {/* The search runs on the server, so there is a round-trip to acknowledge. Without this
+            the box looks unresponsive while 40k branches are being filtered. */}
+        {loading && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Searching…</span>}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {rows.length === 0 && (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-            No branches match this filter.
+            {loading ? 'Searching…' : 'No branches match this filter.'}
           </div>
         )}
         {rows.map((b) => {
           const isOpen = expanded.has(b.projectBranchId);
-          const gapFlag = neverPrepared.some((n) => n.projectBranchId === b.projectBranchId);
+          // Comes down on the row itself now. Testing membership of the `neverPrepared` list only
+          // worked while that list held every branch in the book.
+          const gapFlag = b.neverPrepared;
           return (
             <div key={b.projectBranchId} style={{
               background: 'var(--bg-secondary)',
@@ -275,6 +302,14 @@ export const BranchDocumentPanel: React.FC<{
           );
         })}
       </div>
+
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={pageSize}
+        onPageChange={onPageChange}
+      />
     </div>
   );
 };

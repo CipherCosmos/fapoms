@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DocumentControlPanel } from './documents/DocumentControlPanel';
 import type { OverviewData } from './documents/DocumentControlPanel';
 import { BranchDocumentPanel } from './documents/BranchDocumentPanel';
@@ -9,6 +9,8 @@ import { RefreshCw } from 'lucide-react';
 import { AlertBanner } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
+import { api } from '../services/api';
+import { userMessage } from '../services/errors';
 
 /**
  * The presigned PUT's own budget, longer than the API default because the file, not the network,
@@ -20,29 +22,15 @@ import { fetchWithTimeout } from '../services/http';
 const PRESIGNED_UPLOAD_TIMEOUT_MS = 600_000;
 
 /**
- * These four wrappers predate the shared API client and duplicate it — badly. They are kept for
- * now because replacing them is a behaviour change (the client refreshes on 401; these do not, so
- * a session that expires mid-session here surfaces as a bare "Request failed" instead of a silent
- * re-auth), and that deserves its own change rather than riding along with a timeout fix.
+ * Branch cards per page.
  *
- * What they must not keep doing is hang. Every one of them was a bare `fetch` with no budget, so
- * a stalled connection left the document list spinning with no error and no end — the exact defect
- * this page's own `PRESIGNED_UPLOAD_TIMEOUT_MS` exists to prevent one call below. They now go
- * through `fetchWithTimeout` and inherit the default budget, which closes the hang without
- * pretending the duplication has been dealt with.
+ * The server clamps this to 100 whatever we ask for. The list used to arrive whole — 40,087 rows
+ * and 17.0 MB of JSON for a screen that shows a couple of dozen cards.
  */
-async function apiGet<T>(endpoint: string): Promise<T> {
-  const token = localStorage.getItem('fapoms_token');
-  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || `Request failed: ${endpoint}`);
-  }
-  const json = await res.json();
-  return json.data as T;
-}
+const BRANCH_PAGE_SIZE = 25;
+
+/** Matches the global search box, so typing feels the same in both places. */
+const BRANCH_SEARCH_DEBOUNCE_MS = 200;
 
 /**
  * Opens a document download.
@@ -53,58 +41,8 @@ async function apiGet<T>(endpoint: string): Promise<T> {
  * Exchange the session for a scoped token first, then open the signed URL.
  */
 async function openDocumentDownload(documentId: string): Promise<void> {
-  const { downloadUrl } = await apiGet<{ downloadUrl: string }>(`/documents/${documentId}/download-token`);
+  const { downloadUrl } = await api.request<{ downloadUrl: string }>(`/documents/${documentId}/download-token`);
   window.open(`/api/v1${downloadUrl}`, '_blank', 'noopener,noreferrer');
-}
-
-async function apiPost(endpoint: string, body?: any): Promise<any> {
-  const token = localStorage.getItem('fapoms_token');
-  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
-    method: 'POST',
-    headers: {
-      ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || `Request failed: ${endpoint}`);
-  }
-  const json = await res.json();
-  return json.data;
-}
-
-async function apiUpload(endpoint: string, formData: FormData): Promise<any> {
-  const token = localStorage.getItem('fapoms_token');
-  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || `Upload failed: ${endpoint}`);
-  }
-  const json = await res.json();
-  return json.data;
-}
-
-/**
- * Like apiUpload but returns the whole response envelope, not just `data`.
- * The batch-packet upload reports per-file outcomes (what was filed, what could
- * not be matched) alongside a summary message, and the caller needs both.
- */
-async function apiUploadRaw(endpoint: string, formData: FormData): Promise<any> {
-  const token = localStorage.getItem('fapoms_token');
-  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.message || `Upload failed: ${endpoint}`);
-  return json;
 }
 
 /**
@@ -120,7 +58,10 @@ async function apiUploadRaw(endpoint: string, formData: FormData): Promise<any> 
 async function uploadDocumentSmart(assessmentId: string, type: string, file: File): Promise<any> {
   const contentType = file.type || 'application/octet-stream';
   try {
-    const presign = await apiPost('/documents/upload/presign', { fileName: file.name, contentType });
+    const presign = await api.request<{ uploadUrl?: string; objectKey?: string }>('/documents/upload/presign', {
+      method: 'POST',
+      body: JSON.stringify({ fileName: file.name, contentType }),
+    });
     if (!presign?.uploadUrl || !presign?.objectKey) throw new Error('presign unavailable');
 
     // Bounded on the long budget: this is a multi-megabyte PUT to object storage, so it is slow
@@ -137,19 +78,22 @@ async function uploadDocumentSmart(assessmentId: string, type: string, file: Fil
     });
     if (!put.ok) throw new Error(`storage PUT failed (${put.status})`);
 
-    return await apiPost('/documents/upload/finalize', {
-      objectKey: presign.objectKey,
-      assessmentId,
-      type,
-      fileName: file.name,
-      contentType,
+    return await api.request('/documents/upload/finalize', {
+      method: 'POST',
+      body: JSON.stringify({
+        objectKey: presign.objectKey,
+        assessmentId,
+        type,
+        fileName: file.name,
+        contentType,
+      }),
     });
   } catch {
     const formData = new FormData();
     formData.append('file', file);
-    return apiUpload(
+    return api.request(
       `/documents/upload?assessmentId=${encodeURIComponent(assessmentId)}&type=${encodeURIComponent(type)}`,
-      formData,
+      { method: 'POST', body: formData },
     );
   }
 }
@@ -176,29 +120,75 @@ export const Documents: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
+  // The branch list is the only paged array in the overview payload; these three drive its window.
+  const [branchPage, setBranchPage] = useState(1);
+  const [branchSearch, setBranchSearch] = useState('');
+  const [branchStage, setBranchStage] = useState('ALL');
+  const [branchTotal, setBranchTotal] = useState(0);
+
+  /**
+   * The live branch window, readable from a callback that was bound once.
+   *
+   * `loadOverview` is handed to the socket listeners at mount and must keep a stable identity —
+   * rebuilding it per keystroke would tear down and re-subscribe three socket handlers on every
+   * character typed. So it reads the query through this ref rather than through its own closure,
+   * the same way `Branches.tsx` reads its global scope.
+   */
+  const branchQueryRef = useRef({ page: 1, search: '', stage: 'ALL' });
+
   const loadOverview = useCallback(async () => {
     setOverviewLoading(true);
     try {
-      setOverview(await apiGet<OverviewData>('/documents/operations/overview'));
-    } catch (err: any) {
-      setError(err.message);
+      const { page, search, stage } = branchQueryRef.current;
+      const params = new URLSearchParams({ page: String(page), limit: String(BRANCH_PAGE_SIZE) });
+      if (search.trim()) params.set('search', search.trim());
+      if (stage !== 'ALL') params.set('stage', stage);
+      // withMeta, because the branch array is a page and `meta.pagination.total` is the only
+      // figure that says how big the set actually is.
+      const res = await api.request<{ data: OverviewData; meta?: { pagination?: { total?: number } } }>(
+        `/documents/operations/overview?${params.toString()}`,
+        { withMeta: true },
+      );
+      setOverview(res.data);
+      setBranchTotal(res.meta?.pagination?.total ?? res.data?.branches?.length ?? 0);
+    } catch (err) {
+      setError(userMessage(err));
     } finally {
       setOverviewLoading(false);
     }
   }, []);
 
+  /**
+   * Refetch when the branch window moves.
+   *
+   * Debounced on the same 200 ms as the global search box, because `search` changes on every
+   * keystroke and each one is now a real request. The cleanup also collapses React's
+   * double-invoked mount effect into a single load — this page was firing the overview twice.
+   */
+  useEffect(() => {
+    branchQueryRef.current = { page: branchPage, search: branchSearch, stage: branchStage };
+    const t = setTimeout(() => { loadOverview(); }, BRANCH_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [branchPage, branchSearch, branchStage, loadOverview]);
+
+  // Any change to what is being searched invalidates the page number: staying on page 5 of a
+  // filter that now matches three branches shows an empty list.
+  const changeBranchSearch = useCallback((v: string) => { setBranchSearch(v); setBranchPage(1); }, []);
+  const changeBranchStage = useCallback((v: string) => { setBranchStage(v); setBranchPage(1); }, []);
+
   useEffect(() => {
     // The daily run is scoped to one project's schedule for a date.
-    apiGet<Array<{ id: string; name: string }>>('/projects')
+    api.request<Array<{ id: string; name: string }>>('/projects')
       .then((list) => {
         setProjects(list || []);
         if (list?.length) setProjectId((cur) => cur || list[0].id);
       })
-      .catch((e: any) => setError(e.message));
+      .catch((e) => setError(userMessage(e)));
   }, []);
 
   useEffect(() => {
-    loadOverview();
+    // No initial load here — the branch-window effect above owns that, and calling it from both
+    // is what made this page fetch the overview twice on mount.
     connectSocket();
     const socket = getSocket();
     if (socket) {
@@ -223,11 +213,14 @@ export const Documents: React.FC = () => {
     setError(null);
     setSuccessMsg(null);
     try {
-      const result = await apiPost('/documents/dispatch-batch', { documentIds: ids });
+      const result = await api.request<any>('/documents/dispatch-batch', {
+        method: 'POST',
+        body: JSON.stringify({ documentIds: ids }),
+      });
       setSuccessMsg(result?.message || 'Documents dispatched.');
       await loadOverview();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(userMessage(err));
     } finally {
       setBusyKey(null);
     }
@@ -243,8 +236,8 @@ export const Documents: React.FC = () => {
       await uploadDocumentSmart(projectBranchId, type, file);
       setSuccessMsg(`"${file.name}" uploaded.`);
       await loadOverview();
-    } catch (err: any) {
-      setError(err.message || 'Upload failed.');
+    } catch (err) {
+      setError(userMessage(err));
     }
   };
 
@@ -253,11 +246,11 @@ export const Documents: React.FC = () => {
     setError(null);
     setSuccessMsg(null);
     try {
-      const result = await apiPost(`/documents/${docId}/receive`);
+      const result = await api.request<any>(`/documents/${docId}/receive`, { method: 'POST' });
       setSuccessMsg(result?.message || 'Marked as received.');
       await loadOverview();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(userMessage(err));
     }
   };
 
@@ -266,11 +259,11 @@ export const Documents: React.FC = () => {
     setError(null);
     setSuccessMsg(null);
     try {
-      await apiPost(`/documents/${docId}/send-external-ocr`);
+      await api.request(`/documents/${docId}/send-external-ocr`, { method: 'POST' });
       setSuccessMsg('Marked as sent to the external OCR application.');
       await loadOverview();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(userMessage(err));
     }
   };
 
@@ -280,11 +273,11 @@ export const Documents: React.FC = () => {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      await apiUpload(`/documents/upload-excel?assessmentId=${assessmentId}`, formData);
+      await api.request(`/documents/upload-excel?assessmentId=${assessmentId}`, { method: 'POST', body: formData });
       setSuccessMsg('Excel report uploaded.');
       await loadOverview();
-    } catch (err: any) {
-      setError(err.message || 'Upload failed.');
+    } catch (err) {
+      setError(userMessage(err));
     }
   };
 
@@ -343,12 +336,9 @@ export const Documents: React.FC = () => {
           ) : view === 'daily' ? (
             <DailyRunPanel
               projectId={projectId}
-              apiGet={apiGet}
-              apiUpload={apiUpload}
-              apiUploadRaw={apiUploadRaw}
               onDispatch={handleDispatchMany}
               onSendToOcr={handleSendToOcr}
-              onDownload={(id) => { openDocumentDownload(id).catch(e => setError(e.message)); }}
+              onDownload={(id) => { openDocumentDownload(id).catch((e) => setError(userMessage(e))); }}
               onError={setError}
               onSuccess={setSuccessMsg}
             />
@@ -356,10 +346,20 @@ export const Documents: React.FC = () => {
             <BranchDocumentPanel
               branches={overview.branches || []}
               neverPrepared={overview.neverPrepared || []}
+              total={branchTotal}
+              neverPreparedTotal={overview.totals?.neverPrepared ?? 0}
+              page={branchPage}
+              pageSize={BRANCH_PAGE_SIZE}
+              onPageChange={setBranchPage}
+              search={branchSearch}
+              onSearchChange={changeBranchSearch}
+              stage={branchStage}
+              onStageChange={changeBranchStage}
+              loading={overviewLoading}
               pipeline={overview.pipeline || []}
               busy={busyKey === 'batch-dispatch'}
               onDispatch={handleDispatchMany}
-              onDownload={(id) => { openDocumentDownload(id).catch(e => setError(e.message)); }}
+              onDownload={(id) => { openDocumentDownload(id).catch((e) => setError(userMessage(e))); }}
               onUpload={handleUploadForBranch}
               onMarkReceived={handleMarkReceived}
               onSendToOcr={handleSendToOcr}
@@ -370,7 +370,7 @@ export const Documents: React.FC = () => {
               data={overview}
               busy={busyKey === 'batch-dispatch'}
               onDispatch={handleDispatchMany}
-              onDownload={(id) => { openDocumentDownload(id).catch(e => setError(e.message)); }}
+              onDownload={(id) => { openDocumentDownload(id).catch((e) => setError(userMessage(e))); }}
             />
           )}
         </div>

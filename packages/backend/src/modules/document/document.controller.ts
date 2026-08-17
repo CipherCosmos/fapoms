@@ -1,5 +1,5 @@
 import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
@@ -988,12 +988,35 @@ export class DocumentController {
     SystemRole.READ_ONLY_AUDITOR,
   )
   @ApiOperation({ summary: 'Document control console: branch context, transport trail, pipeline and action queues' })
+  @ApiQuery({ name: 'page', required: false, description: 'Branch list page (1-based).' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Branch rows per page; clamped server-side.' })
+  @ApiQuery({ name: 'search', required: false, description: 'Matches branch name/code, project or client.' })
+  @ApiQuery({ name: 'stage', required: false, description: "A DocumentStatus the branch is sitting at, or 'NEVER_PREPARED'." })
   async operationsOverview(
     @Query('projectId') projectId?: string,
     @Query('status') status?: string,
     @Query('type') type?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('stage') stage?: string,
   ) {
-    return { success: true, data: await this.documentService.operationsOverview({ projectId, status, type }) };
+    const data = await this.documentService.operationsOverview({ projectId, status, type, page, limit, search, stage });
+    // `pagination` describes `data.branches` only — the one array here that is a window rather
+    // than a complete set. Same shape the other paged lists emit (see branch.controller.ts).
+    const { page: p, limit: l, total } = data.branchPagination;
+    return {
+      success: true,
+      data,
+      meta: {
+        pagination: {
+          page: p, limit: l, total,
+          totalPages: Math.ceil(total / l),
+          hasNext: p * l < total,
+          hasPrevious: p > 1,
+        },
+      },
+    };
   }
 
   @Post('upload-generated-batch')
