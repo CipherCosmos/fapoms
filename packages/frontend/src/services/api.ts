@@ -1,5 +1,5 @@
 import { NotificationCategory } from '@fapoms/shared';
-import { fromNetwork, fromResponse } from './errors';
+import { AppError, fromNetwork, fromResponse } from './errors';
 import { clearSession } from './session';
 
 /**
@@ -54,10 +54,38 @@ export interface NotificationPreference {
   email: boolean;
 }
 
+/**
+ * How long any single call may stay in flight before it is given up on.
+ *
+ * `fetch` has no timeout of its own: a request that reaches a stalled proxy, a backend mid-restart
+ * or a Wi-Fi network that accepted the connection and then went quiet simply never settles. React
+ * Query keeps that query in `isFetching` for as long as the tab is open, so the screen shows a
+ * spinner that will never resolve and a retry that will never fire, and — because the browser caps
+ * concurrent connections per origin — six of those are enough to wedge every other request on the
+ * page behind them.
+ *
+ * Thirty seconds is well past any healthy response on this system (the slowest aggregate the desk
+ * loads answers in single-digit seconds) and well short of an operator deciding the app is broken.
+ */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * The exceptions to that budget: work whose size, not the network, decides how long it takes.
+ *
+ * A document upload is a FormData body of several megabytes over an office uplink, and the Excel
+ * report endpoints stream a workbook the server is still generating. Both routinely and legitimately
+ * run past thirty seconds, and aborting one loses real work, so they get a much longer leash rather
+ * than an exemption — a stuck upload still has to end eventually.
+ */
+const LONG_TIMEOUT_MS = 180_000;
+
 class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;
 
-  async request<T>(endpoint: string, options?: RequestInit & { raw?: boolean; withMeta?: boolean }): Promise<T> {
+  async request<T>(
+    endpoint: string,
+    options?: RequestInit & { raw?: boolean; withMeta?: boolean; timeoutMs?: number },
+  ): Promise<T> {
     const token = localStorage.getItem('fapoms_token');
     const headers: Record<string, string> = {
       ...(options?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
@@ -65,16 +93,67 @@ class ApiClient {
       ...(options?.headers as Record<string, string> || {}),
     };
 
+    /**
+     * One signal that carries both reasons a request should stop: the caller no longer wants the
+     * answer, and the answer is taking too long.
+     *
+     * The caller's signal is React Query's — every `queryFn: ({ signal }) => api.request(url, { signal })`
+     * hands it down — so navigating away, switching branch, or changing a filter now actually
+     * cancels the request instead of leaving it to arrive later and overwrite newer state. That
+     * last part is not hypothetical: the planning desk fired a fresh recommendation request on
+     * every branch click, and a slow response for the branch you clicked first would land after
+     * the fast one for the branch you clicked second and repaint the panel with the wrong
+     * candidates.
+     *
+     * They are composed by hand rather than with `AbortSignal.any` so the client keeps working on
+     * the older Chromium builds still deployed on some desks, and the abort *reason* is forwarded
+     * so the catch below can tell "the caller cancelled" (nothing to report) from "we timed out"
+     * (something to tell the operator).
+     */
+    const callerSignal = options?.signal ?? undefined;
+    const controller = new AbortController();
+    const timeoutMs = options?.timeoutMs
+      ?? (options?.body instanceof FormData || options?.raw ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => controller.abort(new DOMException(`Request timed out after ${timeoutMs}ms`, 'TimeoutError')),
+      timeoutMs,
+    );
+    const forwardAbort = () => controller.abort(callerSignal?.reason);
+    if (callerSignal) {
+      if (callerSignal.aborted) forwardAbort();
+      else callerSignal.addEventListener('abort', forwardAbort, { once: true });
+    }
+    try {
+      return await this.send<T>(endpoint, options, headers, controller.signal, callerSignal, timeoutMs);
+    } finally {
+      // The budget covers the whole call including a token refresh and its retry, so the timer is
+      // only cleared once that has all finished — and it is cleared on the failure path too, or a
+      // long-lived tab accumulates one pending timer per request it ever made.
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', forwardAbort);
+    }
+  }
+
+  /**
+   * The request itself, split out only so `request` can own the timeout's lifetime in one
+   * `finally` rather than repeating `clearTimeout` down every early-return and throw path.
+   */
+  private async send<T>(
+    endpoint: string,
+    options: (RequestInit & { raw?: boolean; withMeta?: boolean }) | undefined,
+    headers: Record<string, string>,
+    signal: AbortSignal,
+    callerSignal: AbortSignal | undefined,
+    timeoutMs: number,
+  ): Promise<T> {
     // A dropped connection previously surfaced as a raw `TypeError: Failed to
     // fetch`, which reads as a crash. Offline is a normal condition for field
     // staff on mobile data, not an error state to panic about.
     let response: Response;
     try {
-      response = await fetch(`/api/v1${endpoint}`, { ...options, headers });
+      response = await fetch(`/api/v1${endpoint}`, { ...options, headers, signal });
     } catch (netErr) {
-      const appErr = fromNetwork(netErr);
-      console.error(`[api] ${options?.method ?? 'GET'} ${endpoint} -> network:`, appErr.technical);
-      throw appErr;
+      throw this.abortAwareNetworkError(netErr, endpoint, options?.method, callerSignal, signal, timeoutMs);
     }
 
     // 403 Forbidden from RolesGuard/PermissionsGuard means user IS authenticated
@@ -98,9 +177,9 @@ class ApiClient {
           Authorization: `Bearer ${newToken}`,
         };
         try {
-          response = await fetch(`/api/v1${endpoint}`, { ...options, headers: retryHeaders });
+          response = await fetch(`/api/v1${endpoint}`, { ...options, headers: retryHeaders, signal });
         } catch (netErr) {
-          throw fromNetwork(netErr);
+          throw this.abortAwareNetworkError(netErr, endpoint, options?.method, callerSignal, signal, timeoutMs);
         }
       }
 
@@ -165,6 +244,41 @@ class ApiClient {
       'success' in res &&
       'data' in res;
     return (enveloped ? (res as any).data : res) as T;
+  }
+
+  /**
+   * Turns a failed `fetch` into the right kind of failure — which depends on who stopped it.
+   *
+   * Three outcomes hide behind one `TypeError`/`AbortError`:
+   *  - The CALLER cancelled (React Query dropped the query because the component unmounted or the
+   *    key changed). Nobody is waiting for this answer and nothing went wrong, so the original
+   *    abort is rethrown untouched: React Query recognises it as a cancellation and leaves the
+   *    cache and the error state alone. Wrapping it in an AppError instead would paint a red
+   *    "could not reach the server" banner on a screen the operator just navigated away from.
+   *  - WE gave up (the timeout fired). That is worth telling someone about, and it is a different
+   *    sentence from "you are offline" — the connection was fine, the answer never came.
+   *  - Genuine network failure, which `fromNetwork` already words for a non-technical reader.
+   */
+  private abortAwareNetworkError(
+    netErr: unknown,
+    endpoint: string,
+    method: string | undefined,
+    callerSignal: AbortSignal | undefined,
+    signal: AbortSignal,
+    timeoutMs: number,
+  ): unknown {
+    if (callerSignal?.aborted) return netErr;
+    if (signal.aborted) {
+      const appErr = new AppError(
+        'The server took too long to respond. Please try again.',
+        `Aborted after ${timeoutMs}ms`,
+      );
+      console.error(`[api] ${method ?? 'GET'} ${endpoint} -> timeout after ${timeoutMs}ms`);
+      return appErr;
+    }
+    const appErr = fromNetwork(netErr);
+    console.error(`[api] ${method ?? 'GET'} ${endpoint} -> network:`, appErr.technical);
+    return appErr;
   }
 
   /** @deprecated use getNotificationPage — kept for the couple of call sites not yet migrated. */
@@ -232,11 +346,24 @@ class ApiClient {
       const refreshToken = localStorage.getItem('fapoms_refresh_token');
       if (!refreshToken) return false;
 
-      const refreshResponse = await fetch('/api/v1/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
-      });
+      /**
+       * The refresh gets a timeout of its own because it is the one request everything else
+       * queues behind: `refreshPromise` is shared, so a refresh that never settles leaves every
+       * 401'd call in the app awaiting it forever, and the session neither recovers nor ends.
+       */
+      const refreshController = new AbortController();
+      const refreshTimer = setTimeout(() => refreshController.abort(), DEFAULT_TIMEOUT_MS);
+      let refreshResponse: Response;
+      try {
+        refreshResponse = await fetch('/api/v1/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+          signal: refreshController.signal,
+        });
+      } finally {
+        clearTimeout(refreshTimer);
+      }
 
       if (refreshResponse.ok) {
         const refreshData = await refreshResponse.json();

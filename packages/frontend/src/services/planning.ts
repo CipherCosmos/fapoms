@@ -34,7 +34,18 @@ export interface TravelRates {
   freeTravelAllowanceKm: number;
 }
 
-export const getProjects = () => api.request<ProjectOption[]>('/projects', { method: 'GET' });
+/**
+ * Every read below takes an optional `signal`.
+ *
+ * These are the calls the planning desk repeats as the operator works — a different branch, a
+ * different date, a wider radius — and each one supersedes the last. React Query hands its own
+ * `signal` to the query function, so passing it through is what makes "click branch A, then
+ * immediately branch B" actually abort A's recommendation request instead of letting it arrive
+ * second and repaint the panel with the wrong candidates. Optional so the handful of imperative
+ * callers that are not queries keep working unchanged.
+ */
+export const getProjects = (signal?: AbortSignal) =>
+  api.request<ProjectOption[]>('/projects', { method: 'GET', signal });
 
 /**
  * Zones, optionally narrowed to one client's.
@@ -45,8 +56,8 @@ export const getProjects = () => api.request<ProjectOption[]>('/projects', { met
  * scoped to one project, only that project's client's zones can match anything; picking one of the
  * others silently returns nothing.
  */
-export const getZones = (clientId?: string) =>
-  api.request<ZoneOption[]>(`/zones?limit=100${clientId ? `&clientId=${encodeURIComponent(clientId)}` : ''}`);
+export const getZones = (clientId?: string, signal?: AbortSignal) =>
+  api.request<ZoneOption[]>(`/zones?limit=100${clientId ? `&clientId=${encodeURIComponent(clientId)}` : ''}`, { signal });
 
 /**
  * Branches for a project. Caller supplies its own ProjectBranch type.
@@ -54,11 +65,11 @@ export const getZones = (clientId?: string) =>
  * `scopeQuery` comes from `useScope().scopeParams` via `withScope` — the coverage queue is
  * narrowed by the header's region/zone/state the same way every other operations list is.
  */
-export const getProjectBranches = <T = unknown>(projectId: string, scopeQuery = '') =>
-  api.request<T[]>(`/projects/${projectId}/branches${scopeQuery ? `?${scopeQuery}` : ''}`);
+export const getProjectBranches = <T = unknown>(projectId: string, scopeQuery = '', signal?: AbortSignal) =>
+  api.request<T[]>(`/projects/${projectId}/branches${scopeQuery ? `?${scopeQuery}` : ''}`, { signal });
 
-export const getPricingRates = (projectId: string) =>
-  api.request<TravelRates>(`/pricing/rates?projectId=${encodeURIComponent(projectId)}`);
+export const getPricingRates = (projectId: string, signal?: AbortSignal) =>
+  api.request<TravelRates>(`/pricing/rates?projectId=${encodeURIComponent(projectId)}`, { signal });
 
 // ── Day plans ───────────────────────────────────────────────────────────────────
 export interface DayPlanQuery {
@@ -83,10 +94,10 @@ export const getDayPlans = <T = unknown>(query: DayPlanQuery) => {
  * Sundays, state holidays and non-working Saturdays (same rule assignment creation
  * enforces). `skipped` explains any days that were passed over.
  */
-export const suggestAuditDate = (branchId: string) =>
+export const suggestAuditDate = (branchId: string, signal?: AbortSignal) =>
   api.request<{ date: string; skipped: Array<{ date: string; reason: string }> }>(
     `/planning/suggest-date?branchId=${encodeURIComponent(branchId)}`,
-    { method: 'GET' },
+    { method: 'GET', signal },
   );
 
 /**
@@ -111,12 +122,13 @@ export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(
    * pins on the map, nothing in the list, and no way to reach them.
    */
   radiusKm?: number,
+  signal?: AbortSignal,
 ) =>
   api.request<{ data: TCandidate[]; meta?: { excluded?: TExcluded[] } }>(
     `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}${includeUnavailable ? '&includeUnavailable=true' : ''}${radiusKm ? `&radiusKm=${Math.round(radiusKm)}` : ''}`,
     // withMeta so the caller receives `meta.excluded` (filtered-out candidates + reasons),
     // not just the unwrapped data array.
-    { method: 'GET', withMeta: true },
+    { method: 'GET', withMeta: true, signal },
   );
 
 // ── Route optimisation (read-only compute) ───────────────────────────────────────

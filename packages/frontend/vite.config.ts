@@ -44,6 +44,18 @@ export default defineConfig({
          */
         manualChunks(id: string) {
           if (!id.includes('node_modules')) return undefined;
+          /**
+           * The spreadsheet writer, alone, and never on the critical path.
+           *
+           * `vendor` is the catch-all for anything that matches no rule below, and `vendor` is
+           * reachable from the entry, so `index.html` modulepreloads it. SheetJS is ~333 kB raw
+           * (~100 kB gzip) and was landing there, which meant the LOGIN page downloaded the entire
+           * Excel engine before anyone had signed in — for a library used by exactly one export
+           * button on one screen. Pairing this rule with the dynamic `import('xlsx')` in
+           * PlanningWorkspace's export handler means the chunk is fetched when somebody actually
+           * asks for a spreadsheet, and never otherwise.
+           */
+          if (id.includes('/xlsx/') || id.includes('xlsx.mjs')) return 'xlsx';
           if (id.includes('pdfjs-dist')) return 'pdf';
           if (id.includes('leaflet')) return 'map';
           if (id.includes('@tanstack')) return 'query';

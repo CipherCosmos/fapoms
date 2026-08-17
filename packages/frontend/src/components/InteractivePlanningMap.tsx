@@ -1,9 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
+import { useQuery } from '@tanstack/react-query';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { api } from '../services/api';
+import { queryKeys } from '../hooks/queryKeys';
 import { MapLayerControls } from './MapLayerControls';
 import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
+
+/** Stable empty roster, so "not loaded yet" is not a new array on every render. */
+const NO_ASSAYERS: any[] = [];
 
 interface MapBranch {
   id: string;
@@ -70,11 +75,31 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  /**
+   * Every marker currently on the map, by id.
+   *
+   * The draw effect still removes and re-adds the whole set when it runs. That is now far rarer
+   * than it was — `filteredBranches`/`filteredAssayers` are memoised below, so the effect no
+   * longer fires on every render of a parent holding some sixty pieces of state — but it is
+   * still a rebuild rather than a diff. Reconciling pin-by-pin against a signature is the next
+   * step here, and it is worth doing: it would also stop an open popup being torn out from
+   * under whoever is reading it.
+   */
   const markersRef = useRef<Record<string, L.Marker>>({});
   const circlesRef = useRef<L.Circle[]>([]);
   const polylineRef = useRef<L.Polyline | null>(null);
   const activeRoutePolylineRef = useRef<L.Polyline | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
+  /**
+   * The parent's click handler, read through a ref.
+   *
+   * Pins now outlive a render, so a handler captured when the pin was created would keep calling
+   * whichever `onSelectBranch` the parent passed at that moment. Every call site of this map hands
+   * in an inline arrow, so that closure would go stale immediately — clicking a branch would
+   * select it in a version of the parent's state that no longer exists.
+   */
+  const onSelectBranchRef = useRef(onSelectBranch);
+  onSelectBranchRef.current = onSelectBranch;
 
   // GIP Layer state configuration (persisted in localStorage)
   const [showBranches, setShowBranches] = useState(() => localStorage.getItem('map_showBranches') !== 'false');
@@ -157,12 +182,20 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   useEffect(() => localStorage.setItem('map_cityFilter', cityFilter), [cityFilter]);
   useEffect(() => localStorage.setItem('map_branchStatusFilter', JSON.stringify(branchStatusFilter)), [branchStatusFilter]);
 
-  const filteredBranches = branches.filter(b => {
+  /**
+   * Memoised, because this array is a dependency of the effect that draws the map.
+   *
+   * As a bare `.filter()` it produced a new array on every single render of this component — and
+   * of its parent, which owns some sixty pieces of state. The draw effect listed it in its deps,
+   * so moving an unrelated slider removed and re-added every marker on the map and re-attached the
+   * tile layer, refetching tiles from the CDN each time.
+   */
+  const filteredBranches = useMemo(() => branches.filter(b => {
     if (searchQuery && !b.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     if (cityFilter && !(b.city || '').toLowerCase().includes(cityFilter.toLowerCase())) return false;
     if (branchStatusFilter.length > 0 && !branchStatusFilter.includes(b.status)) return false;
     return true;
-  });
+  }), [branches, searchQuery, cityFilter, branchStatusFilter]);
 
   // Real-time routing overlay states
   const [selectedAssayerForRouting, setSelectedAssayerForRouting] = useState<any | null>(null);
@@ -171,10 +204,22 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   const [roadDurationMinutes, setRoadDurationMinutes] = useState<number | null>(null);
   const [roadGeometry, setRoadGeometry] = useState<L.LatLngExpression[]>([]);
 
-  // Real Assayers coordinates list loaded from API
-  const [realAssayers, setRealAssayers] = useState<any[]>([]);
+  /**
+   * The assayer roster, as a shared query rather than this component's own `useEffect` + state.
+   *
+   * The planning workspace has five layouts and each one renders its own `<InteractivePlanningMap>`
+   * element, so switching layout unmounted one map and mounted another — and re-downloaded the
+   * whole roster every time. One key means one fetch, shared by every map on the page and reused
+   * across mounts, and React Query's `signal` cancels it if the map goes away mid-flight.
+   */
+  const { data: realAssayers = NO_ASSAYERS } = useQuery({
+    queryKey: queryKeys.assayers.mapRoster,
+    queryFn: ({ signal }) => api.request<any[]>('/assayers?limit=100', { signal }),
+    staleTime: 5 * 60_000,
+  });
 
-  const filteredAssayers = realAssayers.filter(a => {
+  /** Memoised for the same reason as `filteredBranches` above. */
+  const filteredAssayers = useMemo(() => realAssayers.filter((a: any) => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       const nameMatch = ((a.firstName || '') + ' ' + (a.lastName || '')).toLowerCase().includes(q);
@@ -182,7 +227,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       if (!nameMatch && !codeMatch) return false;
     }
     return true;
-  });
+  }), [realAssayers, searchQuery]);
 
   // Synchronize parent selected assayer to map routing state
   useEffect(() => {
@@ -206,15 +251,6 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       setSelectedAssayerForRouting(null);
     }
   }, [selectedAssayerFromParent, selectedBranchId, branches]);
-
-  // Fetch assayers on mount
-  useEffect(() => {
-    api.request<any[]>('/assayers?limit=100')
-      .then(data => {
-        setRealAssayers(data);
-      })
-      .catch(err => console.error("Failed to load assayers", err));
-  }, []);
 
   // Fetch real-time OSRM route for road geometry display
   useEffect(() => {

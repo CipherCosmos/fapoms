@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, AlertTriangle, Banknote, FileText, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import {
@@ -11,7 +11,8 @@ import {
   useSyncFromAssignments,
   useBillingClients,
 } from '../hooks/useBilling';
-import { billingApi } from '../services/billing';
+import { billingApi, BILLING_PAGE_SIZE } from '../services/billing';
+import type { BillingList } from '../services/billing';
 import { ClientHierarchyPanel } from './billing/ClientHierarchyPanel';
 import { FinanceDashboard } from './billing/FinanceDashboard';
 import type {
@@ -45,6 +46,17 @@ import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 
 
 type Tab = 'finance' | 'overview' | 'hierarchy' | 'entries' | 'invoices' | 'payables' | 'conflicts' | 'history' | 'expenses';
+
+/** The tables that take a page window, and so need a cursor of their own. */
+type PagedTab = 'entries' | 'invoices' | 'payables' | 'history';
+
+/**
+ * Conflicts cannot be paged from here (the shared query key does not carry the params object), so
+ * the request is capped rather than windowed. Set well above the 50-row page size because there is
+ * no "next" to reach the remainder from — the cap exists to bound a whole-table GET, not to fill a
+ * screen — and the table declares the shortfall whenever it bites.
+ */
+const CONFLICT_LIST_CAP = 200;
 
 const STATE_BADGE: Record<BillingState, string> = {
   NOT_BILLABLE: 'var(--text-muted)',
@@ -184,6 +196,27 @@ export const Billing: React.FC = () => {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: number; failed: { id: string; reason: string }[] } | null>(null);
 
+  /**
+   * One page cursor per table, in component state rather than the URL: the client scope and the
+   * tab are worth linking to and bookmarking, "page 4 of the payables table" is not, and hanging
+   * four more params off every link out of this screen buys nothing.
+   */
+  const [pages, setPages] = useState<Record<PagedTab, number>>({ entries: 1, invoices: 1, payables: 1, history: 1 });
+  const setPage = (list: PagedTab, next: number) => {
+    // The bulk bar acts on the ids in `selectedEntryIds`, not on what is visible, so a selection
+    // carried across a page change would move the state of rows the operator can no longer see —
+    // "3 selected" meaning three rows two pages back. Selection is per page.
+    if (list === 'entries') setSelectedEntryIds(new Set());
+    setPages((p) => ({ ...p, [list]: next }));
+  };
+  // Changing the client scope or the level filter produces a different result set; holding page 4
+  // of the old one lands on an empty table, which reads as "this client has no billing" rather
+  // than "there is no page 4 here". Runs on back/forward too, since ?client= is URL state.
+  useEffect(() => {
+    setPages({ entries: 1, invoices: 1, payables: 1, history: 1 });
+    setSelectedEntryIds(new Set());
+  }, [clientId, level]);
+
   const { toast } = useToast();
   const sync = useSyncFromAssignments();
 
@@ -204,13 +237,38 @@ export const Billing: React.FC = () => {
   const handleExportBilling = () => {
     void downloadExcel('/reports/billing', { clientId: clientId || undefined });
   };
+  /**
+   * Only the tab on screen fetches.
+   *
+   * All eight queries used to mount unconditionally, five of them unpaginated whole-table GETs.
+   * Every billing socket event invalidates `queryKeys.billing.all`, so one entry moving state
+   * refetched the entire book — entries, invoices, payables, conflicts and history — for an
+   * operator looking at a single table. Gating on the active tab is what stops that, both at
+   * mount and on every event afterwards: React Query treats a disabled query as inactive and
+   * leaves it alone. Landing on Finance now costs the client list plus the finance summary
+   * instead of eight requests, and each tab thereafter costs exactly one, cached for 30s.
+   *
+   * Two of these stay ungated on purpose:
+   *  - `clients` feeds the client <select> above the tab strip, which is always on screen;
+   *  - `dashboard` is read only by Overview. Finance has its own consolidated query inside
+   *    <FinanceDashboard/> and no other tab touches `dashboard.data`.
+   */
   const clients = useBillingClients();
-  const dashboard = useBillingDashboard(clientId || undefined);
-  const entries = useBillingEntries({ ...scope, ...(level ? { level } : {}) });
-  const invoices = useBillingInvoices(scope);
-  const payables = useBillingPayables(scope);
-  const conflicts = useBillingConflicts();
-  const history = useBillingHistory(scope);
+  const dashboard = useBillingDashboard(clientId || undefined, { enabled: tab === 'overview' });
+  // The entries query also backs the bulk-selection bar (`selectedEntries` -> reachable states,
+  // merge eligibility), but every one of those is rendered inside the Entries tab and there is no
+  // way to select a row from anywhere else, so tab-gating it costs no behaviour.
+  const entries = useBillingEntries(
+    { ...scope, ...(level ? { level } : {}), page: pages.entries, limit: BILLING_PAGE_SIZE },
+    { enabled: tab === 'entries' },
+  );
+  const invoices = useBillingInvoices({ ...scope, page: pages.invoices, limit: BILLING_PAGE_SIZE }, { enabled: tab === 'invoices' });
+  const payables = useBillingPayables({ ...scope, page: pages.payables, limit: BILLING_PAGE_SIZE }, { enabled: tab === 'payables' });
+  // Conflicts is the one list without a pager — see the note on `useBillingConflicts`. It is
+  // capped instead, and the table says so whenever the cap actually hides anything. A larger cap
+  // than the paged tables because there is no second page to reach the remainder from.
+  const conflicts = useBillingConflicts(undefined, { enabled: tab === 'conflicts', limit: CONFLICT_LIST_CAP });
+  const history = useBillingHistory({ ...scope, page: pages.history, limit: BILLING_PAGE_SIZE }, { enabled: tab === 'history' });
 
   const levelColor: Record<BillingLevel, string> = {
     CLIENT: '#d8ae47',
@@ -517,98 +575,147 @@ export const Billing: React.FC = () => {
             empty={entries.data && entries.data.length === 0}
             loading={entries.isLoading}
           />
+          <Pager page={pages.entries} list={entries.data} onPage={(p) => setPage('entries', p)} />
         </div>
       )}
 
       {tab === 'invoices' && (
-        <Table
-          columns={['Invoice #', 'Status', 'Type', 'Subtotal', 'GST', 'TDS', 'Total', 'Paid', 'Outstanding']}
-          rowIds={invoices.data?.map((i) => i.id)}
-          onRowClick={(id) => setOpenInvoiceId(id)}
-          rows={invoices.data?.map((inv: BillingInvoice) => [
-            <strong key={inv.id}>{inv.invoiceNumber}</strong>,
-            <Badge key={inv.id} color={INV_BADGE[inv.status]}>{inv.status}</Badge>,
-            <span key={inv.id} style={{ fontSize: '12px' }}>{inv.type}</span>,
-            <span key={inv.id}>{money(inv.subtotal)}</span>,
-            <span key={inv.id}>{money(inv.taxAmount)}</span>,
-            <span key={inv.id} style={{ color: 'var(--text-muted)' }}>−{money(inv.tdsAmount)}</span>,
-            <span key={inv.id} style={{ fontWeight: 600 }}>{money(inv.total)}</span>,
-            <span key={inv.id} style={{ color: 'var(--success)' }}>{money(inv.paidAmount)}</span>,
-            <span key={inv.id} style={{ color: 'var(--warning)' }}>{money(inv.outstandingAmount)}</span>,
-          ])}
-          empty={invoices.data && invoices.data.length === 0}
-          loading={invoices.isLoading}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <Table
+            columns={['Invoice #', 'Status', 'Type', 'Subtotal', 'GST', 'TDS', 'Total', 'Paid', 'Outstanding']}
+            rowIds={invoices.data?.map((i) => i.id)}
+            onRowClick={(id) => setOpenInvoiceId(id)}
+            rows={invoices.data?.map((inv: BillingInvoice) => [
+              <strong key={inv.id}>{inv.invoiceNumber}</strong>,
+              <Badge key={inv.id} color={INV_BADGE[inv.status]}>{inv.status}</Badge>,
+              <span key={inv.id} style={{ fontSize: '12px' }}>{inv.type}</span>,
+              <span key={inv.id}>{money(inv.subtotal)}</span>,
+              <span key={inv.id}>{money(inv.taxAmount)}</span>,
+              <span key={inv.id} style={{ color: 'var(--text-muted)' }}>−{money(inv.tdsAmount)}</span>,
+              <span key={inv.id} style={{ fontWeight: 600 }}>{money(inv.total)}</span>,
+              <span key={inv.id} style={{ color: 'var(--success)' }}>{money(inv.paidAmount)}</span>,
+              <span key={inv.id} style={{ color: 'var(--warning)' }}>{money(inv.outstandingAmount)}</span>,
+            ])}
+            empty={invoices.data && invoices.data.length === 0}
+            loading={invoices.isLoading}
+          />
+          <Pager page={pages.invoices} list={invoices.data} onPage={(p) => setPage('invoices', p)} />
+        </div>
       )}
 
       {/* The Assayer column used to render a raw UUID, and the work it was for
           another. Both are now resolved names. */}
       {tab === 'payables' && (
-        <Table
-          columns={['Assayer', 'For', 'Status', 'Fee', 'Travel', 'TDS', 'Net Payable', 'Paid']}
-          rowIds={payables.data?.map((p) => p.id)}
-          onRowClick={(id) => setOpenPayableId(id)}
-          rows={payables.data?.map((p) => [
-            <span key={p.id}>
-              <strong>{p.assayerName ?? 'Unknown assayer'}</strong>
-              {p.assayerCode && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.assayerCode}</div>}
-              {p.assayerId && (
-                <Link to={`/billing/statement?assayer=${p.assayerId}`} onClick={(e) => e.stopPropagation()}
-                  style={{ fontSize: '11px', color: 'var(--accent)', textDecoration: 'none' }}>Statement →</Link>
-              )}
-            </span>,
-            <span key={p.id} style={{ fontSize: '12px' }}>
-              <div>{p.assignmentNumber ?? '—'}</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.projectName ?? ''}</div>
-            </span>,
-            <Badge key={p.id} color={PAYABLE_BADGE[p.status]}>{p.status}</Badge>,
-            <span key={p.id}>{money(p.baseAmount)}</span>,
-            <span key={p.id}>{money(p.travelAmount)}</span>,
-            <span key={p.id} style={{ color: 'var(--text-secondary)' }}>−{money(p.tdsAmount)}</span>,
-            <span key={p.id} style={{ fontWeight: 600 }}>{money(p.totalAmount)}</span>,
-            <span key={p.id} style={{ color: 'var(--success)' }}>{money(p.paidAmount)}</span>,
-          ])}
-          empty={payables.data && payables.data.length === 0}
-          loading={payables.isLoading}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <Table
+            columns={['Assayer', 'For', 'Status', 'Fee', 'Travel', 'TDS', 'Net Payable', 'Paid']}
+            rowIds={payables.data?.map((p) => p.id)}
+            onRowClick={(id) => setOpenPayableId(id)}
+            rows={payables.data?.map((p) => [
+              <span key={p.id}>
+                <strong>{p.assayerName ?? 'Unknown assayer'}</strong>
+                {p.assayerCode && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.assayerCode}</div>}
+                {p.assayerId && (
+                  <Link to={`/billing/statement?assayer=${p.assayerId}`} onClick={(e) => e.stopPropagation()}
+                    style={{ fontSize: '11px', color: 'var(--accent)', textDecoration: 'none' }}>Statement →</Link>
+                )}
+              </span>,
+              <span key={p.id} style={{ fontSize: '12px' }}>
+                <div>{p.assignmentNumber ?? '—'}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.projectName ?? ''}</div>
+              </span>,
+              <Badge key={p.id} color={PAYABLE_BADGE[p.status]}>{p.status}</Badge>,
+              <span key={p.id}>{money(p.baseAmount)}</span>,
+              <span key={p.id}>{money(p.travelAmount)}</span>,
+              <span key={p.id} style={{ color: 'var(--text-secondary)' }}>−{money(p.tdsAmount)}</span>,
+              <span key={p.id} style={{ fontWeight: 600 }}>{money(p.totalAmount)}</span>,
+              <span key={p.id} style={{ color: 'var(--success)' }}>{money(p.paidAmount)}</span>,
+            ])}
+            empty={payables.data && payables.data.length === 0}
+            loading={payables.isLoading}
+          />
+          <Pager page={pages.payables} list={payables.data} onPage={(p) => setPage('payables', p)} />
+        </div>
       )}
 
       {tab === 'conflicts' && (
-        <Table
-          columns={['Conflict #', 'Severity', 'Status', 'Entity', 'Description', 'Resolved']}
-          rowIds={conflicts.data?.map((c) => c.id)}
-          onRowClick={(id) => setOpenConflictId(id)}
-          rows={conflicts.data?.map((c: BillingConflict) => [
-            <strong key={c.id}>{c.conflictNumber}</strong>,
-            <Badge key={c.id} color={CONFLICT_BADGE[c.severity]}>{c.severity}</Badge>,
-            <Badge key={c.id} color={CONFLICT_STATUS_BADGE[c.status]}>{c.status}</Badge>,
-            <span key={c.id} style={{ fontSize: '12px' }}>{c.entityType}</span>,
-            <span key={c.id} style={{ fontSize: '12px' }}>{c.description}</span>,
-            <span key={c.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{c.resolvedAt ? new Date(c.resolvedAt).toLocaleDateString() : '—'}</span>,
-          ])}
-          empty={conflicts.data && conflicts.data.length === 0}
-          loading={conflicts.isLoading}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* Never truncate a list of unresolved money disputes silently: an operator who reads
+              "6 conflicts" off a capped table and clears them believes the book is clean. */}
+          {conflicts.data && conflicts.data.total > conflicts.data.length && (
+            <div style={{ padding: '10px 14px', borderRadius: '8px', fontSize: 12, background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)' }}>
+              Showing the first {conflicts.data.length} of {conflicts.data.total} conflicts. Resolve these to see the rest.
+            </div>
+          )}
+          <Table
+            columns={['Conflict #', 'Severity', 'Status', 'Entity', 'Description', 'Resolved']}
+            rowIds={conflicts.data?.map((c) => c.id)}
+            onRowClick={(id) => setOpenConflictId(id)}
+            rows={conflicts.data?.map((c: BillingConflict) => [
+              <strong key={c.id}>{c.conflictNumber}</strong>,
+              <Badge key={c.id} color={CONFLICT_BADGE[c.severity]}>{c.severity}</Badge>,
+              <Badge key={c.id} color={CONFLICT_STATUS_BADGE[c.status]}>{c.status}</Badge>,
+              <span key={c.id} style={{ fontSize: '12px' }}>{c.entityType}</span>,
+              <span key={c.id} style={{ fontSize: '12px' }}>{c.description}</span>,
+              <span key={c.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{c.resolvedAt ? new Date(c.resolvedAt).toLocaleDateString() : '—'}</span>,
+            ])}
+            empty={conflicts.data && conflicts.data.length === 0}
+            loading={conflicts.isLoading}
+          />
+        </div>
       )}
 
       {tab === 'history' && (
-        <Table
-          columns={['Entity', 'Action', 'From', 'To', 'User', 'When', 'Reason']}
-          rows={history.data?.map((h) => [
-            <span key={h.id}><strong>{h.entityType}</strong><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{h.entityId}</div></span>,
-            <span key={h.id} style={{ fontSize: '12px' }}>{h.action}</span>,
-            <span key={h.id} style={{ fontSize: '12px' }}>{h.fromState ?? '—'}</span>,
-            <span key={h.id} style={{ fontSize: '12px' }}>{h.toState ?? '—'}</span>,
-            <span key={h.id} style={{ fontSize: '12px' }}>{h.userName ?? h.userId ?? '—'}</span>,
-            // Billing history rows carry `createdAt`, not `occurredAt` — the whole WHEN column
-            // read "Invalid Date" while the correct timestamp sat unused in the response.
-            <span key={h.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(h.createdAt).toLocaleString()}</span>,
-            <span key={h.id} style={{ fontSize: '12px' }}>{h.reason ?? '—'}</span>,
-          ])}
-          empty={history.data && history.data.length === 0}
-          loading={history.isLoading}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <Table
+            columns={['Entity', 'Action', 'From', 'To', 'User', 'When', 'Reason']}
+            rows={history.data?.map((h) => [
+              <span key={h.id}><strong>{h.entityType}</strong><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{h.entityId}</div></span>,
+              <span key={h.id} style={{ fontSize: '12px' }}>{h.action}</span>,
+              <span key={h.id} style={{ fontSize: '12px' }}>{h.fromState ?? '—'}</span>,
+              <span key={h.id} style={{ fontSize: '12px' }}>{h.toState ?? '—'}</span>,
+              <span key={h.id} style={{ fontSize: '12px' }}>{h.userName ?? h.userId ?? '—'}</span>,
+              // Billing history rows carry `createdAt`, not `occurredAt` — the whole WHEN column
+              // read "Invalid Date" while the correct timestamp sat unused in the response.
+              <span key={h.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{new Date(h.createdAt).toLocaleString()}</span>,
+              <span key={h.id} style={{ fontSize: '12px' }}>{h.reason ?? '—'}</span>,
+            ])}
+            empty={history.data && history.data.length === 0}
+            loading={history.isLoading}
+          />
+          <Pager page={pages.history} list={history.data} onPage={(p) => setPage('history', p)} />
+        </div>
       )}
+    </div>
+  );
+};
+
+/**
+ * Page control for the billing tables.
+ *
+ * Renders nothing while there is a single short page, so a small book looks exactly as it did
+ * before pagination existed. The count is read off the response instead of being derived here:
+ * only the service layer knows whether the server reported a real total or we are counting what
+ * arrived, and the "+" marks that second case rather than presenting a floor as the whole number.
+ */
+const Pager: React.FC<{
+  page: number;
+  list?: BillingList<unknown>;
+  onPage: (page: number) => void;
+}> = ({ page, list, onPage }) => {
+  if (!list || (page === 1 && !list.hasMore)) return null;
+  const from = (page - 1) * BILLING_PAGE_SIZE + 1;
+  const to = from + list.length - 1;
+  const btn: React.CSSProperties = { fontSize: '12px', padding: '5px 11px' };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, fontSize: '12px', color: 'var(--text-muted)' }}>
+      <span>
+        {list.length > 0
+          ? `Showing ${from}–${to} of ${list.total}${list.hasMore && list.total <= to ? '+' : ''}`
+          : `Page ${page} is empty`}
+      </span>
+      <button onClick={() => onPage(page - 1)} disabled={page <= 1} className="btn btn-secondary" style={btn}>Previous</button>
+      <button onClick={() => onPage(page + 1)} disabled={!list.hasMore} className="btn btn-secondary" style={btn}>Next</button>
     </div>
   );
 };

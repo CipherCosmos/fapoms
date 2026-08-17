@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { queryClient } from '../queryClient';
 import { connectSocket } from '../services/socket';
+import { createCoalescer } from './invalidationCoalescer';
 import { queryKeys } from './queryKeys';
 
 /**
@@ -19,23 +20,37 @@ const DESK_QUEUES = [
   queryKeys.desk.branchHistory,
 ];
 
+/**
+ * The planning desk's coverage queue and candidate list.
+ *
+ * These are here because `PlanningWorkspace` used to subscribe to the same events itself — twice,
+ * through two different socket APIs — and call its loaders directly. That is what turned one
+ * server event into roughly six requests per open desk: an unpaginated `/projects/:id/branches`,
+ * then the recommendation engine, the last-contact log and the date suggestion, all re-triggered
+ * because two effects depended on the `branches` array reference rather than on an id.
+ *
+ * Routing them through this map instead means a burst of events costs one refetch of each, and
+ * React Query's `signal` cancels the superseded request rather than letting it land late.
+ */
+const PLANNING_DESK = [queryKeys.planning.queue, queryKeys.planning.recommendationsAll];
+
 const EVENT_KEYS: [string, ...any[]][] = [
-  ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
-  ['assignment:counter-offered', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.projects.all],
-  ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.metrics, queryKeys.projects.all],
-  ['assignment:fee-updated', queryKeys.assignments.all, ...DESK_QUEUES],
+  ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all],
+  ['assignment:counter-offered', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all],
+  ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all],
+  ['assignment:fee-updated', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK],
   // An assayer flagged a problem from the field — refresh the Field Issues queue and the
   // assignment views so the flag shows without a manual reload.
   ['assignment:issue-reported', queryKeys.assignments.fieldIssues, queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all],
-  ['assignment:escalated', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.dashboard.all],
-  ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
-  ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all],
-  ['ProjectCompleted', queryKeys.projects.all, queryKeys.dashboard.all],
-  ['ProjectCancelled', queryKeys.projects.all, queryKeys.dashboard.all],
-  ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.dashboard.all],
-  ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
-  ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
-  ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all, queryKeys.projects.all],
+  ['assignment:escalated', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.planning.queue, queryKeys.dashboard.all],
+  ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
+  ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
+  ['ProjectCompleted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all],
+  ['ProjectCancelled', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all],
+  ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all],
+  ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
+  ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all],
+  ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
   ['client:created', queryKeys.clients.all, queryKeys.clients.list({})],
   ['client:updated', queryKeys.clients.all, queryKeys.clients.list({})],
   ['client:status-changed', queryKeys.clients.all, queryKeys.clients.list({})],
@@ -49,30 +64,62 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['billing:payable-status-changed', queryKeys.billing.payables({}), queryKeys.billing.all],
 ];
 
+/**
+ * Query roots whose refetch is expensive enough that it must not track events one-for-one.
+ *
+ * `['dashboard']` is the operations command centre: a single server-side aggregate across the
+ * whole assignment book, several joins wide. On the 300 ms window this hook used to run, an open
+ * dashboard refetched that aggregate every 300 ms for as long as events kept arriving — a bulk
+ * import of 500 assignments meant hundreds of full aggregate scans, from every dashboard anyone
+ * had open, for a screen whose numbers nobody reads to three decimal places of freshness.
+ *
+ * Matched on the first key segment so it covers every scoped variant (`['dashboard', 'operations',
+ * scopeKey]`) without having to enumerate them.
+ */
+const SLOW_ROOTS = new Set<string>(['dashboard']);
+
+/**
+ * Coalescing windows.
+ *
+ * `WAIT` is the quiet period after the last event; `MAX_WAIT` is the longest a refresh may be
+ * postponed no matter how the events keep coming. The max-wait is the important half: a plain
+ * trailing debounce starves under a continuous stream — a bulk import emitting an event every
+ * 200 ms would reset a 500 ms timer forever and the screen would never update at all, which is a
+ * worse failure than the storm it was meant to fix.
+ */
+const LIVE_WAIT_MS = 500;
+const LIVE_MAX_WAIT_MS = 2_000;
+const SLOW_WAIT_MS = 3_000;
+const SLOW_MAX_WAIT_MS = 15_000;
+
 export function useSocketInvalidation() {
   useEffect(() => {
     const socket = connectSocket();
     if (!socket) return;
 
-    // Debounce invalidations. A burst of events (e.g. a bulk transition of 50 assignments fires 50
-    // `assignment:status-changed`) would otherwise invalidate the same broad keys 50×, refetching the
-    // active list and dashboard in a storm. Accumulating unique keys over a short window collapses the
-    // burst into a single refetch — imperceptible to the user, far less load on client and server.
-    const pending = new Map<string, any>();
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const flush = () => {
-      timer = null;
-      const keys = [...pending.values()];
-      pending.clear();
-      for (const key of keys) queryClient.invalidateQueries({ queryKey: key });
+    /**
+     * One coalescer per tier.
+     *
+     * Accumulating unique keys over a window collapses a burst — a bulk transition of 50
+     * assignments fires 50 `assignment:status-changed`, which would otherwise invalidate the same
+     * keys 50 times and refetch the active list 50 times over. Splitting live queues from the slow
+     * aggregates means the negotiation queue still updates within two seconds of an event while
+     * the dashboard's whole-book aggregate is capped at one refetch per fifteen seconds under
+     * sustained load.
+     */
+    const invalidate = (keys: unknown[][]) => {
+      for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
     };
+    const live = createCoalescer<unknown[]>(LIVE_WAIT_MS, LIVE_MAX_WAIT_MS, invalidate);
+    const slow = createCoalescer<unknown[]>(SLOW_WAIT_MS, SLOW_MAX_WAIT_MS, invalidate);
 
     const handlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
     for (const [event, ...keys] of EVENT_KEYS) {
       const handler = () => {
-        for (const key of keys) pending.set(JSON.stringify(key), key);
-        if (!timer) timer = setTimeout(flush, 300);
+        for (const key of keys) {
+          (SLOW_ROOTS.has(String(key[0])) ? slow : live).schedule(key);
+        }
       };
       socket.on(event, handler);
       handlers.push({ event, handler });
@@ -106,7 +153,8 @@ export function useSocketInvalidation() {
     socket.on('connect', handleReconnect);
 
     return () => {
-      if (timer) clearTimeout(timer);
+      live.cancel();
+      slow.cancel();
       for (const { event, handler } of handlers) {
         socket.off(event, handler);
       }

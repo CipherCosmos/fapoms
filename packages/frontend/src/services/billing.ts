@@ -286,14 +286,102 @@ export type EnrichedAssayerPayable = AssayerPayable & {
   assignmentNumber: string | null;
 };
 
+/**
+ * A billing list, in the one shape every caller reads.
+ *
+ * It is an *array* carrying two extra properties rather than `{ items, total }` on purpose.
+ * `PayableDetailDrawer`, `ConflictDetailDrawer`, `RaiseConflictModal` and `EntryDetailDrawer` all
+ * call `.find()` / `.filter()` straight on the hook's `data`; handing them an object would turn
+ * every one of those into `data.find is not a function` at runtime — a blank drawer over a
+ * money record, not a compile error. Keeping the array keeps those files correct untouched,
+ * while the page count rides along for whoever wants to draw a pager.
+ *
+ * One consequence worth knowing: a non-index property makes React Query's `isPlainArray` check
+ * (`length === Object.keys(value).length`) fail, so these lists opt out of structural sharing and
+ * get a fresh identity on each refetch. At a page size of 50 that is one extra table render;
+ * the alternative is silent breakage in files this layer cannot see.
+ */
+export type BillingList<T> = T[] & {
+  /**
+   * Rows matching the filter across all pages. Always a floor — never larger than the truth —
+   * because a server that windows without reporting a total leaves us only what we can count.
+   */
+  total: number;
+  /** Whether a further page exists. Decided here, where the response shape is known. */
+  hasMore: boolean;
+};
+
+/** The page window every billing list endpoint accepts. Omit both to ask for the whole table. */
+export interface PageParams {
+  page?: number;
+  limit?: number;
+}
+
+/** One screenful of a dense money table. */
+export const BILLING_PAGE_SIZE = 50;
+
+/** The paginated envelope the billing endpoints are moving to. */
+interface PagedResponse<T> { items: T[]; total: number }
+
+function isPagedResponse<T>(raw: unknown): raw is PagedResponse<T> {
+  return !!raw && !Array.isArray(raw) && Array.isArray((raw as PagedResponse<T>).items);
+}
+
+function asList<T>(items: T[], total: number, hasMore: boolean): BillingList<T> {
+  return Object.assign(items, { total, hasMore });
+}
+
+/**
+ * Normalise a list response whichever shape the server is on — the single place that knows both.
+ *
+ * These endpoints return a bare `T[]` today and are being changed to `{ items, total }`. Frontend
+ * and backend ship independently, so for some window one will be ahead of the other; a client that
+ * understands only one shape renders an empty table against the other (`[].map` over an object) and
+ * the finance screen looks like the book is empty. Reading both means neither deploy order breaks.
+ *
+ * `api.request` has already unwrapped the `{ success, data }` envelope, so what arrives here is the
+ * array or the object, nothing else.
+ *
+ * The client-side slice covers the third case: a server that ignores `page`/`limit` and sends the
+ * whole table anyway. The bytes are already on the wire and nothing here can undo that, but the
+ * operator still gets a page control that moves and a count that is right, instead of 300 rows
+ * under a "Showing 1-50" label. Once the backend honours the window the branch simply stops firing.
+ */
+function normaliseList<T>(raw: T[] | PagedResponse<T> | null | undefined, params: PageParams = {}): BillingList<T> {
+  const limit = params.limit ?? 0;
+  const offset = limit > 0 ? ((params.page ?? 1) - 1) * limit : 0;
+
+  if (isPagedResponse<T>(raw)) {
+    // The server windowed and reported the size of the whole set — the only case where the count
+    // and "is there a next page" are both exact.
+    const total = Number(raw.total ?? raw.items.length);
+    return asList(raw.items, total, offset + raw.items.length < total);
+  }
+
+  const rows = Array.isArray(raw) ? raw : [];
+  if (limit > 0 && rows.length > limit) {
+    // More rows than the window we asked for: this build ignores the params and sent everything.
+    // Slicing here means the count is exact and the pager is real.
+    const items = rows.slice(offset, offset + limit);
+    return asList(items, rows.length, offset + items.length < rows.length);
+  }
+  // Either the whole table was requested (drawers and pickers do this), or the server honoured the
+  // window without a total. In the latter case the count is only what we have seen so far, and a
+  // page that comes back exactly full is the sole hint that more exists.
+  return asList(rows, offset + rows.length, limit > 0 && rows.length === limit);
+}
+
 // Entries
 async function listEntries(params: {
   clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string;
   level?: BillingLevel; state?: BillingState;
-} = {}): Promise<EnrichedBillingEntry[]> {
+} & PageParams = {}): Promise<BillingList<EnrichedBillingEntry>> {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
-  return api.request<EnrichedBillingEntry[]>(`/billing-engine/entries?${q.toString()}`);
+  const raw = await api.request<EnrichedBillingEntry[] | PagedResponse<EnrichedBillingEntry>>(
+    `/billing-engine/entries?${q.toString()}`,
+  );
+  return normaliseList(raw, params);
 }
 async function getEntry(id: string): Promise<BillingEntry> {
   return api.request<BillingEntry>(`/billing-engine/entries/${id}`);
@@ -335,10 +423,11 @@ async function mergeEntries(entryIds: string[], note?: string): Promise<BillingE
 }
 
 // Invoices
-async function listInvoices(params: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoice[]> {
+async function listInvoices(params: { clientId?: string; projectId?: string; status?: InvoiceStatus } & PageParams = {}): Promise<BillingList<BillingInvoice>> {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
-  return api.request<BillingInvoice[]>(`/billing-engine/invoices?${q.toString()}`);
+  const raw = await api.request<BillingInvoice[] | PagedResponse<BillingInvoice>>(`/billing-engine/invoices?${q.toString()}`);
+  return normaliseList(raw, params);
 }
 async function getInvoice(id: string): Promise<BillingInvoice> {
   return api.request<BillingInvoice>(`/billing-engine/invoices/${id}`);
@@ -358,10 +447,11 @@ async function recordPayment(payload: RecordPaymentPayload): Promise<BillingPaym
 }
 
 // Payables
-async function listPayables(params: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus } = {}): Promise<EnrichedAssayerPayable[]> {
+async function listPayables(params: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus } & PageParams = {}): Promise<BillingList<EnrichedAssayerPayable>> {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
-  return api.request<EnrichedAssayerPayable[]>(`/billing-engine/payables?${q.toString()}`);
+  const raw = await api.request<EnrichedAssayerPayable[] | PagedResponse<EnrichedAssayerPayable>>(`/billing-engine/payables?${q.toString()}`);
+  return normaliseList(raw, params);
 }
 async function createPayable(payload: CreatePayablePayload): Promise<AssayerPayable> {
   return api.request<AssayerPayable>('/billing-engine/payables', { method: 'POST', body: JSON.stringify(payload) });
@@ -373,8 +463,12 @@ async function transitionPayable(id: string, status: AssayerPayableStatus, reaso
 }
 
 // Conflicts
-async function listConflicts(status?: BillingConflictStatus): Promise<BillingConflict[]> {
-  return api.request<BillingConflict[]>(`/billing-engine/conflicts${status ? `?status=${status}` : ''}`);
+async function listConflicts(status?: BillingConflictStatus, params: PageParams = {}): Promise<BillingList<BillingConflict>> {
+  const q = new URLSearchParams();
+  if (status) q.set('status', status);
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
+  const raw = await api.request<BillingConflict[] | PagedResponse<BillingConflict>>(`/billing-engine/conflicts?${q.toString()}`);
+  return normaliseList(raw, params);
 }
 async function raiseConflict(payload: RaiseConflictPayload): Promise<BillingConflict> {
   return api.request<BillingConflict>('/billing-engine/conflicts', { method: 'POST', body: JSON.stringify(payload) });
@@ -386,10 +480,11 @@ async function resolveConflict(id: string, status: BillingConflictStatus, action
 }
 
 // History
-async function getHistory(params: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType } = {}): Promise<BillingHistoryEvent[]> {
+async function getHistory(params: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType } & PageParams = {}): Promise<BillingList<BillingHistoryEvent>> {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
-  return api.request<BillingHistoryEvent[]>(`/billing-engine/history?${q.toString()}`);
+  const raw = await api.request<BillingHistoryEvent[] | PagedResponse<BillingHistoryEvent>>(`/billing-engine/history?${q.toString()}`);
+  return normaliseList(raw, params);
 }
 
 // Dashboard & reports

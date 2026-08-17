@@ -4,6 +4,7 @@ import { defaultRouteForRoles } from './config/route-permissions';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { api } from './services/api';
 import { clearSession, endSession } from './services/session';
@@ -120,6 +121,22 @@ const RememberAndRedirectToLogin: React.FC = () => {
   return <Navigate to="/login" replace />;
 };
 
+/**
+ * The boundary that wraps the routed screen, reset by the URL.
+ *
+ * A separate component purely so the `useLocation()` subscription lives here rather than in
+ * `App` — subscribing at the top would re-render the entire authenticated tree, Layout included,
+ * on every navigation, which is a real cost to pay for a prop that only this boundary reads.
+ */
+const RouteErrorBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  return (
+    <ErrorBoundary area="This screen" resetKey={location.pathname}>
+      {children}
+    </ErrorBoundary>
+  );
+};
+
 /** Lightweight fallback shown while a route chunk is fetched. Mirrors ProtectedRoute's loader. */
 const RouteFallback: React.FC = () => (
   <div
@@ -226,16 +243,20 @@ export const App: React.FC = () => {
 
   if (!token) {
     return (
-      <Routes>
-        <Route path="/login" element={<Login onLoginSuccess={handleLoginSuccess} />} />
-        {/*
-          Remember where they were headed. A bookmarked or shared link to, say, /billing used to
-          bounce to /login and then drop the person on their role's home page, leaving them to
-          navigate back by hand — and a link pasted into a chat never landed anywhere useful.
-          `RETURN_TO_KEY` is read once by handleLoginSuccess and cleared.
-        */}
-        <Route path="*" element={<RememberAndRedirectToLogin />} />
-      </Routes>
+      // Sign-in gets a boundary of its own: a crash here has nothing above it to fall back to, and
+      // "the login page is blank" is the one failure nobody can work around from inside the app.
+      <ErrorBoundary area="Sign in">
+        <Routes>
+          <Route path="/login" element={<Login onLoginSuccess={handleLoginSuccess} />} />
+          {/*
+            Remember where they were headed. A bookmarked or shared link to, say, /billing used to
+            bounce to /login and then drop the person on their role's home page, leaving them to
+            navigate back by hand — and a link pasted into a chat never landed anywhere useful.
+            `RETURN_TO_KEY` is read once by handleLoginSuccess and cleared.
+          */}
+          <Route path="*" element={<RememberAndRedirectToLogin />} />
+        </Routes>
+      </ErrorBoundary>
     );
   }
 
@@ -264,7 +285,19 @@ export const App: React.FC = () => {
 
   return (
     <CallProvider>
+    {/*
+      Two boundaries, not one, because they protect different things.
+
+      The outer one is the last resort: it catches a crash in the shell itself (header, sidebar,
+      the rule-bypass banner, the call provider's UI) which would otherwise unmount the React root
+      and leave a white page. The inner one wraps only the routed screen, so a crash in one page
+      leaves the navigation, the notification bell and the scope selector on screen and the person
+      can simply click somewhere else — and because it is reset by the pathname, doing so clears
+      the error rather than carrying it to the next screen.
+    */}
+    <ErrorBoundary area="The application">
     <Layout onLogout={handleLogout} user={currentUser || undefined}>
+      <RouteErrorBoundary>
       <Suspense fallback={<RouteFallback />}>
       <Routes>
         {/* Root sends each role to the first screen of their actual work. Wait for the profile
@@ -331,7 +364,9 @@ export const App: React.FC = () => {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       </Suspense>
+      </RouteErrorBoundary>
     </Layout>
+    </ErrorBoundary>
     </CallProvider>
   );
 };

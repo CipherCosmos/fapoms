@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
 import { ProjectBranchStatus, formatDateOnly } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
-import * as xlsx from 'xlsx';
 import { api } from '../services/api';
+import { userMessage } from '../services/errors';
+import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
-import { useSocket } from '../hooks/useSocket';
-import { connectSocket } from '../services/socket';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
@@ -293,6 +293,22 @@ const STATUS_OPTIONS = [
   ...Object.values(ProjectBranchStatus).map(value => ({ value, label: branchStatusLabel(value) })),
 ];
 
+/**
+ * Frozen empties for the "query has not answered yet" case.
+ *
+ * `data ?? []` looks harmless and is not: it mints a new array on every render, so anything that
+ * depends on it — a `useMemo`, a `useEffect`, `React.memo` on the map — sees a change every time
+ * this component renders, and this component has some sixty pieces of state. Reusing one constant
+ * keeps "no data" referentially stable, which is what lets the map skip rebuilding several hundred
+ * Leaflet markers because an unrelated checkbox moved.
+ */
+const NO_BRANCHES: ProjectBranch[] = [];
+const NO_CANDIDATES: Candidate[] = [];
+const NO_EXCLUDED: ExcludedCandidate[] = [];
+const NO_PROJECTS: ProjectOption[] = [];
+const NO_ZONES: { id: string; name: string }[] = [];
+const NO_CONTACT: Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }> = {};
+
 
 
 
@@ -320,25 +336,14 @@ export const PlanningWorkspace: React.FC = () => {
   // dimensions are taken from the header here.
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
-  // Socket refreshes and other long-lived callbacks reload the coverage queue; they must read
-  // the current scope, not the one captured when they were bound.
-  const scopeQueryRef = useRef(scopeQuery);
-  scopeQueryRef.current = scopeQuery;
+  const queryClient = useQueryClient();
 
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(searchParams.get('projectId') || '');
-  const [branches, setBranches] = useState<ProjectBranch[]>([]);
-  const [zones, setZones] = useState<{ id: string; name: string }[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [historyBranchId, setHistoryBranchId] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [isLoadingQueue, setIsLoadingQueue] = useState(false);
-  const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
-  const [excludedCandidates, setExcludedCandidates] = useState<ExcludedCandidate[]>([]);
-  const [candidatesError, setCandidatesError] = useState<string | null>(null);
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[] | undefined>(undefined);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizedSummary, setOptimizedSummary] = useState<{ totalDistanceKm: number; totalDurationMinutes: number } | null>(null);
@@ -363,8 +368,6 @@ export const PlanningWorkspace: React.FC = () => {
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkScheduledDate, setBulkScheduledDate] = useState('');
   const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
-  /** Latest call outcome per assayer for the focused branch, keyed by assayer id. */
-  const [lastContact, setLastContact] = useState<Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }>>({});
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
   const [negotiatingFee, setNegotiatingFee] = useState('');
   // When set, the negotiation modal is in "counter back" mode: submitting posts a counter-offer on
@@ -405,9 +408,13 @@ export const PlanningWorkspace: React.FC = () => {
    * first workable audit date (skips Sundays, state holidays, off Saturdays) and seeds the
    * picker with it. The moment ops touches the picker, their choice is pinned and branch
    * switches stop overwriting it — manual mode until the page reloads.
+   *
+   * State rather than the ref it used to be, so it can also switch OFF the suggestion query
+   * below. As a ref it could only guard the assignment after the fact, which meant the desk kept
+   * asking the server for a date it had already decided to ignore on every branch click.
    */
-  const planDatePinnedRef = useRef(false);
-  const pinPlanDate = (v: string) => { planDatePinnedRef.current = true; setScheduledAuditDate(v); };
+  const [planDatePinned, setPlanDatePinned] = useState(false);
+  const pinPlanDate = (v: string) => { setPlanDatePinned(true); setScheduledAuditDate(v); };
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
@@ -476,6 +483,207 @@ export const PlanningWorkspace: React.FC = () => {
   const [unableReason, setUnableReason] = useState('');
   const [unableSubmitting, setUnableSubmitting] = useState(false);
 
+  // ── Server reads ────────────────────────────────────────────────────────────────
+  /**
+   * Everything this desk loads is a React Query, and none of it is a socket subscription.
+   *
+   * What was here before: seven `useState` + `fetch` loaders, two independent socket
+   * subscriptions covering eight events between them, and two `useEffect`s that depended on the
+   * `branches` ARRAY rather than on an id. Because one of those effects wrote state that another
+   * one depended on, a single `assignment:status-changed` cascaded into roughly six requests —
+   * the whole unpaginated coverage queue, the recommendation engine, the call log and the date
+   * suggestion — with nothing aborted, so a slow response for a branch the operator had already
+   * left could land afterwards and repaint the panel with the wrong candidates. A 500-branch
+   * bulk import cost thousands of requests per open desk.
+   *
+   * Keys instead. `useSocketInvalidation` (mounted once in the Layout) coalesces every one of
+   * those events into a single invalidation of `['planning', 'branches']` and
+   * `['planning', 'recommendations']`; React Query dedupes concurrent fetches, keeps the previous
+   * data on screen while refetching, and passes a `signal` that actually cancels the superseded
+   * request. Reference data — the project list, zones, the rate card — is not in that map at all,
+   * because no assignment event can change it.
+   */
+  const projectsQuery = useQuery({
+    queryKey: queryKeys.planning.projects,
+    queryFn: ({ signal }) => getProjects(signal),
+    staleTime: 5 * 60_000,
+  });
+  const projects = (projectsQuery.data ?? NO_PROJECTS) as ProjectOption[];
+
+  /**
+   * Land on a project without fighting the URL.
+   *
+   * The old `loadProjects` set `selectedProjectId` to `response[0].id` unconditionally, which
+   * silently overrode the `?projectId=` the page had just read out of the query string — so a
+   * link to a specific project always opened whichever project happened to sort first. Only fill
+   * in a project when there is none, or when the one asked for is not in this user's list at all
+   * (a stale bookmark, or a project outside their scope), which is the one case where falling
+   * back to the first is better than showing an empty screen.
+   */
+  useEffect(() => {
+    if (projects.length === 0) return;
+    if (!selectedProjectId || !projects.some(p => p.id === selectedProjectId)) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, selectedProjectId]);
+
+  const selectedProjectClientId = useMemo(
+    () => projects.find(p => p.id === selectedProjectId)?.clientId,
+    [projects, selectedProjectId],
+  );
+
+  /**
+   * Only the selected project's client's zones — see `getZones`. Without the client filter the
+   * dropdown listed every client's zones under identical names, and the ones that did not belong
+   * to this project could never match a branch.
+   */
+  const zonesQuery = useQuery({
+    queryKey: queryKeys.planning.zones(selectedProjectClientId),
+    queryFn: ({ signal }) => getZones(selectedProjectClientId, signal),
+    staleTime: 5 * 60_000,
+  });
+  const zones = zonesQuery.data ?? NO_ZONES;
+
+  const branchesQuery = useQuery({
+    // `scopeKey` is part of the key because the coverage queue is filtered server-side by the
+    // header's region/zone selection — a scope change is a different result set, not a re-slice.
+    queryKey: queryKeys.planning.branches(selectedProjectId, scopeKey),
+    queryFn: ({ signal }) => getProjectBranches<ProjectBranch>(selectedProjectId, scopeQuery, signal),
+    enabled: !!selectedProjectId,
+    staleTime: 30_000,
+  });
+  const branches = branchesQuery.data ?? NO_BRANCHES;
+  /**
+   * `isLoading`, not `isFetching`: the panel must not blank itself back to a spinner every time a
+   * socket event refreshes the queue underneath it. A background refetch keeps the current rows
+   * on screen and swaps them when the answer arrives; only the first load of a project (or a
+   * scope change, which is a different query) shows the loading state.
+   */
+  const isLoadingQueue = branchesQuery.isLoading;
+
+  /**
+   * Keep whatever branch is already selected if the refresh still contains it.
+   *
+   * The queue reloads after nearly every action on this page — assign, negotiate, bulk-assign, a
+   * coverage-plan deploy, or a realtime event for a branch that is not even the one open — and it
+   * used to snap back to `data[0]` every single time. Negotiating a fee on branch #12 would
+   * refresh the queue and silently swap the open panel to branch #1, so finishing one negotiation
+   * meant re-finding whichever branch you had actually been working on. Only fall back to the
+   * first branch (or none) when the previous selection is genuinely gone — completed, reassigned
+   * elsewhere, or this is the first load.
+   *
+   * This runs on `branches` identity, which React Query only changes when the data actually
+   * changed (structural sharing); an unchanged refetch is a no-op here.
+   */
+  useEffect(() => {
+    setSelectedBranchId((current) =>
+      current && branches.some(b => b.id === current) ? current : (branches.length > 0 ? branches[0].id : null),
+    );
+  }, [branches]);
+
+  const selectedPb = useMemo(
+    () => branches.find(b => b.id === selectedBranchId),
+    [branches, selectedBranchId],
+  );
+  /**
+   * The BRANCH id, which is what the engine takes — `selectedBranchId` is a PROJECT-branch id.
+   * Passing the wrong one 404s ("Branch … not found"), which the panel reports as "could not load
+   * recommendations", and the two ids are indistinguishable at a glance.
+   */
+  const selectedBranchKey = selectedPb?.branchId ?? null;
+
+  /**
+   * The radius the engine actually searches: the map's radius control, widened by the panel's
+   * "Within X km" when that is set further out. Neither control may promise a distance the engine
+   * did not look at — that mismatch is what produced map pins with no matching candidate row.
+   */
+  const engineRadiusKm = Math.max(searchRadiusKm, maxRadiusEnabled ? maxRadius : 0);
+
+  const candidatesQuery = useQuery({
+    // Date, availability rule and radius are all in the key because each one changes the answer:
+    // recommendations are evaluated FOR a date (availability and fees differ by day), the
+    // "ignore date availability" toggle changes which candidates the engine returns at all, and
+    // the radius bounds its search. Re-slicing a cached list would silently cap the radius at
+    // whatever the last request found.
+    queryKey: queryKeys.planning.recommendations(
+      selectedBranchKey ?? '', scheduledAuditDate, ignoreDateAvailability, engineRadiusKm,
+    ),
+    queryFn: ({ signal }) => getRecommendations<Candidate, ExcludedCandidate>(
+      selectedBranchKey!, scheduledAuditDate, ignoreDateAvailability, engineRadiusKm, signal,
+    ),
+    enabled: !!selectedBranchKey,
+    staleTime: 30_000,
+  });
+  const candidates = candidatesQuery.data?.data ?? NO_CANDIDATES;
+  const excludedCandidates = candidatesQuery.data?.meta?.excluded ?? NO_EXCLUDED;
+  const isLoadingCandidates = candidatesQuery.isLoading;
+  /**
+   * A failure has to look different from "nobody suitable".
+   *
+   * This was a bare `catch { console.error(...) }`, so a 500 from the engine and a genuinely
+   * empty candidate list rendered identically — an empty panel, with no indication that anything
+   * had broken. `userMessage` gives the same plain-language sentence the rest of the app uses.
+   */
+  const candidatesError = candidatesQuery.isError ? userMessage(candidatesQuery.error) : null;
+
+  /** "Have we already tried this person?" — the question ops otherwise answers by redialling. */
+  const lastContactQuery = useQuery({
+    queryKey: queryKeys.planning.lastContact(selectedBranchId ?? ''),
+    queryFn: ({ signal }) => api.request<Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }>>(
+      `/call-logs/last-contact?projectBranchId=${selectedBranchId}`,
+      { method: 'GET', signal },
+    ),
+    enabled: !!selectedBranchId,
+    staleTime: 60_000,
+  });
+  const lastContact = lastContactQuery.data ?? NO_CONTACT;
+
+  /**
+   * The client's contracted travel rates for the selected project, so the map quotes travel the
+   * way the platform bills it rather than with its own hardcoded per-km figure.
+   */
+  const travelRatesQuery = useQuery({
+    queryKey: queryKeys.planning.pricingRates(selectedProjectId),
+    queryFn: ({ signal }) => getPricingRates(selectedProjectId, signal),
+    enabled: !!selectedProjectId,
+    staleTime: 10 * 60_000,
+  });
+  const travelRates = travelRatesQuery.data ?? null;
+
+  /**
+   * Auto date mode: the first workable audit date for THIS branch (its state's holidays, working
+   * Saturdays), used to seed the picker. Disabled outright once ops pins a date, so the desk
+   * stops asking the server for an answer it has already decided to ignore.
+   */
+  const suggestedDateQuery = useQuery({
+    queryKey: queryKeys.planning.suggestedDate(selectedBranchKey ?? ''),
+    queryFn: ({ signal }) => suggestAuditDate(selectedBranchKey!, signal),
+    enabled: !!selectedBranchKey && !planDatePinned,
+    staleTime: 10 * 60_000,
+  });
+  useEffect(() => {
+    const suggested = suggestedDateQuery.data?.date;
+    // The suggestion is best-effort; if it fails or the operator has pinned a date in the
+    // meantime, the existing value (tomorrow, or their choice) stands.
+    if (suggested && !planDatePinned) setScheduledAuditDate(suggested);
+  }, [suggestedDateQuery.data, planDatePinned]);
+
+  /**
+   * The two ways this page asks for fresh server state.
+   *
+   * Both invalidate a PREFIX rather than refetching one query object, because the same data is
+   * cached per project, per scope and per set of engine parameters — after a bulk assign the
+   * operator may well switch scope, and a queue left stale under the old key would come back
+   * showing branches that have since been staffed. Only the queries actually mounted refetch;
+   * the rest are simply marked stale.
+   */
+  const refreshBranches = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.planning.queue });
+  }, [queryClient]);
+  const refreshCandidates = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.planning.recommendationsAll });
+  }, [queryClient]);
+
   // Single source of truth for "which candidates are actually eligible right now". The map
   // previously ranked off the raw `candidates` array, so an assayer who fails the min-radius
   // check (too close to the branch — see the "Inside Radius" flag below) could still show a
@@ -494,11 +702,6 @@ export const PlanningWorkspace: React.FC = () => {
     });
   }, [candidates, slaEnabled, slaRadius, maxRadiusEnabled, maxRadius, showAllCandidates]);
   const drawerRef = useRef<HTMLDivElement>(null);
-  /**
-   * The client's contracted travel rates for the selected project, so the map quotes travel the
-   * way the platform bills it rather than with its own hardcoded per-km figure.
-   */
-  const [travelRates, setTravelRates] = useState<{ travelFeePerKm: number; freeTravelAllowanceKm: number } | null>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
   /**
    * Projects to plan together. Empty means "just the one currently selected", which keeps the
@@ -517,98 +720,22 @@ export const PlanningWorkspace: React.FC = () => {
   });
   const [dayPlanAssigning, setDayPlanAssigning] = useState<string | null>(null);
 
-  useEffect(() => { loadProjects(); }, []);
-
-  // Reload zones whenever the selected project changes, so the filter only ever offers zones
-  // belonging to that project's client (see `loadZones`).
+  /**
+   * A different project is a different route and a different optimisation — the old one's
+   * polyline and distance summary describe branches that are no longer on screen.
+   */
   useEffect(() => {
-    const clientId = projects.find(p => p.id === selectedProjectId)?.clientId;
-    loadZones(clientId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProjectId, projects]);
-
-  useEffect(() => {
-    const socket = connectSocket();
-    if (!socket) return;
-    const handleRealtimeUpdate = () => {
-      if (selectedProjectId) {
-        loadProjectBranches(selectedProjectId);
-      }
-    };
-    socket.on('assignment:counter-offered', handleRealtimeUpdate);
-    socket.on('assignment:status-changed', handleRealtimeUpdate);
-    socket.on('schedule:created', handleRealtimeUpdate);
-    return () => {
-      socket.off('assignment:counter-offered', handleRealtimeUpdate);
-      socket.off('assignment:status-changed', handleRealtimeUpdate);
-      socket.off('schedule:created', handleRealtimeUpdate);
-    };
+    setRoutePoints(undefined);
+    setOptimizedSummary(null);
   }, [selectedProjectId]);
 
+  /**
+   * The map's highlighted assayer belongs to the branch that was open, so it is cleared when the
+   * branch changes rather than left pointing at a route between two unrelated places.
+   */
   useEffect(() => {
-    if (selectedProjectId) {
-      loadProjectBranches(selectedProjectId);
-      setRoutePoints(undefined);
-      setOptimizedSummary(null);
-    } else {
-      setBranches([]);
-      setSelectedBranchId(null);
-    }
-  }, [selectedProjectId]);
-
-  useEffect(() => {
-    const selectedPb = branches.find(b => b.id === selectedBranchId);
     setSelectedCandidateForMap(null);
-    if (selectedPb) {
-      loadCandidates(selectedPb.branchId);
-      loadLastContact(selectedPb.id);
-    } else {
-      setCandidates([]);
-      setLastContact({});
-    }
-    // scheduledAuditDate is a dep on purpose: recommendations are evaluated FOR that date, so
-    // changing the planned date must re-rank (availability and fees can both differ by day).
-    // ignoreDateAvailability likewise — it changes which candidates the engine returns, so the
-    // toggle has to refetch rather than re-slice a list that never contained them.
-    // The radius controls are now in the same category: they widen the engine's search area,
-    // so they must refetch. Re-slicing would silently cap them at whatever the last request
-    // found, which is precisely how the map came to show assayers the list could never contain.
-  }, [selectedBranchId, branches, scheduledAuditDate, ignoreDateAvailability, maxRadiusEnabled, maxRadius, searchRadiusKm]);
-
-  // Auto date mode: on branch selection, ask the backend for the first workable audit date for
-  // THIS branch (its state's holidays, working Saturdays) and seed the picker. Skipped once ops
-  // pins a date manually — their choice then survives branch switches.
-  useEffect(() => {
-    if (!selectedBranchId || planDatePinnedRef.current) return;
-    const pb = branches.find(b => b.id === selectedBranchId);
-    if (!pb) return;
-    let cancelled = false;
-    suggestAuditDate(pb.branchId)
-      .then(({ date }) => { if (!cancelled && date && !planDatePinnedRef.current) setScheduledAuditDate(date); })
-      .catch(() => { /* suggestion is best-effort; the tomorrow default stands */ });
-    return () => { cancelled = true; };
-  }, [selectedBranchId, branches]);
-
-  const { on: onSocketEvent } = useSocket();
-
-  useEffect(() => {
-    const unsubs: (() => void)[] = [];
-
-    const refresh = () => {
-      if (selectedBranchId) {
-        const selectedPb = branches.find(b => b.id === selectedBranchId);
-        if (selectedPb) loadCandidates(selectedPb.branchId);
-      }
-    };
-
-    unsubs.push(onSocketEvent('assignment:created', refresh));
-    unsubs.push(onSocketEvent('assignment:status-changed', refresh));
-    unsubs.push(onSocketEvent('assignment:fee-updated', refresh));
-    unsubs.push(onSocketEvent('schedule:created', refresh));
-    unsubs.push(onSocketEvent('schedule:updated', refresh));
-
-    return () => unsubs.forEach(u => u());
-  }, [selectedBranchId, branches]);
+  }, [selectedBranchId]);
 
   useEffect(() => {
     if (selectedBranchId && drawerRef.current) {
@@ -651,68 +778,10 @@ export const PlanningWorkspace: React.FC = () => {
     finally { setIsOptimizing(false); }
   };
 
-  const loadProjects = async () => {
-    try {
-      const response = await getProjects();
-      setProjects(response);
-      if (response.length > 0) setSelectedProjectId(response[0].id);
-    } catch { console.error('Failed to load projects'); }
-  };
-
-  /**
-   * Only the selected project's client's zones — see `getZones`. Without the client filter the
-   * dropdown listed every client's zones under identical names, and the ones that did not belong
-   * to this project could never match a branch.
-   */
-  const loadZones = async (clientId?: string) => {
-    try {
-      const data = await getZones(clientId);
-      setZones(data || []);
-    } catch { console.error('Failed to load zones'); }
-  };
-
-  useEffect(() => {
-    if (selectedProjectId) loadProjectBranches(selectedProjectId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeKey]);
-
-  const loadProjectBranches = async (projectId: string) => {
-    setIsLoadingQueue(true);
-    setMessage(null);
-    try {
-      const data = await getProjectBranches<ProjectBranch>(projectId, scopeQueryRef.current);
-      setBranches(data);
-      /**
-       * Keep whatever branch is already selected if the refresh still contains it.
-       *
-       * This reloads after nearly every action on this page — assign, negotiate, bulk-assign,
-       * a coverage-plan deploy, even a realtime event for a branch that isn't the one open —
-       * and used to snap back to `data[0]` every single time. Negotiating a fee on branch #12
-       * would refresh the queue and silently swap the open panel to branch #1, so finishing one
-       * negotiation meant re-finding whichever branch you'd actually been working on. Only fall
-       * back to the first branch (or none) when the previous selection is genuinely gone from
-       * the list — completed, reassigned elsewhere, or this is the first load.
-       */
-      setSelectedBranchId((current) =>
-        current && data.some((b) => b.id === current) ? current : (data.length > 0 ? data[0].id : null)
-      );
-    } catch { console.error('Failed to fetch project branches queue'); }
-    finally { setIsLoadingQueue(false); }
-  };
-
   /**
    * `projectIdsOverride` lets the project chips reload immediately on click rather than
    * waiting for the next render to observe the new state.
    */
-  useEffect(() => {
-    if (!selectedProjectId) { setTravelRates(null); return; }
-    let cancelled = false;
-    getPricingRates(selectedProjectId)
-      .then((r) => { if (!cancelled) setTravelRates(r); })
-      .catch(() => { if (!cancelled) setTravelRates(null); });
-    return () => { cancelled = true; };
-  }, [selectedProjectId]);
-
   const loadDayPlans = async (projectIdsOverride?: string[]) => {
     if (!selectedProjectId) return;
     setIsLoadingDayPlans(true);
@@ -834,7 +903,7 @@ export const PlanningWorkspace: React.FC = () => {
         text: `${results.length - failed.length}/${results.length} branches assigned to ${plan.assayerName}. Failed: ${failed.map((f) => `${f.branchName} (${f.error})`).join('; ')}`,
       });
     }
-    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    refreshBranches();
     loadDayPlans();
   };
 
@@ -931,7 +1000,7 @@ export const PlanningWorkspace: React.FC = () => {
         ? { type: 'success', text: `All ${succeeded} branch(es) ${verb} ${assayerName}.${partial}` }
         : { type: 'error', text: `${succeeded}/${targets.length} ${verb} ${assayerName}.${partial} ${failures.length} failed — still selected for retry.` },
     );
-    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    refreshBranches();
   };
 
   /**
@@ -974,7 +1043,7 @@ export const PlanningWorkspace: React.FC = () => {
         ? { type: 'success', text: `${ok} branch(es) recorded as unable to cover.` }
         : { type: 'error', text: `${ok}/${outcomes.length} recorded. Failed: ${failed.join(', ')}` },
     );
-    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+    refreshBranches();
   };
 
   /** Put an uncoverable branch back into the planning pool. */
@@ -982,54 +1051,10 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       await api.request(`/projects/branches/${projectBranchId}/reopen-coverage`, { method: 'POST' });
       setMessage({ type: 'success', text: `${branchName} returned to planning.` });
-      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+      refreshBranches();
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.message || 'Could not reopen this branch.' });
     }
-  };
-
-  const loadCandidates = async (branchId: string) => {
-    setIsLoadingCandidates(true);
-    setCandidatesError(null);
-    try {
-      // withMeta so we also receive `excluded` — candidates the engine filtered out, with the
-      // reason. Previously they vanished silently and ops had no way to tell "nobody suitable"
-      // apart from "everyone blocked by one misconfigured rule".
-      //
-      // Evaluated FOR the planned audit date, not for "today": availability, double-booking and
-      // fee quotes all describe scheduledAuditDate — the same date the assignment will be created
-      // with. (The backend used to assume today, so a candidate free tomorrow showed "on leave".)
-      /**
-       * The "Within X km" control drives the ENGINE's search, not just this list's display.
-       *
-       * It used to be display-only, filtering a list the engine had already bounded at a fixed
-       * 200 km. Widening it past that changed nothing — the assayers beyond 200 km were never
-       * candidates to reveal — while the map happily drew them, so the screen contradicted
-       * itself: five pins, an empty list, and nothing connecting the two.
-       */
-      /**
-       * The engine searches the radius the operator set on the map.
-       *
-       * Widened by the panel's "Within X km" when that is set further out, so neither control
-       * can promise a distance the engine did not actually look at — the failure that produced
-       * pins with no matching candidate row.
-       */
-      const response = await getRecommendations<Candidate, ExcludedCandidate>(
-        branchId,
-        scheduledAuditDate,
-        ignoreDateAvailability,
-        Math.max(searchRadiusKm, maxRadiusEnabled ? maxRadius : 0),
-      );
-      setCandidates(response.data || []);
-      setExcludedCandidates(response.meta?.excluded || []);
-    } catch (err: any) {
-      // Was a bare `catch { console.error(...) }`, so a failure looked identical to
-      // "no candidates" — the operator saw an empty list with no indication anything broke.
-      setCandidates([]);
-      setExcludedCandidates([]);
-      setCandidatesError(err?.message || 'Could not load candidate recommendations.');
-    }
-    finally { setIsLoadingCandidates(false); }
   };
 
   const loadAssayerDetail = async (assayerId: string) => {
@@ -1091,7 +1116,7 @@ export const PlanningWorkspace: React.FC = () => {
           ? `${selectedCandidate.displayName} is confirmed for this branch — no acceptance needed. They have been notified on the mobile app.`
           : `Offered this branch to ${selectedCandidate.displayName}. It stays pending until they accept on the mobile app${assignDirectly ? ', or you accept it from the Operations Inbox' : ''}.`,
       });
-      loadProjectBranches(selectedProjectId);
+      refreshBranches();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
     }
@@ -1121,24 +1146,11 @@ export const PlanningWorkspace: React.FC = () => {
         notes,
       }),
     })
-      .then(() => loadLastContact(selectedBranchId))
+      .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.planning.lastContact(selectedBranchId) }))
       .catch(() => { /* supporting record only */ });
   };
 
-  /** "Have we already tried this person?" — the question ops otherwise answers by redialling. */
-  const loadLastContact = async (projectBranchId: string) => {
-    try {
-      const res = await api.request<Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }>>(
-        `/call-logs/last-contact?projectBranchId=${projectBranchId}`,
-        { method: 'GET' },
-      );
-      setLastContact(res || {});
-    } catch {
-      setLastContact({});
-    }
-  };
-
-  const handleExportCoverageReport = () => {
+  const handleExportCoverageReport = async () => {
     if (!selectedProjectId || branches.length === 0) return;
 
     const data = branches.map((b) => ({
@@ -1164,14 +1176,47 @@ export const PlanningWorkspace: React.FC = () => {
       'Remarks': b.remarks || '',
     }));
 
-    const ws = xlsx.utils.json_to_sheet(data);
-    const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Branch Coverage Schedule');
-    xlsx.writeFile(wb, `Branch_Coverage_Report_${selectedProjectId}.xlsx`);
+    /**
+     * SheetJS is fetched here, on the click, and not before.
+     *
+     * It was a static `import * as xlsx from 'xlsx'` at the top of this file — ~333 kB of
+     * spreadsheet engine which, because Rollup routes unmatched node_modules into the eager
+     * `vendor` chunk that `index.html` modulepreloads, was downloaded by the LOGIN page. Every
+     * user paid for it on every cold visit; this one button is the only thing in the application
+     * that uses it. `vite.config.ts` gives it a chunk of its own so this import fetches exactly
+     * that and nothing else.
+     */
+    try {
+      const xlsx = await import('xlsx');
+      const ws = xlsx.utils.json_to_sheet(data);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, 'Branch Coverage Schedule');
+      xlsx.writeFile(wb, `Branch_Coverage_Report_${selectedProjectId}.xlsx`);
+    } catch {
+      // A failed chunk fetch (offline, a deploy that rotated the filename mid-session) must say
+      // so — silently doing nothing reads as a broken button.
+      toast({
+        type: 'error',
+        title: 'Export unavailable',
+        message: 'The spreadsheet exporter could not be loaded. Check your connection and try again.',
+      });
+    }
   };
 
-  const statesList = Array.from(new Set(branches.map(b => b.branch?.state).filter(Boolean)));
-  const filteredBranches = branches.filter(b => {
+  const statesList = useMemo(
+    () => Array.from(new Set(branches.map(b => b.branch?.state).filter(Boolean))),
+    [branches],
+  );
+  /**
+   * Memoised because this array is the map's input.
+   *
+   * As a bare `branches.filter(...)` it was a fresh array on every render of a component holding
+   * some sixty pieces of state — typing in an unrelated search box, moving a radius slider,
+   * opening a modal. The map takes it as a prop, so every one of those renders looked to the map
+   * like "the branches changed", and it responded by removing and rebuilding every Leaflet marker
+   * on screen and re-adding the tile layer.
+   */
+  const filteredBranches = useMemo(() => branches.filter(b => {
     const q = searchTerm.toLowerCase();
     return (b.branch?.name.toLowerCase().includes(q) || b.branch?.branchCode.toLowerCase().includes(q)) &&
       (stateFilter === 'ALL' || b.branch?.state === stateFilter) &&
@@ -1180,8 +1225,26 @@ export const PlanningWorkspace: React.FC = () => {
       (districtFilter === '' || (b.branch?.district || '').toLowerCase().includes(districtFilter.toLowerCase())) &&
       (priorityFilter === 'ALL' || b.priority === priorityFilter) &&
       (zoneFilter === 'ALL' || b.zoneId === zoneFilter);
-  });
-  const selectedPb = branches.find(b => b.id === selectedBranchId);
+  }), [branches, searchTerm, stateFilter, statusFilter, cityFilter, districtFilter, priorityFilter, zoneFilter]);
+
+  /**
+   * The branch points the map actually draws, derived once instead of inline at four call sites.
+   *
+   * It used to be `branches={filteredBranches.map(b => ({...}))}` written out in each of the four
+   * layouts — a brand-new array of brand-new objects on every render, which defeated the map's
+   * `React.memo` completely no matter what the memo compared.
+   */
+  const mapBranches = useMemo(
+    () => filteredBranches.map(b => ({
+      id: b.id,
+      name: b.branch.name,
+      latitude: b.branch.latitude,
+      longitude: b.branch.longitude,
+      status: b.status,
+    })),
+    [filteredBranches],
+  );
+
   const totalCount = branches.length;
   const confirmedCount = branches.filter(b => BRANCH_COVERED_STATUSES.includes(b.status as ProjectBranchStatus)).length;
   const coveragePct = totalCount > 0 ? Number(((confirmedCount / totalCount) * 100).toFixed(1)) : 0;
@@ -1203,7 +1266,7 @@ export const PlanningWorkspace: React.FC = () => {
         body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
       });
       setMessage({ type: 'success', text: `Counter fee ₹${proposedFee.toLocaleString()} approved! Branch confirmed.` });
-      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+      refreshBranches();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
     }
@@ -1249,7 +1312,7 @@ export const PlanningWorkspace: React.FC = () => {
         body: JSON.stringify({ targetStatus: 'NEGOTIATION', counterFee: fee, remarks: counterRemarks || undefined }),
       });
       setMessage({ type: 'success', text: `Countered at ₹${fee.toLocaleString()}. The assayer will see your counter on their app.` });
-      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+      refreshBranches();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to send the counter offer.' });
     } finally {
@@ -1264,7 +1327,7 @@ export const PlanningWorkspace: React.FC = () => {
         body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
       });
       setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
-      if (selectedProjectId) loadProjectBranches(selectedProjectId);
+      refreshBranches();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
     }
@@ -1305,15 +1368,11 @@ export const PlanningWorkspace: React.FC = () => {
         type: 'success',
         text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'}${scheduledDate ? ` for ${scheduledDate}` : ''} (override recorded).`,
       });
-      if (selectedProjectId) loadProjectBranches(selectedProjectId);
-      // `selectedBranchId` is a PROJECT-branch id; loadCandidates wants the branch id. Passing it
-      // raw made the refresh 404 ("Branch … not found"), and loadCandidates reports a failure by
-      // emptying the list — so a successful override was followed by a blank candidate panel.
-      // Every other call site already maps it this way.
-      {
-        const pb = branches.find((b) => b.id === selectedBranchId);
-        if (pb) loadCandidates(pb.branchId);
-      }
+      refreshBranches();
+      // The candidate list has to move too: the assayer just assigned now shows as pending on
+      // this branch. The id mapping that used to be needed here (project-branch id vs branch id,
+      // which 404'd and blanked the panel when confused) is gone — the query owns the correct id.
+      refreshCandidates();
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.message || 'Override assignment failed.' });
       // Rethrow so the panel can show the same refusal inline, beside the row that was clicked.
@@ -1336,7 +1395,7 @@ export const PlanningWorkspace: React.FC = () => {
           <AlertTriangle size={18} />
           <div>{candidatesError}</div>
           <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 10px' }}
-            onClick={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}>
+            onClick={() => { void candidatesQuery.refetch(); }}>
             Retry
           </button>
         </div>
@@ -1637,7 +1696,7 @@ export const PlanningWorkspace: React.FC = () => {
                       }),
                     });
                     setMessage({ type: 'success', text: `App invitation dispatched directly to ${c.displayName}!` });
-                    if (selectedProjectId) loadProjectBranches(selectedProjectId);
+                    refreshBranches();
                   } catch (err: any) {
                     setMessage({ type: 'error', text: err.message || 'Direct dispatch failed' });
                   }
@@ -1975,7 +2034,7 @@ export const PlanningWorkspace: React.FC = () => {
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-              onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+              onRefresh={refreshCandidates}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
             onDecline={handleDeclineCounterOffer}
@@ -2003,9 +2062,9 @@ export const PlanningWorkspace: React.FC = () => {
           {/* Column 2: Interactive Planning Map */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
             <InteractivePlanningMap fillContainer
-              branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+              branches={mapBranches}
               selectedBranchId={selectedBranchId}
-              onSelectBranch={id => setSelectedBranchId(id)}
+              onSelectBranch={setSelectedBranchId}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
               slaEnabled={slaEnabled}
@@ -2038,9 +2097,9 @@ export const PlanningWorkspace: React.FC = () => {
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
             <InteractivePlanningMap fillContainer
-              branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+              branches={mapBranches}
               selectedBranchId={selectedBranchId}
-              onSelectBranch={id => setSelectedBranchId(id)}
+              onSelectBranch={setSelectedBranchId}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
               slaEnabled={slaEnabled}
@@ -2080,7 +2139,7 @@ export const PlanningWorkspace: React.FC = () => {
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-                    onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+                    onRefresh={refreshCandidates}
                     onAccept={handleAcceptCounterOffer}
                     onCounter={handleOpenCounterProposal}
                     onDecline={handleDeclineCounterOffer}
@@ -2112,9 +2171,9 @@ export const PlanningWorkspace: React.FC = () => {
           {/* Column 2: Center Interactive GIS Map */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
             <InteractivePlanningMap fillContainer
-              branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+              branches={mapBranches}
               selectedBranchId={selectedBranchId}
-              onSelectBranch={id => setSelectedBranchId(id)}
+              onSelectBranch={setSelectedBranchId}
               routePoints={routePoints}
               selectedAssayerFromParent={selectedCandidateForMap}
               slaEnabled={slaEnabled}
@@ -2147,7 +2206,7 @@ export const PlanningWorkspace: React.FC = () => {
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-            onRefresh={() => { const pb = branches.find(b => b.id === selectedBranchId); if (pb) loadCandidates(pb.branchId); }}
+            onRefresh={refreshCandidates}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
             onDecline={handleDeclineCounterOffer}
@@ -2159,9 +2218,9 @@ export const PlanningWorkspace: React.FC = () => {
       {layout === 'map-only' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 0 32px' }}>
           <InteractivePlanningMap fillContainer
-            branches={filteredBranches.map(b => ({ id: b.id, name: b.branch.name, latitude: b.branch.latitude, longitude: b.branch.longitude, status: b.status }))}
+            branches={mapBranches}
             selectedBranchId={selectedBranchId}
-            onSelectBranch={id => setSelectedBranchId(id)}
+            onSelectBranch={setSelectedBranchId}
             routePoints={routePoints}
             selectedAssayerFromParent={selectedCandidateForMap}
             slaEnabled={slaEnabled}
@@ -3011,7 +3070,7 @@ export const PlanningWorkspace: React.FC = () => {
           projectId={selectedProjectId}
           projectName={projects.find(p => p.id === selectedProjectId)?.name || 'Project'}
           onClose={() => setShowCoveragePlan(false)}
-          onDeployed={() => { if (selectedProjectId) loadProjectBranches(selectedProjectId); }}
+          onDeployed={() => { refreshBranches(); }}
         />
       )}
 
