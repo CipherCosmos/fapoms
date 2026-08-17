@@ -14,7 +14,7 @@ import { Job } from 'bull';
 import { EXCEL_MIME } from './excel-export';
 import { ReportsService } from './reports.service';
 import { ReportFileStore } from './report-file.store';
-import { progressReporter, ProgressCallback } from '../planning/queued-job';
+import { progressReporter, ProgressCallback } from '../../infrastructure/queue/queued-job';
 import {
   REPORT_JOB,
   REPORT_QUEUE,

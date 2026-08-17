@@ -11,7 +11,7 @@ import {
   REPORT_RESULT_TTL_SECONDS,
   MAX_EXPORT_BYTES,
 } from './report-jobs.contract';
-import { FAILED_JOB_RETENTION } from '../planning/queued-job';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 describe('ReportJobsService', () => {
   let service: ReportJobsService;

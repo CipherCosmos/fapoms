@@ -4,7 +4,7 @@ import { NotFoundException } from '@nestjs/common';
 
 import { PlanningJobsService } from './planning-jobs.service';
 import { PLANNING_JOB, PLANNING_QUEUE, PLANNING_COMPLETED_RETENTION } from './planning-jobs.contract';
-import { FAILED_JOB_RETENTION } from './queued-job';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 describe('PlanningJobsService', () => {
   let service: PlanningJobsService;

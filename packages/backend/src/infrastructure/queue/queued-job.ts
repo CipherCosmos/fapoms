@@ -15,12 +15,14 @@
  * (planning) and four times again (reports). See `one-implementation-rule`: a cross-cutting
  * concern gets one canonical home.
  *
- * ## Why it lives under planning/ rather than infrastructure/queue/
+ * ## Where it lives
  *
- * Purely a partition constraint of the change that introduced it: `infrastructure/queue/` was
- * owned by another workstream. Nothing here is planning-specific, and the reports module imports
- * it as-is. Moving the file to `infrastructure/queue/queued-job.ts` is a rename plus two import
- * lines and should happen the next time that directory is touched.
+ * `infrastructure/queue/`, alongside the Bull wiring it belongs to. It was first written under
+ * `modules/planning/` because that was the only directory the change introducing it owned, with
+ * a note to move it the next time this directory was touched. Billing sync became its third
+ * consumer, at which point three feature modules importing a cross-cutting helper out of a
+ * fourth feature module stopped being a compromise and started being the thing the
+ * one-implementation rule exists to prevent.
  *
  * ## What it deliberately does NOT do
  *

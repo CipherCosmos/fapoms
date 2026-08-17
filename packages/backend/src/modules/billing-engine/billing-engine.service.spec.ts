@@ -102,21 +102,33 @@ describe('BillingEngineService', () => {
     findOne: jest.fn(async () => null),
   };
 
-  // findFeePayable uses a query builder (it filters on a jsonb expression the repository API
-  // cannot express); a chainable stub that resolves to `payableRepo.feePayable` keeps the
-  // "does the fee payable already exist" branch testable.
+  /**
+   * Two query-builder chains run against this repository, both filtering on a jsonb expression
+   * the repository API cannot express, so one chainable stub serves both:
+   *
+   *  - `findFeePayable` — one assignment, resolved through `getOne` to `payableRepo.feePayable`.
+   *  - the backfill's skip set — every assignment that already has a fee payable, resolved
+   *    through `getRawMany` to `payableRepo.feePayableRows`.
+   *
+   * Keeping them on one stub means a test that sets up the second cannot silently break the
+   * first, which is what happened when the backfill's chain was added.
+   */
   const payableRepo: any = {
     create: jest.fn((d) => d),
     save: jest.fn(async (d) => ({ id: 'payable-1', ...d })),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
     feePayable: null as any,
+    feePayableRows: [] as Array<{ assignment_id: string }>,
     createQueryBuilder: jest.fn(() => {
       const qb: any = {
+        select: () => qb,
+        addSelect: () => qb,
         where: () => qb,
         andWhere: () => qb,
         orderBy: () => qb,
         getOne: async () => payableRepo.feePayable,
+        getRawMany: async () => payableRepo.feePayableRows,
       };
       return qb;
     }),
@@ -1003,6 +1015,86 @@ describe('BillingEngineService', () => {
    * event under a fail-open lock, so the database's partial unique indexes (migration
    * 1790500000000) are the guard; these pin how the service behaves around them.
    */
+  /**
+   * The backfill's cost is dominated by what it does PER ASSIGNMENT, so what matters is not that
+   * it produces the right totals but that it stops before doing per-assignment work on rows that
+   * are already settled. It used to call syncPayableForAssignment for every billable assignment
+   * before checking anything — three to four queries each, on a book where the overwhelming
+   * majority are long since billed.
+   */
+  describe('backfill skips settled assignments before touching them', () => {
+    const settled = {
+      id: 'asn-settled', assignmentNumber: 'ASN-S', status: 'COMPLETED',
+      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000,
+    };
+    const fresh = {
+      id: 'asn-fresh', assignmentNumber: 'ASN-F', status: 'COMPLETED',
+      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000,
+    };
+
+    beforeEach(() => {
+      assignmentRepo.find.mockResolvedValue([settled, fresh]);
+      assignmentRepo.findOne.mockImplementation(async (opts: any) => {
+        const id = opts?.where?.id;
+        return id === settled.id ? { ...settled } : id === fresh.id ? { ...fresh } : null;
+      });
+      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
+      projectRepo.findOne = jest.fn(async () => ({ id: 'proj-1', clientId: 'client-1' }));
+      const q = async (sql: string): Promise<any[]> => {
+        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+        return [];
+      };
+      entryRepo.manager.query = q;
+      payableRepo.manager.query = q;
+      managerQuery.mockImplementation(q);
+    });
+
+    it('does no per-assignment work for an assignment that already has both legs', async () => {
+      // Both legs already exist for the settled one, neither for the fresh one.
+      entryRepo.find.mockResolvedValue([{ assignmentId: settled.id }]);
+      payableRepo.feePayableRows = [{ assignment_id: settled.id }];
+      assignmentRepo.findOne.mockClear();
+
+      const result = await service.syncFromAssignments('user-1');
+
+      expect(result.skipped).toBe(1);
+      // syncPayableForAssignment opens by loading the assignment. It must never have been
+      // called for the settled one — that lookup, and the three that follow it, are the cost
+      // this pre-filter exists to avoid.
+      const lookedUp = assignmentRepo.findOne.mock.calls.map((c: any[]) => c[0]?.where?.id);
+      expect(lookedUp).not.toContain(settled.id);
+      expect(lookedUp).toContain(fresh.id);
+    });
+
+    it('still raises the missing leg when only one of the two exists', async () => {
+      // Receivable present, payable absent: the cost leg must still be backfilled.
+      entryRepo.find.mockResolvedValue([{ assignmentId: settled.id }, { assignmentId: fresh.id }]);
+      payableRepo.feePayableRows = [];
+      payableRepo.feePayable = null;
+      assignmentRepo.findOne.mockClear();
+
+      const result = await service.syncFromAssignments('user-1');
+
+      // Both are already billed, so no new receivables — but both still need their payable.
+      expect(result.created).toBe(0);
+      const lookedUp = assignmentRepo.findOne.mock.calls.map((c: any[]) => c[0]?.where?.id);
+      expect(lookedUp).toContain(settled.id);
+    });
+
+    it('reports progress against the total when a reporter is supplied', async () => {
+      entryRepo.find.mockResolvedValue([{ assignmentId: settled.id }, { assignmentId: fresh.id }]);
+      payableRepo.feePayableRows = [{ assignment_id: settled.id }, { assignment_id: fresh.id }];
+      const onProgress = jest.fn();
+
+      await service.syncFromAssignments('user-1', onProgress);
+
+      // The queued path needs a final 100% even when the scan skipped everything, or the poll
+      // endpoint would sit at 0 on a settled book and read as a stalled job.
+      expect(onProgress).toHaveBeenLastCalledWith(2, 2, 'Complete');
+    });
+  });
+
   describe('billing uniqueness per assignment', () => {
     const completed = {
       id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',

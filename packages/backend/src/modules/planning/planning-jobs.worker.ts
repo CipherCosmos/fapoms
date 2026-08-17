@@ -21,7 +21,7 @@ import {
   DayPlansJobData,
   ProjectCandidatesJobData,
 } from './planning-jobs.contract';
-import { progressReporter } from './queued-job';
+import { progressReporter } from '../../infrastructure/queue/queued-job';
 
 /**
  * Why every handler runs at concurrency 1.

@@ -15,7 +15,7 @@
 
 import type { KeepJobsOptions, JobOptions } from 'bull';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
-import { FAILED_JOB_RETENTION, QueuedJobEnvelope } from './queued-job';
+import { FAILED_JOB_RETENTION, QueuedJobEnvelope } from '../../infrastructure/queue/queued-job';
 
 /** Its own queue, not 'background-jobs' — see the module doc for why. */
 export const PLANNING_QUEUE = 'planning-jobs';

@@ -10,7 +10,7 @@ import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { calculateHaversineDistance } from '@fapoms/shared';
 // Type-only, so nothing about queues is linked into this engine at runtime. The engine reports
 // "branch N of M" and stays ignorant of what, if anything, is watching.
-import type { ProgressCallback } from './queued-job';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
 export interface CoverageWarning {
   type: string;

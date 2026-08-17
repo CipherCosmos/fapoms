@@ -50,6 +50,7 @@ import {
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { payableCost, entryRevenue, totalPayableCost, totalEntryRevenue, margin, assignmentFee, applyTaxes } from './billing-money';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
 export interface CreateEntryDto {
   level: BillingLevel;
@@ -135,6 +136,15 @@ const UNBILLED_STATES: BillingState[] = [
   BillingState.UNDER_REVIEW,
   BillingState.APPROVED,
 ];
+
+/**
+ * How often the backfill reports progress, in assignments.
+ *
+ * Each report is a Redis round trip. At one per row a 200,000-assignment scan would spend more
+ * time telling the caller what it was doing than doing it; at one per 500 the poll endpoint still
+ * moves visibly on any book large enough for the wait to matter.
+ */
+const SYNC_PROGRESS_INTERVAL = 500;
 
 @Injectable()
 /**
@@ -627,7 +637,29 @@ export class BillingEngineService implements OnModuleInit {
    * repeated syncs never duplicate. This is the single source of truth that makes
    * the Billing page reflect real field work instead of an empty engine.
    */
-  async syncFromAssignments(userId: string): Promise<{
+  /**
+   * Backfill: bring every billable assignment into the billing engine.
+   *
+   * ## What this had to stop doing
+   *
+   * It called `syncPayableForAssignment` for EVERY billable assignment before checking whether
+   * anything needed doing, and that method opens with its own lookups — the assignment, its fee
+   * payable, the project's client, the commercial profile. Three to four queries each, run for
+   * assignments that were fully billed months ago, on every invocation. At the 200k assignments
+   * the scale database holds, one press of the Sync button was on the order of 800,000 queries
+   * against a twenty-connection pool, inside a single HTTP request.
+   *
+   * Both legs now pre-load what already exists — receivable entries and fee payables — as two
+   * set queries, and an assignment that has both is skipped before any per-assignment work. On a
+   * settled book, which is the normal state, that is two queries and no loop at all.
+   *
+   * `onProgress` is optional so the queued path can report "1,240 / 200,000 scanned" while the
+   * synchronous path (small books, and the tests) stays a plain call.
+   */
+  async syncFromAssignments(
+    userId: string,
+    onProgress?: ProgressCallback,
+  ): Promise<{
     scanned: number;
     created: number;
     skipped: number;
@@ -649,6 +681,24 @@ export class BillingEngineService implements OnModuleInit {
     const existing = await this.entryRepository.find({ select: ['assignmentId'] });
     const existingIds = new Set(existing.filter((e) => e.assignmentId).map((e) => e.assignmentId as string));
 
+    /**
+     * Assignments that already carry a fee payable.
+     *
+     * The predicate is the one the database enforces uniqueness on
+     * (`UQ_assayer_payables_fee_per_assignment`): a payable counts as the fee payable unless it
+     * is an expense reimbursement, which is marked `rate_snapshot.source = 'EXPENSE_CLAIM'` and
+     * of which there can legitimately be several. Deriving the skip set from the same predicate
+     * as the constraint is what stops this loop from either re-doing settled work or, worse,
+     * treating a reimbursement as proof the fee was already raised.
+     */
+    const payableRows: Array<{ assignment_id: string }> = await this.payableRepository
+      .createQueryBuilder('p')
+      .select('p.assignment_id', 'assignment_id')
+      .where('p.assignment_id IS NOT NULL')
+      .andWhere(`(p.rate_snapshot->>'source') IS DISTINCT FROM 'EXPENSE_CLAIM'`)
+      .getRawMany();
+    const existingPayableIds = new Set(payableRows.map((r) => r.assignment_id));
+
     // Resolve clientId for each project involved.
     const projectIds = [...new Set(assignments.map((a) => a.projectId))];
     const projects = projectIds.length
@@ -659,20 +709,39 @@ export class BillingEngineService implements OnModuleInit {
     const created: BillingEntryEntity[] = [];
     const errors: Array<{ assignmentId: string; reason: string }> = [];
     let skipped = 0;
-
     let payablesCreated = 0;
+    let scanned = 0;
 
     for (const a of assignments) {
-      // Backfills the cost leg for work completed before payables were automated,
-      // independently of whether the receivable already exists.
-      try {
-        const payable = await this.syncPayableForAssignment(a.id, userId);
-        if (payable.created) payablesCreated += 1;
-      } catch (err) {
-        errors.push({ assignmentId: a.id, reason: `payable: ${(err as Error).message}` });
+      scanned += 1;
+      // Report every so often rather than every row: a progress write is a Redis round trip,
+      // and 200,000 of them would cost more than the work being reported on.
+      if (onProgress && scanned % SYNC_PROGRESS_INTERVAL === 0) {
+        await onProgress(scanned, assignments.length, `Scanned ${scanned} of ${assignments.length} assignments`);
       }
 
-      if (existingIds.has(a.id)) { skipped += 1; continue; }
+      const hasEntry = existingIds.has(a.id);
+      const hasPayable = existingPayableIds.has(a.id);
+
+      // Nothing owed on either leg. This is the overwhelming majority of a settled book, and
+      // skipping it here — before syncPayableForAssignment's own lookups — is the whole point.
+      if (hasEntry && hasPayable) {
+        skipped += 1;
+        continue;
+      }
+
+      if (!hasPayable) {
+        // Backfills the cost leg for work completed before payables were automated,
+        // independently of whether the receivable already exists.
+        try {
+          const payable = await this.syncPayableForAssignment(a.id, userId);
+          if (payable.created) payablesCreated += 1;
+        } catch (err) {
+          errors.push({ assignmentId: a.id, reason: `payable: ${(err as Error).message}` });
+        }
+      }
+
+      if (hasEntry) { skipped += 1; continue; }
       const clientId = projectClient.get(a.projectId);
       if (!clientId) { errors.push({ assignmentId: a.id, reason: 'no project/client mapping' }); continue; }
       const fee = assignmentFee(a, 'REVENUE').fee;
@@ -688,6 +757,10 @@ export class BillingEngineService implements OnModuleInit {
 
     if (created.length > 0 || payablesCreated > 0) {
       this.logger.log(`Billing sync: ${created.length} receivable entries, ${payablesCreated} assayer payables.`);
+    }
+
+    if (onProgress) {
+      await onProgress(assignments.length, assignments.length, 'Complete');
     }
 
     return {

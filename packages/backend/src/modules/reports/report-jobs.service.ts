@@ -17,7 +17,7 @@ import {
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
-} from '../planning/queued-job';
+} from '../../infrastructure/queue/queued-job';
 import {
   REPORT_JOB,
   REPORT_JOB_OPTIONS,

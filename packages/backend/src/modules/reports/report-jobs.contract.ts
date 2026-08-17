@@ -10,7 +10,7 @@
 import type { JobOptions, KeepJobsOptions } from 'bull';
 import type { BillingState } from '@fapoms/shared';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
-import { FAILED_JOB_RETENTION, QueuedJobEnvelope } from '../planning/queued-job';
+import { FAILED_JOB_RETENTION, QueuedJobEnvelope } from '../../infrastructure/queue/queued-job';
 
 /**
  * Its own queue, separate from 'planning-jobs'.

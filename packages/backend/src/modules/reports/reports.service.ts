@@ -13,7 +13,7 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { buildWorkbook, inr, toDate } from './excel-export';
 // Type-only: these methods report which phase they are in and stay ignorant of whether a queue
 // is watching. See `ReportJobsWorker` for the only adapter onto a Bull job.
-import type { ProgressCallback } from '../planning/queued-job';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
 /**
  * Why progress here is phase-based rather than row-based.

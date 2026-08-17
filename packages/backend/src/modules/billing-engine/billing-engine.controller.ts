@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe, ForbiddenException, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { BillingEngineService, CreateEntryDto, SplitEntryDto } from './billing-engine.service';
+import { BillingJobsService } from './billing-jobs.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES } from './billing-roles';
 import {
@@ -163,14 +164,48 @@ const DISBURSEMENT_ROLES = [
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('billing-engine')
 export class BillingEngineController {
-  constructor(private readonly service: BillingEngineService) {}
+  constructor(
+    private readonly service: BillingEngineService,
+    private readonly jobs: BillingJobsService,
+  ) {}
 
   // Sync
+  /**
+   * The synchronous backfill. Kept because it is what the Billing screen calls today and what a
+   * small book wants: on anything under a few thousand assignments it returns before a queued
+   * run would even be picked up.
+   *
+   * On a large book, use the queued form below. This route walks every billable assignment, and
+   * while the pre-filter means a settled book costs two queries and no per-row work, the first
+   * run against an unbilled backlog is genuinely long — that is what the queue is for.
+   */
   @Post('sync/assignments')
   @Roles(...BILLING_ROLES)
   @ApiOperation({ summary: 'Ingest real billable assignments into billing entries' })
   async syncAssignments(@Req() req: any) {
     return this.service.syncFromAssignments(req.user?.id ?? req.user?.userId ?? 'system');
+  }
+
+  /**
+   * The same backfill, queued: returns a job id immediately and does the work on the billing
+   * queue at concurrency 1, reporting progress as it scans.
+   */
+  @Post('sync/assignments/jobs')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Queue a full billing backfill and return a job id to poll' })
+  @HttpCode(HttpStatus.ACCEPTED)
+  async queueSyncAssignments(@Req() req: any) {
+    const userId = req.user?.id ?? req.user?.userId ?? 'system';
+    return { success: true, data: await this.jobs.enqueueSyncAssignments(userId) };
+  }
+
+  /** Poll a queued billing job for progress and, once done, its summary. */
+  @Get('jobs/:jobId')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Poll a queued billing job' })
+  async billingJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
+    const userId = req.user?.id ?? req.user?.userId;
+    return { success: true, data: await this.jobs.status(jobId, userId) };
   }
 
   // Entries

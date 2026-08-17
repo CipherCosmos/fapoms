@@ -28,7 +28,7 @@ import {
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
-} from './queued-job';
+} from '../../infrastructure/queue/queued-job';
 
 /** What a POST returns: the id to poll, and whether it joined a run already in flight. */
 export interface EnqueueResult {

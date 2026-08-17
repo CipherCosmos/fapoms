@@ -28,7 +28,7 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { calculateHaversineDistance, AssayerStatus } from '@fapoms/shared';
 // Type-only: the planner counts clusters, and stays ignorant of whether a queue is watching.
-import type { ProgressCallback } from './queued-job';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
