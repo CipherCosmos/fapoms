@@ -24,6 +24,10 @@ import { AssignmentStatus, Priority } from '@fapoms/shared';
  */
 @Index('idx_assignments_active_status_created', ['isActive', 'status', 'createdAt'])
 @Index('idx_assignments_open_offers', ['slaDueDate'], { where: `"status" = 'PENDING' AND "is_active" = true` })
+// The list's default view orders by `created_at DESC, id ASC` with no status filter, which the
+// index above cannot serve — `status` sits between its two useful columns. Index Only Scan, 4
+// buffers instead of 4,971; see 1791200000000-AssignmentListPageIndex for the measurements.
+@Index('idx_assignments_recent_page', ['createdAt', 'id'], { where: `"is_active" = true` })
 @Index('idx_assignments_assayer_day', ['assayerId', 'scheduledDate', 'status'], { where: '"is_active" = true' })
 @Index('idx_assignments_branch_recent', ['projectBranchId', 'createdAt'])
 @Index('idx_assignments_sla_status_status_active', ['slaStatus', 'status'], { where: '"is_active" = true' })
