@@ -104,10 +104,17 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * ### When the trigger fires — which is sooner than "not needed yet" suggests
  *
- * Assumptions, stated rather than presented as fact: 480 location fixes per audit (this repo's own
- * measured amplification, quoted in `RetentionService`'s class comment), a 550-day window, and a
- * steady state where rows aging out per day equal rows written per day. The purge ceiling is
- * BATCH_SIZE × MAX_BATCHES × 24 = 1.2 M rows/day.
+ * Assumptions, stated rather than presented as fact — and one of them was originally stated too
+ * strongly here, so it is corrected: **480 location fixes per audit is a model, not a
+ * measurement.** It was quoted from `RetentionService`'s class comment, which called it measured;
+ * re-checking on 2026-08-17 found that database holds 32 location fixes from a single assayer, so
+ * nothing of the kind was ever observed. The figure is a 30-second cadence over a four-hour moving
+ * day, consistent with `location-policy.ts` (`timeInterval: 30_000`, `distanceInterval: 25`). It
+ * is a defensible model and the table below still follows from it; it is not evidence, and the
+ * row counts should be read as "if the cadence model holds" rather than as forecasts.
+ *
+ * The other assumptions: a 550-day window, and a steady state where rows aging out per day equal
+ * rows written per day. The purge ceiling is BATCH_SIZE × MAX_BATCHES × 24 = 1.2 M rows/day.
  *
  *   | audits/day        | pings/day | steady-state rows | % of purge ceiling | vs 50 M trigger |
  *   |-------------------|-----------|-------------------|--------------------|-----------------|

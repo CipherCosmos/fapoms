@@ -16,11 +16,33 @@ import { MetricsService } from '../observability/metrics.service';
  * because its retention setting defaults to null. Everything else — dispatched outbox rows,
  * expired refresh tokens, notifications read months ago — accumulates forever.
  *
- * That is not a slow leak. The measured write amplification is 122 audit rows and 10 notifications
- * *per assignment*, plus roughly 480 location fixes; projected at 200 audits/day that is ~1 GB/year
- * of transactional rows and ~9 GB/year of location history, and at 2,000 audits/day it is ~10 GB
- * and ~93 GB. The production host has 11.5 GB of RAM and runs the API, Redis, MinIO and on-host
- * image builds alongside Postgres.
+ * That is not a slow leak, and the growth is real — but the amplification figures this comment
+ * used to quote were not, and they are corrected here rather than left to be re-used.
+ *
+ * It claimed "122 audit rows per assignment, plus roughly 480 location fixes", projecting ~1 GB
+ * and ~9 GB/year at 200 audits/day. Re-derived 2026-08-17 against the same dev database:
+ *
+ *   - **122 was `total audit rows ÷ assignment count`** — every row in the table, including ones
+ *     nothing to do with an assignment, divided by 22 assignments. Worse, 1,509 of those 2,671
+ *     rows (56%) are `RULE_BYPASSED` written during the bypass testing that produced the very fix
+ *     in `rule-bypass.service.ts`, so the sample was measuring the test, not the workload.
+ *     Excluding those: 52.8. Counting only `entity_type = 'ASSIGNMENT'`: **7.6**.
+ *   - **480 was never measured.** This database holds 32 location fixes, all from one assayer. It
+ *     is a *model* — 30-second cadence over a four-hour moving day, which is consistent with
+ *     `location-policy.ts` (`timeInterval: 30_000`, `distanceInterval: 25`) — and it is a
+ *     reasonable one. It is simply not an observation, and calling it measured invited everything
+ *     downstream to treat it as ground truth.
+ *
+ * The true per-assignment audit rate is somewhere in 7.6–52.8 depending on how much surrounding
+ * activity (user, assayer, document, schedule events) you attribute to the assignment that caused
+ * it — a range nobody can narrow without production data, which is the honest state of it. The
+ * storage projections built on 122 are therefore high by somewhere between 2x and 16x.
+ *
+ * None of which changes what this service does. The case for retention was never the exact
+ * multiplier; it was that the multiplier is greater than zero and nothing ever deleted a row. The
+ * production host has 11.5 GB of RAM and runs the API, Redis, MinIO and on-host image builds
+ * alongside Postgres, and `assayer_location_pings` grows without bound inside its own 550-day
+ * window regardless of which figure is right.
  *
  * ## What it does and does not delete
  *
