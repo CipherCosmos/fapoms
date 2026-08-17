@@ -39,7 +39,7 @@ describe('FeePolicyService', () => {
     // No transport rates by default — the legacy travel formula these tests were written
     // against stays in force unless a test provides an estimate.
     transportRates = {
-      estimate: jest.fn().mockResolvedValue({ distanceKm: 0, options: [], recommended: null }),
+      estimate: jest.fn().mockResolvedValue({ distanceKm: 0, options: [], recommended: null, road: null, policy: {} }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -171,18 +171,23 @@ describe('FeePolicyService', () => {
   });
 
   describe('quote with a transport rate card', () => {
+    const busOption = {
+      mode: 'BUS', modeLabel: 'Bus', scopeType: 'NATIONAL', scopeValue: null,
+      baseFare: 10, perKmRate: 1.5, oneWayCost: 48, roundTripCost: 96, preferred: true,
+      // 25 km at the bus's 40 km/h setting: 38 min each way — an estimate, labelled as one.
+      oneWayMinutes: 38, roundTripMinutes: 75, timeSource: 'RATE_CARD_ESTIMATE', assumedSpeedKmh: 40,
+      viable: true, whyNot: null, rank: 1, score: 0, reason: 'preferred nationally',
+    };
+    const policy = {
+      weightCost: 0.6, weightTime: 0.4, flightMinKm: 500, twoWheelerMaxKm: 150, autoMaxKm: 40,
+      flightOverheadMinutes: 180, avgSpeedKmh: {},
+    };
     const busEstimate = {
       distanceKm: 25,
-      options: [
-        {
-          mode: 'BUS', modeLabel: 'Bus', scopeType: 'NATIONAL', scopeValue: null,
-          baseFare: 10, perKmRate: 1.5, oneWayCost: 48, roundTripCost: 96, preferred: true,
-        },
-      ],
-      recommended: {
-        mode: 'BUS', modeLabel: 'Bus', scopeType: 'NATIONAL', scopeValue: null,
-        baseFare: 10, perKmRate: 1.5, oneWayCost: 48, roundTripCost: 96, preferred: true,
-      },
+      options: [busOption],
+      recommended: busOption,
+      road: null,
+      policy,
     };
 
     it('prices travel from the rate card when the place has one, and says so', async () => {
@@ -200,11 +205,28 @@ describe('FeePolicyService', () => {
       expect(q.total).toBe(1296);
       expect(q.travelSource).toBe('TRANSPORT_RATE_CARD');
       expect(q.transport?.recommended?.mode).toBe('BUS');
+      // "by bus, ~38 min each way" — the mode and its one-way time ride on the breakdown.
+      expect(q.travelMode).toBe('BUS');
+      expect(q.travelDurationMinutes).toBe(38);
+    });
+
+    it('hands the routed road leg to the estimator, so road modes are timed by the real drive', async () => {
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      transportRates.estimate.mockResolvedValue(busEstimate);
+      const road = { distanceKm: 25, durationMinutes: 41, source: 'OSRM' as const };
+
+      await service.quote({
+        assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' }, road,
+      });
+
+      expect(transportRates.estimate).toHaveBeenCalledWith(
+        25, { state: 'Kerala' }, undefined, expect.objectContaining({ road }),
+      );
     });
 
     it('keeps the legacy formula when no rate matches the place', async () => {
       qb.getOne.mockResolvedValue({ baseFee: 1200 });
-      transportRates.estimate.mockResolvedValue({ distanceKm: 25, options: [], recommended: null });
+      transportRates.estimate.mockResolvedValue({ distanceKm: 25, options: [], recommended: null, road: null, policy });
 
       const q = await service.quote({
         assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' },
@@ -213,6 +235,31 @@ describe('FeePolicyService', () => {
       expect(q.travelFee).toBe(120); // (25 - 10) * 8
       expect(q.travelSource).toBe('PLATFORM_DEFAULT');
       expect(q.transport).toBeNull();
+      expect(q.travelMode).toBeNull();
+      expect(q.travelDurationMinutes).toBeNull();
+    });
+
+    it('prices the legacy way when rates matched but every mode was ruled out — and still shows them', async () => {
+      // An auto-only rate card and a 60 km run: the old rule would have recommended a 60 km
+      // auto because it was the only row. Now nothing is recommended, the fee is the legacy
+      // per-km, and the ruled-out option rides along so the desk can see what was considered.
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      const ruledOut = {
+        ...busOption, mode: 'AUTO_RICKSHAW', modeLabel: 'Auto-rickshaw', roundTripCost: 1490,
+        viable: false, whyNot: 'Auto-rickshaw journeys are capped at 40 km one way; this journey is 60 km',
+        score: null, reason: null, preferred: false,
+      };
+      transportRates.estimate.mockResolvedValue({ distanceKm: 60, options: [ruledOut], recommended: null, road: null, policy });
+
+      const q = await service.quote({
+        assayerId: 'a1', clientId: null, distanceKm: 60, place: { state: 'Kerala' },
+      });
+
+      expect(q.travelFee).toBe(400); // (60 - 10) * 8, not ₹1,490 by auto
+      expect(q.travelSource).toBe('PLATFORM_DEFAULT');
+      expect(q.travelMode).toBeNull();
+      expect(q.transport?.options[0]).toMatchObject({ mode: 'AUTO_RICKSHAW', viable: false });
+      expect(q.transport?.recommended).toBeNull();
     });
 
     it('keeps the legacy formula when the caller cannot say where the work is', async () => {

@@ -10,7 +10,7 @@
 
 import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsDateString, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsDateString, IsIn, Min } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -46,6 +46,18 @@ class QuoteRequestDto {
 
   @IsNumber() @Min(0)
   distanceKm: number;
+
+  /**
+   * The routed drive time for `distanceKm`, one way, when the caller has one. Lets the mode
+   * comparison time car/taxi/auto/two-wheeler by the real road instead of an average speed;
+   * the fee is unaffected. `roadSource` says whether the route came from OSRM or the routing
+   * layer's own estimate — assumed ESTIMATE when unstated, the honest default.
+   */
+  @IsOptional() @IsNumber() @Min(0)
+  durationMinutes?: number;
+
+  @IsOptional() @IsIn(['OSRM', 'ESTIMATE'])
+  roadSource?: 'OSRM' | 'ESTIMATE';
 
   @IsOptional() @IsNumber() @Min(1)
   branchCount?: number;
@@ -102,6 +114,10 @@ export class PricingController {
       branchCount: dto.branchCount,
       onDate: dto.onDate ? new Date(dto.onDate) : undefined,
       place,
+      road:
+        dto.durationMinutes && dto.durationMinutes > 0
+          ? { distanceKm: dto.distanceKm, durationMinutes: dto.durationMinutes, source: dto.roadSource ?? 'ESTIMATE' }
+          : null,
     });
   }
 }

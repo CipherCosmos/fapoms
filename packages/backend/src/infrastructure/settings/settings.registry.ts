@@ -49,10 +49,12 @@ export const SETTINGS_GROUPS = [
   { key: 'email', label: 'Email delivery', description: 'The mailbox the platform sends from, and where its links point.' },
   { key: 'schedule', label: 'Schedules', description: 'When recurring work runs — the morning brief and the SLA sweep.' },
   { key: 'fees', label: 'Fees & pricing', description: 'What an audit is worth when no client or assayer contract says otherwise.' },
+  { key: 'transport', label: 'Transport recommendation', description: 'How the recommended way to travel is chosen — the speed assumed for each mode when no timetable exists, when a mode is ruled out, and how cost is weighed against time.' },
   { key: 'billing', label: 'Billing & claims', description: 'Tax withholding and the ceiling on a single expense claim.' },
   { key: 'retention', label: 'Data retention', description: 'How long movement and operational records are kept.' },
   { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
   { key: 'field', label: 'Field rules', description: 'What the app enforces on an assayer in the field, and how far a negotiation may run.' },
+  { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the workforce.' },
 ] as const;
 
 export const SETTINGS_REGISTRY: SettingDef[] = [
@@ -238,6 +240,162 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     applies: 'immediately',
   },
 
+  // ── Transport recommendation ─────────────────────────────────────────────
+  //
+  // Everything `TransportRateService.estimate()` needs beyond the rate card itself: how long
+  // each way of travelling takes, when a mode is not sensible at all, and how cheapness is
+  // traded against speed. All of these are ESTIMATES and POLICY, not measurements — there is no
+  // free, reliable API for Indian rail or bus timetables and fares, and we refuse to invent or
+  // scrape one. Road modes (car, taxi, auto, two-wheeler) get their time from the routing
+  // engine when a route is supplied and only fall back to the speed here when it is not.
+  //
+  // Speeds are door-to-door averages, not top speeds. Indian Railways mail/express services
+  // average roughly 50–60 km/h once station dwell is included (Rajdhani/Shatabdi are faster,
+  // passenger trains far slower); interstate buses on Indian highways average 35–45 km/h; a
+  // domestic jet cruises at ~800 km/h but taxi, climb and descent bring the airborne average
+  // nearer 500 km/h over typical 600–1,500 km sectors, and the airport overhead below is what
+  // actually dominates a flight's door-to-door time.
+  {
+    key: 'transport.avgSpeedKmh.CAR',
+    label: 'Average speed — car',
+    description: 'Used only when no road route is available for the journey; a routed journey uses the real drive time. Door-to-door average including town traffic, not the highway limit.',
+    group: 'transport',
+    type: 'number',
+    default: 45,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.TAXI',
+    label: 'Average speed — taxi',
+    description: 'Same vehicle as a car; kept separate so a city where taxis crawl can say so. Used only when no road route is available.',
+    group: 'transport',
+    type: 'number',
+    default: 45,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.TWO_WHEELER',
+    label: 'Average speed — two-wheeler',
+    description: 'Used only when no road route is available. Quicker than a car through town, slower on an open highway; 40 km/h is a fair middle.',
+    group: 'transport',
+    type: 'number',
+    default: 40,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.AUTO_RICKSHAW',
+    label: 'Average speed — auto-rickshaw',
+    description: 'Used only when no road route is available. Autos live in town traffic; 25 km/h door to door is typical.',
+    group: 'transport',
+    type: 'number',
+    default: 25,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.BUS',
+    label: 'Average speed — bus',
+    description: 'There is no reliable timetable feed for Indian buses, so journey time is the road distance at this speed. State transport and interstate coaches average 35–45 km/h with stops. An estimate — shown as one.',
+    group: 'transport',
+    type: 'number',
+    default: 40,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.TRAIN',
+    label: 'Average speed — train',
+    description: 'There is no free, reliable timetable feed for Indian Railways, so journey time is the road distance at this speed. Mail/express services average 50–60 km/h door to door once halts are counted; raise it where Shatabdi/Vande Bharat cover the route. An estimate — shown as one.',
+    group: 'transport',
+    type: 'number',
+    default: 55,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.FLIGHT',
+    label: 'Average speed — flight (airborne)',
+    description: 'Cruise speed averaged over take-off, climb and descent on a typical domestic sector. Airport time is added separately below — that, not the flying, is most of a flight’s door-to-door time.',
+    group: 'transport',
+    type: 'number',
+    default: 500,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.avgSpeedKmh.OTHER',
+    label: 'Average speed — other',
+    description: 'For rate rows on the “Other” mode (ferry, shared jeep). A road-like guess; tune it if you actually price such a mode.',
+    group: 'transport',
+    type: 'number',
+    default: 40,
+    min: 1, max: 1000, unit: 'km/h',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.flightOverheadMinutes',
+    label: 'Flight fixed overhead',
+    description: 'Added to every flight leg on top of the airborne time: getting to the airport, check-in, security, boarding, baggage, and the transfer at the other end. Three hours is a realistic Indian domestic figure; it is what makes a 500 km flight lose to a 5-hour train.',
+    group: 'transport',
+    type: 'number',
+    default: 180,
+    min: 0, max: 600, unit: 'minutes',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.flightMinKm',
+    label: 'Flights only from',
+    description: 'A flight is not offered as a viable option for a journey shorter than this, one way. Below it the airport overhead swallows any time saved. The option is still shown, marked not viable, so the desk can see and override.',
+    group: 'transport',
+    type: 'number',
+    default: 500,
+    min: 0, max: 5000, unit: 'km',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.twoWheelerMaxKm',
+    label: 'Two-wheeler at most',
+    description: 'An own two-wheeler is not offered as viable beyond this distance one way. Riding 150 km each way is a full working day on the saddle before any audit begins. Still shown, marked not viable.',
+    group: 'transport',
+    type: 'number',
+    default: 150,
+    min: 0, max: 2000, unit: 'km',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.autoMaxKm',
+    label: 'Auto-rickshaw at most',
+    description: 'An auto-rickshaw is not offered as viable beyond this distance one way — autos are town transport and rarely leave it. Still shown, marked not viable.',
+    group: 'transport',
+    type: 'number',
+    default: 40,
+    min: 0, max: 500, unit: 'km',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.weightCost',
+    label: 'Weight on cost',
+    description: 'How much a mode’s cost counts when choosing the recommended one, against its journey time. Cost and time are each scaled 0–1 across the viable modes, then combined with these two weights; the lowest total wins. 0.6 cost / 0.4 time means a mode must save real time to justify costing more.',
+    group: 'transport',
+    type: 'number',
+    default: 0.6,
+    min: 0, max: 1, unit: '×',
+    applies: 'immediately',
+  },
+  {
+    key: 'transport.weightTime',
+    label: 'Weight on time',
+    description: 'The other half of the balance above. Set cost 1 / time 0 to recommend the cheapest viable mode regardless of how long it takes — the behaviour before journey time was considered at all.',
+    group: 'transport',
+    type: 'number',
+    default: 0.4,
+    min: 0, max: 1, unit: '×',
+    applies: 'immediately',
+  },
+
   // ── Billing ─────────────────────────────────────────────────────────────
   {
     key: 'billing.tdsRate',
@@ -385,6 +543,21 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     max: 3650,
     unit: 'days',
     applies: 'next-run',
+  },
+
+  // ── Planning ────────────────────────────────────────────────────────────
+  {
+    // Read by RecommendationEngine once per recommendation for the `fairness` dimension —
+    // see modules/assayer-remarks/assayer-remark.contract.ts (DEFAULT_FAIRNESS_OFFER_CAP).
+    key: 'planning.fairnessOfferCap',
+    label: 'Rotation: offers before "well used"',
+    description: 'How many offers in the last 30 days it takes for an assayer to score zero on the rotation-fairness dimension. Below this the score falls off gradually; at or above it the person is treated as fully used for the month. This is a gentle nudge worth 4% of a recommendation, not a quota — a strong assayer still wins on merit, they just stop winning every tie. Lower it to spread work more aggressively; raise it to let proven people take more.',
+    group: 'planning',
+    type: 'number',
+    default: 8,
+    envVar: 'PLANNING_FAIRNESS_OFFER_CAP',
+    min: 1, max: 100, unit: 'offers / 30 days',
+    applies: 'immediately',
   },
 ];
 

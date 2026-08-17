@@ -61,9 +61,12 @@ export class TransportRateEntity extends BaseEntity {
 
   /**
    * Marks the mode the desk recommends by default in this scope — the one whose cost becomes
-   * the offer's travel component. Without a preferred row the estimate falls back to the
-   * cheapest mode, which is defensible but blunt; preference is how policy like "reimburse at
-   * bus rate in the South, own-vehicle rate in the North-East" is expressed.
+   * the offer's travel component. Without a preferred row the estimate recommends the best
+   * balance of cost and journey time under the operator's weights (see
+   * `TransportRateService.rankOptions`); preference is how policy like "reimburse at bus rate
+   * in the South, own-vehicle rate in the North-East" overrides that arithmetic. A preferred
+   * mode that a viability rule rules out for the distance (a two-wheeler at 200 km) is not
+   * forced — the row is shown with why, and the arithmetic decides.
    */
   @Column({ name: 'is_preferred', type: 'boolean', default: false })
   isPreferred: boolean;

@@ -6,7 +6,8 @@ import { ClientConfigurationEntity } from '../client/client-configuration.entity
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { TransportRateService, TransportEstimate, TransportPlace } from './transport-rate.service';
+import { TravelMode } from '@fapoms/shared';
+import { TransportRateService, TransportEstimate, TransportPlace, RoadLeg } from './transport-rate.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
 
@@ -80,9 +81,23 @@ export interface FeeBreakdown {
    */
   travelSource: 'TRANSPORT_RATE_CARD' | 'CLIENT_RATE_CARD' | 'PLATFORM_DEFAULT';
   /**
+   * How the assayer is expected to travel when the rate card priced the journey — the
+   * recommended mode — and how long that takes ONE WAY in minutes, so the card can say
+   * "by train, ~3h each way" next to the fee. One way, like `distanceKm` on the estimate: every
+   * "each way" display assumes it, and the round-trip figure sits on `transport.recommended`.
+   * Both null under the legacy per-km formula, which knows nothing about how anyone travels.
+   * The time is a real routed figure only for road modes given a route; otherwise an estimate
+   * from an average speed — `transport.recommended.timeSource` says which.
+   */
+  travelMode: TravelMode | null;
+  travelDurationMinutes: number | null;
+  /**
    * The transport grounding behind `travelFee` when a rate card matched — the recommended
-   * mode and every alternative, so the desk can see *why* the number is what it is and argue
-   * with it in specifics. Null when travel came from the legacy formula.
+   * mode and every alternative, each with cost, time, and (when ruled out) why, so the desk can
+   * see *why* the number is what it is and argue with it in specifics. Null when no rate row
+   * matched the place at all. When rows matched but every mode was ruled out for the distance,
+   * this still carries them (with their `whyNot`) while `travelSource` says the fee itself came
+   * from the legacy formula — the desk sees both what was considered and what was charged.
    */
   transport: TransportEstimate | null;
   /**
@@ -328,6 +343,14 @@ export class FeePolicyService implements OnModuleInit {
      * charged whatever distance it was handed exactly once.
      */
     distanceIsRoundTrip?: boolean;
+    /**
+     * The routed road leg for this journey, when the caller has one (the day planner and the
+     * candidate ranker route before they quote). Gives car/taxi/auto/two-wheeler their REAL
+     * drive time in the mode comparison instead of a distance-÷-speed estimate; the fee is
+     * unaffected either way. Same convention as `distanceKm`: the loop's minutes under
+     * `distanceIsRoundTrip`, one way otherwise.
+     */
+    road?: RoadLeg | null;
   }): Promise<FeeBreakdown> {
     const rates = params.configuration !== undefined
       ? this.ratesFromConfiguration(params.configuration, await this.platformDefaults())
@@ -349,16 +372,25 @@ export class FeePolicyService implements OnModuleInit {
      *
      * The rate card lookup failing (cache down, table unreachable) falls back to the legacy
      * formula rather than failing the quote — an offer priced the old way beats no offer.
+     *
+     * The fee is `recommended.roundTripCost`, exactly as before the recommendation learned
+     * about time: the mode comparison decides WHICH mode's cost becomes the fee, never the
+     * arithmetic of that cost. Rates matched but every mode ruled out (an auto-only rate card
+     * and a 200 km journey) is treated like no match for the money — legacy formula — but the
+     * ruled-out options ride along in `transport` so the desk can see what was considered.
      */
     let chargeableKm: number;
     let travelFee: number;
     let travelSource: FeeBreakdown['travelSource'];
+    let travelMode: TravelMode | null = null;
+    let travelDurationMinutes: number | null = null;
     let transport: TransportEstimate | null = null;
 
     const estimate = params.place
       ? await this.transportRateService
           .estimate(params.distanceKm, params.place, params.onDate, {
             distanceIsRoundTrip: params.distanceIsRoundTrip,
+            road: params.road ?? null,
           })
           .catch((err) => {
             this.logger.warn(`Transport rate lookup failed; quoting legacy travel: ${err?.message ?? err}`);
@@ -366,11 +398,14 @@ export class FeePolicyService implements OnModuleInit {
           })
       : null;
 
+    if (estimate && estimate.options.length > 0) transport = estimate;
+
     if (estimate?.recommended) {
-      transport = estimate;
       chargeableKm = estimate.distanceKm;
       travelFee = estimate.recommended.roundTripCost;
       travelSource = 'TRANSPORT_RATE_CARD';
+      travelMode = estimate.recommended.mode;
+      travelDurationMinutes = estimate.recommended.oneWayMinutes;
     } else {
       const legacy = this.calculateTravelFee(params.distanceKm, rates);
       chargeableKm = legacy.chargeableKm;
@@ -403,6 +438,8 @@ export class FeePolicyService implements OnModuleInit {
       usedFallbackBaseFee: usedFallback,
       feeSource,
       travelSource,
+      travelMode,
+      travelDurationMinutes,
       transport,
       feeDeviation,
       feeFlagged: feeDeviation > flagMultiplier,

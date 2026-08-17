@@ -8,11 +8,14 @@ import {
   resolveRegion,
   canonicalStateName,
   travelModeLabel,
+  regionLabel,
   businessDateKey,
 } from '@fapoms/shared';
 
 import { TransportRateEntity, TransportRateScope } from './transport-rate.entity';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
 
 /**
  * The transport rate card: what travelling actually costs, managed by the desk, consumed by
@@ -23,6 +26,15 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
  * yields no transport estimate at all, which tells `FeePolicyService` to fall back to the
  * legacy client per-km formula. Silence, not invention, is the failure mode: an offer grounded
  * in a rate that doesn't exist is worse than an offer that says it used the default.
+ *
+ * Recommendation weighs cost AGAINST TIME. The first version priced every mode against the same
+ * kilometres and picked the cheapest, which meant a 14-hour bus beat a 3-hour train whenever it
+ * was ₹200 cheaper — technically the lowest reimbursement, practically a lost working day and an
+ * assayer who declines. `estimate()` now gives every mode a journey time, rules out modes that
+ * make no sense for the distance (a flight for 80 km, an auto for 200), and recommends the best
+ * balance of the two under weights the operator controls. Every mode is still returned, viable or
+ * not, with its cost, its time and — when ruled out — the rule that did it, so the desk can see
+ * the whole picture and override with reasons.
  */
 
 /** The whole active rate card is one cache entry: it is small and read on every quote. */
@@ -35,9 +47,75 @@ const SCOPE_SPECIFICITY: Record<TransportRateScope, number> = {
   NATIONAL: 1,
 };
 
+/**
+ * Modes whose journey time is the ROAD time: they drive (or are driven) the routed road.
+ * Everything else — train, bus, flight, other — runs on its own network and timetable, for
+ * which there is no free, reliable Indian data source, so those are estimated from distance
+ * at a per-mode average speed. See `journeyTime()`.
+ */
+const ROAD_MODES: ReadonlySet<TravelMode> = new Set([
+  TravelMode.CAR,
+  TravelMode.TAXI,
+  TravelMode.AUTO_RICKSHAW,
+  TravelMode.TWO_WHEELER,
+]);
+
 export interface TransportPlace {
   state?: string | null;
   region?: string | null;
+}
+
+/**
+ * Where an option's journey time came from — because a real figure and a guess must never
+ * wear the same clothes.
+ *
+ *  - ROAD_ROUTE: the road duration handed in by the caller (the geo module's routing result).
+ *    A REAL figure when the route came from OSRM; the routing layer's own straight-line-at-
+ *    average-speed guess when its `source` was ESTIMATE — `TransportEstimate.road.source`
+ *    says which, so a display can add "(estimated)". Either way it is the same number the day
+ *    planner schedules by, which is why it is used as given rather than second-guessed here.
+ *  - RATE_CARD_ESTIMATE: computed here as distance ÷ the mode's average-speed setting
+ *    (`transport.avgSpeedKmh.<MODE>`, plus the fixed airport overhead for flights). Always an
+ *    estimate. Used for train/bus/flight/other, and for road modes when no route was supplied.
+ */
+export type TransportTimeSource = 'ROAD_ROUTE' | 'RATE_CARD_ESTIMATE';
+
+/**
+ * A routed road leg, shaped to match the geo module's `RouteResult` so a routing result can be
+ * passed straight through. `durationMinutes` follows the same convention as the estimate's
+ * distance argument: one way by default, the whole loop when `distanceIsRoundTrip` is set.
+ * `distanceKm` is accepted for structural compatibility but the positional distance argument is
+ * what prices the journey — callers already pass it, and one of them (the assign path) passes
+ * 0 on purpose when the assayer is already travelling that day, which must stay 0.
+ */
+export interface RoadLeg {
+  distanceKm?: number;
+  durationMinutes: number;
+  /** OSRM = a real routed drive; ESTIMATE = the routing layer's haversine-at-40-km/h fallback. */
+  source: 'OSRM' | 'ESTIMATE';
+}
+
+/**
+ * The knobs behind a recommendation, read from platform settings on every estimate and echoed
+ * on the result so a screen can say WHY ("flights only from 500 km", "cost 0.6 / time 0.4")
+ * without a second call. All are operator-tunable at Administration → Platform Settings →
+ * Transport recommendation; the shipped defaults live in the settings registry.
+ */
+export interface TransportPolicy {
+  /** Weight on normalised cost in the score. Shipped 0.6. */
+  weightCost: number;
+  /** Weight on normalised journey time in the score. Shipped 0.4. */
+  weightTime: number;
+  /** FLIGHT is not viable under this many km one way. Shipped 500. */
+  flightMinKm: number;
+  /** TWO_WHEELER is not viable over this many km one way. Shipped 150. */
+  twoWheelerMaxKm: number;
+  /** AUTO_RICKSHAW is not viable over this many km one way. Shipped 40. */
+  autoMaxKm: number;
+  /** Fixed minutes added to each flight leg for airport transfers, check-in, security. Shipped 180. */
+  flightOverheadMinutes: number;
+  /** Door-to-door average speed per mode, used wherever no real road time exists. */
+  avgSpeedKmh: Record<TravelMode, number>;
 }
 
 export interface TransportModeOption {
@@ -52,14 +130,57 @@ export interface TransportModeOption {
   /** Two single journeys — the assayer comes home. This is the figure recommendations use. */
   roundTripCost: number;
   preferred: boolean;
+
+  /** Journey time one way, whole minutes. See `timeSource` for how honest it is. */
+  oneWayMinutes: number;
+  /** There and back — the figure the ranking uses, alongside `roundTripCost`. */
+  roundTripMinutes: number;
+  timeSource: TransportTimeSource;
+  /** The km/h a RATE_CARD_ESTIMATE was derived from; null when the time is a routed figure. */
+  assumedSpeedKmh: number | null;
+
+  /**
+   * False when a business rule rules this mode out for the distance. The option is still here
+   * — with its cost and time — so the desk can see what was rejected and override deliberately.
+   */
+  viable: boolean;
+  /** The rule that ruled it out, in one sentence with the numbers. Null when viable. */
+  whyNot: string | null;
+
+  /**
+   * 1 = the recommendation. Viable modes come first in score order (a preferred row is moved
+   * to the top when it wins), then non-viable ones cheapest-first. Also the order of `options`.
+   */
+  rank: number;
+  /**
+   * 0 (best) … 1 (worst) among the VIABLE options: weightCost × cost scaled 0–1 across them
+   * + weightTime × time scaled 0–1 across them. Null when not viable. Two viable options with
+   * identical cost and time both score 0.
+   */
+  score: number | null;
+  /** One line saying why this is the recommendation. Set on the recommended option only. */
+  reason: string | null;
 }
 
 export interface TransportEstimate {
+  /** Always one way, whatever the caller supplied — every display ("~X km each way") assumes it. */
   distanceKm: number;
-  /** Sorted cheapest-first by round trip. */
+  /** In `rank` order: recommended first, viable by score, then the ruled-out modes. */
   options: TransportModeOption[];
-  /** The preferred mode at the most specific scope that declares one, else the cheapest. */
+  /**
+   * The viable option with the lowest cost-time score — unless a rate row at the most specific
+   * scope is marked preferred and viable, in which case that wins (policy beats arithmetic).
+   * Null when no rate matches the place, when the distance is zero, or when every matched mode
+   * is ruled out; the caller then falls back to legacy per-km travel.
+   */
   recommended: TransportModeOption | null;
+  /**
+   * The road time this estimate was given, one way, or null when the caller had no route. When
+   * present, road modes' times are this figure and `source` says whether it was a real OSRM
+   * route or the routing layer's own estimate.
+   */
+  road: { oneWayMinutes: number; source: RoadLeg['source'] } | null;
+  policy: TransportPolicy;
 }
 
 export interface CreateTransportRateDto {
@@ -78,12 +199,31 @@ export type UpdateTransportRateDto = Partial<CreateTransportRateDto> & { isActiv
 
 const round = (n: number) => Math.round(n);
 
+/** "~3h", "~2h 30m", "~45 min" — for the one-line reason; screens do their own formatting. */
+const describeMinutes = (minutes: number): string => {
+  const total = Math.max(0, Math.round(minutes));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h === 0) return `~${m} min`;
+  return m === 0 ? `~${h}h` : `~${h}h ${m}m`;
+};
+
+const rupees = (n: number): string => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+/** Where a preference was declared, in words: "for Maharashtra", "in the South", "nationally". */
+const scopePhrase = (scopeType: TransportRateScope, scopeValue: string | null): string => {
+  if (scopeType === 'STATE') return `for ${scopeValue}`;
+  if (scopeType === 'REGION') return `in the ${regionLabel(scopeValue)}`;
+  return 'nationally';
+};
+
 @Injectable()
 export class TransportRateService {
   constructor(
     @InjectRepository(TransportRateEntity)
     private readonly rateRepository: Repository<TransportRateEntity>,
     private readonly cache: CacheService,
+    private readonly settings: PlatformSettingsService,
   ) {}
 
   // ---------------------------------------------------------------- CRUD
@@ -182,7 +322,8 @@ export class TransportRateService {
   }
 
   /**
-   * Per-mode journey costs for a distance, and the one the desk should recommend.
+   * Per-mode journey costs AND times for a distance, which modes are sensible for it, and the
+   * one the desk should recommend.
    *
    * Costs are round trip: the assayer comes home, and a reimbursement that covers half the
    * journey is not a recommendation anyone can stand behind. Returns empty options rather
@@ -195,54 +336,330 @@ export class TransportRateService {
    * one-way plus its return, ~2× the real cost. For a loop, the full-journey cost is
    * 2 × baseFare + perKm × loopKm — identical to the round-trip formula when the loop is
    * exactly there-and-back, which is what keeps the two entry points from ever disagreeing
-   * about the same journey.
+   * about the same journey. `road.durationMinutes`, when supplied, follows the same
+   * convention: the loop's minutes with the flag, one way without.
+   *
+   * What happens, in order:
+   *   1. Each matched rate row becomes an option with cost (as before) and TIME
+   *      (`journeyTime()`): the routed road time for road modes when a route was given,
+   *      otherwise distance ÷ the mode's average-speed setting, flights carrying a fixed
+   *      airport overhead per leg. Every time figure says where it came from.
+   *   2. Viability rules (`viability()`) mark modes that make no sense for the distance —
+   *      each rule is named, has its threshold in platform settings, and writes a one-line
+   *      `whyNot`. Ruled-out modes stay in the list; they just cannot be recommended.
+   *   3. Among viable modes, cost and time are each scaled 0–1 and combined under the
+   *      operator's weights (`rankOptions()`); the lowest score is recommended, unless a
+   *      viable preferred row at the most specific scope exists, which wins outright — the
+   *      pre-existing "reimburse at bus rate in the South" policy hook, kept intact.
+   *
+   * TRAIN and BUS appear only when the place has a rate row for them — that IS the "only if a
+   * rate row exists for the scope" rule, satisfied by construction: no row, no option. This
+   * service does not synthesise placeholder options for modes it has no price for; silence,
+   * not invention, remains the failure mode.
    */
   async estimate(
     distanceKm: number,
     place: TransportPlace,
     onDate?: Date,
-    opts: { distanceIsRoundTrip?: boolean } = {},
+    opts: { distanceIsRoundTrip?: boolean; road?: RoadLeg | null } = {},
   ): Promise<TransportEstimate> {
+    const policy = await this.policy();
+
     const km = Number.isFinite(distanceKm) && distanceKm > 0 ? distanceKm : 0;
-    if (km <= 0) return { distanceKm: 0, options: [], recommended: null };
+    if (km <= 0) return { distanceKm: 0, options: [], recommended: null, road: null, policy };
 
     const oneWayKm = opts.distanceIsRoundTrip ? km / 2 : km;
 
-    const rates = await this.ratesFor(place, onDate);
-    const options: TransportModeOption[] = rates
-      .map((r) => {
-        const baseFare = Number(r.baseFare);
-        const perKm = Number(r.perKmRate);
-        const oneWay = round(baseFare + perKm * oneWayKm);
-        const fullJourney = opts.distanceIsRoundTrip
-          ? round(2 * baseFare + perKm * km)
-          : oneWay * 2;
-        return {
-          mode: r.mode,
-          modeLabel: travelModeLabel(r.mode),
-          scopeType: r.scopeType,
-          scopeValue: r.scopeValue,
-          baseFare,
-          perKmRate: perKm,
-          oneWayCost: oneWay,
-          roundTripCost: fullJourney,
-          preferred: r.isPreferred,
-        };
-      })
-      .sort((a, b) => a.roundTripCost - b.roundTripCost);
+    // A route with no usable duration is the same as no route: fall back to the estimate
+    // rather than declare a 0-minute drive.
+    const roadMinutes = Number(opts.road?.durationMinutes);
+    const road =
+      opts.road && Number.isFinite(roadMinutes) && roadMinutes > 0
+        ? {
+            oneWayMinutes: opts.distanceIsRoundTrip ? roadMinutes / 2 : roadMinutes,
+            source: opts.road.source,
+          }
+        : null;
 
-    // Preference at a more specific scope beats preference at a broader one, so a national
-    // "prefer bus" default can be overridden by one state that prefers own-vehicle rates.
-    const preferred = options
-      .filter((o) => o.preferred)
-      .sort((a, b) => SCOPE_SPECIFICITY[b.scopeType] - SCOPE_SPECIFICITY[a.scopeType])[0];
+    const rates = await this.ratesFor(place, onDate);
+    const options: TransportModeOption[] = rates.map((r) => {
+      const baseFare = Number(r.baseFare);
+      const perKm = Number(r.perKmRate);
+      const oneWay = round(baseFare + perKm * oneWayKm);
+      const fullJourney = opts.distanceIsRoundTrip
+        ? round(2 * baseFare + perKm * km)
+        : oneWay * 2;
+
+      const time = this.journeyTime(r.mode, oneWayKm, road, policy);
+      const whyNot = this.viability(r.mode, oneWayKm, policy);
+
+      return {
+        mode: r.mode,
+        modeLabel: travelModeLabel(r.mode),
+        scopeType: r.scopeType,
+        scopeValue: r.scopeValue,
+        baseFare,
+        perKmRate: perKm,
+        oneWayCost: oneWay,
+        roundTripCost: fullJourney,
+        preferred: r.isPreferred,
+        oneWayMinutes: round(time.oneWayMinutes),
+        // Two legs. For a loop the road figure was already the loop's and was halved above,
+        // so doubling here returns exactly what the router said; for estimated modes a loop of
+        // 2 × oneWayKm at the same speed is the same arithmetic. Flights pay the airport
+        // overhead on both legs, which is the truth of it.
+        roundTripMinutes: round(time.oneWayMinutes * 2),
+        timeSource: time.timeSource,
+        assumedSpeedKmh: time.assumedSpeedKmh,
+        viable: whyNot === null,
+        whyNot,
+        rank: 0,
+        score: null,
+        reason: null,
+      };
+    });
+
+    const { ordered, recommended } = this.rankOptions(options, policy);
 
     return {
       // Always the one-way figure, whatever the caller supplied: every display of this value
       // ("~X km each way") assumes it.
       distanceKm: oneWayKm,
-      options,
-      recommended: preferred ?? options[0] ?? null,
+      options: ordered,
+      recommended,
+      road: road ? { oneWayMinutes: round(road.oneWayMinutes), source: road.source } : null,
+      policy,
+    };
+  }
+
+  // ---------------------------------------------------------------- recommendation
+
+  /**
+   * How long one leg takes by a mode, and how much to trust the answer.
+   *
+   * Road modes take the routed road time as given when there is one — that is the same figure
+   * the day planner schedules by, and second-guessing it here would put two different drive
+   * times for one journey on the same screen. Without a route (the Transport Costs estimator,
+   * the single-branch assign path today) they get the same treatment as everything else:
+   * distance ÷ a per-mode average speed from platform settings.
+   *
+   * Train and bus are ALWAYS estimated this way. There is no free, reliable API for Indian
+   * rail or bus timetables (IRCTC's is closed; the third-party ones are scrapers with terms
+   * that forbid exactly this use), and pretending otherwise — inventing station pairs, or
+   * scraping — would produce confident wrong numbers. Road kilometres at 55 km/h for a train is
+   * a stated, tunable estimate that the operator can correct per deployment, and every option
+   * says so in `timeSource`. Rail routes are also not road routes: a train between two towns can
+   * be shorter or far longer than the road, which is one more reason this is a ceiling on
+   * honesty, not a timetable.
+   *
+   * Flight = a fixed overhead per leg (airport transfers, check-in, security, boarding,
+   * baggage — 3 h shipped) + road km at the airborne average. Using ROAD km for the airborne
+   * leg slightly overstates it (great-circle is shorter), which is the conservative side to
+   * err on when the alternative is under-promising a train.
+   */
+  private journeyTime(
+    mode: TravelMode,
+    oneWayKm: number,
+    road: { oneWayMinutes: number; source: RoadLeg['source'] } | null,
+    policy: TransportPolicy,
+  ): { oneWayMinutes: number; timeSource: TransportTimeSource; assumedSpeedKmh: number | null } {
+    if (road && ROAD_MODES.has(mode)) {
+      return { oneWayMinutes: road.oneWayMinutes, timeSource: 'ROAD_ROUTE', assumedSpeedKmh: null };
+    }
+    const speed = policy.avgSpeedKmh[mode];
+    const cruiseMinutes = (oneWayKm / speed) * 60;
+    const overhead = mode === TravelMode.FLIGHT ? policy.flightOverheadMinutes : 0;
+    return {
+      oneWayMinutes: overhead + cruiseMinutes,
+      timeSource: 'RATE_CARD_ESTIMATE',
+      assumedSpeedKmh: speed,
+    };
+  }
+
+  /**
+   * The business rules that rule a mode OUT for a distance. Returns the reason, or null when
+   * the mode is fine. Each rule is one line, its threshold lives in platform settings, and its
+   * message carries both numbers so the desk can see how far off it was.
+   *
+   *  - Flight minimum (`transport.flightMinKm`, 500): under this the airport overhead alone
+   *    exceeds the train, and no domestic sector that short is sold as a day trip anyway.
+   *  - Two-wheeler maximum (`transport.twoWheelerMaxKm`, 150): beyond this the ride is a
+   *    working day in itself before the audit starts, and a safety question besides.
+   *  - Auto-rickshaw maximum (`transport.autoMaxKm`, 40): autos are town transport; a 200 km
+   *    auto is a number the old cheapest-wins rule would happily have recommended.
+   *
+   * Deliberately NOT rules: no upper bound on car/taxi/bus/train distance (a 1,500 km taxi is
+   * silly but the time figure and the score make that plain without a hard stop), and no
+   * "train/bus needs a row" check here — a mode with no rate row never becomes an option at
+   * all, so that rule is enforced upstream by construction.
+   */
+  private viability(mode: TravelMode, oneWayKm: number, policy: TransportPolicy): string | null {
+    const kmText = `${round(oneWayKm)} km`;
+    if (mode === TravelMode.FLIGHT && oneWayKm < policy.flightMinKm) {
+      return `Flights are only considered from ${policy.flightMinKm} km one way; this journey is ${kmText}`;
+    }
+    if (mode === TravelMode.TWO_WHEELER && oneWayKm > policy.twoWheelerMaxKm) {
+      return `Two-wheeler journeys are capped at ${policy.twoWheelerMaxKm} km one way; this journey is ${kmText}`;
+    }
+    if (mode === TravelMode.AUTO_RICKSHAW && oneWayKm > policy.autoMaxKm) {
+      return `Auto-rickshaw journeys are capped at ${policy.autoMaxKm} km one way; this journey is ${kmText}`;
+    }
+    return null;
+  }
+
+  /**
+   * Score, order and choose. Mutates the options' rank/score/reason in place and returns them
+   * in rank order with the recommendation.
+   *
+   * Scoring: among VIABLE options, cost and time are each scaled to 0–1 across the set as
+   *   norm(x) = 1 − best / x
+   * — 0 for the cheapest (or fastest), 0.5 for twice the best, approaching 1 as an option gets
+   * arbitrarily worse — and
+   *   score = wCost × costNorm + wTime × timeNorm
+   * with the weights normalised to sum to 1 so the score itself is 0–1. Lowest wins. A single
+   * viable option scores 0 by definition; two options identical on an axis both score 0 on it.
+   *
+   * Why this scaling. Cost is in rupees and time in minutes, and no exchange rate between them
+   * is defensible in general (₹100 per hour? per whom?), so both must be made unitless before
+   * they can be weighed. Two candidates were worked through with real numbers and rejected:
+   *
+   *  - Min–max, (x − min)/(max − min). Bounded, familiar — and blind to magnitude. With exactly
+   *    two viable modes (a state that priced only BUS and TRAIN) one is 0 and the other 1 on
+   *    every axis, so the score collapses to the weights alone: at 0.6/0.4 the cheaper mode wins
+   *    whatever the gap. A 14-hour bus at ₹1,680 beats a 12.7-hour train at ₹1,880 because it is
+   *    ₹200 cheaper — the exact bug this ranking exists to fix. It is also unstable under
+   *    irrelevant alternatives: add a ₹25,000 taxi row and the bus's cost norm drops from 1 to
+   *    0.03, flipping bus-vs-train though neither of them changed.
+   *  - A rupees-per-hour value of time. The economically honest formulation, but it needs a
+   *    number nobody will sign off, and the weights are that number in disguise anyway.
+   *
+   * 1 − best/x keeps the size of the gap: ₹200 on ₹1,880 is 0.106 (×0.6 = 0.064) while 4.8 hours
+   * on 17.5 is 0.273 (×0.4 = 0.109), so the train wins; and each option's norm depends only on
+   * itself and the best, so a taxi row appearing cannot reorder bus and train. In pairwise terms
+   * the rule the weights express is: the cheaper mode wins iff 0.6 × (its saving as a fraction
+   * of the dearer's cost) exceeds 0.4 × (the dearer's time saving as a fraction of the cheaper's
+   * time). A train may cost up to ~1.8× a bus if it saves two-thirds of the time; ~2× if it
+   * saves four-fifths. Also rejected: lexicographic cost-then-time (is exactly the old bug in a
+   * hat).
+   *
+   * Preferred rows: the existing policy hook is kept. A row marked preferred at the most
+   * specific matching scope is recommended if it is viable, however it scores — its reason
+   * says "preferred for Maharashtra" so nobody mistakes policy for arithmetic. A preferred row
+   * that fails a viability rule is skipped, and its `whyNot` explains.
+   *
+   * Non-viable options rank after every viable one, cheapest first, with a null score.
+   */
+  private rankOptions(
+    options: TransportModeOption[],
+    policy: TransportPolicy,
+  ): { ordered: TransportModeOption[]; recommended: TransportModeOption | null } {
+    const viable = options.filter((o) => o.viable);
+    const ruledOut = options
+      .filter((o) => !o.viable)
+      .sort((a, b) => a.roundTripCost - b.roundTripCost || a.modeLabel.localeCompare(b.modeLabel));
+
+    if (viable.length > 0) {
+      const minC = Math.min(...viable.map((o) => o.roundTripCost));
+      const minT = Math.min(...viable.map((o) => o.roundTripMinutes));
+      // A best of 0 (a free mode; a 0-minute journey) makes the ratio meaningless — everyone
+      // else is infinitely worse. Treat the axis as spent: only the best scores 0, the rest 1.
+      const norm = (v: number, best: number) => (v <= best ? 0 : best > 0 ? 1 - best / v : 1);
+
+      // Both weights zero would make every score 0 and the choice arbitrary; that is not a
+      // policy anyone means, so it degrades to "cheapest", the pre-time behaviour.
+      let wCost = Math.max(0, policy.weightCost);
+      let wTime = Math.max(0, policy.weightTime);
+      if (wCost + wTime <= 0) { wCost = 1; wTime = 0; }
+      const wSum = wCost + wTime;
+      wCost /= wSum; wTime /= wSum;
+
+      for (const o of viable) {
+        o.score = Number((wCost * norm(o.roundTripCost, minC) + wTime * norm(o.roundTripMinutes, minT)).toFixed(4));
+      }
+      viable.sort(
+        (a, b) =>
+          (a.score as number) - (b.score as number) ||
+          a.roundTripCost - b.roundTripCost ||
+          a.roundTripMinutes - b.roundTripMinutes ||
+          a.modeLabel.localeCompare(b.modeLabel),
+      );
+
+      // Preference at a more specific scope beats preference at a broader one, so a national
+      // "prefer bus" default can be overridden by one state that prefers own-vehicle rates.
+      // Ties at the same scope go to the better score, since `viable` is already in that order
+      // and the sort is stable.
+      const preferred = viable
+        .filter((o) => o.preferred)
+        .sort((a, b) => SCOPE_SPECIFICITY[b.scopeType] - SCOPE_SPECIFICITY[a.scopeType])[0];
+      if (preferred && preferred !== viable[0]) {
+        viable.splice(viable.indexOf(preferred), 1);
+        viable.unshift(preferred);
+      }
+
+      const recommended = viable[0];
+      recommended.reason = this.reasonFor(recommended, viable, !!preferred);
+      const ordered = [...viable, ...ruledOut];
+      ordered.forEach((o, i) => { o.rank = i + 1; });
+      return { ordered, recommended };
+    }
+
+    ruledOut.forEach((o, i) => { o.rank = i + 1; });
+    return { ordered: ruledOut, recommended: null };
+  }
+
+  /** The one line under the recommendation. Policy first, then the arithmetic in plain words. */
+  private reasonFor(rec: TransportModeOption, viable: TransportModeOption[], byPreference: boolean): string {
+    if (byPreference) return `preferred ${scopePhrase(rec.scopeType, rec.scopeValue)}`;
+    if (viable.length === 1) return 'only viable mode';
+    const cheapest = rec.roundTripCost === Math.min(...viable.map((o) => o.roundTripCost));
+    const fastest = rec.roundTripMinutes === Math.min(...viable.map((o) => o.roundTripMinutes));
+    if (cheapest && fastest) return 'cheapest and fastest viable';
+    if (cheapest) return 'cheapest viable';
+    return `best cost-time balance: ${rupees(rec.roundTripCost)}, ${describeMinutes(rec.oneWayMinutes)} each way`;
+  }
+
+  /**
+   * The recommendation policy as configured right now — one settings read per estimate. A
+   * settings outage degrades to the shipped defaults rather than failing the quote: an offer
+   * priced under default policy beats no offer, and the settings screen shows what is in force.
+   */
+  private async policy(): Promise<TransportPolicy> {
+    const speedKey = (mode: TravelMode) => `transport.avgSpeedKmh.${mode}`;
+    const keys = [
+      'transport.weightCost',
+      'transport.weightTime',
+      'transport.flightMinKm',
+      'transport.twoWheelerMaxKm',
+      'transport.autoMaxKm',
+      'transport.flightOverheadMinutes',
+      ...Object.values(TravelMode).map(speedKey),
+    ];
+    const values: Record<string, unknown> = await this.settings.getMany(keys).catch(() => ({}));
+
+    // A saved value that is somehow not a number or is negative falls back to the registry
+    // default rather than poisoning the ranking; a speed of zero (which would make every
+    // journey infinite) does the same.
+    const num = (key: string): number => {
+      const raw = Number(values[key]);
+      const fallback = Number(SETTING_BY_KEY[key]?.default ?? 0);
+      return Number.isFinite(raw) && raw >= 0 ? raw : fallback;
+    };
+    const avgSpeedKmh = Object.fromEntries(
+      Object.values(TravelMode).map((mode) => {
+        const raw = Number(values[speedKey(mode)]);
+        const fallback = Number(SETTING_BY_KEY[speedKey(mode)]?.default ?? 40);
+        return [mode, Number.isFinite(raw) && raw > 0 ? raw : fallback];
+      }),
+    ) as Record<TravelMode, number>;
+
+    return {
+      weightCost: num('transport.weightCost'),
+      weightTime: num('transport.weightTime'),
+      flightMinKm: num('transport.flightMinKm'),
+      twoWheelerMaxKm: num('transport.twoWheelerMaxKm'),
+      autoMaxKm: num('transport.autoMaxKm'),
+      flightOverheadMinutes: num('transport.flightOverheadMinutes'),
+      avgSpeedKmh,
     };
   }
 
