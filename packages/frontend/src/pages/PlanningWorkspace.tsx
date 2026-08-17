@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
 import { ProjectBranchStatus, formatDateOnly } from '@fapoms/shared';
@@ -8,6 +8,7 @@ import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
+import { useUrlSelection } from '../hooks/useUrlSelection';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
@@ -339,10 +340,26 @@ export const PlanningWorkspace: React.FC = () => {
   const queryClient = useQueryClient();
 
   const { toast } = useToast();
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const [selectedProjectId, setSelectedProjectId] = useState<string>(searchParams.get('projectId') || '');
-  const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
+  /**
+   * The project is url-backed both ways now.
+   *
+   * It used to *seed* from `?projectId=` and then live in `useState`, so an inbound link worked
+   * but the operator's own choice never reached the address bar — a refresh dropped back to
+   * whichever project sorted first. Reading and writing the same place removes the asymmetry.
+   */
+  const [projectIdParam, setProjectIdParam] = useUrlSelection('projectId');
+  const selectedProjectId = projectIdParam ?? '';
+  const setSelectedProjectId = setProjectIdParam;
+  /**
+   * The selected branch lives in the URL, like the project above it.
+   *
+   * It was plain `useState`, so a refresh — or stepping to another screen to reschedule or
+   * reassign and coming back — dropped the branch the operator was working on, and they had to
+   * find it in the list again. The project was already deep-linkable; the branch inside it was
+   * not, which is the half that costs the most to re-establish.
+   */
+  const [selectedBranchId, setSelectedBranchId] = useUrlSelection('branchId');
   const [historyBranchId, setHistoryBranchId] = useState<string | null>(null);
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[] | undefined>(undefined);
   const [isOptimizing, setIsOptimizing] = useState(false);
@@ -593,10 +610,13 @@ export const PlanningWorkspace: React.FC = () => {
    * changed (structural sharing); an unchanged refetch is a no-op here.
    */
   useEffect(() => {
-    setSelectedBranchId((current) =>
-      current && branches.some(b => b.id === current) ? current : (branches.length > 0 ? branches[0].id : null),
-    );
-  }, [branches]);
+    // Reads the selection rather than taking a functional update, because it now lives in the URL
+    // and the url is the value. Keeping a valid choice is a no-op, so re-running on the selection
+    // itself is harmless.
+    const stillThere = selectedBranchId && branches.some(b => b.id === selectedBranchId);
+    if (stillThere) return;
+    setSelectedBranchId(branches.length > 0 ? branches[0].id : null);
+  }, [branches, selectedBranchId, setSelectedBranchId]);
 
   const selectedPb = useMemo(
     () => branches.find(b => b.id === selectedBranchId),

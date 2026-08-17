@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useUrlSelection } from '../hooks/useUrlSelection';
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
 import { StatusBadge, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
@@ -169,9 +170,8 @@ export const Assignments: React.FC = () => {
     SystemRole.OPERATIONS_MANAGER,
     SystemRole.OPERATIONS_EXECUTIVE,
   ]);
-  const [searchParams] = useSearchParams();
-  const assignmentIdParam = searchParams.get('id');
-  const [selectedAsnId, setSelectedAsnId] = useState<string | null>(null);
+  // The selection IS the url param — no local mirror, so the two can never disagree.
+  const [selectedAsnId, selectAssignment] = useUrlSelection('id');
   const [newComment, setNewComment] = useState('');
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -235,7 +235,7 @@ export const Assignments: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
     } catch (err: any) {
       // Open the panel on the failing row so the error lands next to its context.
-      setSelectedAsnId(asnId);
+      selectAssignment(asnId);
       setActionError(err?.message || 'Action failed.');
     } finally {
       setQuickBusyId(null);
@@ -448,14 +448,14 @@ export const Assignments: React.FC = () => {
     staleTime: 15_000,
   });
 
+  // Land on something when the operator arrived without a selection. An explicit selection is
+  // never overridden here — that is what made a chosen row jump elsewhere as the list reloaded.
   useEffect(() => {
-    if (assignmentIdParam) {
-      setSelectedAsnId(assignmentIdParam);
-    } else if (assignments.length > 0 && !selectedAsnId) {
-      setSelectedAsnId(assignments[0].id);
+    if (!selectedAsnId && assignments.length > 0) {
+      selectAssignment(assignments[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignmentIdParam, assignments]);
+  }, [assignments, selectedAsnId]);
 
   const formatRelativeTime = (ts: string): string => {
     const diff = Date.now() - new Date(ts).getTime();
@@ -567,9 +567,16 @@ export const Assignments: React.FC = () => {
       return dateSort === 'asc' ? ta - tb : tb - ta;
     });
 
+  /**
+   * Selecting a row writes the id into the URL and leaves everything else in it alone.
+   *
+   * This used to be `navigate('/assignments?id=' + id)`, which builds a fresh query string:
+   * arriving at `?status=COMPLETED&page=2&region=WEST` and clicking one row left `?id=…` and
+   * nothing else. A refresh then reloaded an unfiltered page 1 without the selected row on it,
+   * so the operator had to filter and page back to the work they were already doing.
+   */
   const selectAndShow = (id: string) => {
-    setSelectedAsnId(id);
-    navigate(`/assignments?id=${id}`, { replace: true });
+    selectAssignment(id);
   };
 
   const pageStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;

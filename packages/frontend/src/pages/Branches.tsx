@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } from '../components/ui';
 import { api } from '../services/api';
@@ -151,9 +151,9 @@ export const Branches: React.FC = () => {
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [branchDetail, setBranchDetail] = useState<BranchDetail | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
-  const branchIdParam = searchParams.get('id');
+  // Writes the id while preserving the client filter, the search box and the header's scope —
+  // `navigate('/branches?id=' + id)` used to replace the whole query string and drop them.
+  const [branchIdParam, selectBranch] = useUrlSelection('id');
 
   // The socket handler below subscribes once (mount), so it must read the *current* selected client
   // through a ref — capturing selectedClientId in the closure would freeze it at its initial '' and a
@@ -384,7 +384,7 @@ export const Branches: React.FC = () => {
                     <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches found.</td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.branchCode}
-                      onClick={() => { loadBranchDetail(b); navigate(`/branches?id=${b.id}`, { replace: true }); }}
+                      onClick={() => { loadBranchDetail(b); selectBranch(b.id); }}
                       style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(216,174,71,0.08)' : undefined }}>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.branchCode}</td>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>

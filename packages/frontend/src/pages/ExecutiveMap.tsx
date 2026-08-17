@@ -9,6 +9,7 @@ import {
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { useScope, withScope } from '../context/ScopeContext';
+import { useUrlSelection } from '../hooks/useUrlSelection';
 import { formatRupees as money } from '@fapoms/shared';
 import { useExcelExport } from '../hooks/useExcelExport';
 
@@ -72,7 +73,9 @@ export const ExecutiveMap: React.FC = () => {
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const { scopeParams, scopeKey } = useScope();
-  const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
+  // In the URL so a refresh, or a trip to another screen and back, keeps the branch whose side
+  // panel the operator is reading.
+  const [selectedBranchId, setSelectedBranchId] = useUrlSelection('branchId');
   const [lens, setLens] = useState<'ALL' | 'GAPS' | 'UNASSIGNED'>('ALL');
 
   const { download: downloadExcel } = useExcelExport();
