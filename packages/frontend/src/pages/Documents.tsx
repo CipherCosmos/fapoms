@@ -8,10 +8,32 @@ import { CustomerMasterVersions } from './CustomerMasterVersions';
 import { RefreshCw } from 'lucide-react';
 import { AlertBanner } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
+import { fetchWithTimeout } from '../services/http';
 
+/**
+ * The presigned PUT's own budget, longer than the API default because the file, not the network,
+ * sets the pace: scanned audit paperwork runs to several megabytes and branch offices upload over
+ * ADSL. Ten minutes covers the worst real case we have seen with room to spare, while still
+ * guaranteeing the upload ends — which is the whole point, since the multipart fallback below
+ * cannot run until this one gives up.
+ */
+const PRESIGNED_UPLOAD_TIMEOUT_MS = 600_000;
+
+/**
+ * These four wrappers predate the shared API client and duplicate it — badly. They are kept for
+ * now because replacing them is a behaviour change (the client refreshes on 401; these do not, so
+ * a session that expires mid-session here surfaces as a bare "Request failed" instead of a silent
+ * re-auth), and that deserves its own change rather than riding along with a timeout fix.
+ *
+ * What they must not keep doing is hang. Every one of them was a bare `fetch` with no budget, so
+ * a stalled connection left the document list spinning with no error and no end — the exact defect
+ * this page's own `PRESIGNED_UPLOAD_TIMEOUT_MS` exists to prevent one call below. They now go
+ * through `fetchWithTimeout` and inherit the default budget, which closes the hang without
+ * pretending the duplication has been dealt with.
+ */
 async function apiGet<T>(endpoint: string): Promise<T> {
   const token = localStorage.getItem('fapoms_token');
-  const res = await fetch(`/api/v1${endpoint}`, {
+  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) {
@@ -37,7 +59,7 @@ async function openDocumentDownload(documentId: string): Promise<void> {
 
 async function apiPost(endpoint: string, body?: any): Promise<any> {
   const token = localStorage.getItem('fapoms_token');
-  const res = await fetch(`/api/v1${endpoint}`, {
+  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
     method: 'POST',
     headers: {
       ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
@@ -55,7 +77,7 @@ async function apiPost(endpoint: string, body?: any): Promise<any> {
 
 async function apiUpload(endpoint: string, formData: FormData): Promise<any> {
   const token = localStorage.getItem('fapoms_token');
-  const res = await fetch(`/api/v1${endpoint}`, {
+  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
@@ -75,7 +97,7 @@ async function apiUpload(endpoint: string, formData: FormData): Promise<any> {
  */
 async function apiUploadRaw(endpoint: string, formData: FormData): Promise<any> {
   const token = localStorage.getItem('fapoms_token');
-  const res = await fetch(`/api/v1${endpoint}`, {
+  const res = await fetchWithTimeout(`/api/v1${endpoint}`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
@@ -101,10 +123,17 @@ async function uploadDocumentSmart(assessmentId: string, type: string, file: Fil
     const presign = await apiPost('/documents/upload/presign', { fileName: file.name, contentType });
     if (!presign?.uploadUrl || !presign?.objectKey) throw new Error('presign unavailable');
 
-    const put = await fetch(presign.uploadUrl, {
+    // Bounded on the long budget: this is a multi-megabyte PUT to object storage, so it is slow
+    // by nature — but it is also the one hop that does not touch our API, which means a bucket
+    // that accepts the connection and stalls (wrong region, missing CORS preflight, a proxy that
+    // blackholes PUT) is invisible to every timeout we already had. Worse, the fallback to the
+    // multipart upload below lives in this function's `catch`, so a hang did not merely delay the
+    // upload — it prevented the retry path that exists precisely for storage being unavailable.
+    const put = await fetchWithTimeout(presign.uploadUrl, {
       method: 'PUT',
       headers: { 'Content-Type': contentType },
       body: file,
+      timeoutMs: PRESIGNED_UPLOAD_TIMEOUT_MS,
     });
     if (!put.ok) throw new Error(`storage PUT failed (${put.status})`);
 

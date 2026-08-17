@@ -1,5 +1,6 @@
 import { queryClient } from '../queryClient';
 import { disconnectSocket } from './socket';
+import { fetchWithTimeout } from './http';
 
 /**
  * Everything this app persists about a signed-in person, in one list.
@@ -71,7 +72,11 @@ export async function endSession(): Promise<void> {
   try {
     const token = localStorage.getItem('fapoms_token');
     if (token) {
-      await fetch('/api/v1/auth/logout', {
+      // Bounded so "best-effort" stays true. The local teardown below lives in `finally`, which
+      // an unsettled fetch never reaches — so a stalled server did exactly what the comment above
+      // promises cannot happen: it trapped the user in the session they asked to leave. The
+      // timeout turns that into the already-handled failure path.
+      await fetchWithTimeout('/api/v1/auth/logout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       });

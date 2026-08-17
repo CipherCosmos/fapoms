@@ -1,6 +1,10 @@
 import { NotificationCategory } from '@fapoms/shared';
 import { AppError, fromNetwork, fromResponse } from './errors';
 import { clearSession } from './session';
+// Budgets and the direct-fetch helper live in a leaf module so `session.ts` can share them
+// without closing an import cycle back through this file. See services/http.ts.
+import { DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS } from './http';
+export { fetchWithTimeout, DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS } from './http';
 
 /**
  * Re-exported from shared, never re-declared.
@@ -53,31 +57,6 @@ export interface NotificationPreference {
   push: boolean;
   email: boolean;
 }
-
-/**
- * How long any single call may stay in flight before it is given up on.
- *
- * `fetch` has no timeout of its own: a request that reaches a stalled proxy, a backend mid-restart
- * or a Wi-Fi network that accepted the connection and then went quiet simply never settles. React
- * Query keeps that query in `isFetching` for as long as the tab is open, so the screen shows a
- * spinner that will never resolve and a retry that will never fire, and — because the browser caps
- * concurrent connections per origin — six of those are enough to wedge every other request on the
- * page behind them.
- *
- * Thirty seconds is well past any healthy response on this system (the slowest aggregate the desk
- * loads answers in single-digit seconds) and well short of an operator deciding the app is broken.
- */
-const DEFAULT_TIMEOUT_MS = 30_000;
-
-/**
- * The exceptions to that budget: work whose size, not the network, decides how long it takes.
- *
- * A document upload is a FormData body of several megabytes over an office uplink, and the Excel
- * report endpoints stream a workbook the server is still generating. Both routinely and legitimately
- * run past thirty seconds, and aborting one loses real work, so they get a much longer leash rather
- * than an exemption — a stuck upload still has to end eventually.
- */
-const LONG_TIMEOUT_MS = 180_000;
 
 class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;

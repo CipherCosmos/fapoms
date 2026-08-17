@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { BrandLogo } from '../components/BrandLogo';
+import { fetchWithTimeout } from '../services/http';
 
 interface LoginProps {
   onLoginSuccess: (accessToken: string, refreshToken: string) => void;
@@ -18,7 +19,11 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setError('');
 
     try {
-      const response = await fetch('/api/v1/auth/login', {
+      // Bounded, because this runs before there is a session and so cannot go through the api
+      // client. Without a deadline a backend that accepted the connection and then went quiet
+      // left this button spinning indefinitely: `isLoading` is only cleared in `finally`, which
+      // a never-settling fetch never reaches, so the sole recovery was reloading the page.
+      const response = await fetchWithTimeout('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),

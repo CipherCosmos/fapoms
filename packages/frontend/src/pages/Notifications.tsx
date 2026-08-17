@@ -83,6 +83,7 @@ export const Notifications: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [prefsReloadKey, setPrefsReloadKey] = useState(0);
 
   const load = async (nextOffset = 0) => {
     nextOffset === 0 ? setLoading(true) : setLoadingMore(true);
@@ -103,15 +104,54 @@ export const Notifications: React.FC = () => {
     }
   };
 
+  /**
+   * The inbox page is fetched only while the Inbox tab is actually showing.
+   *
+   * This page has two tabs and used to load both on mount: `load(0)` ran unconditionally, so
+   * arriving on Preferences pulled a 20-row inbox page (plus its `total`/`unreadCount`
+   * aggregates) that nothing on screen rendered. That is not a hypothetical route — the bell's
+   * "Choose what reaches me" links straight to `/notifications?tab=preferences`, which is the
+   * *only* way most people reach Preferences at all. Measured on the dev stack, that deep link
+   * fired `GET /notifications/preferences` **and** `GET /notifications?limit=20&offset=0`; now it
+   * fires only the first.
+   *
+   * `tab` is in the dependency list rather than the effect being skipped entirely, so switching
+   * to Inbox loads it at that moment. React keeps `notifications`/`total` in state across a tab
+   * switch, so going Inbox → Preferences → Inbox re-renders from what is already there and the
+   * refetch is a background refresh, not an empty list — the same "keep the data, stop the
+   * request" property `enabled` gives a React Query tab (this page predates React Query and does
+   * its own fetching, so the gate has to be written by hand).
+   *
+   * The socket subscription stays outside the gate: a notification arriving while Preferences is
+   * open must still update the header count, and `handler` re-enters `load` which is itself gated.
+   */
   useEffect(() => {
-    load(0);
+    if (tab === 'inbox') {
+      load(0);
+    } else {
+      // Preferences still needs the header's "N unread" line, but not the page of rows behind it.
+      // This is the same number for a fraction of the work: a COUNT the server answers from an
+      // index, versus selecting, ordering and serialising twenty full notification rows.
+      api.getUnreadNotificationCount().then(setUnreadCount).catch(() => {});
+    }
     connectSocket();
     const socket = getSocket();
-    const handler = () => load(0);
+    const handler = () => {
+      if (tab === 'inbox') void load(0);
+      // On Preferences there is no list to refresh, but the header count is still on screen and
+      // a new notification has just made it stale.
+      else api.getUnreadNotificationCount().then(setUnreadCount).catch(() => {});
+    };
     socket?.on('notification:new', handler);
     return () => { socket?.off('notification:new', handler); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, unreadOnly]);
+  }, [category, unreadOnly, tab]);
+
+  /** Refresh what is on screen, which is not the same thing on both tabs. */
+  const handleRefresh = () => {
+    if (tab === 'inbox') void load(0);
+    else setPrefsReloadKey((k) => k + 1);
+  };
 
   const handleOpen = async (n: WebNotification) => {
     if (!n.isRead) {
@@ -146,7 +186,11 @@ export const Notifications: React.FC = () => {
               <CheckCheck size={14} /> Mark all read
             </button>
           )}
-          <button onClick={() => load(0)} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: '12px' }}>
+          {/* Refreshes whichever tab is showing. It used to call `load(0)` unconditionally, which
+              on Preferences fetched the inbox list to update a header count and left the
+              preference rows the user was looking at untouched — the one thing Refresh should
+              have done there. */}
+          <button onClick={handleRefresh} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: '12px' }}>
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
@@ -284,7 +328,9 @@ export const Notifications: React.FC = () => {
           )}
         </>
       ) : (
-        <PreferencesPanel />
+        /* Remounted on Refresh (see handleRefresh) — the panel loads its rows in its own mount
+           effect, so a new key is the whole refresh mechanism and needs no prop drilling. */
+        <PreferencesPanel key={prefsReloadKey} />
       )}
     </div>
   );

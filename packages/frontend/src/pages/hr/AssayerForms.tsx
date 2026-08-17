@@ -7,6 +7,7 @@ import { Autocomplete } from '../../components/ui/Autocomplete';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
 import { userMessage } from '../../services/errors';
+import { fetchWithTimeout } from '../../services/http';
 
 /**
  * Assayer create/edit forms.
@@ -263,7 +264,21 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
     setAddrError(null);
     if (!/^\d{6}$/.test(pincode || '')) return;
     try {
-      const res = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
+      /**
+       * Five seconds, not the usual thirty, because of who is on the other end and who is waiting.
+       *
+       * This is a third-party host we neither operate nor monitor, and `handleSubmit` *awaits*
+       * this call before saving — so whatever this does, the operator watches it do. An unbounded
+       * fetch to an unreachable third party therefore froze the whole submit with the button
+       * disabled and nothing to click.
+       *
+       * The check is advisory: the catch below already swallows every failure because the backend
+       * enforces address consistency regardless. Waiting thirty seconds to discard the answer
+       * anyway is strictly worse than giving up at five and letting the save proceed.
+       */
+      const res = await fetchWithTimeout(`https://api.postalpincode.in/pincode/${pincode}`, {
+        timeoutMs: 5_000,
+      });
       const data = await res.json();
       const ok = data?.[0];
       if (ok && ok.Status === 'Success' && ok.PostOffice?.[0]) {
