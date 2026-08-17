@@ -133,8 +133,27 @@ const SCOPE_GOVERNED_ROUTES = [
   '/assignments',
   '/branches',
   '/inbox',
-  '/field-issues',
 ];
+
+/**
+ * Audited 2026-08-17, because "documents ignores the global scope" was raised as a bug.
+ *
+ * It is not one. `/documents` is a national desk and the header *hides* the scope control there
+ * (see the `applies` guard in `Header.tsx`), so there is no indicator claiming a narrowing that
+ * the page is not applying. Confirmed in the browser: with the scope stored as WEST + a project,
+ * `/documents` renders no scope control at all. Documents is the data-entry pipeline, and the
+ * paragraph above names that desk explicitly — it works whatever file arrives, wherever it came
+ * from — so leaving it national is the deliberate answer, not an oversight.
+ *
+ * Also checked: every route in this list resolves to a page that actually calls `useScope`
+ * (dashboard, executive-map, projects, planning, scheduling, assignments, branches, inbox — all
+ * eight). A governed route whose page ignored the scope *would* be the bug this audit went
+ * looking for, and there isn't one.
+ *
+ * `/field-issues` was removed from this list in the same pass: that page was merged into the
+ * assignments screen (see the comment on `showHandledIssues` in `Assignments.tsx`), so the prefix
+ * could never match anything and only suggested a desk that no longer exists.
+ */
 
 function isScopeExempt(pathname: string): boolean {
   return !SCOPE_GOVERNED_ROUTES.some(
