@@ -35,6 +35,13 @@ export interface InboxAssignment {
   branchName: string | null;
   branchCity: string | null;
   branchId: string | null;
+  /**
+   * The project this sits in, so the inbox can hand the planning workspace both halves of a
+   * location: `?projectId=…&branchId=…`. Without it the "Open planning" button could only send
+   * the operator to the page and let it choose for them — which, on a 72-branch project, meant
+   * finding the branch again by hand.
+   */
+  projectId: string | null;
   projectName: string | null;
   assayerId: string;
   assayerName: string | null;
@@ -215,6 +222,7 @@ export class OperationsInboxService {
         branchName: a.projectBranch?.branch?.name ?? null,
         branchCity: a.projectBranch?.branch?.city ?? null,
         branchId: a.projectBranch?.branch?.id ?? null,
+        projectId: a.projectId ?? null,
         projectName: (a as any).project?.name ?? null,
         assayerId: a.assayerId,
         assayerName: a.assayer?.displayName ?? null,

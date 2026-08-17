@@ -244,7 +244,7 @@ export const ExecutiveMap: React.FC = () => {
                       No assayer lives within serviceable range. This branch needs travel-and-stay costing, a partner, or a local hire — it cannot be scheduled normally.
                     </div>
                   )}
-                  <button onClick={() => navigate(`/planning?projectId=${selected.projectId}`)} className="btn btn-secondary"
+                  <button onClick={() => navigate(`/planning?projectId=${selected.projectId}&branchId=${selected.projectBranchId}`)} className="btn btn-secondary"
                     style={{ marginTop: 'auto', fontSize: 12 }}>
                     Open in Planning
                   </button>

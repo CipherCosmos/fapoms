@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { 
   CalendarDays, RefreshCw, Calendar, CheckCircle2,
@@ -87,6 +88,31 @@ export const Scheduling: React.FC = () => {
   const [viewMode, setViewMode] = useState<'calendar' | 'timeline'>('calendar');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
+
+  /**
+   * Arriving with an assignment already in mind.
+   *
+   * The inbox's "Put on calendar" and the assignment panel's "Schedule" link both sent the
+   * operator to a bare `/scheduling`, which opens on today with nothing selected — so having just
+   * told the system which assignment needed a date, they had to find it again in a dropdown of
+   * every unscheduled job. The id now travels with them: the create modal opens with that
+   * assignment already chosen.
+   *
+   * Consumed once and then cleared from the URL, because it describes an intent ("schedule this")
+   * rather than a state worth restoring — leaving it would reopen the modal on every refresh.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const wanted = searchParams.get('assignmentId');
+    if (!wanted) return;
+    setSelectedAssignmentId(wanted);
+    setShowCreateModal(true);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('assignmentId');
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [scheduleDate, setScheduleDate] = useState(todayDateKey());
   const [scheduleRemarks, setScheduleRemarks] = useState('');
   const [isCreating, setIsCreating] = useState(false);

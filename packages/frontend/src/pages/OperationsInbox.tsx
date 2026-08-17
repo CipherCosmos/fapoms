@@ -31,6 +31,7 @@ interface InboxItem {
   branchName: string | null;
   branchCity: string | null;
   branchId: string | null;
+  projectId: string | null;
   projectName: string | null;
   assayerId: string;
   assayerName: string | null;
@@ -76,6 +77,29 @@ const age = (h: number) => (h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.
 export const OperationsInbox: React.FC = () => {
   const { maxNegotiationRounds } = usePlatformLimits();
   const navigate = useNavigate();
+
+  /**
+   * Open the planning workspace *on the branch this card is about*.
+   *
+   * It used to navigate to `/planning?projectId=` — the interpolation was never written, so the
+   * parameter arrived empty and the workspace fell back to whichever project and branch sorted
+   * first. On the 72-branch RBL project that meant the operator, who had just told the system
+   * which branch needed a replacement, had to find it again themselves.
+   *
+   * `branchId` is the **project-branch** id, which is what the workspace selects on — not
+   * `item.branchId`, which is the underlying branch record and would not match anything there.
+   * Both are on the card, one character apart, so this is worth saying out loud.
+   *
+   * Either id may legitimately be null on a malformed row; sending the parameter empty is what
+   * caused this bug, so anything missing is omitted rather than sent blank.
+   */
+  const openPlanningFor = (item: InboxItem) => {
+    const params = new URLSearchParams();
+    if (item.projectId) params.set('projectId', item.projectId);
+    if (item.projectBranchId) params.set('branchId', item.projectBranchId);
+    const qs = params.toString();
+    navigate(qs ? `/planning?${qs}` : '/planning');
+  };
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
   // The Layout's socket invalidation (via the desk.inbox key) refreshes this queue on every
@@ -436,7 +460,7 @@ export const OperationsInbox: React.FC = () => {
                   <button onClick={() => setReassignFor(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
                     Find replacement
                   </button>
-                  <button onClick={() => navigate(`/planning?projectId=`)} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                  <button onClick={() => openPlanningFor(item)} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
                     Open planning
                   </button>
                 </div>
@@ -447,7 +471,7 @@ export const OperationsInbox: React.FC = () => {
           {lane('Accepted, not scheduled', <CalendarClock size={14} />, data0.unscheduled.length, 'var(--accent)', (
             data0.unscheduled.map((item) => (
               <CardShell key={item.id} item={item}>
-                <button onClick={() => navigate('/scheduling')} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
                   Put on calendar
                 </button>
               </CardShell>

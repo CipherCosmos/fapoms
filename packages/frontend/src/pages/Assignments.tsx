@@ -19,6 +19,8 @@ interface Assignment {
   id: string;
   assignmentNumber: string;
   projectId: string;
+  /** Carried so the panel's outbound links can name the branch, not just the project. */
+  projectBranchId?: string | null;
   assayerId: string;
   status: string;
   rejectReason?: string | null;
@@ -575,6 +577,24 @@ export const Assignments: React.FC = () => {
    * nothing else. A refresh then reloaded an unfiltered page 1 without the selected row on it,
    * so the operator had to filter and page back to the work they were already doing.
    */
+  /**
+   * Where "Planning" and "Reassign Branch" should land: this assignment's project and branch.
+   *
+   * All three used to navigate to a bare `/planning`, which opens on whichever project and branch
+   * sort first — so the operator, looking at one rejected assignment and asking to reassign it,
+   * arrived somewhere unrelated and had to find their branch again.
+   *
+   * `projectBranchId` is what the workspace selects on; anything missing is omitted rather than
+   * sent as an empty parameter, which is the failure that produced `/planning?projectId=`.
+   */
+  const planningLinkFor = (asn: Assignment): string => {
+    const params = new URLSearchParams();
+    if (asn.projectId) params.set('projectId', asn.projectId);
+    if (asn.projectBranchId) params.set('branchId', asn.projectBranchId);
+    const qs = params.toString();
+    return qs ? `/planning?${qs}` : '/planning';
+  };
+
   const selectAndShow = (id: string) => {
     selectAssignment(id);
   };
@@ -900,7 +920,7 @@ export const Assignments: React.FC = () => {
                       </button>
                     )}
                     {['REJECTED', 'CANCELLED'].includes(selectedAsn.status) && (
-                      <button onClick={() => navigate('/planning')} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+                      <button onClick={() => navigate(planningLinkFor(selectedAsn))} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
                         🔄 Reassign Branch →
                       </button>
                     )}
@@ -1004,8 +1024,8 @@ export const Assignments: React.FC = () => {
                   <div>
                     <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Quick Links</span>
                     <div style={{ display: 'flex', gap: '4px', marginTop: '1px' }}>
-                      <button onClick={() => navigate(`/planning`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Planning</button>
-                      <button onClick={() => navigate(`/scheduling`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Schedule</button>
+                      <button onClick={() => navigate(planningLinkFor(selectedAsn))} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Planning</button>
+                      <button onClick={() => navigate(`/scheduling?assignmentId=${selectedAsn.id}`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Schedule</button>
                     </div>
                   </div>
                 </div>
