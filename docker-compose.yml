@@ -31,6 +31,57 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # ─────────────────────────────────────────────────────────────────────────
+    # Query statistics. `-c` flags, not a mounted postgresql.conf — the same
+    # mechanism deploy/docker-compose.prod.yml already uses, so there is one way
+    # to configure Postgres in this repo rather than two.
+    #
+    # Deliberately NOT a copy of the production tuning block. Those values
+    # (shared_buffers, work_mem, the WAL and autovacuum knobs) are sized against
+    # that file's `mem_limit: 3g`; this stack has no memory limit at all and runs
+    # beside Metro, Vite and a Nest watcher on a developer laptop. Duplicating
+    # them here would be two sets of numbers claiming to describe one database.
+    # What IS duplicated is the part that changes what can be *observed*, because
+    # a developer measuring a query on a Postgres that keeps no statement history
+    # is measuring a different database from the one that runs in production.
+    #
+    # RESTART REQUIRED: shared_preload_libraries is PGC_POSTMASTER — it can only
+    # be read at postmaster startup, so `SELECT pg_reload_conf()` and `ALTER
+    # SYSTEM` do nothing for it. Changing this line means recreating the
+    # container (`docker compose up -d --force-recreate --no-deps postgres`);
+    # the data lives in the `pgdata` named volume and survives that.
+    #
+    # Preloading is necessary but not sufficient: the extension itself is created
+    # by migration 1790700000000-EnableQueryStatistics, which runs on connect.
+    # Verified on PG 16.4 that the ORDER matters less than it looks — CREATE
+    # EXTENSION succeeds with no library loaded; it is reading the view that
+    # fails with 55000 until the postmaster has been restarted with this flag.
+    # ─────────────────────────────────────────────────────────────────────────
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=${PG_PRELOAD_LIBRARIES:-pg_stat_statements}
+      # 5,000 normalised statements retained. Once full, pg_stat_statements evicts
+      # the least-executed entries — which silently turns "the top queries" into
+      # "the top queries that survived eviction". `db_query_stats_tracked` in
+      # RuntimeMetricsService reports the occupancy so that is visible rather than
+      # assumed; raise this if it sits near the ceiling.
+      - -c
+      - pg_stat_statements.max=${PG_STAT_STATEMENTS_MAX:-5000}
+      # `top` records statements as the client issued them. `all` additionally
+      # records statements executed inside functions and procedures, which
+      # double-counts their time against the caller and roughly triples the number
+      # of entries — not worth it while nothing in this schema is a stored
+      # procedure hot path.
+      - -c
+      - pg_stat_statements.track=${PG_STAT_STATEMENTS_TRACK:-top}
+      # Without this, blk_read_time/blk_write_time stay 0 and every "is this query
+      # slow because of I/O or because of CPU?" question is unanswerable from the
+      # statement history. The cost is a clock read per block access; measure with
+      # `pg_test_timing` before enabling on a virtualised host with a slow clock
+      # source, but on a laptop this is free.
+      - -c
+      - track_io_timing=${PG_TRACK_IO_TIMING:-on}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fapoms -d fapoms"]
       interval: 5s

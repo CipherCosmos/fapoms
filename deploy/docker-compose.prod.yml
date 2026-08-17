@@ -111,11 +111,22 @@ services:
       # Observability. The audit of 2026-08-16 could not answer "which query is slow in
       # production?" from the database at all — there was no statement history and no slow log,
       # so every measurement had to be reproduced by hand against a scratch copy.
-      # NOTE: preloading the library is necessary but not sufficient. Run this once, against the
-      # application database, after the first start with this config:
-      #     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-      # It is deliberately not in a migration: `CREATE EXTENSION` errors outright when the
-      # library is not preloaded, which would break `migration:run` on every developer machine.
+      #
+      # Preloading the library is necessary but not sufficient — the extension must also exist in
+      # the application database. That half is now done by migration
+      # 1790700000000-EnableQueryStatistics, so there is no manual step and no deployment that
+      # can be preloaded-but-empty. This block previously told the operator to run
+      # `CREATE EXTENSION` by hand and justified it with "CREATE EXTENSION errors outright when
+      # the library is not preloaded". That was checked on 2026-08-17 against PG 16.4 and is
+      # simply not true: CREATE EXTENSION succeeds with no library loaded (it only installs the
+      # SQL objects); what fails, with SQLSTATE 55000 "must be loaded via
+      # shared_preload_libraries", is SELECTing from the view afterwards. So a migration is safe
+      # in either order, and the ordering hazard lives entirely on the reader — which is why
+      # RuntimeMetricsService treats 55000 as "not available yet" rather than an error.
+      #
+      # RESTART REQUIRED for the line below: shared_preload_libraries is PGC_POSTMASTER. Neither
+      # `pg_reload_conf()` nor `ALTER SYSTEM` can bring it into effect — the container has to be
+      # recreated, and until it is, the extension exists but collects nothing.
       - -c
       - shared_preload_libraries=${PG_PRELOAD_LIBRARIES:-pg_stat_statements}
       - -c

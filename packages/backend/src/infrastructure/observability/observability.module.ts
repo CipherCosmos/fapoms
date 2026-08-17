@@ -19,8 +19,10 @@ import { RuntimeMetricsService } from './runtime-metrics.service';
   controllers: [MetricsController],
   providers: [
     MetricsService,
-    // Samples the pool, the queues and the socket count at scrape time — the three things the
-    // audit found impossible to diagnose from outside the process.
+    // Samples the pool, the queues, the socket count and the top statements from
+    // pg_stat_statements at scrape time — the things the audit found impossible to diagnose from
+    // outside the process. The statement gauges degrade to "unavailable" rather than throwing
+    // when the extension is not loaded, so this stays safe to register unconditionally.
     RuntimeMetricsService,
     MetricsAuthGuard,
     JobFailureMonitor,
