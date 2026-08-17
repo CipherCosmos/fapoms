@@ -275,11 +275,5 @@ export const useScope = (): ScopeContextValue => {
   return ctx;
 };
 
-/** Build a query string from the scope plus any page-specific params. */
-export function withScope(params: Record<string, string>, extra: Record<string, string | number | undefined> = {}): string {
-  const search = new URLSearchParams(params);
-  for (const [key, val] of Object.entries(extra)) {
-    if (val !== undefined && val !== '' && val !== 'ALL') search.set(key, String(val));
-  }
-  return search.toString();
-}
+export { SCOPE_DIMENSIONS, withScope, scopeConflict } from './scope-merge';
+export type { ScopeDimension, ScopeConflict } from './scope-merge';

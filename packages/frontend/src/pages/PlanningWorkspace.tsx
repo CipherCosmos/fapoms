@@ -7,7 +7,7 @@ import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey 
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryKeys } from '../hooks/queryKeys';
-import { useScope, withScope } from '../context/ScopeContext';
+import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
@@ -334,7 +334,7 @@ export const PlanningWorkspace: React.FC = () => {
   // The header's global scope narrows the coverage queue. This page keeps its own project
   // selector — planning is inherently one project at a time — so only the geographic
   // dimensions are taken from the header here.
-  const { scopeParams, scopeKey } = useScope();
+  const { scopeParams, scopeKey, setScope } = useScope();
   const scopeQuery = withScope(scopeParams);
   const queryClient = useQueryClient();
 
@@ -520,12 +520,29 @@ export const PlanningWorkspace: React.FC = () => {
    * (a stale bookmark, or a project outside their scope), which is the one case where falling
    * back to the first is better than showing an empty screen.
    */
+  /**
+   * ...and do not fight the header either.
+   *
+   * The condition above used to also re-select when the chosen project was absent from `projects`.
+   * But `projects` is scoped: narrowing the header's scope shrinks that list, so the effect fired
+   * and moved the operator to `projects[0]` — a project they had not chosen, with no indication
+   * that their selection had been discarded. Changing the header is exactly when someone is
+   * paying attention to what changed, and this changed something else.
+   *
+   * So it fills a blank and nothing more. A selection that falls outside the current scope is
+   * kept, the request carries the header's value (see `withScope`), and `conflict` below puts the
+   * disagreement on screen with both ways out of it.
+   */
   useEffect(() => {
     if (projects.length === 0) return;
-    if (!selectedProjectId || !projects.some(p => p.id === selectedProjectId)) {
-      setSelectedProjectId(projects[0].id);
-    }
+    if (!selectedProjectId) setSelectedProjectId(projects[0].id);
   }, [projects, selectedProjectId]);
+
+  /** Set when the chosen project contradicts the header's project, rather than narrowing under it. */
+  const scopeMismatch = useMemo(
+    () => scopeConflict(scopeParams, { projectId: selectedProjectId || undefined }),
+    [scopeParams, selectedProjectId],
+  );
 
   const selectedProjectClientId = useMemo(
     () => projects.find(p => p.id === selectedProjectId)?.clientId,
@@ -1736,6 +1753,36 @@ export const PlanningWorkspace: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-20px', background: 'var(--bg-page)' }}>
+      {/*
+        The header's scope and this page's project picker name the same thing. When they disagree
+        the request carries the header's value — it is the ceiling — and this says so, with both
+        ways out. The alternative, and what used to happen, was to silently move the operator to a
+        project they had not chosen the moment they narrowed their scope.
+      */}
+      {scopeMismatch && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '7px 16px', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-warning, #92400e)', background: 'var(--bg-warning-subtle, #fef3c7)', borderBottom: '1px solid var(--border-hair)' }}>
+          <span>
+            Showing the project set in your scope filter, not the one selected here — the two
+            disagree, so the narrower scope wins.
+          </span>
+          <span style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            <button
+              onClick={() => setScope({ projectId: 'ALL' })}
+              className="btn btn-secondary"
+              style={{ padding: '2px 8px', fontSize: '10.5px' }}
+            >
+              Widen scope
+            </button>
+            <button
+              onClick={() => setSelectedProjectId(scopeMismatch.scoped)}
+              className="btn btn-secondary"
+              style={{ padding: '2px 8px', fontSize: '10.5px' }}
+            >
+              Match the scope
+            </button>
+          </span>
+        </div>
+      )}
       {/* ── HIGH-DENSITY TOP COMMAND HEADER ── */}
       <div style={{
         background: 'var(--bg-surface)',

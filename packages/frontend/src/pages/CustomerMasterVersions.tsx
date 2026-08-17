@@ -3,7 +3,9 @@ import { Check, FileSpreadsheet, Layers } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { DataTable, Column, Modal, StatusBadge, useToast } from '../components/ui';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
-import { getProjects, ProjectOption } from '../services/planning';
+import { ProjectOption } from '../services/planning';
+import { api } from '../services/api';
+import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
 import {
   getVersions,
   approveVersion,
@@ -29,6 +31,7 @@ const RECORDS_PAGE_SIZE = 50;
  */
 export const CustomerMasterVersions: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const { toast } = useToast();
+  const { scopeParams, scopeKey } = useScope();
   const roles = useCurrentRoles();
   const canApprove = hasAnyRole(roles, APPROVER_ROLES);
 
@@ -45,14 +48,36 @@ export const CustomerMasterVersions: React.FC<{ embedded?: boolean }> = ({ embed
   const [recordsPage, setRecordsPage] = useState(1);
   const [recordsLoading, setRecordsLoading] = useState(false);
 
+  /**
+   * The project list is the header's list, not everything the account can see.
+   *
+   * This page used to call `getProjects()` unscoped, so an operator narrowed to one region still
+   * got every project in the country here — the scope indicator in the header was, on this screen,
+   * simply untrue. Region is enforced server-side regardless (`resolveRegionScope` falls back to
+   * `users.regions`), so nothing was ever exposed that should not have been; what was wrong is
+   * that the controls stopped describing the data.
+   *
+   * `scopeKey` is in the dependency list because narrowing the scope has to re-fetch, not re-slice:
+   * the list is a server-side result, so filtering the copy already in hand would show "3 of 40"
+   * with no way to reach the rest.
+   */
   useEffect(() => {
-    getProjects()
+    const query = withScope(scopeParams);
+    api
+      .request<ProjectOption[]>(`/projects${query ? `?${query}` : ''}`, { method: 'GET' })
       .then((list) => {
         setProjects(list);
-        if (list.length > 0) setProjectId(list[0].id);
+        // The header's project, when it has fixed one — that is the narrowing rule, and it is why
+        // the local picker below is a choice *within* the scope rather than a competing one.
+        const scoped = scopeParams.projectId;
+        if (scoped && list.some((p) => p.id === scoped)) setProjectId(scoped);
+        else if (list.length > 0) setProjectId((current) => (current && list.some((p) => p.id === current) ? current : list[0].id));
       })
       .catch(() => toast({ type: 'error', title: 'Could not load projects', message: 'Please refresh the page.' }));
-  }, [toast]);
+  }, [toast, scopeKey, scopeParams]);
+
+  /** Set when the local picker names a different project than the header has fixed. */
+  const scopeMismatch = scopeConflict(scopeParams, { projectId: projectId || undefined });
 
   const loadVersions = useCallback(async (pid: string) => {
     if (!pid) return;
@@ -158,6 +183,14 @@ export const CustomerMasterVersions: React.FC<{ embedded?: boolean }> = ({ embed
   return (
     <div style={{ padding: embedded ? 0 : '20px 24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+        {scopeMismatch && (
+          // The picker below chose a project the header has fixed differently. The request carries
+          // the header's — it is the ceiling — so say which one is on screen rather than letting
+          // the two controls contradict each other in silence.
+          <div style={{ flexBasis: '100%', padding: '6px 10px', marginBottom: 8, fontSize: 11.5, fontWeight: 600, borderRadius: 6, color: 'var(--text-warning, #92400e)', background: 'var(--bg-warning-subtle, #fef3c7)' }}>
+            Showing the project from your scope filter; the selection here disagrees with it.
+          </div>
+        )}
         {embedded ? <div /> : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <FileSpreadsheet size={22} style={{ color: 'var(--accent)' }} />
