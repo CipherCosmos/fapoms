@@ -19,6 +19,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { LocationTrailService } from '../assayer/location-trail.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { OperationsInboxService } from './operations-inbox.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
@@ -235,6 +236,12 @@ const mockNotificationService = {
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: DataSource, useValue: mockDataSource },
         { provide: UnitOfWork, useValue: mockUnitOfWork },
+        // The dashboard rollup is cached; `wrap` here always runs the loader, so every existing
+        // assertion still exercises the real query path rather than a cache hit.
+        {
+          provide: CacheService,
+          useValue: { wrap: jest.fn((_k: string, _ttl: number, load: () => unknown) => load()) },
+        },
         { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
         { provide: OperationsInboxService, useValue: { resolveChannels: jest.fn().mockResolvedValue(new Map()) } },
         { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },

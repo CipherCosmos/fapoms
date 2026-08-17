@@ -40,6 +40,7 @@ import { FeePolicyService } from '../pricing/fee-policy.service';
 import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
@@ -180,6 +181,7 @@ export class AssignmentService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly uow: UnitOfWork,
+    private readonly cache: CacheService,
   ) {}
 
 
@@ -2215,10 +2217,65 @@ export class AssignmentService {
     return { ...base, expectedDistanceKm, expectedIsRecomputed, assessment, unavailableReason: null };
   }
 
+  /**
+   * How long a KPI tile may be stale, and why an index was measured and then not added.
+   *
+   * The rollup reads every active assignment to produce about nine numbers: 200,000 rows in,
+   * `(statuses × SLA states)` out. Measured on the 200k book it is **~50 ms**, consistently, and
+   * it runs on a screen every operator opens — so twenty operators refreshing costs a second of
+   * database CPU between them, for one answer they would all have accepted sharing.
+   *
+   * **An index does not fix this, which is worth recording so nobody re-tries it.** A partial
+   * index on `(status, sla_status) WHERE is_active` turns the parallel sequential scan into a
+   * parallel Index Only Scan and cuts buffers from **4,913 to 175** — a 28x reduction that buys
+   * almost nothing: 49 ms becomes 47 ms. The cost was never I/O. Aggregating 200,000 rows is
+   * 200,000 rows of CPU whether they arrive from the heap or from an index, and the write cost of
+   * another index on the hottest table in the system is real. (Note the index cannot be used at
+   * all while the aggregate is `COUNT(assignment.id)` — that needs a column the index lacks.
+   * `COUNT(*)` is exactly equivalent here, `id` being a NOT NULL primary key, and was verified to
+   * produce identical counts on the fixture. It is left as-is because without the index it changes
+   * nothing.)
+   *
+   * So the lever is not making the scan cheaper, it is doing it once for everybody. Ten seconds is
+   * short enough that a tile never visibly disagrees with the list under it — an operator who
+   * completes an assignment and looks up sees the new number within one breath — and long enough
+   * that a desk full of people refreshing costs one scan rather than twenty. It matches what the
+   * operations dashboard, the command centre and the HR overview already do.
+   *
+   * When the book reaches a size where 50 ms becomes 500 ms, the answer is a rollup maintained on
+   * write, not a bigger index. The measurement above is why.
+   */
+  private static readonly DASHBOARD_SUMMARY_TTL_S = 10;
+
   async getDashboardSummary(scope?: Partial<GlobalScope>): Promise<any> {
     // These KPI tiles sit above the assignment list. Leaving them unscoped while the list below
     // is scoped is worse than not scoping either: the operator reads "42 in progress", counts 6
     // rows, and has no way to tell which number is lying.
+    //
+    // Every scope dimension is therefore in the cache key too. A key that ignored region would
+    // serve one desk's tiles to the next desk that loaded the page inside the TTL — the same trap
+    // the command centre's key comment describes, and it is worse here, because a wrong count
+    // looks exactly like a right one.
+    // Every field of GlobalScope, not just the ones this method reads directly — `applyBranchScope`
+    // filters on zone and state as well, and a key that tracked only what is visible in this
+    // function would go stale the moment that helper learns a new dimension.
+    const cacheKey = [
+      'assignments:dashboard-summary',
+      scope?.projectId ?? 'all',
+      scope?.clientId ?? 'all',
+      scope?.zoneId ?? 'all',
+      scope?.state ?? 'all',
+      // Sorted, because two accounts holding the same regions in a different order must share a
+      // cache entry rather than each paying for their own.
+      scope?.regions?.slice().sort().join('+') ?? 'all',
+    ].join(':');
+
+    return this.cache.wrap(cacheKey, AssignmentService.DASHBOARD_SUMMARY_TTL_S, () =>
+      this.computeDashboardSummary(scope),
+    );
+  }
+
+  private async computeDashboardSummary(scope?: Partial<GlobalScope>): Promise<any> {
     /**
      * Both breakdowns from one pass over the table.
      *
