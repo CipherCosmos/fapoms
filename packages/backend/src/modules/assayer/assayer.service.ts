@@ -380,6 +380,28 @@ export class AssayerService implements OnModuleInit {
    * offers the vocabulary this workforce actually uses — and a name typed once is offered to
    * everyone afterwards, which is what stops "Gold Assaying" and "Gold assaying" becoming two
    * different skills that the eligibility filter treats as unrelated.
+   *
+   * ## The `COUNT(DISTINCT)` stays, and is index-backed
+   *
+   * This is the least-protected of the endpoints that aggregate `workforce_attributes`: the HR
+   * capability page fetches it from a bare `useEffect([])` with no react-query wrapper, so there
+   * is no client cache, no dedupe and no server-side `CacheService.wrap` — every visit to
+   * /hr/capability runs it, and the page unmounts on tab change. It is also unbounded: no LIMIT,
+   * a full aggregate over every active attribute row.
+   *
+   * Measured on a copy of the 200k fixture with the HR tables filled to match its 5,038-assayer
+   * roster (40,405 attribute rows), warm, five runs: 75.6 ms, of which ~70 ms was a sort of all
+   * 40k rows by `(type, name, assayer_id)` — a `DISTINCT` aggregate cannot be hash-aggregated, so
+   * the planner must sort, and these are collated `varchar`s. `1791000000000-WorkforceVocabularyIndex`
+   * supplies that exact order as a partial index, and the same unchanged SQL now runs in 5.3 ms.
+   *
+   * Two things were tried and rejected. Pre-aggregating into a `SELECT DISTINCT` subquery so the
+   * planner can hash reaches only 26.4 ms, and once the index exists it is worse than doing
+   * nothing (21.1 ms vs 5.3 ms) because it reverts to a sequential scan. And `COUNT(*)` is not a
+   * legal substitute for `COUNT(DISTINCT …)` here: nothing in the schema or the write path stops
+   * one assayer holding the same `(type, name)` twice — there is no unique constraint, and
+   * `syncWorkforceAttributes` inserts whatever array the client sends — so the DISTINCT is
+   * load-bearing, and dropping it would inflate the counts the picker ranks its suggestions by.
    */
   async getWorkforceAttributeVocabulary(): Promise<Record<string, Array<{ name: string; assayerCount: number }>>> {
     const rows = await this.workforceAttributeRepository

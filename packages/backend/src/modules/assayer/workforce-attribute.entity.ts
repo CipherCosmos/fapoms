@@ -5,6 +5,11 @@ import { AssayerEntity } from './assayer.entity';
 @Entity('workforce_attributes')
 @Index(['assayerId'])
 @Index(['type', 'name'])
+// Feeds the two `GROUP BY (type, name) … COUNT(DISTINCT assayer_id)` aggregates — the capability
+// panel and the vocabulary picker — with pre-sorted input, so they never sort the whole table.
+// Declared here as well as in `1791000000000-WorkforceVocabularyIndex` because an index that lives
+// only in a migration is one a regenerated baseline drops; see `scale-indexes.spec.ts`.
+@Index('IDX_workforce_attributes_vocabulary', ['type', 'name', 'assayerId'], { where: '"is_active" = true' })
 export class WorkforceAttributeEntity extends BaseEntity {
   @Column({ name: 'assayer_id', type: 'uuid' })
   assayerId: string;

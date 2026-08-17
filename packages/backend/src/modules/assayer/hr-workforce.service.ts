@@ -309,6 +309,22 @@ export class HrWorkforceService {
      * the denominator, and the tile could read "9/8" in green while roster members genuinely had
      * no ID on file. A coverage figure whose two halves describe different populations is not a
      * coverage figure.
+     *
+     * The two `COUNT(DISTINCT)`s here were flagged by the Phase 4 audit and left alone on the
+     * measurements. On a copy of the 200k fixture with the document tables filled to match its
+     * 5,038-assayer roster (15,081 government documents, 20,108 files) this whole statement is
+     * 13.1 ms warm, and the distinct counts are not the expensive part of it — both document
+     * tables are already indexed on `assayer_id`, and the cost is dominated by the roster count
+     * beside them, which has to visit all 5,026 rows however it is written. On the fixture as
+     * shipped it is 1.0 ms. It runs behind `overview()`'s 30 s cluster-wide cache, under a
+     * 60 s react-query staleTime, on a page only HR and admins can open, with no polling and no
+     * socket invalidation — so this is at most a couple of executions a minute, and an index
+     * that could only shave part of 13 ms does not pay for itself.
+     *
+     * These figures also cannot be approximated away: `HrCompliancePage` renders them verbatim as
+     * "N/total" and derives an exact badge count from `roster - withGovDoc`, and it has a
+     * `withGovDoc === 0` branch that prints "No identity document has been recorded for anyone
+     * on the roster." An estimate that lands on zero would publish that as a finding.
      */
     const [docCoverage] = await this.dataSource.query(`
       SELECT
@@ -410,6 +426,21 @@ export class HrWorkforceService {
    * reported against where the branches are, not just as a total.
    */
   private async capability() {
+    /**
+     * `COUNT(DISTINCT w.assayer_id)` per `(type, name)` — a skill's headline number is how many
+     * PEOPLE hold it, so a person who recorded the same skill twice must count once.
+     *
+     * Flagged by the Phase 4 audit; kept, and made cheap with an index instead of a rewrite. At
+     * the fixture's roster fully profiled (40,405 attribute rows) this was 80.1 ms warm, almost
+     * all of it a sort of every row by `(type, name, assayer_id)` that the `DISTINCT` aggregate
+     * forces — Postgres cannot hash-aggregate a DISTINCT aggregate.
+     * `1791000000000-WorkforceVocabularyIndex` provides that order, taking the same SQL to
+     * 19.2 ms; the migration carries the full numbers and the rejected pre-aggregation rewrite.
+     *
+     * Unlike the vocabulary endpoint that shares this shape, this one was never urgent on its
+     * own — it is inside `overview()`, behind a 30 s cache, and 0.3 ms on today's data. It gets
+     * the improvement as a free rider on an index bought for the uncached picker.
+     */
     const byType = await this.dataSource.query(`
       SELECT w.type, w.name, COUNT(DISTINCT w.assayer_id)::int AS "assayerCount"
       FROM workforce_attributes w
@@ -422,6 +453,17 @@ export class HrWorkforceService {
     // Same rule as the document coverage above: numerator and denominator must count the same
     // people, or `unprofiled` goes negative and the "N assayers have no recorded skill" warning
     // disappears exactly when the data is worst.
+    //
+    // Three more flagged `COUNT(DISTINCT)`s, also left as they are: 18.6 ms at the fully-profiled
+    // roster (1.2 ms today), 14.3 ms once the vocabulary index above is in place, behind the same
+    // 30 s cache. Rewriting the three subqueries as one pass with `FILTER` was measured and is
+    // slightly WORSE (18.3 ms) — each subquery already prunes to its own type, whereas the single
+    // pass sorts every attribute row three times over.
+    //
+    // Note `withSkill` is load-bearing even though the frontend renders none of this object: it
+    // is the input to `unprofiled` below, which IS displayed. `withLanguage` and
+    // `withCertification` are genuinely unread by any consumer — dead payload on every response,
+    // worth removing, but that is an API-shape change and not part of a query-cost pass.
     const [coverage] = await this.dataSource.query(`
       SELECT
         (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
