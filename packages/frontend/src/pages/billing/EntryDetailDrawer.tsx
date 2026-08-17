@@ -26,7 +26,31 @@ const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value
 export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void }> = ({ entryId, onClose }) => {
   const { toast } = useToast();
   const { data: entry } = useBillingEntry(entryId);
-  const { data: history } = useBillingHistory({ entityType: BillingEntityType.ENTRY });
+  /**
+   * One entry's audit trail, fetched as narrowly as the API allows.
+   *
+   * This asked for `{ entityType: ENTRY }` — every ENTRY history row in the book — and threw
+   * all but one entry's rows away in the filter below. `/billing-engine/history` exposes no
+   * `entityId` filter, only the denormalised scope columns, so the narrowest question that can
+   * be asked is the entry's own assignment (then project, then client). Every ENTRY row is
+   * written with its entry's own `assignmentId`, and an entry's `assignmentId` never changes
+   * after creation, so scoping this way cannot hide a row the drawer used to show.
+   *
+   * It also fixes a silent truncation: the endpoint returns the 200 newest matching rows, so
+   * unscoped, an entry older than the 200 most recent ENTRY events showed "No history yet."
+   * rather than its history. Scoped to one assignment, 200 rows is never the binding limit.
+   */
+  const historyScope =
+    entry?.assignmentId ? { assignmentId: entry.assignmentId }
+    : entry?.projectId ? { projectId: entry.projectId }
+    : entry?.clientId ? { clientId: entry.clientId }
+    : {};
+  const { data: history, isLoading: historyLoading } = useBillingHistory(
+    { entityType: BillingEntityType.ENTRY, ...historyScope },
+    // Nothing to scope by until the entry lands; without this the drawer would fire one
+    // unscoped whole-table request on its first render and the scoped one straight after.
+    { enabled: !!entry },
+  );
   const transition = useTransitionBillingEntry();
   const adjust = useAdjustBillingEntry();
   const split = useSplitBillingEntry();
@@ -41,6 +65,8 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
 
   if (!entry) return <DetailDrawer open onClose={onClose} title="Loading…" width={620}><div /></DetailDrawer>;
 
+  // Still needed after the scoping above: one assignment can hold a root entry and the split
+  // children it was broken into, so the scoped response is a superset of this entry's rows.
   const entryHistory = (history ?? []).filter((h) => h.entityId === entry.id);
   const nextStates = BILLING_STATE_TRANSITIONS[entry.state] ?? [];
 
@@ -150,7 +176,11 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
 
       <div>
         <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 8px', color: 'var(--text-primary)' }}>History</h4>
-        {entryHistory.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No history yet.</div>}
+        {/* The history request now starts only once the entry has resolved, so there is a real
+            moment with nothing to show. Saying "No history yet." during it would claim an
+            absence that has not been established. */}
+        {historyLoading && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading history…</div>}
+        {!historyLoading && entryHistory.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No history yet.</div>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {entryHistory.map((h) => (
             <div key={h.id} style={{ background: 'var(--bg-tertiary)', padding: 10, borderRadius: 'var(--radius-sm)' }}>
