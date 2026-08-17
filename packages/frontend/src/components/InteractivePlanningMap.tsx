@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import { useQuery } from '@tanstack/react-query';
 import { calculateHaversineDistance } from '@fapoms/shared';
@@ -19,6 +19,127 @@ interface MapBranch {
   city?: string;
   riskScore?: number;
 }
+
+/**
+ * A pin as the draw effect *describes* it — plain data, no Leaflet object yet.
+ *
+ * Every field is compared against the previous pass to decide what work a pin actually needs, so
+ * every field has to be cheap to compare and stable when nothing changed. That is why the icon is
+ * carried as its html string rather than as an `L.DivIcon`: two `L.divIcon(...)` calls with
+ * identical arguments produce two different objects, so comparing icon instances would report a
+ * change on every run and defeat the whole exercise.
+ */
+interface MarkerSpec {
+  lat: number;
+  lng: number;
+  iconHtml: string;
+  iconClassName: string;
+  iconSize: [number, number];
+  iconAnchor: [number, number];
+  /** `null` for a pin with no popup — assayer pins have one, branch pins do not. */
+  popupHtml: string | null;
+  /**
+   * What a click on this pin should do *now*.
+   *
+   * Never handed to Leaflet directly. A pin now survives across effect runs, so a listener that
+   * closed over one run's handler would keep routing to the branch that was selected, and the
+   * distance that was measured, at the moment the pin was drawn. `reconcileMarkers` installs one
+   * listener for the life of the pin that looks this up fresh on each click instead.
+   */
+  onClick: (() => void) | null;
+}
+
+/** A pin on the map, together with the description it was last drawn from. */
+interface DrawnMarker {
+  marker: L.Marker;
+  spec: MarkerSpec;
+}
+
+/** The one place a description turns into a real Leaflet icon — called only when it has to be. */
+const buildDivIcon = (spec: MarkerSpec) => L.divIcon({
+  html: spec.iconHtml,
+  className: spec.iconClassName,
+  iconSize: spec.iconSize,
+  iconAnchor: spec.iconAnchor,
+});
+
+/** Would these two descriptions produce the same DOM node? If so, `setIcon` is pure waste. */
+const sameIcon = (a: MarkerSpec, b: MarkerSpec) =>
+  a.iconHtml === b.iconHtml &&
+  a.iconClassName === b.iconClassName &&
+  a.iconSize[0] === b.iconSize[0] && a.iconSize[1] === b.iconSize[1] &&
+  a.iconAnchor[0] === b.iconAnchor[0] && a.iconAnchor[1] === b.iconAnchor[1];
+
+/**
+ * Bring the pins on `map` in line with `desired`, touching as little as possible.
+ *
+ * The draw effect used to `.remove()` every marker and rebuild the lot with fresh `L.marker` /
+ * `L.divIcon` calls each time it ran. On a 5,000-branch project, selecting a single branch meant
+ * destroying 5,000 DOM nodes and creating 5,000 more to recolour one pin — and, because the pin
+ * carrying an open popup was destroyed with the rest, closing that popup under whoever was
+ * reading it.
+ *
+ * Three cases, and only the first two cost any DOM work:
+ *  - a key in `desired` that is not on the map yet — create the marker;
+ *  - a key on the map that `desired` no longer lists (filtered out, its layer switched off, or
+ *    now outside the search radius) — remove it;
+ *  - a key in both — compare the two descriptions and apply only the difference: `setLatLng`
+ *    when a branch has been re-geocoded, `setIcon` when the colour or rank badge changed,
+ *    `setPopupContent` when the text changed. `setPopupContent` earns its place on its own:
+ *    rebinding the popup, or replacing the marker, shuts a popup that is currently open.
+ *
+ * `drawn` is the caller's ref map and is mutated in place — the click listener installed below
+ * reads back through it by key, so it must stay the same object for the life of the component.
+ */
+const reconcileMarkers = (
+  map: L.Map,
+  drawn: Map<string, DrawnMarker>,
+  desired: Map<string, MarkerSpec>,
+) => {
+  // Gone. Deleting the entry currently being visited is safe during `Map.forEach`.
+  drawn.forEach((entry, key) => {
+    if (desired.has(key)) return;
+    entry.marker.remove();
+    drawn.delete(key);
+  });
+
+  desired.forEach((spec, key) => {
+    const existing = drawn.get(key);
+
+    if (!existing) {
+      const marker = L.marker([spec.lat, spec.lng], { icon: buildDivIcon(spec) });
+      // One listener for the life of the pin, dispatching through `drawn` so it always runs the
+      // handler from the most recent pass rather than the one this pin was born with.
+      marker.on('click', () => drawn.get(key)?.spec.onClick?.());
+      if (spec.popupHtml !== null) marker.bindPopup(spec.popupHtml);
+      marker.addTo(map);
+      drawn.set(key, { marker, spec });
+      return;
+    }
+
+    const { marker, spec: prev } = existing;
+
+    if (prev.lat !== spec.lat || prev.lng !== spec.lng) {
+      marker.setLatLng([spec.lat, spec.lng]);
+    }
+    if (!sameIcon(prev, spec)) {
+      // For a divIcon this does not even replace the element: Leaflet's `DivIcon.createIcon`
+      // hands back the existing `<div>` and rewrites its `innerHTML`, so the node stays put and
+      // the marker's listeners and bound popup come through untouched. Recolouring the selected
+      // branch costs an innerHTML write on two pins, not a node anywhere.
+      marker.setIcon(buildDivIcon(spec));
+    }
+    if (prev.popupHtml !== spec.popupHtml) {
+      if (spec.popupHtml === null) marker.unbindPopup();
+      else if (prev.popupHtml === null) marker.bindPopup(spec.popupHtml);
+      else marker.setPopupContent(spec.popupHtml);
+    }
+
+    // Recorded last, so the click dispatcher only starts using the new handler once the pin it
+    // describes has actually been brought up to date.
+    existing.spec = spec;
+  });
+};
 
 interface InteractivePlanningMapProps {
   branches: MapBranch[];
@@ -76,16 +197,16 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   /**
-   * Every marker currently on the map, by id.
+   * Every marker currently on the map, keyed by a namespaced stable id — `branch-<id>` and
+   * `assayer-<id>`, namespaced so a branch and an assayer that happen to share a uuid can never
+   * collide on one entry.
    *
-   * The draw effect still removes and re-adds the whole set when it runs. That is now far rarer
-   * than it was — `filteredBranches`/`filteredAssayers` are memoised below, so the effect no
-   * longer fires on every render of a parent holding some sixty pieces of state — but it is
-   * still a rebuild rather than a diff. Reconciling pin-by-pin against a signature is the next
-   * step here, and it is worth doing: it would also stop an open popup being torn out from
-   * under whoever is reading it.
+   * The draw effect describes the pins it wants and hands them to `reconcileMarkers`, which
+   * diffs them against this map; see the comment there for what that replaced. The `Map` object
+   * itself is created once and never reassigned, because the click listener on every pin holds a
+   * reference to it.
    */
-  const markersRef = useRef<Record<string, L.Marker>>({});
+  const markersRef = useRef<Map<string, DrawnMarker>>(new Map());
   const circlesRef = useRef<L.Circle[]>([]);
   const polylineRef = useRef<L.Polyline | null>(null);
   const activeRoutePolylineRef = useRef<L.Polyline | null>(null);
@@ -93,13 +214,32 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   /**
    * The parent's click handler, read through a ref.
    *
-   * Pins now outlive a render, so a handler captured when the pin was created would keep calling
-   * whichever `onSelectBranch` the parent passed at that moment. Every call site of this map hands
-   * in an inline arrow, so that closure would go stale immediately — clicking a branch would
-   * select it in a version of the parent's state that no longer exists.
+   * Pins now outlive the effect run that drew them, and `onSelectBranch` is deliberately not in
+   * that effect's dependency list — redrawing the map because a parent re-rendered with a new
+   * inline arrow is exactly what the memoisation work was undoing. Without this ref those two
+   * facts combine badly: a pin would go on calling whichever `onSelectBranch` the parent happened
+   * to pass on the render that drew it, so clicking a branch would select it against a version of
+   * the parent's state that no longer exists. Reading `.current` at click time costs nothing and
+   * removes the whole class of bug.
    */
   const onSelectBranchRef = useRef(onSelectBranch);
   onSelectBranchRef.current = onSelectBranch;
+
+  /**
+   * Creates the Leaflet map the first time anything needs it.
+   *
+   * Two effects now want the map — the basemap effect and the draw effect — and neither can
+   * assume the other has run first, so whichever gets there first builds it. Kept as a function
+   * rather than a mount effect so a container ref that is not yet attached simply defers the
+   * work to the next run, which is how the single combined effect behaved before the split.
+   */
+  const ensureMap = useCallback((): L.Map | null => {
+    if (mapInstanceRef.current) return mapInstanceRef.current;
+    if (!mapContainerRef.current) return null;
+    // Centred on India.
+    mapInstanceRef.current = L.map(mapContainerRef.current).setView([20.5937, 78.9629], 5);
+    return mapInstanceRef.current;
+  }, []);
 
   // GIP Layer state configuration (persisted in localStorage)
   const [showBranches, setShowBranches] = useState(() => localStorage.getItem('map_showBranches') !== 'false');
@@ -314,17 +454,25 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     return () => clearTimeout(timer);
   }, [branches, selectedBranchId, routePoints, selectedAssayerFromParent]);
 
+  /**
+   * The basemap, in an effect of its own.
+   *
+   * This used to sit at the top of the draw effect, which meant every reason to touch a pin — a
+   * keystroke in the search box, a selection change, an OSRM route arriving — also removed the
+   * tile layer and added a fresh one, and the browser re-requested every visible tile from the
+   * CDN. Which pins are shown has nothing to do with which basemap is under them, so the two are
+   * no longer tied together.
+   *
+   * Watching `effectiveMapStyle` rather than `mapStyle`/`appTheme` also stops a swap when the
+   * operator moves between two dark themes, where 'auto' resolves to the same tiles either way.
+   *
+   * Tiles live in Leaflet's `tilePane` and markers in `markerPane`, so re-adding the layer after
+   * markers already exist cannot cover them up — the two effects are free to run in either order.
+   */
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    const map = ensureMap();
+    if (!map) return;
 
-    // Initialize map if it doesn't exist
-    if (!mapInstanceRef.current) {
-      mapInstanceRef.current = L.map(mapContainerRef.current).setView([20.5937, 78.9629], 5); // Center on India coordinates
-    }
-
-    const map = mapInstanceRef.current;
-
-    // Swap tile layers dynamically between OpenStreetMap and Google Satellite Hybrid
     if (tileLayerRef.current) {
       tileLayerRef.current.remove();
     }
@@ -340,10 +488,22 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       subdomains: isSatellite ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c', 'd'],
       attribution: isSatellite ? '&copy; Google Maps' : '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
+  }, [effectiveMapStyle, ensureMap]);
 
-    // Clear old markers
-    Object.values(markersRef.current).forEach((marker) => marker.remove());
-    markersRef.current = {};
+  useEffect(() => {
+    const map = ensureMap();
+    if (!map) return;
+
+    /**
+     * What the map should show once this pass is done, keyed the same way `markersRef` is.
+     *
+     * Nothing is added to or removed from Leaflet while this is being filled in: the layer
+     * passes below only *describe* pins, and the single `reconcileMarkers` call at the end works
+     * out the difference against what is already on the map. Circles and polylines below are
+     * still torn down and rebuilt — they are bounded by the selected branch and the analytics
+     * toggles rather than by the project's branch count, so they were never the expensive half.
+     */
+    const desiredMarkers = new Map<string, MarkerSpec>();
 
     // Clear old circles
     circlesRef.current.forEach((circle) => circle.remove());
@@ -385,20 +545,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             </svg>
           `;
 
-          const customIcon = L.divIcon({
-            html: markerSvg,
-            className: 'custom-leaflet-marker',
+          desiredMarkers.set(`branch-${b.id}`, {
+            lat,
+            lng,
+            iconHtml: markerSvg,
+            iconClassName: 'custom-leaflet-marker',
             iconSize: [28, 28],
             iconAnchor: [14, 28],
+            popupHtml: null,
+            // `markerSvg` above is the only thing selection changes, so selecting a branch is now
+            // two `setIcon` calls — the pin losing the highlight and the pin gaining it — instead
+            // of a full rebuild of the layer.
+            onClick: () => onSelectBranchRef.current(b.id),
           });
-
-          const marker = L.marker([lat, lng], { icon: customIcon })
-            .addTo(map)
-            .on('click', () => {
-              onSelectBranch(b.id);
-            });
-
-          markersRef.current[b.id] = marker;
           bounds.push([lat, lng]);
 
           // GIP Phase 4 Analytics Layer: Targeted SLA Risk Overlay
@@ -543,17 +702,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:12px;font-weight:800;">✕</div>`
             : '';
 
-          const assayerIcon = L.divIcon({
-            html: `<div style="position:relative;width:26px;height:26px;opacity:${blocked ? 0.55 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`,
-            className: 'custom-assayer-marker',
-            iconSize: [24, 24],
-            iconAnchor: [12, 24],
-          });
+          const assayerIconHtml = `<div style="position:relative;width:26px;height:26px;opacity:${blocked ? 0.55 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`;
 
-          const assayerMarker = L.marker([aLat, aLng], { icon: assayerIcon })
-            .addTo(map);
+          // Filled in by whichever of the two branches below applies, then handed to the
+          // reconciler together with the icon. Assayer pins away from a selected branch carry a
+          // popup but no click behaviour — there is nothing to route to.
+          let assayerPopupHtml: string;
+          let assayerOnClick: (() => void) | null = null;
 
           if (selectedBranchLatLng) {
+            // Copied to a const so the routing handler below closes over a target that cannot be
+            // reassigned out from under it while the pin waits for a click.
+            const routeTarget = selectedBranchLatLng;
+            const routeBranchName = selectedBranch?.name || 'Target Branch';
             const slaStatus = slaCompliant === null ? '' : slaCompliant
               ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${effectiveSlaRadius}km SLA</div>`
               : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${effectiveSlaRadius}km SLA — Breach Risk</div>`;
@@ -569,7 +730,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               : ranking
               ? `<div style="margin-top:3px;color:#047857;font-weight:600;">#${ranking.rank} recommended · score ${ranking.score ?? '—'}</div>`
               : '';
-            assayerMarker.bindPopup(`
+            assayerPopupHtml = `
               <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:170px;">
                 <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
@@ -578,34 +739,52 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                 ${slaStatus}
                 ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>'}
               </div>
-            `);
-            assayerMarker.on('click', () => {
+            `;
+            assayerOnClick = () => {
               setSelectedAssayerForRouting({
                 ...assayer,
                 straightDistance: straightDist,
                 aLat,
                 aLng,
-                bLat: selectedBranchLatLng[0],
-                bLng: selectedBranchLatLng[1],
-                branchName: selectedBranch?.name || 'Target Branch'
+                bLat: routeTarget[0],
+                bLng: routeTarget[1],
+                branchName: routeBranchName
               });
-            });
+            };
           } else {
-            assayerMarker.bindPopup(`
+            assayerPopupHtml = `
               <div style="color:#000; font-family:sans-serif; font-size:12px; min-width: 140px;">
                 <b style="color:#a855f7; display:block; margin-bottom: 4px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Status: <span style="color:var(--status-active)">${assayer.status}</span></div>
                 <div>Skills: <i>${assayer.skills?.length ? assayer.skills.join(', ') : 'None recorded'}</i></div>
               </div>
-            `);
+            `;
           }
 
-          markersRef.current[`assayer-${assayer.id}`] = assayerMarker;
+          desiredMarkers.set(`assayer-${assayer.id}`, {
+            lat: aLat,
+            lng: aLng,
+            iconHtml: assayerIconHtml,
+            iconClassName: 'custom-assayer-marker',
+            iconSize: [24, 24],
+            iconAnchor: [12, 24],
+            popupHtml: assayerPopupHtml,
+            onClick: assayerOnClick,
+          });
         }
       }
     });
     }
+
+    // Both layers have now described what they want, so settle up in one pass. Branch and
+    // assayer pins are reconciled together rather than layer by layer, because that is what lets
+    // switching a layer off be "these keys are gone" instead of a special case.
+    //
+    // Insertion order is not load-bearing: Leaflet stacks markers by latitude (`zIndexOffset`
+    // aside), not by the order they were added, so pins that survive a pass keep the same
+    // stacking they would have had after a rebuild.
+    reconcileMarkers(map, markersRef.current, desiredMarkers);
 
     // 3. Render Audit Density Heat Overlay
     if (showWorkforceDensity && filteredBranches.length > 0) {
@@ -693,7 +872,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         map.fitBounds(bounds, { padding: [30, 30] });
       }
     }
-  }, [branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, mapStyle, appTheme, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
+    // `mapStyle`/`appTheme` are deliberately absent: the basemap moved to its own effect above,
+    // and a theme change is no longer a reason to walk every pin on the map.
+  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
