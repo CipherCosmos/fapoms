@@ -60,6 +60,35 @@ export class CallLogService {
    * assessments are keyed by (projectId, branchId), so resolve across.
    */
   private async resolveAssessmentId(projectBranchId: string): Promise<string> {
+    const assessmentId = await this.findAssessmentId(projectBranchId);
+    if (!assessmentId) {
+      throw new NotFoundException(`No assessment exists for project branch ${projectBranchId}.`);
+    }
+    return assessmentId;
+  }
+
+  /**
+   * The same lookup, for readers — `null` instead of a 404 when the branch simply has no
+   * assessment yet.
+   *
+   * The distinction matters because "who have we already called about this branch?" has a true
+   * answer for a branch nobody has assessed: **nobody**. Refusing to answer it is not a stricter
+   * reading of the data, it is a wrong one.
+   *
+   * It was reported as a 404 from production on
+   * `GET /call-logs/last-contact?projectBranchId=8058137e-…`. The planning workspace fetches this
+   * every time an operator selects a branch, so on any branch without an assessment row the call
+   * failed outright and the candidate list lost its "called 2h ago — no answer" hints. Ten of
+   * ninety-eight project branches in the development database have no assessment row, so this was
+   * never an exotic case.
+   *
+   * A branch that does not exist at all is still a 404: that question is about nothing, rather
+   * than having an empty answer. Only the missing-assessment half degrades.
+   *
+   * `create` deliberately keeps `resolveAssessmentId` above and its 404 — a call log is stored
+   * against the assessment, so there is genuinely nowhere to put one until it exists.
+   */
+  private async findAssessmentId(projectBranchId: string): Promise<string | null> {
     const pb = await this.projectBranchRepository.findOne({ where: { id: projectBranchId } });
     if (!pb) {
       throw new NotFoundException(`Project branch ${projectBranchId} not found.`);
@@ -67,10 +96,7 @@ export class CallLogService {
     const assessment = await this.assessmentRepository.findOne({
       where: { projectId: pb.projectId, branchId: pb.branchId },
     });
-    if (!assessment) {
-      throw new NotFoundException(`No assessment exists for project branch ${projectBranchId}.`);
-    }
-    return assessment.id;
+    return assessment?.id ?? null;
   }
 
   async create(dto: CreateCallLogDto, userId: string): Promise<CallLogEntity> {
@@ -121,7 +147,9 @@ export class CallLogService {
 
   /** Call history for one branch, newest first — "who has already been approached". */
   async findForProjectBranch(projectBranchId: string): Promise<CallLogEntity[]> {
-    const assessmentId = await this.resolveAssessmentId(projectBranchId);
+    const assessmentId = await this.findAssessmentId(projectBranchId);
+    // No assessment yet means nobody can have been called yet: an empty history, not a failure.
+    if (!assessmentId) return [];
     return this.callLogRepository.find({
       where: { assessmentId, isActive: true },
       relations: ['assessor'],
