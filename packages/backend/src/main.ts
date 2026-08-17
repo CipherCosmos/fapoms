@@ -34,6 +34,10 @@ import * as express from 'express';
 import * as compression from 'compression';
 import helmet from 'helmet';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import {
+  assertConcurrencyWithinPool,
+  DEFAULT_DB_POOL_MAX,
+} from './infrastructure/queue/worker-concurrency';
 
 /**
  * Configuration that must never reach production, checked before anything connects.
@@ -142,6 +146,16 @@ async function bootstrap() {
   // all-'api' deployment with no worker would never process jobs — run at least one
   // 'worker' or 'all' replica.)
   const processRole = (process.env.PROCESS_ROLE || 'all').toLowerCase();
+
+  // The queues each picked a sensible concurrency; nobody added them up. Counted 2026-08-17 the
+  // sum is 29 slots against a default pool of 20, and with the shipped PROCESS_ROLE=all those
+  // slots share the pool with every request handler. Say so at boot rather than letting it
+  // surface later as unattributable request timeouts. See `worker-concurrency.ts`.
+  assertConcurrencyWithinPool(
+    Number(process.env.DB_POOL_MAX) || DEFAULT_DB_POOL_MAX,
+    processRole,
+    logger,
+  );
 
   if (processRole === 'worker') {
     // Dedicated worker: runs Bull processors + scheduled crons, serves no HTTP, so

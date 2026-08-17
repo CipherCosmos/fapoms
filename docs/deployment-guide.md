@@ -273,6 +273,46 @@ RUN printf 'server{listen 80;root /usr/share/nginx/html;location /{try_files $ur
 Run **two** backend containers off the same image: one `PROCESS_ROLE=api`, one
 `PROCESS_ROLE=worker`. Same image, different env — that is all the split needs.
 
+### Sizing the connection pool against the workers
+
+This is the one number the role split changes that is easy to miss, so it gets its own section.
+
+The backend declares **29 concurrent job slots** across eleven Bull workers — notification delivery
+alone is 8 of them (5 push, 3 email), then reports 4, OCR 3, planning 3, and eleven singles. The
+count is in `src/infrastructure/queue/worker-concurrency.ts`, and a test fails the build if that
+table and the `@Process` decorators ever disagree.
+
+`DB_POOL_MAX` defaults to **20**.
+
+With `PROCESS_ROLE=all` — which is what `.env.production.example` ships and what a single-container
+deployment runs — those 29 slots and every HTTP request handler draw from the same 20 connections.
+That is not an outage in itself: most slots idle, several are cron-driven at staggered minutes, and
+the notification slots spend most of their time waiting on push and SMTP rather than on Postgres.
+But there is nothing preventing it, and when it does bite it bites as a `DB_CONN_TIMEOUT_MS`
+timeout on a *user request* caused by background work — an incident where nothing in the request's
+own path is slow, which is the hardest kind to attribute.
+
+The backend now says so at boot:
+
+```
+WARN [WorkerConcurrency] Worker concurrency (29 slots) exceeds the database pool (DB_POOL_MAX=20),
+and PROCESS_ROLE is not "api", so request handlers draw from the same pool.
+```
+
+Three ways to resolve it, in increasing order of how much traffic they are for:
+
+1. **Raise `DB_POOL_MAX` to 32+** on a single-container deployment. Cheapest, and fine on Tier A —
+   Postgres `max_connections` defaults to 100, so one container at 32 is comfortable.
+2. **Split the roles** (above). The API replica's pool is then serving only request handlers, and
+   the worker replica's pool only jobs; size each for its own job.
+3. **Put PgBouncer in front** once `replicas × DB_POOL_MAX` approaches Postgres `max_connections`.
+   Point `DB_HOST` at it in transaction-pooling mode and keep the per-replica pool modest. This is
+   a Tier B concern, not a Tier A one — with fewer than a handful of replicas it adds a moving part
+   for no measurable gain.
+
+The invariant to hold in all three cases: **`replicas × DB_POOL_MAX` < Postgres `max_connections`**,
+leaving headroom for `psql`, backups and migrations.
+
 ### Option 2 — Cloud VM + managed data services
 
 Same app containers, but Postgres/Redis/S3 become managed (RDS + ElastiCache + S3, or the Azure/GCP
