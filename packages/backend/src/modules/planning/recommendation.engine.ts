@@ -1883,6 +1883,26 @@ export class RecommendationEngine {
         } else if (blockedBy === this.deployabilityFilter.name) {
           // Which onboarding stage they are stuck at, and the click that unsticks them.
           detail = this.deployabilityFilter.explain(assayer);
+        } else if (blockedBy === this.requiredSkillsFilter.name) {
+          /**
+           * Which skill or certification, not merely that one is missing.
+           *
+           * "Missing a skill or certification this project requires" is unactionable when it is
+           * the answer for most of the roster: an operator cannot tell whether to send someone on
+           * a course, renew a lapsed certificate, or simply record an attribute nobody typed in.
+           * `checkSkillsAndCertifications` already names them; it was just being thrown away.
+           *
+           * This is not hypothetical tidying. On this deployment 25 of 26 active assayers hold
+           * none of the three attributes the gold-audit projects require, so every branch of
+           * those projects can only ever match one person, 1,200 km away — and the screen said
+           * nothing about why.
+           */
+          const pb = context.branchFacts?.projectBranch;
+          if (pb?.project) {
+            detail = this.constraintEvaluator
+              .checkSkillsAndCertifications(assayer, pb.project, context.scheduledDate)
+              .reason;
+          }
         }
 
         // DATE-kind exclusions are candidates for ANOTHER day, and ops needs enough to act on
