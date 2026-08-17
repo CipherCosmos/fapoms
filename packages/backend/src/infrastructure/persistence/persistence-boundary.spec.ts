@@ -30,6 +30,14 @@ const SRC = path.resolve(__dirname, '../..');
  * data is stored. Shrink this list; never add to it.
  */
 const IMPORTS_TYPEORM = [
+  // Samples the connection pool's own counters for /metrics. It reads no table at all — the
+  // DataSource is how you reach the pool object, and routing a diagnostic through a repository
+  // would put it inside the layer it exists to observe.
+  'infrastructure/observability/runtime-metrics.service.ts',
+  // Batched retention deletes. Expressed as bounded raw DELETEs because the point is to bound
+  // how long each statement holds locks on append-only tables, which the repository API cannot
+  // express; it owns no domain concept and reads no entity.
+  'infrastructure/retention/retention.service.ts',
   'core/audit/unified-audit.service.ts',
   // The region ceiling on detail routes. Read-only, and single-column region lookups by id
   // across five tables (branch, project_branch, assignment, assayer, schedule) — it exists
@@ -133,6 +141,11 @@ const IMPORTS_TYPEORM = [
  * from inside the transaction, so a subscriber sees state that can still roll back.
  */
 const OPENS_ITS_OWN_TRANSACTIONS = [
+  // Holds a DataSource to read pool counters for /metrics; issues no query and opens nothing.
+  'infrastructure/observability/runtime-metrics.service.ts',
+  // Batched deletes, each its own short statement. Deliberately NOT one transaction: the whole
+  // design is that a purge never holds locks on an append-only table for long.
+  'infrastructure/retention/retention.service.ts',
   // Takes a DataSource for read-only region lookups only; opens no transaction.
   'infrastructure/scope/region-guard.service.ts',
   // Read-only morning-digest aggregates (pending payables/expenses/overdue invoices) and the
