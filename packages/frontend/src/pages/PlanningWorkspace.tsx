@@ -613,9 +613,22 @@ export const PlanningWorkspace: React.FC = () => {
     // Reads the selection rather than taking a functional update, because it now lives in the URL
     // and the url is the value. Keeping a valid choice is a no-op, so re-running on the selection
     // itself is harmless.
+    // An empty list is "not loaded yet", never "your branch is gone".
+    //
+    // This is what still dropped a refreshed selection after the url work. On reload `branches`
+    // is `[]` for a beat, so `branches.some(...)` was false, and the line below wrote `null` —
+    // erasing the very query parameter the page had just been opened with. The data then
+    // arrived, found no selection, and filled in `branches[0]`. Asking for the tenth branch and
+    // getting the first was not a race in the loader; it was this effect deleting the answer
+    // before the question could be checked.
+    if (branches.length === 0) return;
+
     const stillThere = selectedBranchId && branches.some(b => b.id === selectedBranchId);
     if (stillThere) return;
-    setSelectedBranchId(branches.length > 0 ? branches[0].id : null);
+
+    // Loaded, and the selection genuinely is not in it — a branch from another project, or a
+    // stale link. Landing on the first is better than an empty workspace.
+    setSelectedBranchId(branches[0].id);
   }, [branches, selectedBranchId, setSelectedBranchId]);
 
   const selectedPb = useMemo(
