@@ -67,6 +67,44 @@ const CLIENT_RADIUS_SQL = `COALESCE(NULLIF(c.planning_preferences->>'maxDistance
  */
 const BRANCH_GEOG_SQL = `COALESCE(b.location, ST_SetSRID(ST_MakePoint(b.longitude, b.latitude), 4326))::geography`;
 
+/**
+ * Impose a total order on a result set, by id, in memory.
+ *
+ * ## Why this exists at all
+ *
+ * Neither population query below can be left in whatever order its plan happens to emit. The
+ * arrays they produce are sorted on non-unique keys (packets, distance, isolated-then-
+ * unassigned) and then cut — `coverageGaps` at 25, the pin layers at `maxPoints` — and a sort
+ * on a non-unique key is only as stable as its input. Where the keys tie, arrival order alone
+ * decides which branch an operator is shown as the 25th worst-covered, and which 4,000 of
+ * 4,526 assayers make it onto the map. Float accumulators are summed in arrival order too.
+ *
+ * ## Why in TypeScript and not `ORDER BY`
+ *
+ * `ORDER BY s.id, s.project_branch_id` on the branch query is the obvious spelling, and it was
+ * written and measured first: it makes the planner spill an external merge sort of 40,087 wide
+ * rows against a 4 MB `work_mem`, and took the unfiltered Command Room load from 1.07 s to
+ * 1.94 s — an 81% regression on a query that exists only because it was too slow. Sorting the
+ * same rows here moves object references rather than tuples: 1.11 s, about 40 ms of cost.
+ *
+ * Both spellings were verified to produce byte-identical responses across six filter scopes,
+ * so this is purely the cheaper way to buy the same guarantee.
+ *
+ * The keys are uuids rendered as lowercase hex with hyphens at fixed positions, so plain
+ * code-unit comparison gives byte-for-byte the same sequence Postgres' uuid ordering would;
+ * `localeCompare` is deliberately not used, because collation is locale-dependent and that is
+ * the entire class of bug this function exists to close.
+ */
+function orderedById<T extends Record<string, any>>(rows: T[], tieBreak?: string): T[] {
+  // Spelled out rather than looped over a key list: this runs ~613,000 times on the unfiltered
+  // book, and the loop plus its per-key property lookup was measurable against the sort itself.
+  return rows.sort((a, b) => {
+    if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+    if (!tieBreak || a[tieBreak] === b[tieBreak]) return 0;
+    return a[tieBreak] < b[tieBreak] ? -1 : 1;
+  });
+}
+
 @Injectable()
 export class CommandCenterService {
   private readonly logger = new Logger(CommandCenterService.name);
@@ -199,6 +237,28 @@ export class CommandCenterService {
      *
      * `isolated` is unaffected by the split because it was already derived from the KNN
      * distance rather than from this count (see `isolated` below for why that matters).
+     *
+     * ## Why the row order this returns is load-bearing
+     *
+     * Three things downstream read this row order as a tie-break, none of them obviously:
+     *
+     *  - `territories` and `territories[].districts` are sorted by `packets` descending. Where
+     *    packets tie, `Array.prototype.sort` is stable, so the winner is whichever state or
+     *    district this query happened to emit first.
+     *  - `coverageGaps` is sorted by distance descending and cut at 25. Six branches tie at the
+     *    boundary on the scale book, so row order alone decides which one an operator is shown
+     *    as the 25th worst-covered branch.
+     *  - The float accumulators behind `avgNearestAssayerKm` and the per-district `auditHours`
+     *    are summed in arrival order, and float addition is not associative.
+     *
+     * Without a total order the plan is free to emit these 40,087 rows in any order, and it
+     * does: measured here, `enable_mergejoin=off` alone reorders 79,400 positions and changes
+     * the coverage-gap list and the accumulators, on identical data. Postgres can make that
+     * choice by itself after a routine ANALYZE.
+     *
+     * The order is imposed in TypeScript, immediately below, rather than with an `ORDER BY`
+     * here — see `orderedById` for why. It is deliberately not both: one owner, so the two
+     * cannot drift into disagreeing.
      */
     const branches = await this.dataSource.query(
       `WITH scoped AS (
@@ -266,6 +326,13 @@ export class CommandCenterService {
     /**
      * The workforce layer. `open_assignments` was a correlated COUNT per assayer — one index
      * probe per person, 5,000 of them on a national roster; grouped once instead.
+     *
+     * This one is ordered below too, and here row order decides content rather than just
+     * sequence: `assayerPoints` is cut to `maxPoints`, and on the scale book that is 4,000 of
+     * 4,526 people. Which 526 got dropped was whatever the plan emitted last —
+     * `enable_hashjoin=off` picks a different set on identical data. Every assayer aggregate
+     * (headcount, daily capacity, territory rollups, `idleAssayers`) is computed over the full
+     * roster and is unaffected; ordering only makes the bounded pin array reproducible.
      */
     const assayers = await this.dataSource.query(
       `WITH roster AS (
@@ -297,7 +364,9 @@ export class CommandCenterService {
     const n = (v: any) => Number(v ?? 0);
 
     // ── Per-branch derived view ────────────────────────────────────────────
-    const branchPoints = branches.map((b: any) => {
+    // Total order, before anything reads these rows. `project_branch_id` alone would be unique;
+    // leading with the branch id keeps a branch's several project-branches adjacent.
+    const branchPoints = orderedById(branches, 'project_branch_id').map((b: any) => {
       const packets = n(b.packet_count);
       const auditHours = (packets * n(b.minutes_per_packet)) / 60;
       // Exact distance for comparisons, rounded only for display. Rounding first made a branch
@@ -347,7 +416,7 @@ export class CommandCenterService {
       };
     });
 
-    const assayerPoints = assayers.map((a: any) => ({
+    const assayerPoints = orderedById(assayers, 'id').map((a: any) => ({
       id: a.id,
       name: a.display_name,
       assayerCode: a.assayer_code,
@@ -372,6 +441,11 @@ export class CommandCenterService {
           assayers: 0, dailyCapacity: 0,
           assignedBranches: 0, unassignedBranches: 0, isolatedBranches: 0,
           realisedRevenue: 0, pipelineValue: 0,
+          // Internal only — the running total and divisor behind `avgNearestAssayerKm`.
+          // Deliberately destructured off before the territory is returned: a float sum is
+          // worth exactly as much as its summation order, and these two were reaching the
+          // wire raw (`nearestKmSum: 268848.70000000414`) while every displayed figure
+          // derived from them was already rounded and stable.
           nearestKmSum: 0, nearestKmCount: 0,
           districts: new Map<string, any>(),
         });
@@ -418,15 +492,23 @@ export class CommandCenterService {
       const demandDays = t.auditHours / WORKING_HOURS_PER_DAY;
       const capacityDays = t.dailyCapacity; // branch-slots per day ≈ days of capacity per day
       const unassignedShare = t.branches ? t.unassignedBranches / t.branches : 0;
-      t.districts = [...t.districts.values()].sort((a: any, b: any) => b.packets - a.packets);
+      // Kept out of the spread below rather than overwritten by it: these are the running
+      // float total and its divisor, not outputs. See where they are initialised.
+      const { nearestKmSum, nearestKmCount, ...territoryFields } = t;
       return {
-        ...t,
+        ...territoryFields,
+        // Rounded to the same 1 dp every other hours figure on this response already uses
+        // (branch, territory and total). Unrounded, a district carried the summation order
+        // out with it — `auditHours: 110.39999999999999` against a neighbouring `58.1`.
+        districts: [...t.districts.values()]
+          .map((d: any) => ({ ...d, auditHours: Math.round(d.auditHours * 10) / 10 }))
+          .sort((a: any, b: any) => b.packets - a.packets),
         auditHours: Math.round(t.auditHours * 10) / 10,
         demandAssayerDays: Math.round(demandDays * 10) / 10,
         dailyCapacity: t.dailyCapacity,
         // >1 means more work than local people can absorb in a day's cycle.
         loadRatio: capacityDays > 0 ? Math.round((demandDays / capacityDays) * 100) / 100 : null,
-        avgNearestAssayerKm: t.nearestKmCount ? Math.round((t.nearestKmSum / t.nearestKmCount) * 10) / 10 : null,
+        avgNearestAssayerKm: nearestKmCount ? Math.round((nearestKmSum / nearestKmCount) * 10) / 10 : null,
         pipelineValue: Math.round(t.branches * avgFee),
         unassignedShare: Math.round(unassignedShare * 100),
         // The headline judgement for this territory.
