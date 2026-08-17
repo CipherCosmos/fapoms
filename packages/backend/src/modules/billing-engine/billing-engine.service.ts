@@ -83,6 +83,49 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 /** Rounding slack when comparing money. Two figures within this are equal. */
 const MONEY_EPSILON = 0.01;
 
+/**
+ * One page of a billing list, and the size of the set it was cut from.
+ *
+ * `total` is the count across ALL pages, not the length of `items` — the client needs it to
+ * draw a pager and to say "50 of 85,733", and it is the only figure that stays right when the
+ * window moves.
+ */
+export interface BillingPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/** Rows returned when a caller names no window. */
+const BILLING_PAGE_DEFAULT = 50;
+
+/**
+ * The most rows any single billing list request can return.
+ *
+ * This clamp is the whole point of the change. Every list on this service used to run an
+ * unbounded `find()`: `GET /billing-engine/entries` with no filters returned one row per
+ * completed assignment — 85,733 on the scale book, and one of EIGHT queries the Billing page
+ * fires on mount. A ceiling that the caller cannot raise is what stops a future `?limit=999999`
+ * from quietly restoring exactly the behaviour being removed here.
+ */
+const BILLING_PAGE_MAX = 100;
+
+/**
+ * Resolve a `page`/`limit` pair into a clamped window.
+ *
+ * There is no shared paginator in this codebase — `document.service.ts`, `feedback.service.ts`
+ * and `validation.service.ts` each clamp inline in the same shape — so this follows that local
+ * convention rather than introducing a cross-cutting abstraction the rest of the repo would
+ * not use. Junk input (`limit=abc`, `page=-3`, `limit=0`) resolves to the default rather than
+ * to `NaN`, which as an OFFSET makes Postgres reject the query outright.
+ */
+function billingPageWindow(page?: number | string, limit?: number | string): { skip: number; take: number; page: number; limit: number } {
+  const safeLimit = Math.min(BILLING_PAGE_MAX, Math.max(1, Number(limit) || BILLING_PAGE_DEFAULT));
+  const safePage = Math.max(1, Math.trunc(Number(page)) || 1);
+  return { skip: (safePage - 1) * safeLimit, take: safeLimit, page: safePage, limit: safeLimit };
+}
+
 /** Work that is real revenue but has not reached an invoice yet. */
 const UNBILLED_STATES: BillingState[] = [
   BillingState.PENDING_BILLING,
@@ -1314,6 +1357,14 @@ export class BillingEngineService implements OnModuleInit {
     level?: BillingLevel;
     state?: BillingState;
   } = {}): Promise<BillingEntryEntity[]> {
+    return this.entryRepository.find({ where: this.entryWhere(filters), order: { createdAt: 'DESC' } });
+  }
+
+  /** The TypeORM `where` every entry list shares, so the paged and unpaged paths cannot drift. */
+  private entryWhere(filters: {
+    clientId?: string; projectId?: string; assignmentId?: string;
+    assayerId?: string; level?: BillingLevel; state?: BillingState;
+  }): Record<string, unknown> {
     const where: Record<string, unknown> = {};
     if (filters.clientId) where.clientId = filters.clientId;
     if (filters.projectId) where.projectId = filters.projectId;
@@ -1321,7 +1372,26 @@ export class BillingEngineService implements OnModuleInit {
     if (filters.assayerId) where.assayerId = filters.assayerId;
     if (filters.level) where.level = filters.level;
     if (filters.state) where.state = filters.state;
-    return this.entryRepository.find({ where, order: { createdAt: 'DESC' } });
+    return where;
+  }
+
+  /**
+   * One clamped page of billing entries, plus the total the filter matches.
+   *
+   * The unpaged {@link findEntries} above is kept for the bulk export in `reports.service`,
+   * which genuinely needs every row and runs on a background export path with progress
+   * reporting. Nothing reached from an interactive request may use it: this is the method the
+   * controller calls.
+   */
+  async findEntriesPage(filters: Parameters<BillingEngineService['findEntries']>[0] & { page?: number | string; limit?: number | string } = {}): Promise<BillingPage<BillingEntryEntity>> {
+    const w = billingPageWindow(filters.page, filters.limit);
+    const [items, total] = await this.entryRepository.findAndCount({
+      where: this.entryWhere(filters),
+      order: { createdAt: 'DESC' },
+      skip: w.skip,
+      take: w.take,
+    });
+    return { items, total, page: w.page, limit: w.limit };
   }
 
   /**
@@ -1332,6 +1402,24 @@ export class BillingEngineService implements OnModuleInit {
    */
   async findEntriesEnriched(filters: Parameters<BillingEngineService['findEntries']>[0] = {}) {
     const entries = await this.findEntries(filters);
+    return this.attachEntryNames(entries);
+  }
+
+  /**
+   * A page of entries, enriched — what `GET /billing-engine/entries` serves.
+   *
+   * The name lookups run against the PAGE, not the table: `resolveNames` issues four
+   * `id = ANY($1)` queries whose parameter arrays used to hold one id per row in the whole
+   * book, so the enrichment step scaled with the table exactly as badly as the list did.
+   */
+  async findEntriesPageEnriched(
+    filters: Parameters<BillingEngineService['findEntriesPage']>[0] = {},
+  ): Promise<BillingPage<Awaited<ReturnType<BillingEngineService['attachEntryNames']>>[number]>> {
+    const { items, total, page, limit } = await this.findEntriesPage(filters);
+    return { items: await this.attachEntryNames(items), total, page, limit };
+  }
+
+  private async attachEntryNames(entries: BillingEntryEntity[]) {
     const names = await this.resolveNames(entries);
     return entries.map((e) => ({
       ...e,
@@ -1346,7 +1434,34 @@ export class BillingEngineService implements OnModuleInit {
 
   /** Payables with assayer/project labels — the table rendered raw UUIDs before. */
   async findPayablesEnriched(filters: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus } = {}) {
-    const payables = await this.findPayables(filters);
+    return this.attachPayableNames(await this.findPayables(filters));
+  }
+
+  /**
+   * A page of payables, enriched — what `GET /billing-engine/payables` serves.
+   *
+   * Same shape and the same reason as {@link findEntriesPageEnriched}: the label lookups now
+   * cover a page rather than every payable ever raised.
+   */
+  async findPayablesPageEnriched(
+    filters: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus; page?: number | string; limit?: number | string } = {},
+  ): Promise<BillingPage<Awaited<ReturnType<BillingEngineService['attachPayableNames']>>[number]>> {
+    const w = billingPageWindow(filters.page, filters.limit);
+    const where: Record<string, unknown> = {};
+    if (filters.assayerId) where.assayerId = filters.assayerId;
+    if (filters.clientId) where.clientId = filters.clientId;
+    if (filters.status) where.status = filters.status;
+
+    const [payables, total] = await this.payableRepository.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: w.skip,
+      take: w.take,
+    });
+    return { items: await this.attachPayableNames(payables), total, page: w.page, limit: w.limit };
+  }
+
+  private async attachPayableNames(payables: AssayerPayableEntity[]) {
     const names = await this.resolveNames([], payables);
     // Payables reference projects/assignments that the entry-based lookup above
     // does not cover, so those labels are resolved directly.
@@ -1555,9 +1670,26 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   async findConflicts(status?: BillingConflictStatus): Promise<any[]> {
-    const conflicts = await this.conflictRepository.find({
+    return (await this.findConflictsPage(status)).items;
+  }
+
+  /**
+   * One clamped page of conflicts, newest first.
+   *
+   * Conflicts are raised automatically by duplicate detection on every entry created, so this
+   * table grows with the billing book rather than with operator activity — an unbounded read
+   * here was the same defect as on entries, just less obvious.
+   */
+  async findConflictsPage(
+    status?: BillingConflictStatus,
+    pageParams: { page?: number | string; limit?: number | string } = {},
+  ): Promise<BillingPage<any>> {
+    const w = billingPageWindow(pageParams.page, pageParams.limit);
+    const [conflicts, total] = await this.conflictRepository.findAndCount({
       where: status ? { status } : {},
       order: { createdAt: 'DESC' },
+      skip: w.skip,
+      take: w.take,
     });
 
     const userIds = [...new Set([
@@ -1574,11 +1706,16 @@ export class BillingEngineService implements OnModuleInit {
 
     const userNameById = new Map<string, string>(users.map((u: any) => [u.id, u.display_name]));
 
-    return conflicts.map((c) => ({
-      ...c,
-      createdByName: c.createdById ? userNameById.get(c.createdById) ?? null : null,
-      resolvedByName: c.resolvedById ? userNameById.get(c.resolvedById) ?? null : null,
-    }));
+    return {
+      items: conflicts.map((c) => ({
+        ...c,
+        createdByName: c.createdById ? userNameById.get(c.createdById) ?? null : null,
+        resolvedByName: c.resolvedById ? userNameById.get(c.resolvedById) ?? null : null,
+      })),
+      total,
+      page: w.page,
+      limit: w.limit,
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -1937,12 +2074,62 @@ export class BillingEngineService implements OnModuleInit {
     });
   }
 
+  /**
+   * Every invoice matching the filter, each with its entries hydrated.
+   *
+   * Retained for the bulk export in `reports.service`, which prints an entry count per invoice
+   * and so genuinely needs the relation. Interactive callers must use {@link findInvoicesPage}:
+   * this one loads the whole invoice book AND every billing line hanging off it.
+   */
   async findInvoices(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoiceEntity[]> {
+    return this.invoiceRepository.find({ where: this.invoiceWhere(filters), relations: ['entries'], order: { createdAt: 'DESC' } });
+  }
+
+  private invoiceWhere(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus }): Record<string, unknown> {
     const where: Record<string, unknown> = {};
     if (filters.clientId) where.clientId = filters.clientId;
     if (filters.projectId) where.projectId = filters.projectId;
     if (filters.status) where.status = filters.status;
-    return this.invoiceRepository.find({ where, relations: ['entries'], order: { createdAt: 'DESC' } });
+    return where;
+  }
+
+  /**
+   * One clamped page of invoices — what `GET /billing-engine/invoices` serves.
+   *
+   * Deliberately WITHOUT `relations: ['entries']`. The list screen renders an invoice's number,
+   * status, dates and money columns; it never opens the lines, which are fetched by
+   * {@link getInvoice} when a row is expanded. Hydrating them for the list meant every invoice
+   * dragged its entire set of billing entries across the wire to be discarded — the single
+   * largest multiplier on this endpoint. `entryCount` replaces the one thing a list could want
+   * from them, at the cost of a grouped count rather than N hydrated rows.
+   */
+  async findInvoicesPage(
+    filters: { clientId?: string; projectId?: string; status?: InvoiceStatus; page?: number | string; limit?: number | string } = {},
+  ): Promise<BillingPage<BillingInvoiceEntity & { entryCount: number }>> {
+    const w = billingPageWindow(filters.page, filters.limit);
+    const [invoices, total] = await this.invoiceRepository.findAndCount({
+      where: this.invoiceWhere(filters),
+      order: { createdAt: 'DESC' },
+      skip: w.skip,
+      take: w.take,
+    });
+
+    // One grouped count for the page, rather than one hydrated relation per invoice.
+    const ids = invoices.map((i) => i.id);
+    const countRows: Array<{ invoice_id: string; n: string }> = ids.length
+      ? await this.invoiceRepository.manager.query(
+          `SELECT invoice_id, COUNT(*) AS n FROM billing_entries WHERE invoice_id = ANY($1) GROUP BY invoice_id`,
+          [ids],
+        )
+      : [];
+    const countById = new Map(countRows.map((r) => [r.invoice_id, Number(r.n)]));
+
+    return {
+      items: invoices.map((i) => Object.assign(i, { entryCount: countById.get(i.id) ?? 0 })),
+      total,
+      page: w.page,
+      limit: w.limit,
+    };
   }
 
   async getInvoice(invoiceId: string): Promise<BillingInvoiceEntity> {
@@ -2480,77 +2667,167 @@ export class BillingEngineService implements OnModuleInit {
   // -----------------------------------------------------------------------
 
   async getHistory(filters: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType } = {}): Promise<BillingHistoryEntity[]> {
+    return this.historyRepository.find({ where: this.historyWhere(filters), order: { createdAt: 'DESC' }, take: 200 });
+  }
+
+  private historyWhere(filters: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType }): Record<string, unknown> {
     const where: Record<string, unknown> = {};
     if (filters.clientId) where.clientId = filters.clientId;
     if (filters.projectId) where.projectId = filters.projectId;
     if (filters.assignmentId) where.assignmentId = filters.assignmentId;
     if (filters.assayerId) where.assayerId = filters.assayerId;
     if (filters.entityType) where.entityType = filters.entityType;
-    return this.historyRepository.find({ where, order: { createdAt: 'DESC' }, take: 200 });
+    return where;
+  }
+
+  /**
+   * One clamped page of the audit trail, plus the true number of matching events.
+   *
+   * This list was already bounded at 200 rows, so it was never the memory problem the others
+   * were — but a fixed `take` with no `total` and no way to reach row 201 is a silent truncation
+   * rather than a page: the trail simply stopped, with nothing on screen to say more existed.
+   */
+  async getHistoryPage(
+    filters: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType; page?: number | string; limit?: number | string } = {},
+  ): Promise<BillingPage<BillingHistoryEntity>> {
+    const w = billingPageWindow(filters.page, filters.limit);
+    const [items, total] = await this.historyRepository.findAndCount({
+      where: this.historyWhere(filters),
+      order: { createdAt: 'DESC' },
+      skip: w.skip,
+      take: w.take,
+    });
+    return { items, total, page: w.page, limit: w.limit };
   }
 
   // -----------------------------------------------------------------------
   // Dashboard & reports (spec §11)
   // -----------------------------------------------------------------------
 
+  /**
+   * Receivables ageing, computed in SQL over the whole invoice book.
+   *
+   * The buckets are the ones {@link ageInvoices} produced row by row in JS. The day count is
+   * reproduced exactly: `daysOverdue` measures from UTC midnight on the due date to now and
+   * treats anything not yet past due — and anything fully paid — as `current`.
+   */
+  private static readonly AGEING_SELECT = `
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND (due_date IS NULL OR $OD <= 0)), 0) AS current,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 0  AND $OD <= 30), 0) AS d1_30,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 30 AND $OD <= 60), 0) AS d31_60,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 60 AND $OD <= 90), 0) AS d61_90,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 90), 0) AS d90_plus
+  `.replace(/\$OD/g, `FLOOR(EXTRACT(EPOCH FROM (NOW() - ((due_date::text || ' 00:00:00+00')::timestamptz))) / 86400)`);
+
+  /**
+   * The billing overview, assembled from SQL aggregates rather than from the table.
+   *
+   * It previously loaded EVERY billing entry, EVERY invoice and EVERY payable into the process
+   * and reduced them in JavaScript — five `Array.filter` passes over the entry list alone. On
+   * the scale book that is 85,733 entries hydrated into entity objects to produce fourteen
+   * scalars. Every figure below is now one grouped pass in Postgres over an index, and the
+   * numbers are unchanged: the same columns, the same state predicates, the same rounding.
+   *
+   * The scoping asymmetry is preserved deliberately, not overlooked. A client-scoped call has
+   * never filtered on `is_active` while the org-wide call always has, so a soft-deleted entry
+   * counts towards one dashboard and not the other. That is a real defect, but correcting it
+   * here would move numbers finance reads, which this change is explicitly not allowed to do —
+   * it is called out in the handover instead.
+   */
   async dashboard(clientId?: string): Promise<any> {
-    const [entries, invoices, payables, conflicts, history] = await Promise.all([
-      clientId ? this.findEntries({ clientId }) : this.entryRepository.find({ where: { isActive: true } }),
-      clientId ? this.findInvoices({ clientId }) : this.invoiceRepository.find({ where: { isActive: true } }),
-      this.payableRepository.find({ where: clientId ? { clientId } : { isActive: true } }),
-      this.conflictRepository.find({ where: { status: BillingConflictStatus.OPEN } }),
+    const mgr = this.entryRepository.manager;
+    // Client-scoped: filter on the client and nothing else. Org-wide: active rows only.
+    const scope = (col = 'client_id') => (clientId ? `${col} = $1` : 'is_active = true');
+    const params = clientId ? [clientId] : [];
+    const unbilled = UNBILLED_STATES.map((s) => `'${s}'`).join(',');
+
+    const [entryRows, levelRows, payableRows, invoiceRows, ageRows, conflictRows, history] = await Promise.all([
+      mgr.query(`
+        SELECT COALESCE(SUM(billed_amount), 0)      AS billed,
+               COALESCE(SUM(paid_amount), 0)        AS paid,
+               COALESCE(SUM(outstanding_amount), 0) AS outstanding,
+               COALESCE(SUM(total_amount) FILTER (WHERE state IN (${unbilled})), 0)                     AS pending,
+               COALESCE(SUM(disputed_amount) FILTER (WHERE state = '${BillingState.DISPUTED}'), 0)      AS disputed,
+               COALESCE(SUM(total_amount) FILTER (WHERE state IN ('${BillingState.CANCELLED}','${BillingState.ADJUSTED}')), 0) AS cancelled_adjusted,
+               COALESCE(SUM(taxable_amount), 0)     AS revenue
+          FROM billing_entries WHERE ${scope()}`, params),
+
+      mgr.query(`
+        SELECT level,
+               COALESCE(SUM(billed_amount), 0)      AS billed,
+               COALESCE(SUM(paid_amount), 0)        AS paid,
+               COALESCE(SUM(outstanding_amount), 0) AS outstanding
+          FROM billing_entries WHERE ${scope()} GROUP BY level`, params),
+
+      mgr.query(`
+        SELECT COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.PENDING}'), 0)  AS pending,
+               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.APPROVED}'), 0) AS approved,
+               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.PAID}'), 0)     AS paid,
+               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.DISPUTED}'), 0) AS disputed,
+               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.ON_HOLD}'), 0)  AS on_hold,
+               COALESCE(SUM(base_amount + travel_amount), 0)                                            AS assayer_cost
+          FROM assayer_payables WHERE ${scope()}`, params),
+
+      mgr.query(`
+        SELECT COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE status IN ('${InvoiceStatus.ISSUED}','${InvoiceStatus.PARTIALLY_PAID}'))::int AS issued,
+               COUNT(*) FILTER (WHERE status = '${InvoiceStatus.PAID}')::int                                        AS paid,
+               COALESCE(SUM(outstanding_amount), 0) AS outstanding
+          FROM billing_invoices WHERE ${scope()}`, params),
+
+      mgr.query(`SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices WHERE ${scope()}`, params),
+
+      mgr.query(`SELECT COUNT(*)::int AS n FROM billing_conflicts WHERE status = '${BillingConflictStatus.OPEN}'`),
+
       this.historyRepository.find({ where: clientId ? { clientId } : {}, order: { createdAt: 'DESC' }, take: 50 }),
     ]);
 
-    const sum = <T, K extends keyof T>(arr: T[], k: K) =>
-      round2(arr.reduce((a, item) => a + Number((item as any)[k] ?? 0), 0));
+    const n = (v: any) => round2(Number(v ?? 0));
+    const e = entryRows[0] ?? {};
+    const p = payableRows[0] ?? {};
+    const inv = invoiceRows[0] ?? {};
+    const ag = ageRows[0] ?? {};
 
-    const billed = sum(entries, 'billedAmount');
-    const paid = sum(entries, 'paidAmount');
-    const outstanding = sum(entries, 'outstandingAmount');
+    const billed = n(e.billed);
+    const paid = n(e.paid);
+    const outstanding = n(e.outstanding);
     // The one definition of unbilled — the shared UNBILLED_STATES, which every other finance
     // figure uses. This inlined a 5-state list that omitted APPROVED, so the moment finance
     // approved an entry the Overview KPI dropped it while the Finance tab still counted it: the
     // same rupees, two numbers, on two tabs of one screen.
-    const pending = sum(
-      entries.filter((e) => UNBILLED_STATES.includes(e.state)),
-      'totalAmount',
-    );
-    const disputed = sum(entries.filter((e) => e.state === BillingState.DISPUTED), 'disputedAmount');
-    const cancelledAdjusted = sum(
-      entries.filter((e) => e.state === BillingState.CANCELLED || e.state === BillingState.ADJUSTED),
-      'totalAmount',
-    );
+    const pending = n(e.pending);
+    const disputed = n(e.disputed);
+    const cancelledAdjusted = n(e.cancelled_adjusted);
 
+    // Every level is present even when it has no rows: the client iterates `Object.keys(byLevel)`
+    // to lay out its columns, so a level dropping out because nothing was billed at it would
+    // silently remove a column rather than show a zero.
+    const levelById = new Map(levelRows.map((r: any) => [r.level, r]));
     const byLevel: Record<string, { billed: number; paid: number; outstanding: number }> = {};
     for (const lvl of Object.values(BillingLevel)) {
-      const levelEntries = entries.filter((e) => e.level === lvl);
-      byLevel[lvl] = {
-        billed: sum(levelEntries, 'billedAmount'),
-        paid: sum(levelEntries, 'paidAmount'),
-        outstanding: sum(levelEntries, 'outstandingAmount'),
-      };
+      const row: any = levelById.get(lvl) ?? {};
+      byLevel[lvl] = { billed: n(row.billed), paid: n(row.paid), outstanding: n(row.outstanding) };
     }
 
     const payableTotals = {
-      pending: sum(payables.filter((p) => p.status === AssayerPayableStatus.PENDING), 'totalAmount'),
-      approved: sum(payables.filter((p) => p.status === AssayerPayableStatus.APPROVED), 'totalAmount'),
-      paid: sum(payables.filter((p) => p.status === AssayerPayableStatus.PAID), 'totalAmount'),
-      disputed: sum(payables.filter((p) => p.status === AssayerPayableStatus.DISPUTED), 'totalAmount'),
-      onHold: sum(payables.filter((p) => p.status === AssayerPayableStatus.ON_HOLD), 'totalAmount'),
+      pending: n(p.pending),
+      approved: n(p.approved),
+      paid: n(p.paid),
+      disputed: n(p.disputed),
+      onHold: n(p.on_hold),
     };
 
     const invoiceTotals = {
-      total: invoices.length,
-      issued: invoices.filter((i) => i.status === InvoiceStatus.ISSUED || i.status === InvoiceStatus.PARTIALLY_PAID).length,
-      paid: invoices.filter((i) => i.status === InvoiceStatus.PAID).length,
-      outstanding: round2(invoices.reduce((a, i) => a + Number(i.outstandingAmount ?? 0), 0)),
+      total: Number(inv.total ?? 0),
+      issued: Number(inv.issued ?? 0),
+      paid: Number(inv.paid ?? 0),
+      outstanding: n(inv.outstanding),
     };
 
     // Net revenue (taxable value, ex-GST) against gross assayer cost (fee + travel).
     // GST is a pass-through and TDS a withheld tax credit, so neither side is netted.
-    const assayerCost = totalPayableCost(payables);
-    const revenue = totalEntryRevenue(entries);
+    const assayerCost = n(p.assayer_cost);
+    const revenue = n(e.revenue);
 
     return {
       currency: 'INR',
@@ -2563,11 +2840,17 @@ export class BillingEngineService implements OnModuleInit {
         assayerCost,
         ...margin(revenue, assayerCost),
       },
-      aging: this.ageInvoices(invoices),
+      aging: {
+        current: n(ag.current),
+        d1_30: n(ag.d1_30),
+        d31_60: n(ag.d31_60),
+        d61_90: n(ag.d61_90),
+        d90_plus: n(ag.d90_plus),
+      },
       byLevel,
       payable: payableTotals,
       invoices: invoiceTotals,
-      openConflicts: conflicts.length,
+      openConflicts: Number(conflictRows[0]?.n ?? 0),
       recentActivity: history.map((h) => ({
         id: h.id,
         action: h.action,
@@ -2971,50 +3254,101 @@ export class BillingEngineService implements OnModuleInit {
    * data previously lived in three unconnected modules.
    */
   async financeDashboard(): Promise<any> {
-    const [entries, invoices, payables, payments, conflicts] = await Promise.all([
-      this.entryRepository.find({ where: { isActive: true } }),
-      this.invoiceRepository.find({ where: { isActive: true } }),
-      this.payableRepository.find({ where: { isActive: true } }),
-      this.paymentRepository.find({ where: { isActive: true }, order: { createdAt: 'DESC' } }),
-      this.conflictRepository.find({ where: { status: BillingConflictStatus.OPEN } }),
+    const mgr = this.entryRepository.manager;
+    const unbilled = UNBILLED_STATES.map((s) => `'${s}'`).join(',');
+
+    /**
+     * Five aggregate queries in place of four whole-table reads.
+     *
+     * This endpoint used to load every entry, every invoice, every payable AND every payment
+     * ever recorded — the last of those with no bound at all — purely to produce twenty
+     * scalars and a fifteen-row recent-payments strip. Only that strip needs rows, and it now
+     * asks for the fifteen it renders instead of sorting the entire payment history in memory.
+     */
+    const [entryRows, invoiceRows, ageRows, payableRows, cashRows, conflictRows, recent] = await Promise.all([
+      mgr.query(`
+        SELECT COALESCE(SUM(total_amount) FILTER (WHERE state IN (${unbilled})), 0)                AS unbilled,
+               COALESCE(SUM(total_amount) FILTER (WHERE state = '${BillingState.DISPUTED}'), 0)    AS disputed,
+               COALESCE(SUM(taxable_amount), 0) AS net_revenue,
+               COALESCE(SUM(tax_amount), 0)     AS gst_collected,
+               COALESCE(SUM(tds_amount), 0)     AS tds_by_clients
+          FROM billing_entries WHERE is_active = true`),
+
+      mgr.query(`
+        SELECT COALESCE(SUM(total), 0)              AS invoiced,
+               COALESCE(SUM(paid_amount), 0)        AS collected,
+               COALESCE(SUM(outstanding_amount), 0) AS outstanding
+          FROM billing_invoices WHERE is_active = true`),
+
+      mgr.query(`SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices WHERE is_active = true`),
+
+      mgr.query(`
+        SELECT COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.PENDING}'), 0)  AS awaiting_approval,
+               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = '${AssayerPayableStatus.APPROVED}'), 0) AS approved_unpaid,
+               COALESCE(SUM(paid_amount), 0)                                                            AS paid,
+               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.ON_HOLD}'), 0)  AS on_hold,
+               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.DISPUTED}'), 0) AS disputed,
+               COALESCE(SUM(total_amount), 0)                                                           AS total,
+               COALESCE(SUM(base_amount + travel_amount), 0)                                            AS gross_cost,
+               COALESCE(SUM(tds_amount), 0)                                                             AS tds_from_assayers
+          FROM assayer_payables WHERE is_active = true`),
+
+      mgr.query(`
+        SELECT COALESCE(SUM(amount) FILTER (WHERE direction = '${PaymentDirection.INBOUND}'), 0)  AS cash_in,
+               COALESCE(SUM(amount) FILTER (WHERE direction = '${PaymentDirection.OUTBOUND}'), 0) AS cash_out,
+               COUNT(*) FILTER (WHERE direction = '${PaymentDirection.INBOUND}')::int             AS inbound_count,
+               COUNT(*) FILTER (WHERE direction = '${PaymentDirection.OUTBOUND}')::int            AS outbound_count
+          FROM billing_payments WHERE is_active = true`),
+
+      mgr.query(`SELECT COUNT(*)::int AS n FROM billing_conflicts WHERE status = '${BillingConflictStatus.OPEN}'`),
+
+      // Only the rows the strip actually renders. `.slice(0, 15)` over every payment ever taken
+      // was the whole reason this endpoint read the payments table at all.
+      this.paymentRepository.find({ where: { isActive: true }, order: { createdAt: 'DESC' }, take: 15 }),
     ]);
 
-    const sum = (arr: any[], k: string) => round2(arr.reduce((a, x) => a + Number(x[k] ?? 0), 0));
-    const inbound = payments.filter((p) => p.direction === PaymentDirection.INBOUND);
-    const outbound = payments.filter((p) => p.direction === PaymentDirection.OUTBOUND);
+    const n = (v: any) => round2(Number(v ?? 0));
+    const e = entryRows[0] ?? {};
+    const inv = invoiceRows[0] ?? {};
+    const ag = ageRows[0] ?? {};
+    const p = payableRows[0] ?? {};
+    const cash = cashRows[0] ?? {};
 
     // Accounts receivable — money clients owe us.
     const receivable = {
-      unbilled: sum(entries.filter((e) => UNBILLED_STATES.includes(e.state)), 'totalAmount'),
-      invoiced: sum(invoices, 'total'),
-      collected: sum(invoices, 'paidAmount'),
-      outstanding: sum(invoices, 'outstandingAmount'),
-      disputed: sum(entries.filter((e) => e.state === BillingState.DISPUTED), 'totalAmount'),
-      aging: this.ageInvoices(invoices),
+      unbilled: n(e.unbilled),
+      invoiced: n(inv.invoiced),
+      collected: n(inv.collected),
+      outstanding: n(inv.outstanding),
+      disputed: n(e.disputed),
+      aging: {
+        current: n(ag.current),
+        d1_30: n(ag.d1_30),
+        d31_60: n(ag.d31_60),
+        d61_90: n(ag.d61_90),
+        d90_plus: n(ag.d90_plus),
+      },
     };
 
     // Accounts payable — money we owe assayers for completed work.
-    const byStatus = (s: AssayerPayableStatus) => payables.filter((p) => p.status === s);
     const payable = {
-      awaitingApproval: sum(byStatus(AssayerPayableStatus.PENDING), 'totalAmount'),
-      approvedUnpaid: round2(
-        byStatus(AssayerPayableStatus.APPROVED).reduce((a, p) => a + (Number(p.totalAmount) - Number(p.paidAmount)), 0),
-      ),
-      paid: sum(payables, 'paidAmount'),
-      onHold: sum(byStatus(AssayerPayableStatus.ON_HOLD), 'totalAmount'),
-      disputed: sum(byStatus(AssayerPayableStatus.DISPUTED), 'totalAmount'),
-      total: sum(payables, 'totalAmount'),
+      awaitingApproval: n(p.awaiting_approval),
+      approvedUnpaid: n(p.approved_unpaid),
+      paid: n(p.paid),
+      onHold: n(p.on_hold),
+      disputed: n(p.disputed),
+      total: n(p.total),
     };
 
-    const netRevenue = sum(entries, 'taxableAmount');
-    const grossCost = round2(payables.reduce((a, p) => a + Number(p.baseAmount) + Number(p.travelAmount), 0));
+    const netRevenue = n(e.net_revenue);
+    const grossCost = n(p.gross_cost);
 
     // Statutory positions finance has to file: GST collected on sales, TDS
     // withheld by clients from us, and TDS we withheld from assayers.
     const taxPosition = {
-      gstCollected: sum(entries, 'taxAmount'),
-      tdsWithheldByClients: sum(entries, 'tdsAmount'),
-      tdsWithheldFromAssayers: sum(payables, 'tdsAmount'),
+      gstCollected: n(e.gst_collected),
+      tdsWithheldByClients: n(e.tds_by_clients),
+      tdsWithheldFromAssayers: n(p.tds_from_assayers),
     };
 
     return {
@@ -3023,11 +3357,11 @@ export class BillingEngineService implements OnModuleInit {
       payable,
       cashflow: {
         // Real movements, not accruals — what actually hit the bank.
-        in: sum(inbound, 'amount'),
-        out: sum(outbound, 'amount'),
-        net: round2(sum(inbound, 'amount') - sum(outbound, 'amount')),
-        inboundCount: inbound.length,
-        outboundCount: outbound.length,
+        in: n(cash.cash_in),
+        out: n(cash.cash_out),
+        net: round2(n(cash.cash_in) - n(cash.cash_out)),
+        inboundCount: Number(cash.inbound_count ?? 0),
+        outboundCount: Number(cash.outbound_count ?? 0),
       },
       profitability: {
         netRevenue,
@@ -3038,14 +3372,14 @@ export class BillingEngineService implements OnModuleInit {
       taxPosition,
       // Working capital: collections still to come, less what we must pay out.
       workingCapital: round2(receivable.outstanding - payable.approvedUnpaid),
-      openConflicts: conflicts.length,
-      recentPayments: payments.slice(0, 15).map((p) => ({
-        id: p.id,
-        direction: p.direction,
-        reference: p.paymentReference,
-        method: p.method,
-        amount: Number(p.amount),
-        date: p.receivedDate,
+      openConflicts: Number(conflictRows[0]?.n ?? 0),
+      recentPayments: recent.map((pm) => ({
+        id: pm.id,
+        direction: pm.direction,
+        reference: pm.paymentReference,
+        method: pm.method,
+        amount: Number(pm.amount),
+        date: pm.receivedDate,
       })),
     };
   }
