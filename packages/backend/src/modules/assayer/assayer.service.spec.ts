@@ -541,66 +541,8 @@ describe('AssayerService', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Remarks
-  // ---------------------------------------------------------------------------
-
-  describe('addRemark', () => {
-    it('should create remark with author attribution', async () => {
-      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
-      const saved = { id: 'rem-1', content: 'Good work', authorId: 'user-1', authorName: 'Admin', category: 'PERFORMANCE' };
-      mockRemarkRepo.create.mockReturnValue(saved);
-      mockRemarkRepo.save.mockResolvedValue(saved);
-
-      const result = await service.addRemark('asr-1', {
-        content: 'Good work', category: 'PERFORMANCE', visibility: 'PUBLIC',
-      }, 'user-1', 'Admin');
-
-      expect(result.authorName).toBe('Admin');
-      expect(mockAuditService.recordEvent).toHaveBeenCalled();
-    });
-  });
-
-  describe('updateRemark', () => {
-    it('should update remark content', async () => {
-      mockRemarkRepo.findOne.mockResolvedValue({ id: 'rem-1', assayerId: 'asr-1', content: 'Old', isActive: true });
-      mockRemarkRepo.save.mockImplementation((e) => Promise.resolve(e));
-
-      const result = await service.updateRemark('rem-1', { content: 'Updated content' }, 'user-1');
-
-      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'ASSAYER_REMARK_UPDATED' }),
-      );
-    });
-  });
-
-  describe('removeRemark', () => {
-    it('should soft delete remark and preserve audit', async () => {
-      mockRemarkRepo.findOne.mockResolvedValue({ id: 'rem-1', assayerId: 'asr-1', content: 'Some remark', isActive: true });
-      mockRemarkRepo.save.mockImplementation((e) => Promise.resolve(e));
-
-      await service.removeRemark('rem-1', 'user-1');
-
-      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'ASSAYER_REMARK_REMOVED' }),
-      );
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // Pagination
   // ---------------------------------------------------------------------------
-
-  describe('getRemarks pagination', () => {
-    it('should return paginated remarks', async () => {
-      const remarks = [{ id: 'rem-1', content: 'Remark 1' }];
-      mockRemarkRepo.findAndCount.mockResolvedValue([remarks, 1]);
-
-      const result = await service.getRemarks('asr-1', undefined, 1, 20);
-
-      expect(result.remarks).toHaveLength(1);
-      expect(result.total).toBe(1);
-    });
-  });
 
   describe('getActivityTimeline pagination', () => {
     it('should return paginated timeline', async () => {

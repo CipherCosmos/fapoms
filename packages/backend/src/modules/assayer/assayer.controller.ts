@@ -601,40 +601,6 @@ export class CreateAssayerDocumentRequestDto {
   remarks?: string;
 }
 
-export class CreateRemarkRequestDto {
-  @IsString() @IsNotEmpty()
-  content: string;
-
-  @IsString() @IsNotEmpty()
-  category: string;
-
-  @IsString() @IsNotEmpty()
-  visibility: string;
-
-  @IsOptional() @IsArray()
-  attachmentPaths?: string[];
-
-  @IsOptional() @IsNumber()
-  rating?: number;
-}
-
-export class UpdateRemarkRequestDto {
-  @IsOptional() @IsString()
-  content?: string;
-
-  @IsOptional() @IsString()
-  category?: string;
-
-  @IsOptional() @IsString()
-  visibility?: string;
-
-  @IsOptional() @IsArray()
-  attachmentPaths?: string[];
-
-  @IsOptional() @IsNumber()
-  rating?: number;
-}
-
 export class UpdateAssayerDocumentRequestDto {
   @IsOptional() @IsString()
   documentType?: string;
@@ -1216,77 +1182,7 @@ export class AssayerController {
     await this.assayerService.removeAssayerDocument(id, req.user.id);
   }
 
-  // Remarks
-  // Remarks form part of the performance record; only staff may write them.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @Post(':assayerId/remark')
-  @HttpCode(201)
-  @ApiOperation({ summary: 'Add a remark to an assayer profile' })
-  async addRemark(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Body() dto: CreateRemarkRequestDto,
-    @Req() req: any,
-  ) {
-    const authorId = req.user?.id && /^[0-9a-fA-F-]{36}$/.test(req.user.id) ? req.user.id : assayerId;
-    const authorName = req.user?.name || req.user?.email || 'Operations Manager';
-    const remark = await this.assayerService.addRemark(assayerId, dto, authorId, authorName);
-    return { success: true, data: remark };
-  }
-
-  @Put(':assayerId/remark/:remarkId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Update a remark' })
-  async updateRemark(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Param('remarkId', ParseUUIDPipe) remarkId: string,
-    @Body() dto: UpdateRemarkRequestDto,
-    @Req() req: any,
-  ) {
-    const remark = await this.assayerService.updateRemark(remarkId, dto, req.user.id);
-    return { success: true, data: remark };
-  }
-
-  // Same reconciliation as the update above: neither OPERATIONS role holds
-  // `ASSAYER:DELETE:ORGANIZATION`, so both were dead entries the decorator advertised.
-  @Delete(':assayerId/remark/:remarkId')
-  @HttpCode(204)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
-  @RequirePermissions('assayer:delete:organization')
-  @ApiOperation({ summary: 'Delete a remark' })
-  async removeRemark(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Param('remarkId', ParseUUIDPipe) remarkId: string,
-    @Req() req: any,
-  ): Promise<void> {
-    await this.assayerService.removeRemark(remarkId, req.user.id);
-  }
-
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
-  @Get(':assayerId/remark')
-  @ApiOperation({ summary: 'List remarks for an assayer' })
-  async getRemarks(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Query('visibility') visibility?: string,
-    @Query('page') page = 1,
-    @Query('limit') limit = 20,
-  ) {
-    const { remarks, total } = await this.assayerService.getRemarks(assayerId, visibility, page, limit);
-    return {
-      success: true,
-      data: remarks,
-      meta: {
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit),
-          hasNext: page * limit < total,
-          hasPrevious: page > 1,
-        },
-      },
-    };
-  }
+  // Staff remarks about an assayer live under /assayer-remarks (modules/assayer-remarks).
 
   // Activity Timeline
   @Get(':assayerId/activity')
