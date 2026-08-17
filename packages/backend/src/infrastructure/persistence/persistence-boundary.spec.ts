@@ -88,6 +88,10 @@ const IMPORTS_TYPEORM = [
   'modules/feedback/feedback-thread.service.ts',
   // Read-only SLA breach detector for the feedback desk; aggregate queries only, no writes.
   'modules/feedback/feedback-escalation.service.ts',
+  // Staff remarks about assayers. Repository-only (Repository, In/IsNull/MoreThanOrEqual find
+  // operators), no DataSource, no transactions; it owns the one table and is the single read
+  // path the recommendation engine scores from (`loadScoringWindow`, one query per pool).
+  'modules/assayer-remarks/assayer-remarks.service.ts',
   'modules/document/document.service.ts',
   'modules/expense/expense.service.ts',
   'modules/geo/geo-seed.service.ts',

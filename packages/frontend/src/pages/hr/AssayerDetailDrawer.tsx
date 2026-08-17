@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  X, Edit2, ArrowRightLeft, Send, AlertTriangle, CheckCircle2,
+  X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus } from '@fapoms/shared';
@@ -13,6 +13,7 @@ import {
 } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
+import { AssayerRemarks } from '../../components/AssayerRemarks';
 
 /**
  * Everything about one person, in a slide-over.
@@ -60,7 +61,6 @@ export const AssayerDetailDrawer: React.FC<{
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
-  const [remark, setRemark] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
 
@@ -79,14 +79,16 @@ export const AssayerDetailDrawer: React.FC<{
 
   useEffect(() => {
     if (tab === 'summary' || loaded[tab] !== undefined) return;
-    const url = {
+    // Remarks are fetched by <AssayerRemarks> itself (react-query), so the planning desk and
+    // this drawer read one list from one API; only the other tabs load through here.
+    const url: Partial<Record<TabKey, string>> = {
       commercial: `/assayers/${assayerId}/commercial`,
       skills: `/assayers/${assayerId}/workforce-attribute`,
-      remarks: `/assayers/${assayerId}/remark`,
       history: `/assayers/${assayerId}/activity`,
-    }[tab];
-    if (!url) return;
-    api.request<any[]>(url)
+    };
+    const tabUrl = url[tab];
+    if (!tabUrl) return;
+    api.request<any[]>(tabUrl)
       .then((d) => setLoaded((p) => ({ ...p, [tab]: Array.isArray(d) ? d : [] })))
       .catch(() => setLoaded((p) => ({ ...p, [tab]: [] })));
   }, [tab, assayerId, loaded]);
@@ -115,21 +117,6 @@ export const AssayerDetailDrawer: React.FC<{
       setTarget(''); setReason('');
       setLoaded((p) => ({ ...p, history: undefined }));
       onChanged();
-    } catch (e) { setErr(userMessage(e)); }
-    setBusy(false);
-  };
-
-  const addRemark = async () => {
-    if (!remark.trim()) return;
-    setBusy(true); setErr(null);
-    try {
-      await api.request(`/assayers/${assayerId}/remark`, {
-        method: 'POST',
-        body: JSON.stringify({ content: remark, category: 'GENERAL', visibility: 'INTERNAL' }),
-      });
-      setRemark('');
-      const fresh = await api.request<any[]>(`/assayers/${assayerId}/remark`);
-      setLoaded((p) => ({ ...p, remarks: Array.isArray(fresh) ? fresh : [] }));
     } catch (e) { setErr(userMessage(e)); }
     setBusy(false);
   };
@@ -372,33 +359,13 @@ export const AssayerDetailDrawer: React.FC<{
                 />
               )}
 
-              {tab === 'remarks' && (
-                <div>
-                  {canManage && (
-                    <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-                      <input value={remark} onChange={(e) => setRemark(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') addRemark(); }}
-                        placeholder="Add a remark…"
-                        style={{ flex: 1, padding: '8px 11px', fontSize: '12.5px', borderRadius: '7px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }} />
-                      <button onClick={addRemark} disabled={!remark.trim() || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 12px' }}>
-                        <Send size={12} />
-                      </button>
-                    </div>
-                  )}
-                  <List
-                    rows={loaded.remarks}
-                    empty="No remarks yet."
-                    render={(r: any) => (
-                      <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
-                        <div style={{ fontSize: '12.5px' }}>{r.content}</div>
-                        <div style={{ ...label, marginTop: '4px' }}>
-                          {r.authorName ?? 'system'} · {fmtWhen(r.createdAt)}{r.category ? ` · ${r.category}` : ''}
-                        </div>
-                      </div>
-                    )}
-                  />
-                </div>
-              )}
+              {/*
+                Rated, attributed staff remarks — the same component the planning desk shows in
+                its assayer-detail modal, and the same figure the recommendation engine scores
+                from. Who may write is decided by role inside the component (the operations desk
+                can, not only HR), so it is deliberately not gated on `canManage`.
+              */}
+              {tab === 'remarks' && <AssayerRemarks assayerId={assayerId} />}
 
               {tab === 'history' && (
                 <List

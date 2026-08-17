@@ -279,22 +279,6 @@ export interface CreateAssayerDocumentDto {
   remarks?: string;
 }
 
-export interface CreateRemarkDto {
-  content: string;
-  category: string;
-  visibility: string;
-  attachmentPaths?: string[];
-  rating?: number;
-}
-
-export interface UpdateRemarkDto {
-  content?: string;
-  category?: string;
-  visibility?: string;
-  attachmentPaths?: string[];
-  rating?: number;
-}
-
 export interface UpdateAssayerDocumentDto {
   documentType?: string;
   fileName?: string;
@@ -1312,94 +1296,27 @@ export class AssayerService implements OnModuleInit {
     await this.recordActivity(doc.assayerId, 'ASSAYER_DOCUMENT_REMOVED', null, null, userId, `Removed ${doc.documentType} document`);
   }
 
-  // ---- Remarks ----
-
-  async addRemark(assayerId: string, dto: CreateRemarkDto, userId: string, userName: string): Promise<AssayerRemarkEntity> {
-    await this.findOne(assayerId);
-    const remark = this.remarkRepository.create({
-      assayerId,
-      authorId: userId,
-      authorName: userName,
-      content: dto.content,
-      category: dto.category,
-      visibility: dto.visibility,
-      attachmentPaths: dto.attachmentPaths || [],
-      rating: dto.rating ?? null,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await this.remarkRepository.save(remark);
-    if (dto.rating != null) {
-      await this.recomputeAverageRating(assayerId);
-    }
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_REMARK_ADDED',
-      entityType: 'ASSAYER_REMARK',
-      entityId: saved.id,
-      userId,
-      remarks: `Remark added for assayer ${assayerId} (${dto.category})`,
-    });
-    await this.recordActivity(assayerId, 'ASSAYER_REMARK_ADDED', null, null, userId, `Remark added (${dto.category})`);
-    return saved;
-  }
-
-  async updateRemark(remarkId: string, dto: UpdateRemarkDto, userId: string): Promise<AssayerRemarkEntity> {
-    const remark = await this.remarkRepository.findOne({ where: { id: remarkId, isActive: true } });
-    if (!remark) throw new NotFoundException(`Remark ${remarkId} not found.`);
-    if (dto.content !== undefined) remark.content = dto.content;
-    if (dto.category !== undefined) remark.category = dto.category;
-    if (dto.visibility !== undefined) remark.visibility = dto.visibility;
-    if (dto.attachmentPaths !== undefined) remark.attachmentPaths = dto.attachmentPaths;
-    if (dto.rating !== undefined) remark.rating = dto.rating;
-    remark.updatedBy = userId;
-    const saved = await this.remarkRepository.save(remark);
-    if (dto.rating !== undefined) {
-      await this.recomputeAverageRating(remark.assayerId);
-    }
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_REMARK_UPDATED',
-      entityType: 'ASSAYER_REMARK',
-      entityId: remarkId,
-      userId,
-      remarks: `Remark updated for assayer ${remark.assayerId}`,
-    });
-    await this.recordActivity(remark.assayerId, 'ASSAYER_REMARK_UPDATED', null, null, userId, `Remark updated`);
-    return saved;
-  }
-
-  async removeRemark(remarkId: string, userId: string): Promise<void> {
-    const remark = await this.remarkRepository.findOne({ where: { id: remarkId, isActive: true } });
-    if (!remark) throw new NotFoundException(`Remark ${remarkId} not found.`);
-    remark.isActive = false;
-    remark.updatedBy = userId;
-    await this.remarkRepository.save(remark);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_REMARK_REMOVED',
-      entityType: 'ASSAYER_REMARK',
-      entityId: remarkId,
-      userId,
-      remarks: `Remark removed for assayer ${remark.assayerId}`,
-    });
-    await this.recordActivity(remark.assayerId, 'ASSAYER_REMARK_REMOVED', null, null, userId, `Remark removed`);
-  }
-
-  async getRemarks(assayerId: string, visibility?: string, page = 1, limit = 20): Promise<{ remarks: AssayerRemarkEntity[]; total: number }> {
-    const where: any = { assayerId, isActive: true };
-    if (visibility) where.visibility = visibility;
-    const [remarks, total] = await this.remarkRepository.findAndCount({
-      where,
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
-    return { remarks, total };
-  }
-
   // ---- Stats & Profile ----
 
+  /**
+   * The cached `averageRating` on the assayer row, on the 1–5 scale its readers expect.
+   *
+   * Remarks themselves are written and read through AssayerRemarksService (modules/assayer-remarks);
+   * this is the only remark-derived figure that still lives here, because it is a column on the
+   * assayer row and is also refreshed from `updateAssayerStats`.
+   *
+   * Remark ratings are stored −2…+2 (see modules/assayer-remarks and migration
+   * AssayerRemarkRatings1791430000000). This used to write the raw average, which was harmless
+   * while no screen ever set a rating — the column sat at 0 and every reader hid it — but with the
+   * signed scale a single +1 remark came out as "1.0 out of 5", the opposite of what was said.
+   * `3 + mean` maps the neutral point to 3.0, all −2 to 1.0 and all +2 to 5.0, which is what the
+   * planning modal's colour thresholds (≥4 good, ≥3 fair) and the mobile "out of 5" tile read.
+   * Zero remains "nothing rated yet" and is still hidden by every reader's `> 0` guard.
+   *
+   * Deliberately a plain average over all live rated remarks, not the engine's recency-weighted
+   * one: this is a lifetime figure on the profile, the engine's is a "who are they now" score,
+   * and the two are labelled differently on screen.
+   */
   async recomputeAverageRating(assayerId: string): Promise<void> {
     const result = await this.remarkRepository
       .createQueryBuilder('r')
@@ -1408,8 +1325,11 @@ export class AssayerService implements OnModuleInit {
       .andWhere('r.rating IS NOT NULL')
       .andWhere('r.isActive = :isActive', { isActive: true })
       .getRawOne();
-    const avg = result?.avg ? parseFloat(Number(result.avg).toFixed(2)) : 0;
-    await this.assayerRepository.update(assayerId, { averageRating: avg });
+    const mean = result?.avg === null || result?.avg === undefined ? null : Number(result.avg);
+    const outOfFive = mean === null || !Number.isFinite(mean)
+      ? 0
+      : parseFloat(Math.max(1, Math.min(5, 3 + mean)).toFixed(2));
+    await this.assayerRepository.update(assayerId, { averageRating: outOfFive });
   }
 
   /**

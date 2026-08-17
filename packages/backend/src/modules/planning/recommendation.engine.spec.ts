@@ -26,6 +26,8 @@ import {
   CustomerDensityScoreCalculator,
   ProfitabilityScoreCalculator,
   RiskScoreCalculator,
+  RemarksScoreCalculator,
+  FairnessScoreCalculator,
 } from './recommendation.engine';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -41,6 +43,8 @@ import { AssayerService } from '../assayer/assayer.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
+import { AssayerRemarksService } from '../assayer-remarks/assayer-remarks.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 describe('RecommendationEngine', () => {
   let engine: RecommendationEngine;
@@ -81,6 +85,25 @@ describe('RecommendationEngine', () => {
     query: jest.fn().mockResolvedValue([]),
   };
 
+  /**
+   * What the assayer repository hands the engine. The real repository returns `AssayerEntity`
+   * instances, and the engine reads the entity's *getters* — `effectiveLatitude` /
+   * `effectiveLongitude` (the live fix if shared, else home) — to decide who gets routed at all.
+   * Fixture rows are plain objects with no getters, so for as long as `find` returned them raw
+   * nobody in this file had a position: no candidate was ever routed, the routing double below
+   * was never called, and the distance figures a test queued were silently ignored. Rows are
+   * therefore hydrated into entities on the way out, exactly as TypeORM would hand them over.
+   * Tests keep configuring and asserting on `mockAssayerRepo.find` itself.
+   */
+  const asAssayerEntity = (row: Record<string, unknown>): AssayerEntity => Object.assign(new AssayerEntity(), row);
+  const assayerRepositoryForEngine = {
+    ...mockAssayerRepo,
+    find: async (...args: unknown[]) => {
+      const rows = await mockAssayerRepo.find(...args);
+      return Array.isArray(rows) ? rows.map(asAssayerEntity) : rows;
+    },
+  };
+
   const mockAssignmentRepo = {
     findOne: jest.fn(),
     count: jest.fn(),
@@ -112,8 +135,46 @@ describe('RecommendationEngine', () => {
     findOne: jest.fn(),
   };
 
+  /**
+   * The engine routes the whole candidate pool in one `calculateDistances` batch and only falls
+   * back to per-candidate `calculateRoute` if the batch throws. A double that stubs only
+   * `calculateRoute` makes the batch throw (it is `undefined`), so every test would exercise the
+   * fallback and never the path production runs. The default `calculateDistances` therefore
+   * answers the batch by mapping each destination, in order, through the `calculateRoute` stub —
+   * so a test that queues per-candidate figures with `mockResolvedValueOnce` still hands them
+   * out one per candidate, and the batch path is what runs. Answers are labelled `OSRM` because
+   * that is what a routed batch returns; a stub that sets its own `source` keeps it.
+   */
+  const batchViaCalculateRoute = async (
+    origin: { latitude: number; longitude: number },
+    destinations: Array<{ id: string; latitude: number; longitude: number }>,
+    mode?: string,
+  ): Promise<Record<string, { distanceKm: number; durationMinutes: number; source: 'OSRM' | 'ESTIMATE' }>> => {
+    const results: Record<string, { distanceKm: number; durationMinutes: number; source: 'OSRM' | 'ESTIMATE' }> = {};
+    for (const d of destinations) {
+      const route = await mockRoutingService.calculateRoute(origin, d, mode);
+      if (route) results[d.id] = { ...route, source: route.source ?? 'OSRM' };
+    }
+    return results;
+  };
+
   const mockRoutingService = {
     calculateRoute: jest.fn(),
+    calculateDistances: jest.fn(batchViaCalculateRoute),
+  };
+
+  /**
+   * Staff remarks for the pool, keyed by assayer id — what recommend() preloads through the
+   * remarks module. Empty means nobody has said anything, which scores every candidate a
+   * neutral 50 on that dimension.
+   */
+  const mockRemarksService = {
+    loadScoringWindow: jest.fn().mockResolvedValue({}),
+  };
+
+  /** `planning.fairnessOfferCap`; 8 is the shipped default. */
+  const mockPlatformSettings = {
+    getNumber: jest.fn().mockResolvedValue(8),
   };
 
   const mockRuleEngine = {
@@ -167,11 +228,13 @@ describe('RecommendationEngine', () => {
         CustomerDensityScoreCalculator,
         ProfitabilityScoreCalculator,
         RiskScoreCalculator,
+        RemarksScoreCalculator,
+        FairnessScoreCalculator,
         ConfigurationResolver,
         ConstraintEvaluator,
         {
           provide: getRepositoryToken(AssayerEntity),
-          useValue: mockAssayerRepo,
+          useValue: assayerRepositoryForEngine,
         },
         {
           provide: getRepositoryToken(AssignmentEntity),
@@ -217,6 +280,8 @@ describe('RecommendationEngine', () => {
           provide: HolidayService,
           useValue: {},
         },
+        { provide: AssayerRemarksService, useValue: mockRemarksService },
+        { provide: PlatformSettingsService, useValue: mockPlatformSettings },
       ],
     }).compile();
 
@@ -232,6 +297,8 @@ describe('RecommendationEngine', () => {
     // so they must resolve rather than return undefined.
     mockProjectBranchRepo.findOne.mockResolvedValue(null);
     mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 10, durationMinutes: 20 });
+    // The batch is what recommend() actually calls; keep it routed through calculateRoute.
+    mockRoutingService.calculateDistances.mockImplementation(batchViaCalculateRoute);
     mockCommercialRepo.find.mockResolvedValue([]);
     mockCommercialRepo.findOne.mockResolvedValue(null);
     mockQueryRepo.find.mockResolvedValue([]);
@@ -239,6 +306,8 @@ describe('RecommendationEngine', () => {
     // createQueryBuilder is a factory, so clearAllMocks strips its implementation too.
     mockAssignmentRepo.createQueryBuilder.mockImplementation(groupedCountBuilder);
     mockQueryRepo.createQueryBuilder.mockImplementation(groupedCountBuilder);
+    mockRemarksService.loadScoringWindow.mockResolvedValue({});
+    mockPlatformSettings.getNumber.mockResolvedValue(8);
   });
 
   it('should filter out inactive assayers', async () => {
@@ -658,9 +727,10 @@ describe('RecommendationEngine', () => {
     mockAssayerRepo.find.mockResolvedValue([assayerClose, assayerFar]);
     mockAssignmentRepo.findOne.mockResolvedValue(null);
 
+    // One figure per candidate, in pool order: the batch routes each destination exactly once
+    // (it used to be one call per scorer per candidate, so this queue was twice as long, and
+    // the unused half leaked into the next test's routing answers).
     mockRoutingService.calculateRoute
-      .mockResolvedValueOnce({ distanceKm: 5, durationMinutes: 10 })
-      .mockResolvedValueOnce({ distanceKm: 80, durationMinutes: 120 })
       .mockResolvedValueOnce({ distanceKm: 5, durationMinutes: 10 })
       .mockResolvedValueOnce({ distanceKm: 80, durationMinutes: 120 });
 
@@ -679,6 +749,19 @@ describe('RecommendationEngine', () => {
     expect(results).toHaveLength(2);
     expect(results[0].assayer.id).toBe('a-close');
     expect(results[0].score).toBeGreaterThan(results[1].score);
+    // The pool was routed as one batch, not candidate by candidate through the fallback.
+    expect(mockRoutingService.calculateDistances).toHaveBeenCalledTimes(1);
+    expect(mockRoutingService.calculateDistances).toHaveBeenCalledWith(
+      { latitude: 19.076, longitude: 72.877 },
+      [
+        { id: 'a-close', latitude: 19.08, longitude: 72.88 },
+        { id: 'a-far', latitude: 20.5, longitude: 73.5 },
+      ],
+      'driving',
+    );
+    // …and the batch's figures are the ones each candidate is scored and shown with.
+    expect(results[0].route).toEqual({ distanceKm: 5, durationMinutes: 10, source: 'OSRM' });
+    expect(results[1].route).toEqual({ distanceKm: 80, durationMinutes: 120, source: 'OSRM' });
   });
 
   it('should flag (not exclude) the assayer holding an unconfirmed pending offer on this branch', async () => {
@@ -744,6 +827,112 @@ describe('RecommendationEngine', () => {
     expect(results).toHaveLength(1);
     expect(results[0].assayer.id).toBe('a-no-coords');
     expect(results[0].breakdown.distance).toBe(0);
+  });
+
+  /**
+   * The two dimensions added for staff remarks and rotation fairness. Both tests use a pair of
+   * candidates that are identical on every other dimension, so the ranking can only be decided
+   * by the dimension under test — which is the strongest statement that it actually moves the
+   * answer, and by how much.
+   */
+  describe('staff remarks and rotation fairness', () => {
+    const twin = (id: string) => ({
+      id, status: 'ACTIVE', isActive: true, latitude: 19.08, longitude: 72.88,
+      performanceRating: 5.0, experienceYears: 5,
+    });
+    const branch = { id: 'b-1', latitude: 19.076, longitude: 72.877 } as any;
+
+    beforeEach(() => {
+      mockAssayerRepo.find.mockResolvedValue([twin('a-1'), twin('a-2')]);
+      mockClientRepo.findOne.mockResolvedValue(null);
+      mockRoutingService.calculateRoute.mockResolvedValue({ distanceKm: 10, durationMinutes: 20 });
+    });
+
+    it('a −2 remark yesterday moves the candidate below an otherwise identical peer, by at most the dimension weight', async () => {
+      const yesterday = new Date(Date.now() - 86_400_000);
+      mockRemarksService.loadScoringWindow.mockResolvedValue({
+        'a-1': [{ rating: -2, category: 'CONDUCT', content: 'Was rude to the branch manager.', authorRole: 'OPERATIONS_EXECUTIVE', authorName: 'Ops', createdAt: yesterday }],
+      });
+
+      const results = await engine.recommend(branch, new Date());
+      const remarked = results.find((r) => r.assayer.id === 'a-1')!;
+      const clean = results.find((r) => r.assayer.id === 'a-2')!;
+
+      // One query for the whole pool, with both ids — never once per candidate.
+      expect(mockRemarksService.loadScoringWindow).toHaveBeenCalledTimes(1);
+      expect(mockRemarksService.loadScoringWindow.mock.calls[0][0]).toEqual(expect.arrayContaining(['a-1', 'a-2']));
+
+      // 50 + 25 × (−2) = 0 for the remarked candidate; nothing said = 50 for the peer.
+      expect(remarked.breakdown.remarksScore).toBe(0);
+      expect(clean.breakdown.remarksScore).toBe(50);
+      expect(results[0].assayer.id).toBe('a-2');
+      // The whole dimension is worth 6 points; a 50-point swing on it moves the total by 3.
+      // Bounded: no remark history, however bad, can cost more than weight × 100.
+      expect(clean.score - remarked.score).toBeCloseTo(3, 1);
+
+      // And the card can say why.
+      expect(remarked.remarkSummary).toEqual(expect.objectContaining({ count: 1, weightedMean: -2 }));
+      expect(remarked.remarkSummary.latest).toEqual(expect.objectContaining({ rating: -2, category: 'CONDUCT', authorRole: 'OPERATIONS_EXECUTIVE' }));
+      expect(clean.remarkSummary).toEqual({ count: 0, weightedMean: null, latest: null });
+    });
+
+    it('a candidate with cap-many recent offers loses a dead heat to one who has had none — and only that', async () => {
+      // The grouped-count builder serves every per-pool count in recommend(); the recent-offers
+      // one is the only query that filters on `a.createdAt >= :since`, so answer only that one.
+      const offersAwareBuilder = () => {
+        const b: any = groupedCountBuilder();
+        let isRecentOffers = false;
+        b.andWhere = jest.fn((cond: string) => {
+          if (typeof cond === 'string' && cond.includes('a.createdAt >= :since')) isRecentOffers = true;
+          return b;
+        });
+        b.getRawMany = jest.fn(async () => (isRecentOffers ? [{ assayerId: 'a-1', count: 8 }] : []));
+        return b;
+      };
+      mockAssignmentRepo.createQueryBuilder.mockImplementation(offersAwareBuilder);
+      mockPlatformSettings.getNumber.mockResolvedValue(8);
+
+      const results = await engine.recommend(branch, new Date());
+      const busy = results.find((r) => r.assayer.id === 'a-1')!;
+      const idle = results.find((r) => r.assayer.id === 'a-2')!;
+
+      expect(mockPlatformSettings.getNumber).toHaveBeenCalledWith('planning.fairnessOfferCap', 8);
+      expect(busy.breakdown.fairness).toBe(0);
+      expect(idle.breakdown.fairness).toBe(100);
+      expect(results[0].assayer.id).toBe('a-2');
+      // 100 points of a 0.04 dimension = 4 points of the total, and not one more.
+      expect(idle.score - busy.score).toBeCloseTo(4, 1);
+      // Nothing else moved: it is a nudge on this dimension, not a penalty smeared elsewhere.
+      for (const k of Object.keys(busy.breakdown)) {
+        if (k !== 'fairness') expect(busy.breakdown[k]).toBe(idle.breakdown[k]);
+      }
+    });
+
+    it('a candidate with a merit lead of more than the fairness weight still wins despite being the busy one', async () => {
+      // a-1 is busier AND plainly better: rating 5.0 vs 3.0 (performance 100 vs 60, ×0.07 = 2.8
+      // points) and 10 years vs none (experience 100 vs 0, ×0.02 = 2 points) — a 4.8-point merit
+      // lead against a 4-point nudge. Merit wins; fairness only settles the close ones.
+      mockAssayerRepo.find.mockResolvedValue([
+        { ...twin('a-1'), performanceRating: 5.0, experienceYears: 10 },
+        { ...twin('a-2'), performanceRating: 3.0, experienceYears: 0 },
+      ]);
+      const offersAwareBuilder = () => {
+        const b: any = groupedCountBuilder();
+        let isRecentOffers = false;
+        b.andWhere = jest.fn((cond: string) => {
+          if (typeof cond === 'string' && cond.includes('a.createdAt >= :since')) isRecentOffers = true;
+          return b;
+        });
+        b.getRawMany = jest.fn(async () => (isRecentOffers ? [{ assayerId: 'a-1', count: 20 }] : []));
+        return b;
+      };
+      mockAssignmentRepo.createQueryBuilder.mockImplementation(offersAwareBuilder);
+
+      const results = await engine.recommend(branch, new Date());
+      expect(results[0].assayer.id).toBe('a-1');
+      expect(results[0].breakdown.fairness).toBe(0);
+      expect(results[1].breakdown.fairness).toBe(100);
+    });
   });
 });
 

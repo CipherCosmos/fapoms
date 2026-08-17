@@ -76,10 +76,14 @@ import {
   CustomerDensityScoreCalculator,
   ProfitabilityScoreCalculator,
   RiskScoreCalculator,
+  RemarksScoreCalculator,
+  FairnessScoreCalculator,
   RecommendationEngine,
 } from './recommendation.engine';
 
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
+// The remarks scorer reads staff remarks through the module that owns them.
+import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module';
 
 @Module({
   imports: [
@@ -127,6 +131,7 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
     // Field incidents have to reach the operations desk — see FieldOperationsService.
     NotificationsModule,
     forwardRef(() => AssignmentModule),
+    AssayerRemarksModule,
   ],
   controllers: [PlanningController],
   providers: [
@@ -177,6 +182,8 @@ import { ValidationQueryEntity } from '../validation-query/validation-query.enti
     CustomerDensityScoreCalculator,
     ProfitabilityScoreCalculator,
     RiskScoreCalculator,
+    RemarksScoreCalculator,
+    FairnessScoreCalculator,
     RecommendationEngine,
   ],
   exports: [PlanningService, PlanningOrchestratorService, ProjectPlanningService, OptimizationEngine, ScenarioPlanningService, ClusterManager, CoveragePlanningEngine, OperationsPlanningService, 'OperationsControlServiceInterface', OperationsControlCenterService, OperationsExecutionService, FieldOperationsService, RecommendationEngine, ConstraintEvaluator, DayPlannerService, CommandCenterService],

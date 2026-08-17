@@ -57,6 +57,7 @@ import { ExpenseModule } from './modules/expense/expense.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { CallsModule } from './modules/calls/calls.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
+import { AssayerRemarksModule } from './modules/assayer-remarks/assayer-remarks.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { UserAwareThrottlerGuard } from './infrastructure/http/throttling/user-aware-throttler.guard';
 import { createResilientThrottlerStorage } from './infrastructure/http/throttling/resilient-throttler-storage';
@@ -190,6 +191,7 @@ import { PlatformSettingsModule } from './infrastructure/settings/platform-setti
     ValidationQueryModule,
     CallsModule,
     FeedbackModule,
+    AssayerRemarksModule,
 
     // Background job queue
     QueueModule,

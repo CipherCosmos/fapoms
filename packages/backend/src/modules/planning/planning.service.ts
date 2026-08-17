@@ -19,6 +19,7 @@ import { generateExplanation, ExplanationReason } from './explainability.mapper'
 import { AuditService } from '../../core/audit/audit.service';
 import { EventCategory } from '@fapoms/shared';
 import { FeePolicyService } from '../pricing/fee-policy.service';
+import type { RemarkSummary } from '../assayer-remarks/assayer-remark.contract';
 
 export interface AssayerRecommendation {
   id: string;
@@ -32,6 +33,10 @@ export interface AssayerRecommendation {
   district: string;
   city: string;
   distanceKm: number | null;
+  /** One-way travel time in minutes, from the same source as `distanceKm`. */
+  durationMinutes?: number | null;
+  /** 'OSRM' when measured by road, 'ESTIMATE' when straight-line fell back in — never silent. */
+  distanceSource?: 'OSRM' | 'ESTIMATE' | null;
   score?: number;
   latitude?: number | null;
   longitude?: number | null;
@@ -48,6 +53,13 @@ export interface AssayerRecommendation {
    * request to see past a constraint, not to be kept from knowing it exists.
    */
   dateConflict?: string | null;
+  /**
+   * What staff have said about this person, exactly as the `remarksScore` dimension read it:
+   * how many rated remarks in the last year, their recency-weighted mean (−2…+2), and the most
+   * recent one. Lets the card say "3 remarks · avg −0.7" and show the words, so a moved score
+   * is never a mystery. See modules/assayer-remarks.
+   */
+  remarkSummary?: RemarkSummary;
 }
 
 /** A candidate the filters removed, and why — surfaced so ops isn't left guessing. */
@@ -178,14 +190,22 @@ export class PlanningService {
 
     const recommendations: AssayerRecommendation[] = [];
     for (const r of results) {
-      let distanceKm: number | null = null;
-      if (branch.latitude && branch.longitude && r.assayer.effectiveLatitude && r.assayer.effectiveLongitude) {
-        const route = await this.routingService.calculateRoute(
+      /**
+       * The route the engine already scored with. It used to be recomputed here with one
+       * `calculateRoute` per candidate — N lookups straight after the engine had batched the
+       * whole pool into a single `/table` request — and only `distanceKm` survived the copy, so
+       * the API could never say whether a figure was measured by road or estimated. Reusing the
+       * engine's own result removes the lookups and carries `durationMinutes` and `source`
+       * through untouched. The lookup remains as a fallback for a result that arrived without one.
+       */
+      let route = r.route ?? null;
+      if (!route && branch.latitude && branch.longitude && r.assayer.effectiveLatitude && r.assayer.effectiveLongitude) {
+        route = await this.routingService.calculateRoute(
           { latitude: branch.latitude, longitude: branch.longitude },
           { latitude: r.assayer.effectiveLatitude, longitude: r.assayer.effectiveLongitude },
         );
-        distanceKm = route.distanceKm;
       }
+      const distanceKm: number | null = route?.distanceKm ?? null;
 
       // Quoted through the one calculator that prices the assignment itself. This used to read
       // the profile active *today* and fall back to a literal 1500, while assignment creation
@@ -213,6 +233,11 @@ export class PlanningService {
         district: r.assayer.district,
         city: r.assayer.city,
         distanceKm,
+        // One-way, minutes. Real road time when `distanceSource` is OSRM; the historical
+        // straight-line-at-40-km/h figure when it is ESTIMATE — the card must label the two
+        // differently, so both travel together.
+        durationMinutes: route?.durationMinutes ?? null,
+        distanceSource: route?.source ?? null,
         score: r.score,
         latitude: r.assayer.effectiveLatitude,
         longitude: r.assayer.effectiveLongitude,
@@ -226,6 +251,7 @@ export class PlanningService {
         // Present only when the date checks were relaxed and this candidate has a clash on the
         // planned date. Null/absent means genuinely free.
         dateConflict: r.dateConflict ?? null,
+        remarkSummary: r.remarkSummary,
       });
     }
 

@@ -4,7 +4,7 @@ import { Repository, In } from 'typeorm';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { BranchEntity } from '../branch/branch.entity';
-import { RoutingService } from '../geo/routing.provider';
+import { RoutingService, RouteSource } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
 import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, calculateHaversineDistance, businessDateKey, BypassableRule } from '@fapoms/shared';
@@ -17,6 +17,18 @@ import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+import { AssayerRemarksService } from '../assayer-remarks/assayer-remarks.service';
+import {
+  DEFAULT_FAIRNESS_OFFER_CAP,
+  FAIRNESS_OFFER_CAP_SETTING,
+  FAIRNESS_OFFER_WINDOW_DAYS,
+  RemarkForScoring,
+  RemarkSummary,
+  fairnessScoreFrom,
+  remarksScoreFrom,
+  summariseRemarks,
+} from '../assayer-remarks/assayer-remark.contract';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
  * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
@@ -121,8 +133,11 @@ export interface PlanningContext {
      * expensive thing in this pipeline, since it can reach an external provider. Sharing one
      * result halves the calls and makes the ranking self-consistent: the two scores can no
      * longer disagree because they were computed from separate responses.
+     *
+     * `source` says whether the figures are road figures ('OSRM') or a straight-line estimate
+     * ('ESTIMATE'); anything that shows a distance to a person must carry that label through.
      */
-    routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }>;
+    routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number; source: RouteSource }>;
     /** The project-branch row for this branch — identical for every candidate. */
     projectBranch?: any;
     /**
@@ -168,6 +183,27 @@ export interface PlanningContext {
      */
     sameDayAcceptedCountByAssayer: Record<string, number>;
     sameDayBranchPointsByAssayer: Record<string, Array<{ latitude: number; longitude: number }>>;
+    /**
+     * Staff remarks about each candidate from the last 365 days, rated ones only, newest first.
+     *
+     * Loaded for the whole pool in ONE query through AssayerRemarksService.loadScoringWindow —
+     * never per candidate. The remarks scorer reads this; the candidate row also carries a
+     * summary of it (count, recency-weighted mean, latest remark) so the card can show what
+     * moved the number. Optional so a context built before this fact existed still type-checks
+     * and the scorer falls back to its own (single-assayer) query.
+     */
+    remarksByAssayer?: Record<string, RemarkForScoring[]>;
+    /**
+     * Assignments offered to each candidate in the last 30 days, any status, live rows only.
+     * One grouped count for the pool. The fairness scorer reads this — see
+     * FairnessScoreCalculator for why it is a nudge and not a quota.
+     */
+    recentOffersByAssayer?: Record<string, number>;
+    /**
+     * `planning.fairnessOfferCap`, resolved once per recommendation rather than once per
+     * candidate; the platform-settings read is cached but it is still an await per call.
+     */
+    fairnessOfferCap?: number;
   };
 }
 
@@ -543,6 +579,39 @@ export class RequiredSkillsFilter implements CandidateFilter {
   }
 }
 
+/**
+ * Distance → score, 0–100: `100 · e^(−km / 200)`.
+ *
+ * Until August 2026 this was `100 − km/5`, a straight line that hit zero at 500 km. Two things
+ * were wrong with it, and both got worse the moment the kilometres became real road distances
+ * (which run 11–56 % longer than the straight line they replaced — see routing.provider.ts):
+ *
+ *   - It stopped discriminating exactly where discrimination is scarce. Every candidate 500 km
+ *     or further scored the same zero, so 500 km and 1,250 km were tied. On this deployment
+ *     the only person holding the attributes a gold-audit project needs can be 1,200 km away
+ *     (see the note in `recommend()`), and a scorer that cannot tell 600 from 1,200 is no help
+ *     in choosing between the two people who can actually do the job.
+ *   - It was too gentle near home. 30 km scored 94 and 100 km scored 80 — a fourteen-point
+ *     gap for the difference between a local visit and a day trip, while 400 → 500 km, which
+ *     nobody would weigh, was worth twenty points.
+ *
+ * The exponential fixes both. It never reaches zero, so any two candidates stay ordered by
+ * distance however far away they are; and it is steep where the decision is real:
+ *
+ *      km:    0    30    50   100   139   200   250   500  1000
+ *   score:  100    86    78    61    50    37    29     8   0.7
+ *
+ * 200 km was chosen because it is the scale of the decision: about 2 h 45 min by road at the
+ * ~72 km/h the seven measured pairs average, i.e. the point past which an audit becomes an
+ * overnight trip. Halving distance is worth the same everywhere on this curve (each 139 km
+ * halves the score), which is how ops think about it — 50 vs 190 km is a big deal, 800 vs
+ * 940 km barely matters, both are a flight or a night away.
+ *
+ * Rejected: a steeper `e^(−km/100)` (a 250 km candidate would score 8, indistinguishable from
+ * 500 km at the weights in use); a piecewise-linear knee (adds parameters for no gain the
+ * exponential does not already give); leaving it linear and only widening the zero point (still
+ * ties everyone beyond it).
+ */
 @Injectable()
 export class DistanceScoreCalculator implements ScoreCalculator {
   name = 'distance';
@@ -558,10 +627,36 @@ export class DistanceScoreCalculator implements ScoreCalculator {
         { latitude: context.branch.latitude, longitude: context.branch.longitude },
         { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
       );
-    return Math.max(0, 100 - (route.distanceKm / 5));
+    return distanceScore(route.distanceKm);
   }
 }
 
+/** See `DistanceScoreCalculator`. Exported so the curve is testable without a routing double. */
+export function distanceScore(distanceKm: number): number {
+  const km = Number(distanceKm);
+  if (!Number.isFinite(km)) return 0;
+  if (km <= 0) return 100;
+  return Math.min(100, Math.max(0, 100 * Math.exp(-km / 200)));
+}
+
+/**
+ * Travel time → score, 0–100: `100 · e^(−minutes / 170)`.
+ *
+ * The same shape as the distance curve, for the same reasons (the old `100 − min/6` was zero
+ * at ten hours and flat beyond, and gentle where it should have been steep). The scale is set
+ * so that the two curves agree for a typical road: the seven measured pairs in
+ * routing.provider.ts average ~72 km/h door to door, at which 200 km is 167 minutes — rounded
+ * to 170, so a candidate scores about the same on both dimensions unless the road is unusually
+ * slow or fast for its length. That is deliberate: when this diverges from the distance score
+ * it is *because* the terrain is slow (the Idukki pair: 275 km but 4 h 36 min), and that is the
+ * signal the travel-time dimension exists to carry, not a second copy of distance.
+ *
+ *     min:    0    30    60    90   118   170   240   300   600
+ *   score:  100    84    70    59    50    37    24    17     3
+ *
+ * With `source: 'ESTIMATE'` the minutes are straight-line ÷ 40 km/h; the score is still
+ * bounded and monotone, it is simply less informative, and the label travels with the route.
+ */
 @Injectable()
 export class TravelTimeScoreCalculator implements ScoreCalculator {
   name = 'travelTime';
@@ -578,8 +673,16 @@ export class TravelTimeScoreCalculator implements ScoreCalculator {
         { latitude: context.branch.latitude, longitude: context.branch.longitude },
         { latitude: assayer.effectiveLatitude, longitude: assayer.effectiveLongitude },
       );
-    return Math.max(0, 100 - (route.durationMinutes / 6));
+    return travelTimeScore(route.durationMinutes);
   }
+}
+
+/** See `TravelTimeScoreCalculator`. */
+export function travelTimeScore(durationMinutes: number): number {
+  const minutes = Number(durationMinutes);
+  if (!Number.isFinite(minutes)) return 0;
+  if (minutes <= 0) return 100;
+  return Math.min(100, Math.max(0, 100 * Math.exp(-minutes / 170)));
 }
 
 @Injectable()
@@ -1126,6 +1229,126 @@ export class RiskScoreCalculator implements ScoreCalculator {
   }
 }
 
+/**
+ * What the people who work with this assayer have said about them, as a number.
+ *
+ * ## What it reads
+ *
+ * Staff remarks (modules/assayer-remarks) rated −2…+2, from the last 365 days, each weighted
+ * `exp(-ageDays / 90)` so last week's observation counts for e-fold more than one from three
+ * months ago. Score = `50 + 25 × weighted mean`: nothing said → 50 (neutral, the engine's usual
+ * "no signal"), everything glowing → 100, everything damning → 0.
+ *
+ * ## Why it cannot exclude anyone
+ *
+ * The mean is bounded to [-2, +2] by the DB CHECK on `rating`, so the score is bounded to
+ * [0, 100] by arithmetic, not by a clamp that could be forgotten. At its default weight (0.06)
+ * the worst possible remark history costs a candidate 6 points of a 100-point total — enough to
+ * lose a close call to a peer with a clean record, nowhere near enough to fall off the list. That
+ * is deliberate: a remark is one person's view on one day, and the operator, not the scorer, is
+ * the one who should decide it disqualifies someone. The exclusion filters are untouched.
+ *
+ * ## Rejected alternatives
+ *
+ *  - Adjust `assayer.performanceRating` from remarks (the older path did this into
+ *    `averageRating`, which nothing read). It hides the signal inside another number, has no
+ *    recency, and cannot be explained on the card as "3 remarks, avg −0.7".
+ *  - A hard rule "any −2 in 90 days → excluded". Turns a single bad day into invisibility, with
+ *    no one accountable for the exclusion. Explicitly out of scope.
+ *  - Per-category weights (CONDUCT counts double, say). Nobody could agree the numbers, and a
+ *    scheme like that is what makes people stop writing remarks. The category is for the reader.
+ *
+ * ## Where the data comes from
+ *
+ * `context.branchFacts.remarksByAssayer`, one query for the pool. The per-candidate call below
+ * exists only for standalone use of the calculator; recommend() never takes that path.
+ */
+@Injectable()
+export class RemarksScoreCalculator implements ScoreCalculator {
+  name = 'remarksScore';
+
+  constructor(private readonly remarksService: AssayerRemarksService) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    return remarksScoreFrom(await this.summaryFor(assayer, context));
+  }
+
+  /** The same summary the card shows, so what ops reads and what the ranking used agree. */
+  async summaryFor(assayer: AssayerEntity, context: PlanningContext): Promise<RemarkSummary> {
+    const shared = context?.branchFacts?.remarksByAssayer;
+    if (shared) return summariseRemarks(shared[assayer.id] ?? []);
+    const loaded: Record<string, RemarkForScoring[]> = await this.remarksService
+      .loadScoringWindow([assayer.id])
+      .catch(() => ({}));
+    return summariseRemarks(loaded[assayer.id] ?? []);
+  }
+}
+
+/**
+ * Rotation fairness: prefer, gently, whoever has been offered the least work lately.
+ *
+ * ## The problem it answers
+ *
+ * Every other dimension rewards being good — near, fast, accepted, clean paperwork — and the
+ * best assayer near a cluster of branches wins all of them, every cycle. That is correct on
+ * merit and bad for the business: it makes the plan brittle (one person's leave empties a
+ * region), it starves newer assayers of the work that would make them good, and it is the thing
+ * the workforce complains about most. Nothing in the engine pushed the other way.
+ *
+ * ## What it does
+ *
+ * Offers in the last 30 days (assignments created, any status, live rows), per candidate, from
+ * one grouped count. Score = `100 × (1 − min(1, offers / cap))`, cap = platform setting
+ * `planning.fairnessOfferCap` (default 8). 0 offers → 100, cap or more → 0.
+ *
+ * ## Why it is a nudge and not a quota
+ *
+ * At weight 0.04 the whole dimension is worth 4 points. A candidate who is 5 points better on
+ * merit still wins against someone who has had nothing all month; two candidates within a point
+ * of each other now go to the one who has been sitting idle instead of always the same one. It
+ * changes ties and near-ties, which is exactly the set of decisions where "spread it around"
+ * costs nothing. It never removes a candidate, never caps anyone's work, and an operator can
+ * still pick whoever they like from the list. Counting offers rather than acceptances is
+ * deliberate: someone who was offered eight jobs and declined them has still had their turn.
+ *
+ * ## Rejected alternatives
+ *
+ *  - A hard rotation ("no more than N per month"). A quota on a workforce that is partly
+ *    part-time and partly regional cannot be one number, and the operator would end up
+ *    overriding it daily.
+ *  - Round-robin within a cluster. Ignores merit entirely, which is the opposite mistake.
+ *  - Reading `workload` (committed jobs) instead of offers. Workload is about capacity right now;
+ *    fairness is about who has had a chance recently. Someone with a full week is scored down by
+ *    workload already; someone who had a busy fortnight and is free now is exactly who this
+ *    dimension should still count against, a little.
+ */
+@Injectable()
+export class FairnessScoreCalculator implements ScoreCalculator {
+  name = 'fairness';
+
+  constructor(
+    @InjectRepository(AssignmentEntity)
+    private readonly assignmentRepository: Repository<AssignmentEntity>,
+  ) {}
+
+  async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    const cap = context?.branchFacts?.fairnessOfferCap ?? DEFAULT_FAIRNESS_OFFER_CAP;
+    const shared = context?.branchFacts?.recentOffersByAssayer;
+    if (shared) return fairnessScoreFrom(shared[assayer.id] ?? 0, cap);
+
+    // Standalone fallback only; recommend() supplies the grouped count for the whole pool.
+    const since = new Date(Date.now() - FAIRNESS_OFFER_WINDOW_DAYS * 86_400_000);
+    const offers = await this.assignmentRepository
+      .createQueryBuilder('a')
+      .where('a.isActive = true')
+      .andWhere('a.assayerId = :id', { id: assayer.id })
+      .andWhere('a.createdAt >= :since', { since })
+      .getCount()
+      .catch(() => 0);
+    return fairnessScoreFrom(offers, cap);
+  }
+}
+
 /** Per-client data a batch of recommendation runs can share. */
 export interface RecommendationPreload {
   client: ClientEntity | null;
@@ -1225,6 +1448,8 @@ export class RecommendationEngine {
     private readonly customerDensityCalculator: CustomerDensityScoreCalculator,
     private readonly profitabilityCalculator: ProfitabilityScoreCalculator,
     private readonly riskCalculator: RiskScoreCalculator,
+    private readonly remarksCalculator: RemarksScoreCalculator,
+    private readonly fairnessCalculator: FairnessScoreCalculator,
     private readonly configResolver: ConfigurationResolver,
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
@@ -1248,6 +1473,12 @@ export class RecommendationEngine {
     private readonly ruleEngine: RuleEngine,
     private readonly engineRoutingService: RoutingService,
     private readonly assayerService: AssayerService,
+    /**
+     * Two more per-recommendation facts: the pool's recent staff remarks (one query through the
+     * remarks module, which owns that table) and the fairness offer cap (one settings read).
+     */
+    private readonly remarksServiceForFacts: AssayerRemarksService,
+    private readonly platformSettings: PlatformSettingsService,
   ) {
     this.filters.push(
       // First: "can this person be sent anywhere at all?" — see DeployabilityFilter.
@@ -1277,6 +1508,10 @@ export class RecommendationEngine {
       this.customerDensityCalculator,
       this.profitabilityCalculator,
       this.riskCalculator,
+      // What staff have said about them, and whether they have had a fair share of offers
+      // lately — see the two classes for why each is bounded and gentle.
+      this.remarksCalculator,
+      this.fairnessCalculator,
     );
 
     // A calculator with no configured weight still runs — it just contributes nothing, which
@@ -1605,30 +1840,61 @@ export class RecommendationEngine {
     ]);
 
     /**
-     * One route per candidate instead of two.
+     * One routing request for the whole pool, not one per candidate.
      *
      * The distance and travel-time scorers each routed the same origin/destination pair, so a
-     * pool of N candidates produced 2N calls to the routing provider — the single most
-     * expensive operation here, since it can be an external service. Computed once, in
-     * parallel across candidates, and shared. A failed route is omitted rather than defaulted,
-     * so the scorers fall through to their own call and no candidate is silently scored zero.
+     * pool of N candidates once produced 2N calls to the routing provider — the single most
+     * expensive operation here, since it reaches an external road router. Sharing one result
+     * per candidate halved that; this batches the rest. `calculateDistances` sends the branch
+     * and every candidate coordinate in one `/table` request (chunked past ~100 coordinates),
+     * answers from the 30-day route cache first, and routes each distinct coordinate once —
+     * which matters on this database, where most assayers sit on a city centroid. Measured on
+     * the dev database (2026-08-17, PUNE CAMP against every geo-located assayer): 27
+     * candidates, 25 distinct points, one HTTP request in 951 ms on a cold cache and zero
+     * requests in 1 ms on a warm one, where the old code made 27 requests every time; and
+     * `/table` returns the same figures as `/route` to the metre.
+     *
+     * The provider never rejects (a dead router yields a labelled great-circle estimate), so a
+     * failed batch here means a programming fault. Rather than blank every candidate's distance
+     * for it, the old per-candidate lookups run instead — a slower answer, not a missing one.
+     * That path is also what a routing double that only stubs `calculateRoute` exercises.
      */
-    const routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number }> = {};
+    const routeByAssayer: Record<string, { distanceKm: number; durationMinutes: number; source: RouteSource }> = {};
     if (branch.latitude && branch.longitude) {
-      const routed = await Promise.all(
-        assayers.map(async (a) => {
-          if (!a.effectiveLatitude || !a.effectiveLongitude) return null;
-          const route = await this.engineRoutingService
-            .calculateRoute(
-              { latitude: Number(branch.latitude), longitude: Number(branch.longitude) },
-              { latitude: Number(a.effectiveLatitude), longitude: Number(a.effectiveLongitude) },
-            )
-            .catch(() => null);
-          return route ? ([a.id, route] as const) : null;
-        }),
-      );
-      for (const entry of routed) {
-        if (entry) routeByAssayer[entry[0]] = { distanceKm: entry[1].distanceKm, durationMinutes: entry[1].durationMinutes };
+      const origin = { latitude: Number(branch.latitude), longitude: Number(branch.longitude) };
+      const destinations = assayers
+        .filter((a) => a.effectiveLatitude && a.effectiveLongitude)
+        .map((a) => ({ id: a.id, latitude: Number(a.effectiveLatitude), longitude: Number(a.effectiveLongitude) }));
+      const keep = (id: string, route: { distanceKm: number; durationMinutes: number; source?: RouteSource } | null | undefined) => {
+        if (!route) return;
+        routeByAssayer[id] = {
+          distanceKm: route.distanceKm,
+          durationMinutes: route.durationMinutes,
+          // A route with no label came from something older than the labelled provider; the
+          // only honest thing to call it is an estimate.
+          source: route.source ?? 'ESTIMATE',
+        };
+      };
+
+      let batched: Record<string, { distanceKm: number; durationMinutes: number; source?: RouteSource }> | null = null;
+      if (destinations.length > 0) {
+        try {
+          batched = await this.engineRoutingService.calculateDistances(origin, destinations, 'driving');
+        } catch {
+          batched = null;
+        }
+      }
+
+      if (batched) {
+        for (const d of destinations) keep(d.id, batched[d.id]);
+      } else {
+        const routed = await Promise.all(
+          destinations.map(async (d) => {
+            const route = await this.engineRoutingService.calculateRoute(origin, d).catch(() => null);
+            return [d.id, route] as const;
+          }),
+        );
+        for (const [id, route] of routed) keep(id, route);
       }
     }
 
@@ -1650,6 +1916,9 @@ export class RecommendationEngine {
       rules,
       priorVisitRows,
       sameDayRows,
+      remarksByAssayer,
+      recentOfferRows,
+      fairnessOfferCap,
     ] = await Promise.all([
       assayerIds.length
         ? this.commercialRepositoryForFacts.find({
@@ -1763,7 +2032,40 @@ export class RecommendationEngine {
             .getRawMany()
             .catch(() => [])
         : Promise.resolve([]),
+      // Staff remarks for the pool, last 365 days, rated only — one query, owned by the
+      // remarks module. A failure here scores everyone neutral (50) rather than failing the
+      // recommendation; a missing opinion is not a reason to give no answer.
+      this.remarksServiceForFacts
+        .loadScoringWindow(assayerIds)
+        .catch(() => ({}) as Record<string, RemarkForScoring[]>),
+      // Offers per candidate in the last 30 days, any status. `createdAt` is when the offer was
+      // made, which is the "had a turn" event fairness is about — not the scheduled date, which
+      // may be weeks away, and not acceptance, which would let a serial decliner look starved.
+      assayerIds.length
+        ? this.assignmentRepository
+            .createQueryBuilder('a')
+            .select('a.assayerId', 'assayerId')
+            .addSelect('COUNT(*)::int', 'count')
+            .where('a.isActive = true')
+            .andWhere('a.createdAt >= :since', {
+              since: new Date(Date.now() - FAIRNESS_OFFER_WINDOW_DAYS * 86_400_000),
+            })
+            .andWhere('a.assayerId IN (:...ids)', { ids: assayerIds })
+            .groupBy('a.assayerId')
+            .getRawMany()
+            .catch(() => [])
+        : Promise.resolve([]),
+      // The operator's fairness cap, once per recommendation. The default is what the
+      // calculator would use anyway, so a settings outage changes nothing.
+      this.platformSettings
+        .getNumber(FAIRNESS_OFFER_CAP_SETTING, DEFAULT_FAIRNESS_OFFER_CAP)
+        .catch(() => DEFAULT_FAIRNESS_OFFER_CAP),
     ]);
+
+    const recentOffersByAssayer = (recentOfferRows as any[]).reduce<Record<string, number>>((acc, r) => {
+      acc[r.assayerId] = Number(r.count) || 0;
+      return acc;
+    }, {});
 
     const priorVisitsByAssayer = (priorVisitRows as any[]).reduce<Record<string, number>>((acc, r) => {
       acc[r.assayerId] = Number(r.count) || 0;
@@ -1838,6 +2140,9 @@ export class RecommendationEngine {
       priorVisitsByAssayer,
       sameDayAcceptedCountByAssayer,
       sameDayBranchPointsByAssayer,
+      remarksByAssayer: remarksByAssayer as Record<string, RemarkForScoring[]>,
+      recentOffersByAssayer,
+      fairnessOfferCap: Number(fairnessOfferCap) || DEFAULT_FAIRNESS_OFFER_CAP,
     };
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this
@@ -1864,6 +2169,12 @@ export class RecommendationEngine {
       detail?: string;
       kind: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING';
       distanceKm: number | null;
+      /**
+       * Whether `distanceKm` is a road figure or a straight line — see `RouteSource`. Carried
+       * so the panel can say "212 km by road" or "~164 km (straight line, estimate)" and never
+       * dress the second up as the first. Null exactly when `distanceKm` is.
+       */
+      distanceSource: RouteSource | null;
       nextAvailableDate: string | null;
     }[] = [];
 
@@ -1931,6 +2242,7 @@ export class RecommendationEngine {
           kind,
           // Already computed for the whole pool — free context for the ops decision.
           distanceKm: routeByAssayer[assayer.id]?.distanceKm ?? null,
+          distanceSource: routeByAssayer[assayer.id]?.source ?? null,
           nextAvailableDate,
         });
         continue;
@@ -1962,6 +2274,21 @@ export class RecommendationEngine {
         dateConflict: context.relaxAvailability
           ? this.describeDateConflict(assayer, context)
           : null,
+        // What staff have said, summarised exactly as the remarks scorer read it — count,
+        // recency-weighted mean and the latest remark — so the card can show the words behind
+        // the number. Computed from the shared facts; no extra query.
+        remarkSummary: await this.remarksCalculator.summaryFor(assayer, context),
+        /**
+         * The route the scorers just used, handed back rather than recomputed.
+         *
+         * `planning.service.ts` used to call `calculateRoute` again per candidate to get a
+         * distance for the response — N lookups after this method had already batched them all
+         * into one `/table` call. Worse, it copied only `distanceKm`, so `durationMinutes` and
+         * `source` never left this class: the API could not say whether "266 km" was measured
+         * by road or estimated by straight line, which is precisely the distinction that makes
+         * the OSRM fallback honest. Returning the same object closes both.
+         */
+        route: context.branchFacts?.routeByAssayer[assayer.id] ?? null,
       });
     }
 
@@ -1978,9 +2305,13 @@ export class RecommendationEngine {
         assayerId: p.id,
         displayName: p.displayName,
         reason: `Outside the ${Math.round(prefilterRadiusKm)} km candidate search area for this branch`,
-        detail: `${p.distanceKm.toFixed(0)} km away. Widen the client's serviceability radius to consider them.`,
+        // The pre-filter measured on a sphere (ST_DistanceSphere), never on the road, and the
+        // search area itself is a great-circle radius — so this figure is a straight line and
+        // is labelled as one. It was never routed, so there is no road figure to prefer.
+        detail: `~${p.distanceKm.toFixed(0)} km away (straight line). Widen the client's serviceability radius to consider them.`,
         kind: 'DISTANCE',
         distanceKm: p.distanceKm,
+        distanceSource: 'ESTIMATE',
         nextAvailableDate: null,
       });
     }
