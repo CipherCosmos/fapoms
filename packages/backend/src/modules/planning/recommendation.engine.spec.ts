@@ -551,6 +551,10 @@ describe('RecommendationEngine', () => {
       // The number is the point: "outside the search area" without a distance is not actionable.
       expect(pruned.reason).toContain('km candidate search area');
       expect(pruned.detail).toContain('413 km away');
+      // The pre-filter measured on a sphere, never on the road; the row says so rather than
+      // letting the panel dress a straight line up as a road figure.
+      expect(pruned.distanceSource).toBe('ESTIMATE');
+      expect(pruned.detail).toContain('straight line');
     });
 
     it('leaves the rule-based exclusions first, so the actionable ones stay at the top', async () => {
@@ -566,6 +570,10 @@ describe('RecommendationEngine', () => {
 
       expect(excluded[0].assayerId).toBe('a-blocked');
       expect(excluded.at(-1).assayerId).toBe('a-far');
+      // A rule-blocked candidate was routed with the pool, so its row carries the batch's
+      // figure AND its label — the panel says "by road" only because the engine said OSRM.
+      expect(excluded[0].distanceKm).toBeGreaterThan(0);
+      expect(excluded[0].distanceSource).toBe('OSRM');
     });
 
     /**

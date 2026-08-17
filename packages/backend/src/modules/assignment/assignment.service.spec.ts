@@ -86,6 +86,10 @@ describe('AssignmentService', () => {
     assessAssignmentTravel: jest.fn().mockResolvedValue(null),
   };
 
+  // Unlabelled by default — a route from something older than the labelled provider — which
+  // the service must record as an estimate. Individual tests override with a labelled route.
+  const mockRoutingService = { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) };
+
   const mockFeePolicyService = {
             quote: jest.fn().mockResolvedValue({
               baseFee: 1200, branchCount: 1, baseComponent: 1200,
@@ -246,7 +250,7 @@ const mockNotificationService = {
         },
         { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
         { provide: OperationsInboxService, useValue: { resolveChannels: jest.fn().mockResolvedValue(new Map()) } },
-        { provide: RoutingService, useValue: { calculateRoute: jest.fn().mockResolvedValue({ distanceKm: 5, durationMinutes: 10 }) } },
+        { provide: RoutingService, useValue: mockRoutingService },
         { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
       ],
     }).compile();
@@ -594,6 +598,48 @@ const mockNotificationService = {
       expect(created.quotedTravelFee).toBe(130);
       expect(created.quotedTransportMode).toBe('BUS');
       expect(created.quotedDistanceKm).toBeGreaterThan(0);
+      // The default routing double returns no `source` — a route from something older than the
+      // labelled provider — and the only honest label for that is an estimate.
+      expect(created.quotedDistanceSource).toBe('ESTIMATE');
+    });
+
+    /**
+     * How the kilometres were measured is frozen beside them. A travel allowance quoted from a
+     * straight line while the router was down and one quoted by road differ by 11–56 % on real
+     * pairs; audit and travel verification must be able to tell which this offer was.
+     */
+    it('records whether the quoted distance was measured by road or estimated, and hands the road leg to the quote', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockRoutingService.calculateRoute.mockResolvedValueOnce({ distanceKm: 84.6, durationMinutes: 70, source: 'OSRM' });
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const created = mockAssignmentRepo.create.mock.calls.at(-1)?.[0];
+      expect(created.quotedDistanceKm).toBe(84.6);
+      expect(created.quotedDistanceSource).toBe('OSRM');
+
+      // The same routed leg reaches the calculator, so the transport rate card times road
+      // modes by the real drive — the input the planning screen's quote also receives.
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.road).toEqual({ distanceKm: 84.6, durationMinutes: 70, source: 'OSRM' });
+    });
+
+    it('records no distance source when no distance was quoted', async () => {
+      setup();
+      // No branch coordinates: nothing to route, nothing to label.
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1', branch: { name: 'Test', state: 'MH' }, project: {},
+      });
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      const created = mockAssignmentRepo.create.mock.calls.at(-1)?.[0];
+      expect(created.quotedDistanceKm).toBeNull();
+      expect(created.quotedDistanceSource).toBeNull();
+      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(quoteArgs.road).toBeNull();
     });
   });
 

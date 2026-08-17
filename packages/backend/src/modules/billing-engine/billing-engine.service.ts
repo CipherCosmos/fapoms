@@ -913,6 +913,13 @@ export class BillingEngineService implements OnModuleInit {
           proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
           quotedTravelFee: quotedTravel,
           quotedTransportMode: a.quotedTransportMode ?? null,
+          // The kilometres the travel component was priced from and how they were measured —
+          // 'OSRM' along the road, 'ESTIMATE' as a straight line while the router was down.
+          // The two differ by 11–56 % on real pairs; "why was travel paid on 164 km when the
+          // road is 213?" must be answerable from the payable alone. Null on offers that
+          // predate the columns.
+          quotedDistanceKm: a.quotedDistanceKm != null ? Number(a.quotedDistanceKm) : null,
+          quotedDistanceSource: a.quotedDistanceSource ?? null,
           profileStandardBaseFee: rateCard ? Number(rateCard.base_fee) : null,
           profileTravelReimbursement: rateCard ? Number(rateCard.travel_reimbursement ?? 0) : null,
           profileDailyRate: rateCard ? Number(rateCard.daily_rate) : null,

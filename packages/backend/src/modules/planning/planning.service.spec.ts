@@ -140,6 +140,7 @@ describe('PlanningService', () => {
     mockRoutingService.calculateRoute.mockResolvedValue({
       distanceKm: 5.5,
       durationMinutes: 12,
+      source: 'OSRM',
     });
 
     const results = await service.getRecommendedCandidates('b-1');
@@ -151,6 +152,36 @@ describe('PlanningService', () => {
     expect(results[0].id).toBe('a-1');
     expect(results[0].distanceKm).toBe(5.5);
     expect(results[0].score).toBe(95.5);
+    // The label travels with the figure, and the sentence a person reads says how it was
+    // measured — an estimate must never be presented as a road figure.
+    expect(results[0].distanceSource).toBe('OSRM');
+    expect(results[0].durationMinutes).toBe(12);
+    expect(results[0].readableReasons!.map((r) => r.message).join(' ')).toContain('5.5 km by road');
+  });
+
+  it('labels a straight-line fallback as an estimate everywhere it is shown', async () => {
+    mockBranchRepository.findOne.mockResolvedValue({ id: 'b-1', latitude: 19.076, longitude: 72.8777 });
+    mockRecommendationEngine.recommend.mockResolvedValue([
+      {
+        assayer: {
+          id: 'a-2', assayerCode: 'AS-2', displayName: 'Far Away', phone: null, email: null,
+          status: 'ACTIVE', state: 'MH', district: 'Nashik', city: 'Nashik',
+          effectiveLatitude: 20.0, effectiveLongitude: 73.8,
+        },
+        score: 40,
+        breakdown: { distance: 20 },
+        // The engine hands back the route it scored with; here the router was down.
+        route: { distanceKm: 164.4, durationMinutes: 246.6, source: 'ESTIMATE' },
+      },
+    ]);
+
+    const results = await service.getRecommendedCandidates('b-1');
+
+    expect(results[0].distanceKm).toBe(164.4);
+    expect(results[0].distanceSource).toBe('ESTIMATE');
+    expect(results[0].readableReasons!.map((r) => r.message).join(' ')).toContain('~164 km (straight line, estimate)');
+    // The engine's route was reused — no second lookup for the same pair.
+    expect(mockRoutingService.calculateRoute).not.toHaveBeenCalled();
   });
 
   // Business Rule test coverage

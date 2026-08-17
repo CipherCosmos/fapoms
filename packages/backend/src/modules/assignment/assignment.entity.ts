@@ -78,6 +78,18 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'quoted_distance_km', type: 'decimal', precision: 8, scale: 2, nullable: true })
   quotedDistanceKm: number | null;
 
+  /**
+   * How `quotedDistanceKm` was measured: `OSRM` along the road network, `ESTIMATE` as a
+   * great-circle straight line at an assumed speed because the router was unavailable when the
+   * offer was priced. The two differ by 11–56 % on real pairs, so a travel allowance quoted
+   * from an estimate must stay distinguishable in audit and in travel verification — expense
+   * review compares the claimed journey against this figure, and a straight line will always
+   * read short of the road actually driven. Null when no distance was quoted, and for offers
+   * made before the column existed (their distance was in fact always an estimate).
+   */
+  @Column({ name: 'quoted_distance_source', type: 'varchar', length: 10, nullable: true })
+  quotedDistanceSource: 'OSRM' | 'ESTIMATE' | null;
+
   @Column({ name: 'quoted_base_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
   quotedBaseFee: number | null;
 

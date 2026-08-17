@@ -11,6 +11,7 @@ import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { getRecommendations } from '../services/planning';
+import { formatRouteDistance, type RouteSource } from '@fapoms/shared';
 import { AlertBanner } from '../components/ui';
 
 import { usePlatformLimits } from '../hooks/usePlatformLimits';
@@ -68,6 +69,8 @@ interface InboxData {
 
 interface Candidate {
   id: string; displayName: string; distanceKm: number | null; score: number | null;
+  /** 'OSRM' by road, 'ESTIMATE' straight line — the row labels the figure accordingly. */
+  distanceSource?: RouteSource | null;
   baseFee: number | null; phone?: string;
 }
 
@@ -604,7 +607,7 @@ const ReassignDrawer: React.FC<{
                   {c.score != null && <span style={{ marginLeft: 6, fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>{Math.round(c.score)}%</span>}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  {c.distanceKm != null ? `${c.distanceKm} km` : 'distance n/a'} · base {inr(c.baseFee)}
+                  {formatRouteDistance(c.distanceKm, c.distanceSource ?? null, { emptyAs: 'distance n/a' })} · base {inr(c.baseFee)}
                 </div>
               </div>
               <button onClick={() => offer(c)} disabled={busyId != null}

@@ -33,7 +33,7 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { ProjectEntity } from '../project/project.entity';
 import { COMMITTED_ASSIGNMENT_STATUSES } from './assignment-workload';
-import { RoutingService } from '../geo/routing.provider';
+import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
@@ -325,21 +325,37 @@ export class AssignmentService {
     let resolvedProposedFee = dto.proposedFee;
     let calculatedTravelFee = 0;
     let distanceKm = 0;
+    /**
+     * The whole routing answer, not just its distance. `source` says whether the kilometres
+     * below were measured along the road (OSRM) or are a straight-line estimate because the
+     * router was unavailable — the two differ by 11–56 % on real pairs, and a travel allowance
+     * priced from the estimate must stay distinguishable in audit and in travel verification,
+     * so it is frozen onto the offer beside `quotedDistanceKm`. `durationMinutes` lets the
+     * transport rate card time the road modes by the real drive rather than an average speed.
+     */
+    let route: RouteResult | null = null;
 
     // Home, not the live fix: this distance sets the travel allowance actually billed, and a
     // fee that changes with where somebody's phone was that morning is not auditable.
     if (projectBranch.branch?.latitude && projectBranch.branch?.longitude && assayer.homeLatitude && assayer.homeLongitude) {
       try {
-        const route = await this.routingService.calculateRoute(
+        route = await this.routingService.calculateRoute(
           { latitude: Number(projectBranch.branch.latitude), longitude: Number(projectBranch.branch.longitude) },
           { latitude: Number(assayer.homeLatitude), longitude: Number(assayer.homeLongitude) }
         );
-        distanceKm = route.distanceKm || 0;
+        distanceKm = route?.distanceKm || 0;
       } catch (e) {
         // Routing unavailable — the quote below falls back to zero travel rather than
         // guessing a distance, so ops sees base fee only instead of a fabricated allowance.
+        route = null;
       }
     }
+
+    /**
+     * Frozen beside `quotedDistanceKm` (below) so the row can always say how its kilometres
+     * were measured. Same fallback rule as everywhere else: an unlabelled route is an estimate.
+     */
+    const quotedDistanceSource: 'OSRM' | 'ESTIMATE' | null = route ? (route.source ?? 'ESTIMATE') : null;
 
     // The client's own territorial rules, enforced on the write path rather than merely
     // influencing a score. Without this an operator could assign an assayer living beside the
@@ -394,6 +410,15 @@ export class AssignmentService {
         state: projectBranch.branch?.state ?? null,
         region: projectBranch.branch?.region ?? null,
       },
+      // The routed leg, so the rate card times road modes by the real drive — the same input
+      // the planning screen's quote receives, so the mode (and therefore the fee) recommended
+      // there is the one recorded here. On a deduped second branch `chargeableDistanceKm` is 0
+      // and the rate card prices no journey at all, road leg or not.
+      road: route && route.durationMinutes > 0
+        // A route with no label came from something older than the labelled provider; the
+        // only honest thing to call it is an estimate (the engine applies the same rule).
+        ? { distanceKm: route.distanceKm, durationMinutes: route.durationMinutes, source: route.source ?? 'ESTIMATE' }
+        : null,
     });
     const baseFee = quote.baseFee;
     calculatedTravelFee = quote.travelFee;
@@ -497,6 +522,7 @@ export class AssignmentService {
       // The quote behind THIS offer, for this assayer. The previous assayer's breakdown must
       // not survive the reuse — their home, their distance, their rate card.
       assignment.quotedDistanceKm = distanceKm > 0 ? Number(distanceKm.toFixed(2)) : null;
+      assignment.quotedDistanceSource = distanceKm > 0 ? quotedDistanceSource : null;
       assignment.quotedBaseFee = quote.baseFee;
       assignment.quotedTravelFee = quote.travelFee;
       assignment.quotedTransportMode = quote.transport?.recommended?.mode ?? null;
@@ -520,6 +546,7 @@ export class AssignmentService {
         // recommend vs what did we agree" remains answerable forever — and the travel figure
         // and distance are what expense review and travel verification later compare against.
         quotedDistanceKm: distanceKm > 0 ? Number(distanceKm.toFixed(2)) : null,
+        quotedDistanceSource: distanceKm > 0 ? quotedDistanceSource : null,
         quotedBaseFee: quote.baseFee,
         quotedTravelFee: quote.travelFee,
         quotedTransportMode: quote.transport?.recommended?.mode ?? null,
@@ -2168,6 +2195,14 @@ export class AssignmentService {
     checkedInAt: Date | null;
     trackingEnabled: boolean;
     expectedDistanceKm: number | null;
+    /**
+     * How `expectedDistanceKm` was measured — `OSRM` by road, `ESTIMATE` as a straight line.
+     * The trail measures the road actually driven, so a journey compared against a straight-line
+     * quote will read long by 11–56 % through no fault of the assayer; a reviewer must be able
+     * to see that the baseline, not the claim, is the approximate one. Null when unrecorded
+     * (offers made before the column existed) and no recomputation was possible.
+     */
+    expectedDistanceSource: 'OSRM' | 'ESTIMATE' | null;
     expectedIsRecomputed: boolean;
     assessment: Awaited<ReturnType<LocationTrailService['assessAssignmentTravel']>>;
     /** Why no assessment could be produced, when that is the case. */
@@ -2183,6 +2218,7 @@ export class AssignmentService {
       checkedInAt: assignment.checkedInAt ?? null,
       trackingEnabled: Boolean(assayer?.isLiveEnabled),
       expectedDistanceKm: null as number | null,
+      expectedDistanceSource: null as 'OSRM' | 'ESTIMATE' | null,
       expectedIsRecomputed: true,
       assessment: null,
       unavailableReason: null as string | null,
@@ -2202,6 +2238,10 @@ export class AssignmentService {
     // preference the fee calculation itself uses.
     let expectedDistanceKm: number | null =
       assignment.quotedDistanceKm != null ? Number(assignment.quotedDistanceKm) : null;
+    // The label recorded with the quote. Null for offers older than the column — their figure
+    // was in fact always a straight line, but the row does not say so and this does not guess.
+    let expectedDistanceSource: 'OSRM' | 'ESTIMATE' | null =
+      expectedDistanceKm != null ? (assignment.quotedDistanceSource ?? null) : null;
     let expectedIsRecomputed = expectedDistanceKm == null;
 
     if (expectedDistanceKm == null &&
@@ -2213,11 +2253,13 @@ export class AssignmentService {
           { latitude: Number(assayer.homeLatitude), longitude: Number(assayer.homeLongitude) },
         );
         expectedDistanceKm = route?.distanceKm ?? null;
+        expectedDistanceSource = expectedDistanceKm != null ? (route?.source ?? 'ESTIMATE') : null;
       } catch {
         expectedDistanceKm = calculateHaversineDistance(
           Number(branch.latitude), Number(branch.longitude),
           Number(assayer.homeLatitude), Number(assayer.homeLongitude),
         );
+        expectedDistanceSource = 'ESTIMATE';
       }
     }
 
@@ -2228,7 +2270,7 @@ export class AssignmentService {
       trackingEnabled: Boolean(assayer?.isLiveEnabled),
     });
 
-    return { ...base, expectedDistanceKm, expectedIsRecomputed, assessment, unavailableReason: null };
+    return { ...base, expectedDistanceKm, expectedDistanceSource, expectedIsRecomputed, assessment, unavailableReason: null };
   }
 
   /**

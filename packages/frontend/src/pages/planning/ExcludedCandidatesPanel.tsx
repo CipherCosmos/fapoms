@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatRouteDistance, type RouteSource } from '@fapoms/shared';
 
 export interface ExcludedCandidate {
   assayerId: string;
@@ -11,6 +12,12 @@ export interface ExcludedCandidate {
    */
   kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING';
   distanceKm?: number | null;
+  /**
+   * How `distanceKm` was measured — 'OSRM' by road, 'ESTIMATE' as a straight line (the
+   * geographic pre-filter always measures on a sphere, so its rows are always estimates).
+   * Rendered as "213 km by road" or "~164 km (straight line, estimate)"; absent, hedged.
+   */
+  distanceSource?: RouteSource | null;
   /** First day after a blocking leave, when the engine could compute it. */
   nextAvailableDate?: string | null;
 }
@@ -149,7 +156,12 @@ export const ExcludedCandidatesPanel: React.FC<{
                         </span>
                       )}
                       {e.distanceKm != null && (
-                        <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 500 }}>{Math.round(e.distanceKm)} km</span>
+                        <span
+                          title={e.distanceSource === 'OSRM' ? 'Measured along the road network.' : 'Straight-line distance — the road is longer, typically by 11–56 %.'}
+                          style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 500 }}
+                        >
+                          {formatRouteDistance(e.distanceKm, e.distanceSource ?? null)}
+                        </span>
                       )}
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>

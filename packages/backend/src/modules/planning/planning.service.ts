@@ -217,6 +217,9 @@ export class PlanningService {
       const readableReasons = generateExplanation(r.breakdown, {
         displayName: r.assayer.displayName,
         distanceKm,
+        // So the sentence says "8.3 km by road" or "~164 km (straight line, estimate)" — the
+        // reason is read by a person, and an estimate must not read as a road figure.
+        distanceSource: route?.source ?? null,
         performanceRating: r.assayer.performanceRating,
         experienceYears: r.assayer.experienceYears,
         baseFee,

@@ -106,9 +106,18 @@ export const TravelEvidence: React.FC<{ assignmentId: string }> = ({ assignmentI
         <Stat
           label="Distance quoted"
           value={km(data.expectedDistanceKm)}
-          // The quoted distance is recomputed from the assayer's current home address because it
-          // was never stored. A reviewer comparing two numbers should know one is reconstructed.
-          note={data.expectedIsRecomputed ? 'recomputed from home address' : undefined}
+          // Two things a reviewer comparing two numbers must know about the baseline: whether it
+          // was reconstructed from the assayer's current home (older offers never stored it),
+          // and whether it was a straight line rather than the road — the trail measures the
+          // road actually driven, so a straight-line quote reads short through no fault of the
+          // assayer. A road figure says so; an estimate says so; an unlabelled one is not
+          // dressed up as either.
+          note={[
+            data.expectedIsRecomputed ? 'recomputed from home address' : null,
+            data.expectedDistanceSource === 'OSRM' ? 'by road'
+              : data.expectedDistanceSource === 'ESTIMATE' ? 'straight-line estimate, not road'
+              : data.expectedDistanceKm != null ? 'measurement basis unrecorded' : null,
+          ].filter(Boolean).join(' · ') || undefined}
         />
         <Stat label="Window observed" value={`${Math.round(track.coverage * 100)}%`} />
         <Stat label="Longest gap" value={`${track.longestGapMinutes} min`} />

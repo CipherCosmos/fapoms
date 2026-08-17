@@ -99,7 +99,13 @@ export interface TravelVerification {
   /** Whether the assayer had location sharing on — changes what an empty trail means. */
   trackingEnabled: boolean;
   expectedDistanceKm: number | null;
-  /** The quoted distance is not stored, so it is reconstructed from the assayer's current home. */
+  /**
+   * How the quoted distance was measured: 'OSRM' along the road, 'ESTIMATE' as a straight line
+   * (the trail measures the road actually driven, so a straight-line baseline reads short by
+   * 11–56 % through no fault of the assayer). Null when the offer predates the column.
+   */
+  expectedDistanceSource: 'OSRM' | 'ESTIMATE' | null;
+  /** True when the quote was not recorded on the offer and was reconstructed from the assayer's current home. */
   expectedIsRecomputed: boolean;
   assessment: {
     verdict: TravelVerdict;

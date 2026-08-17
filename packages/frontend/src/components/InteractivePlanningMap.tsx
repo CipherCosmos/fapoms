@@ -376,10 +376,22 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       if (selectedBranch && selectedBranch.latitude !== null && selectedBranch.longitude !== null) {
         setSelectedAssayerForRouting({
           ...selectedAssayerFromParent,
-          straightDistance: selectedAssayerFromParent.distanceKm || calculateHaversineDistance(
+          // The straight line, computed as one. This used to reuse the parent's `distanceKm`,
+          // which was a straight line back when the server estimated every distance — it is
+          // now usually a ROAD figure (`distanceSource === 'OSRM'`), and showing a road figure
+          // under the "Straight-line:" label would be exactly the mislabel this panel must not
+          // make. The server's road figure is kept separately as the fallback for a failed
+          // browser-side route below, and labelled as road only when it really is one.
+          straightDistance: calculateHaversineDistance(
             Number(selectedAssayerFromParent.latitude), Number(selectedAssayerFromParent.longitude),
             Number(selectedBranch.latitude), Number(selectedBranch.longitude)
           ),
+          serverRoad: selectedAssayerFromParent.distanceSource === 'OSRM' && selectedAssayerFromParent.distanceKm != null
+            ? {
+                distanceKm: Number(selectedAssayerFromParent.distanceKm),
+                durationMinutes: selectedAssayerFromParent.durationMinutes != null ? Number(selectedAssayerFromParent.durationMinutes) : null,
+              }
+            : null,
           aLat: Number(selectedAssayerFromParent.latitude),
           aLng: Number(selectedAssayerFromParent.longitude),
           bLat: Number(selectedBranch.latitude),
@@ -401,7 +413,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       return;
     }
 
-    const { aLat, aLng, bLat, bLng, straightDistance } = selectedAssayerForRouting;
+    const { aLat, aLng, bLat, bLng, serverRoad } = selectedAssayerForRouting;
 
     // Map travel mode to OSRM profile
     const osrmProfile = travelMode === 'walking' ? 'foot' : travelMode === 'two-wheeler' ? 'cycling' : 'driving';
@@ -409,6 +421,26 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     const modeSpeed = modeSpeeds[travelMode] || 40;
 
     const url = `https://router.project-osrm.org/route/v1/${osrmProfile}/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`;
+
+    /**
+     * No road figure from the browser. This used to copy the straight line into
+     * `roadDistanceKm`, so the panel then said "Road Distance: 164 km" and "Road distance from
+     * OSRM" over a straight-line number — the router being down turned an estimate into a
+     * road figure on screen. Now: the server's own routed figure (it batched this pair by
+     * road when it ranked the candidate, and cached it) stands in for a car journey when there
+     * is one; otherwise the road fields stay null and the panel's existing "Straight-line:" /
+     * "Estimate based on straight-line distance" labels take over. Nothing is ever promoted.
+     */
+    const fallBackHonestly = () => {
+      if (travelMode === 'driving' && serverRoad) {
+        setRoadDistanceKm(serverRoad.distanceKm);
+        setRoadDurationMinutes(serverRoad.durationMinutes ?? (serverRoad.distanceKm / modeSpeed) * 60);
+      } else {
+        setRoadDistanceKm(null);
+        setRoadDurationMinutes(null);
+      }
+      setRoadGeometry([[aLat, aLng], [bLat, bLng]]);
+    };
 
     fetch(url)
       .then(res => res.json())
@@ -420,8 +452,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           // Validate OSRM result against mode: if avg speed > 2x mode speed, result is unrealistic (OSRM fallback)
           const avgSpeed = roadKm / (roadMin / 60);
           if (avgSpeed > modeSpeed * 2) {
-            setRoadDistanceKm(straightDistance);
-            setRoadDurationMinutes((straightDistance / modeSpeed) * 60);
+            fallBackHonestly();
           } else {
             setRoadDistanceKm(roadKm);
             setRoadDurationMinutes(roadMin);
@@ -431,16 +462,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             setRoadGeometry(coords);
           }
         } else {
-          setRoadDistanceKm(straightDistance);
-          setRoadDurationMinutes((straightDistance / modeSpeed) * 60);
-          setRoadGeometry([[aLat, aLng], [bLat, bLng]]);
+          fallBackHonestly();
         }
       })
       .catch(err => {
         console.error("OSRM Route fetch error", err);
-        setRoadDistanceKm(straightDistance);
-        setRoadDurationMinutes((straightDistance / modeSpeed) * 60);
-        setRoadGeometry([[aLat, aLng], [bLat, bLng]]);
+        fallBackHonestly();
       });
   }, [selectedAssayerForRouting, travelMode]);
 
@@ -734,7 +761,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:170px;">
                 <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
-                <div>Distance: <b>${straightDist.toFixed(1)} km</b></div>
+                <div>Distance: <b>~${straightDist.toFixed(1)} km</b> <span style="color:#666;">straight line</span></div>
                 ${verdict}
                 ${slaStatus}
                 ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>'}
