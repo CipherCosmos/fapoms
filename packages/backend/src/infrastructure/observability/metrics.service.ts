@@ -91,6 +91,30 @@ export class MetricsService {
     registers: [this.registry],
   });
 
+  /**
+   * Retention passes that hit their batch ceiling instead of running out of rows.
+   *
+   * This is the alarm behind the partitioning decision recorded in
+   * `1790600000000-DataLifecycleIndexes`. That migration declines to partition the append tables
+   * and names the condition that should change the answer: "a purge tick failing to keep up
+   * (visible as `RetentionService` reporting a full batch on every pass for a week)". As written
+   * that was not visible at all — the pass logged a row total, and 50,000 is what you see both
+   * when the table is drained by the last batch and when there are ten million rows still waiting.
+   * Telling those apart meant knowing that 50,000 is exactly BATCH_SIZE × MAX_BATCHES and noticing
+   * the same number in the logs week after week.
+   *
+   * A saturated pass means only one thing: there was more to delete than the tick was allowed to
+   * delete. One is unremarkable — it is the expected shape of the first passes after a backlog.
+   * A rate that stays above zero is the trigger, and now it is a number on a dashboard rather than
+   * an archaeology exercise.
+   */
+  readonly retentionSaturated: Counter<'table'> = new Counter({
+    name: 'retention_batches_saturated_total',
+    help: 'Retention passes that exhausted their batch ceiling with rows still to delete, by table',
+    labelNames: ['table'],
+    registers: [this.registry],
+  });
+
   scrape(): Promise<string> {
     return this.registry.metrics();
   }

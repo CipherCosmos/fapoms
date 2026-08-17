@@ -80,11 +80,61 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * 1.8 MB. Partitioning a 1.8 MB table buys nothing; the amplification fix in
  * `rule-bypass.service.ts` and the retention worker are what keep these tables in range.
  *
+ * ### What partitioning would actually buy, measured
+ *
+ * Measured 2026-08-17 on `part_test`: two tables holding identical data — 20,000,000 pings over
+ * 600 days (5.9 GB, 2.1 GB of it index), one a plain heap with the shipped indexes, one the same
+ * shape RANGE-partitioned by month. Both loaded from one generated set so the only difference is
+ * the shape.
+ *
+ *   | operation                                     | heap (as shipped)        | partitioned |
+ *   |-----------------------------------------------|--------------------------|-------------|
+ *   | one retention tick (10 × 5,000 rows)          | 7.84 s                   | n/a         |
+ *   | remove one month (~1,033,333 rows)            | ~161 s of statements —   | 185 ms      |
+ *   |                                               | and 21 hourly ticks, by  | (DROP TABLE)|
+ *   |                                               | the MAX_BATCHES policy   |             |
+ *   | dead tuples left behind                       | 50,000 per tick          | 0           |
+ *   | space returned to the filesystem              | none until VACUUM        | immediate   |
+ *   | one assayer's trail for one day (read)        | 11 buffers / 3.2 ms      | 10 buffers  |
+ *
+ * The last row is the one that should temper any enthusiasm: **partitioning does nothing for the
+ * read path here.** `uq_location_pings_assayer_instant (assayer_id, recorded_at)` already prunes
+ * as well as a partition key would, because every real query on this table names an assayer. The
+ * entire case for partitioning these tables is deletion and vacuum, not query speed.
+ *
+ * ### When the trigger fires — which is sooner than "not needed yet" suggests
+ *
+ * Assumptions, stated rather than presented as fact: 480 location fixes per audit (this repo's own
+ * measured amplification, quoted in `RetentionService`'s class comment), a 550-day window, and a
+ * steady state where rows aging out per day equal rows written per day. The purge ceiling is
+ * BATCH_SIZE × MAX_BATCHES × 24 = 1.2 M rows/day.
+ *
+ *   | audits/day        | pings/day | steady-state rows | % of purge ceiling | vs 50 M trigger |
+ *   |-------------------|-----------|-------------------|--------------------|-----------------|
+ *   | 200 (current)     |    96,000 |            52.8 M |                 8% | **already at it** |
+ *   | 500               |   240,000 |             132 M |                20% | 2.6×            |
+ *   | 2,000 (modelled)  |   960,000 |             528 M |                80% | 10.6×           |
+ *   | 2,500             | 1,200,000 |             660 M | **100% — falls behind permanently** | 13× |
+ *
+ * So the honest reading of "the numbers say it is not needed yet" is: it is not needed yet *because
+ * retention has only just been switched on and the window has not filled*. At the low projection
+ * this repo already uses — 200 audits/day — the table settles at roughly the 50 M trigger. The
+ * decision to defer is still right; the belief that it is years away is not.
+ *
+ * Note the two limits are independent and the row-count one binds far earlier. Time is never the
+ * problem: 7.84 s of statements per hour is nothing. The binding constraint is the deliberate
+ * 50,000-rows-per-tick policy ceiling, and above ~2,500 audits/day no ceiling setting works,
+ * because the purge would have to run continuously just to break even.
+ *
  * ### The partition plan, for when it IS needed
  *
- * Trigger: either table passing ~50 million rows, or a purge tick failing to keep up (visible as
- * `RetentionService` reporting a full batch on every pass for a week). Then, as a *separate,
- * scheduled, offline* change — not an automatic migration:
+ * Trigger: either table passing ~50 million rows, or a purge tick failing to keep up. The second
+ * used to be unobservable — the pass logged a row total, and 50,000 removed looks identical
+ * whether the last batch drained the table or ten million rows are still queued. It is now an
+ * explicit signal: `RetentionService` returns which tables stopped on the ceiling rather than on
+ * the data, logs a WARN naming the table, and increments `retention_batches_saturated_total{table}`.
+ * Alert on that counter staying above zero. Then, as a *separate, scheduled, offline* change — not
+ * an automatic migration:
  *
  *   1. Change the entity PKs to composite (`@PrimaryColumn` on id + the time column) in the same
  *      release, so entities and schema stay in agreement.

@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import { CacheService } from '../cache/cache.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { AuthService } from '../../modules/auth/auth.service';
+import { MetricsService } from '../observability/metrics.service';
 
 /**
  * FAPOMS — the only thing in this system that deletes anything.
@@ -119,6 +120,7 @@ export class RetentionService {
     private readonly cache: CacheService,
     private readonly settings: PlatformSettingsService,
     private readonly auth: AuthService,
+    private readonly metrics: MetricsService,
   ) {}
 
   // ---------------------------------------------------------------------------------------------
@@ -146,22 +148,43 @@ export class RetentionService {
       notifications: 0,
       locationPings: 0,
       durationMs: 0,
+      saturated: [],
       failures: [],
     };
 
-    const phase = async (name: keyof RetentionReport & string, fn: () => Promise<number>) => {
+    const phase = async (
+      name: keyof RetentionReport & string,
+      table: string,
+      fn: () => Promise<BatchOutcome>,
+    ) => {
       try {
-        (report as any)[name] = await fn();
+        const { removed, saturated } = await fn();
+        (report as any)[name] = removed;
+        if (!saturated) return;
+
+        report.saturated.push(table);
+        this.metrics.retentionSaturated.inc({ table });
+        // WARN, not LOG: this is the documented trigger for partitioning that table, and the
+        // migration that declined to partition said it would be "visible as RetentionService
+        // reporting a full batch on every pass". This is that line. One of these after a backlog
+        // is expected; a run of them across passes means the tick can no longer keep up with the
+        // write rate, and no amount of raising the ceiling changes the shape of the problem.
+        this.logger.warn(
+          `Retention phase "${name}" hit its batch ceiling: removed ${removed} row(s) from ` +
+            `${table} (${RetentionService.MAX_BATCHES} × ${RetentionService.BATCH_SIZE}) and there ` +
+            `are more waiting. If this repeats on every pass, ${table} has outgrown batched ` +
+            `deletes — see 1790600000000-DataLifecycleIndexes for the partition plan.`,
+        );
       } catch (error) {
         this.logger.error(`Retention phase "${name}" failed: ${(error as Error).message}`);
         report.failures.push({ phase: name, error });
       }
     };
 
-    await phase('outboxEvents', () => this.purgeDispatchedOutboxEvents());
-    await phase('refreshTokens', () => this.purgeDeadRefreshTokens());
-    await phase('notifications', () => this.purgeReadNotifications());
-    await phase('locationPings', () => this.purgeLocationPings());
+    await phase('outboxEvents', 'outbox_events', () => this.purgeDispatchedOutboxEvents());
+    await phase('refreshTokens', 'refresh_tokens', () => this.purgeDeadRefreshTokens());
+    await phase('notifications', 'notifications', () => this.purgeReadNotifications());
+    await phase('locationPings', 'assayer_location_pings', () => this.purgeLocationPings());
 
     report.durationMs = Date.now() - started;
 
@@ -201,9 +224,9 @@ export class RetentionService {
    * Written to match `IDX_e58bf63cc50ef5e4503d6836df (dispatched_at, occurred_at)`, which already
    * exists: verified as a 110-buffer index scan against 2,000,000 rows.
    */
-  private async purgeDispatchedOutboxEvents(): Promise<number> {
+  private async purgeDispatchedOutboxEvents(): Promise<BatchOutcome> {
     const days = this.days('RETENTION_OUTBOX_DAYS', RetentionService.DEFAULT_OUTBOX_DAYS);
-    if (days <= 0) return 0;
+    if (days <= 0) return NOTHING_TO_DO;
     return this.deleteInBatches(
       `DELETE FROM outbox_events WHERE id IN (
          SELECT id FROM outbox_events
@@ -222,20 +245,20 @@ export class RetentionService {
    * table and what counts as a dead token is an auth question — this service owns the *schedule*,
    * not the definition. See `AuthService.pruneRefreshTokens`.
    */
-  private async purgeDeadRefreshTokens(): Promise<number> {
+  private async purgeDeadRefreshTokens(): Promise<BatchOutcome> {
     const graceDays = this.days(
       'RETENTION_REFRESH_TOKEN_GRACE_DAYS',
       RetentionService.DEFAULT_REFRESH_TOKEN_GRACE_DAYS,
     );
-    if (graceDays < 0) return 0;
+    if (graceDays < 0) return NOTHING_TO_DO;
 
     let removed = 0;
     for (let pass = 0; pass < RetentionService.MAX_BATCHES; pass++) {
       const deleted = await this.auth.pruneRefreshTokens(graceDays, RetentionService.BATCH_SIZE);
       removed += deleted;
-      if (deleted < RetentionService.BATCH_SIZE) break;
+      if (deleted < RetentionService.BATCH_SIZE) return { removed, saturated: false };
     }
-    return removed;
+    return { removed, saturated: true };
   }
 
   /**
@@ -253,12 +276,12 @@ export class RetentionService {
    * and it is bounded by the retention window, but it is a real behaviour change and it is why the
    * default is 180 days rather than 30.
    */
-  private async purgeReadNotifications(): Promise<number> {
+  private async purgeReadNotifications(): Promise<BatchOutcome> {
     const days = this.days(
       'RETENTION_READ_NOTIFICATION_DAYS',
       RetentionService.DEFAULT_READ_NOTIFICATION_DAYS,
     );
-    if (days <= 0) return 0;
+    if (days <= 0) return NOTHING_TO_DO;
     return this.deleteInBatches(
       `DELETE FROM notifications WHERE id IN (
          SELECT id FROM notifications
@@ -278,9 +301,9 @@ export class RetentionService {
    * `idx_location_pings_recorded_at` (128 buffers) instead of a sequential scan that degrades as
    * the table is recycled (11,126 buffers measured after a single purge-and-refill cycle).
    */
-  private async purgeLocationPings(): Promise<number> {
+  private async purgeLocationPings(): Promise<BatchOutcome> {
     const days = await this.locationPingRetentionDays();
-    if (days <= 0) return 0;
+    if (days <= 0) return NOTHING_TO_DO;
     return this.deleteInBatches(
       `DELETE FROM assayer_location_pings WHERE id IN (
          SELECT id FROM assayer_location_pings
@@ -364,7 +387,7 @@ export class RetentionService {
    * accumulates WAL for as long as it runs, and on the first run after this ships that backlog is
    * everything since the system was installed.
    */
-  private async deleteInBatches(sql: string, params: unknown[]): Promise<number> {
+  private async deleteInBatches(sql: string, params: unknown[]): Promise<BatchOutcome> {
     let removed = 0;
     for (let batch = 0; batch < RetentionService.MAX_BATCHES; batch++) {
       const result = await this.dataSource.query(sql, [...params, RetentionService.BATCH_SIZE]);
@@ -372,9 +395,13 @@ export class RetentionService {
       removed += deleted;
       // A short batch means the table is drained; stop rather than issue a statement that will
       // find nothing, which on these tables still costs an index descent.
-      if (deleted < RetentionService.BATCH_SIZE) break;
+      //
+      // Reaching the end of the loop without ever seeing a short batch means the opposite: the
+      // ceiling stopped us, not the data. That distinction is the whole signal — see
+      // `MetricsService.retentionSaturated` — so it is returned rather than thrown away.
+      if (deleted < RetentionService.BATCH_SIZE) return { removed, saturated: false };
     }
-    return removed;
+    return { removed, saturated: true };
   }
 
   /** `now - days`, as a Date, because the driver binds Dates to timestamptz correctly. */
@@ -407,8 +434,28 @@ export interface RetentionReport {
   notifications: number;
   locationPings: number;
   durationMs: number;
+  /**
+   * Tables whose purge stopped because it hit the batch ceiling rather than because it ran out of
+   * rows. Empty is the healthy state. See `MetricsService.retentionSaturated`.
+   */
+  saturated: string[];
   failures: Array<{ phase: string; error: unknown }>;
 }
+
+/**
+ * What one purge phase did, and — the part that matters — *why it stopped*.
+ *
+ * A bare row count cannot answer that. 50,000 removed is what you see both when the last batch
+ * drained the table and when ten million rows are still queued behind the ceiling, and those two
+ * call for opposite responses.
+ */
+interface BatchOutcome {
+  removed: number;
+  saturated: boolean;
+}
+
+/** A phase that was switched off by configuration: nothing removed, and nothing left behind. */
+const NOTHING_TO_DO: BatchOutcome = { removed: 0, saturated: false };
 
 /**
  * A configured number of days, or `null` for "nobody has said".

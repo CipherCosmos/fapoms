@@ -5,6 +5,7 @@ import { RetentionService, rowsAffected } from './retention.service';
 import { CacheService } from '../cache/cache.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { AuthService } from '../../modules/auth/auth.service';
+import { MetricsService } from '../observability/metrics.service';
 
 /**
  * This service is the only thing in FAPOMS that deletes anything, so the tests that matter are
@@ -35,6 +36,10 @@ describe('RetentionService', () => {
   const settings = { get: jest.fn().mockResolvedValue(null) };
   const auth = { pruneRefreshTokens: jest.fn().mockResolvedValue(0) };
 
+  // Only the one counter is used, and it is asserted on directly — a real Prometheus registry here
+  // would make the assertions about parsing exposition text rather than about retention.
+  const metrics = { retentionSaturated: { inc: jest.fn() } };
+
   const RETENTION_ENV = [
     'RETENTION_OUTBOX_DAYS',
     'RETENTION_REFRESH_TOKEN_GRACE_DAYS',
@@ -62,6 +67,7 @@ describe('RetentionService', () => {
         { provide: CacheService, useValue: cache },
         { provide: PlatformSettingsService, useValue: settings },
         { provide: AuthService, useValue: auth },
+        { provide: MetricsService, useValue: metrics },
       ],
     }).compile();
     service = module.get(RetentionService);
@@ -157,6 +163,65 @@ describe('RetentionService', () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------------------------
+  // Saturation — the trigger for partitioning, made observable
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * `1790600000000-DataLifecycleIndexes` declines to partition the append tables and names the
+   * condition that should change that answer: a purge tick that stops because it ran out of
+   * *permission* rather than out of *rows*. These tests exist because a row count alone cannot
+   * express that — 50,000 removed is the same number in both cases.
+   */
+  describe('saying out loud when a purge cannot keep up', () => {
+    it('reports the table as saturated when the ceiling stopped it, not the data', async () => {
+      // Every batch full, forever: outbox exhausts its 10 and the rest of the tick finds nothing.
+      deleteResults = new Array(200).fill(5_000);
+      const report = await service.runOnce();
+
+      expect(report.outboxEvents).toBe(50_000);
+      expect(report.saturated).toContain('outbox_events');
+      expect(metrics.retentionSaturated.inc).toHaveBeenCalledWith({ table: 'outbox_events' });
+    });
+
+    it('stays quiet when the last batch drained the table', async () => {
+      // 5,000 then a short batch: the ceiling was never the binding constraint.
+      deleteResults = [5_000, 12];
+      const report = await service.runOnce();
+
+      expect(report.outboxEvents).toBe(5_012);
+      expect(report.saturated).toEqual([]);
+      expect(metrics.retentionSaturated.inc).not.toHaveBeenCalled();
+    });
+
+    it('does not confuse a purge switched off with a purge that fell behind', async () => {
+      // A window of zero means "keep forever". Nothing was deleted, but nothing is waiting either,
+      // and reporting that as saturation would fire the partitioning alarm on a disabled phase.
+      process.env.RETENTION_OUTBOX_DAYS = '0';
+      const report = await service.runOnce();
+
+      expect(report.outboxEvents).toBe(0);
+      expect(report.saturated).not.toContain('outbox_events');
+    });
+
+    it('names the table that fell behind, not just the phase, so the warning is actionable', async () => {
+      // The location trail is the table this alarm exists for: it is the one with a write rate
+      // that can outrun 10 x 5,000 an hour.
+      process.env.LOCATION_TRAIL_RETENTION_DAYS = '550';
+      process.env.RETENTION_OUTBOX_DAYS = '0';
+      process.env.RETENTION_READ_NOTIFICATION_DAYS = '0';
+      deleteResults = new Array(200).fill(5_000);
+
+      const report = await service.runOnce();
+
+      expect(report.saturated).toEqual(['assayer_location_pings']);
+      expect(metrics.retentionSaturated.inc).toHaveBeenCalledWith({
+        table: 'assayer_location_pings',
+      });
+    });
+  });
+
 
   // -------------------------------------------------------------------------------------------
   // Index-matching shape
