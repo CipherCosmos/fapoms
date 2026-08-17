@@ -42,6 +42,8 @@ describe('AssignmentService', () => {
     findOne: jest.fn(),
     find: jest.fn(),
     findAndCount: jest.fn(),
+    // The list runs the page and its total in parallel; `count` is the total half.
+    count: jest.fn(),
   };
 
   const mockProjectBranchRepo = {
@@ -657,6 +659,59 @@ const mockNotificationService = {
       await expect(
         service.update('asn-1', { proposedFee: 600 }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  /**
+   * The list pages on ids and then hydrates. These guard the invariant that broke when it shipped.
+   *
+   * Dropping `relations` does not remove TypeORM's `SELECT DISTINCT … "distinctAlias"` wrapper —
+   * joins do, and every filter that reaches through `projectBranch` still joins. The wrapper
+   * projects exactly what `select` lists and then orders the outer query by the sort columns, so
+   * a sort column missing from `select` is a 500 from the database, not a type error.
+   *
+   * The first version selected `id` alone. It was measured on the unfiltered list, which has no
+   * joins and therefore no wrapper, so it looked fine; every filtered view returned
+   * `column distinctAlias.AssignmentEntity_created_at does not exist`. A mocked repository cannot
+   * reproduce the SQL, so the assertion here is on the shape that has to hold for the SQL to be
+   * legal: **everything ordered by is selected**.
+   */
+  describe('list pagination', () => {
+    const pageOptions = () => mockAssignmentRepo.find.mock.calls[0][0];
+
+    beforeEach(() => {
+      mockAssignmentRepo.find.mockResolvedValue([]);
+      mockAssignmentRepo.count.mockResolvedValue(0);
+    });
+
+    it('selects every column it orders by, or the distinct wrapper cannot resolve them', async () => {
+      await service.findAll(1, 25);
+      const { select, order } = pageOptions();
+
+      for (const column of Object.keys(order)) {
+        expect(select).toHaveProperty(column);
+      }
+    });
+
+    it('orders by a total order, so a page boundary cannot fall inside a tie', async () => {
+      await service.findAll(1, 25);
+      expect(pageOptions().order).toEqual({ createdAt: 'DESC', id: 'ASC' });
+    });
+
+    it('holds when the filters join through projectBranch — the shape that actually broke', async () => {
+      // unscheduledOnly + projectBranchStatus is the combination the planning screen sends, and
+      // the one that 500'd: both reach through the relation, so both produce the join.
+      await service.findAll(1, 100, undefined, 'ASSIGNMENT_CONFIRMED', undefined, true);
+      const { select, order } = pageOptions();
+
+      for (const column of Object.keys(order)) {
+        expect(select).toHaveProperty(column);
+      }
+    });
+
+    it('does not ask for the six relations while paginating — that was the 28kb query', async () => {
+      await service.findAll(1, 25);
+      expect(pageOptions().relations).toBeUndefined();
     });
   });
 

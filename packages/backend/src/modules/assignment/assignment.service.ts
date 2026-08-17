@@ -1659,7 +1659,21 @@ export class AssignmentService {
     const [pageRows, total] = await Promise.all([
       this.assignmentRepository.find({
         where,
-        select: { id: true },
+        /**
+         * `createdAt` is selected even though only `id` is used, and it is not optional.
+         *
+         * Dropping `relations` does NOT remove TypeORM's `SELECT DISTINCT … "distinctAlias"`
+         * wrapper — joins do, and a `where` that reaches through `projectBranch` (the
+         * `projectBranchStatus`, `unscheduledOnly` and region-scope filters all do) still joins.
+         * The wrapper projects exactly what `select` lists, then orders the outer query by the
+         * sort columns, so ordering by a column that is not selected fails at the database with
+         * `column distinctAlias.AssignmentEntity_created_at does not exist`.
+         *
+         * This shipped broken: the first version selected `id` alone and was measured only on the
+         * unfiltered list, which has no joins and therefore no wrapper. Every filtered view 500'd.
+         * `filtered pagination` in the spec now covers those paths.
+         */
+        select: { id: true, createdAt: true },
         order: { createdAt: 'DESC', id: 'ASC' },
         take: limit,
         skip: (page - 1) * limit,
