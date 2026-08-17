@@ -751,6 +751,29 @@ export const PlanningWorkspace: React.FC = () => {
       return true;
     });
   }, [candidates, slaEnabled, slaRadius, maxRadiusEnabled, maxRadius, showAllCandidates]);
+  /**
+   * Why the list is this short, when the list is not empty.
+   *
+   * The "no candidates" panel below explains itself well, but it only renders when the list is
+   * *empty*. The case that actually confuses operators is a list with one name on it: the screen
+   * shows a single distant assayer and says nothing about the twenty-five who were removed, so
+   * the natural reading is that the engine is broken or that nobody else exists.
+   *
+   * On this deployment that is exactly what happens — one assayer holds the skills and the
+   * certification the gold-audit projects require, so every branch of those projects matches him
+   * and only him, whatever the distance. The engine is right; the roster is thin. That is a
+   * sentence the screen has to say, because no amount of re-picking dates or widening radii will
+   * change it.
+   */
+  const qualificationBlock = useMemo(() => {
+    const skills = excludedCandidates.filter(e => e.kind === 'SKILLS');
+    if (skills.length === 0) return null;
+    // The engine names the missing attributes per assayer; they are the same list in the common
+    // case, so the first one reads as the requirement rather than as one person's gap.
+    const detail = skills.find(e => e.detail)?.detail ?? null;
+    return { count: skills.length, considered: skills.length + displayCandidates.length, detail };
+  }, [excludedCandidates, displayCandidates]);
+
   /** Listed candidates the map will not draw, because they fall outside its search radius. */
   const offMapCount = useMemo(
     () => displayCandidates.filter(c => c.distanceKm != null && c.distanceKm > searchRadiusKm).length,
@@ -1563,6 +1586,22 @@ export const PlanningWorkspace: React.FC = () => {
           inside `searchRadiusKm`. Stated once here so the gap between the two views is a fact
           the operator is told, rather than one they infer from a pin that is not there.
         */}
+        {qualificationBlock && (
+          <div style={{ marginBottom: '8px', padding: '7px 10px', fontSize: '11px', fontWeight: 600, color: 'var(--danger)', background: 'var(--status-cancelled-bg)', borderRadius: '6px', lineHeight: 1.5 }}>
+            <div>
+              {qualificationBlock.count} of {qualificationBlock.considered} assayers were excluded for
+              qualifications — this branch's shortlist is limited by the roster, not by distance or date.
+            </div>
+            {qualificationBlock.detail && (
+              <div style={{ marginTop: '3px', fontWeight: 500, opacity: 0.9 }}>
+                {qualificationBlock.detail.replace(/^Assayer Qualification Conflict:\s*/, '')}
+              </div>
+            )}
+            <div style={{ marginTop: '3px', fontWeight: 500, opacity: 0.9 }}>
+              Record the missing skills and certifications on the HR roster to widen this list.
+            </div>
+          </div>
+        )}
         {offMapCount > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', padding: '5px 9px', fontSize: '10.5px', fontWeight: 600, color: 'var(--warning)', background: 'var(--status-pending-bg)', borderRadius: '6px' }}>
             <span>{offMapCount} of these {offMapCount === 1 ? 'is' : 'are'} beyond {searchRadiusKm} km — listed, but not shown on the map</span>
