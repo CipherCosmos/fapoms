@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import {
@@ -32,8 +32,23 @@ import { AuditService } from '../../../core/audit/audit.service';
  *     per rule and each skip is written against the record it affected, so the question "which
  *     of these audits was produced with the controls off?" has an answer.
  */
+/**
+ * One rule's worth of unattributed skips, waiting to become a single audit row.
+ *
+ * `subjects` is a map rather than a list so that a candidate evaluated repeatedly within one
+ * decision counts once as a subject and N times as an occurrence — which is the distinction the
+ * aggregate row exists to preserve.
+ */
+interface PendingEvidence {
+  occurrences: number;
+  /** `entityType:entityId` → how many times that subject was involved. */
+  subjects: Map<string, number>;
+  /** A bounded sample of the human-readable reasons, distinct. */
+  details: Set<string>;
+}
+
 @Injectable()
-export class RuleBypassService {
+export class RuleBypassService implements OnModuleDestroy {
   private readonly logger = new Logger(RuleBypassService.name);
 
   /**
@@ -47,6 +62,48 @@ export class RuleBypassService {
 
   /** Usage counts not yet written back, keyed by rule. Flushed periodically to avoid a write per skip. */
   private pendingUsage = new Map<string, number>();
+
+  /**
+   * Unattributed evidential skips waiting to be written as one audit row per rule.
+   *
+   * Keyed by rule; each entry counts the occurrences and remembers which subjects were involved.
+   * See `noteBypass` for why these are aggregated and check-in skips are not.
+   */
+  private pendingEvidence = new Map<BypassableRule, PendingEvidence>();
+  private evidenceTimer: NodeJS.Timeout | null = null;
+  /** Distinct subjects across every entry of `pendingEvidence`. See `MAX_PENDING_SUBJECTS`. */
+  private pendingSubjectCount = 0;
+
+  /**
+   * How long unattributed skips are collected before one audit row is written.
+   *
+   * Two seconds is comfortably longer than a recommendation request (measured at ~234 ms over a
+   * 200k-assignment book), so the thousands of skips one request produces collapse into one row;
+   * and short enough that the evidence is durable within a few seconds of the decision it
+   * describes, which is what matters if the process is about to be restarted.
+   */
+  private static readonly EVIDENCE_FLUSH_MS = 2_000;
+
+  /**
+   * Distinct subjects named individually in one aggregate row. Beyond this the row still reports
+   * the true total — `subjectCount` and `occurrences` are never truncated, only the id list is.
+   * A jsonb column is not a place to put 5,000 uuids.
+   */
+  private static readonly MAX_NAMED_SUBJECTS = 50;
+
+  /** Distinct human-readable reasons sampled per rule. The count lives in `occurrences`. */
+  private static readonly MAX_SAMPLED_DETAILS = 50;
+
+  /**
+   * Total distinct subjects buffered across all rules before a flush is forced ahead of the timer.
+   *
+   * The bound has to be on *subjects*, not on rules: there are only twelve bypassable rules, so a
+   * cap on `pendingEvidence.size` could never be reached and would be a guard that does nothing.
+   * The dimension that actually grows is the candidate pool — a planning request over a national
+   * desk can put thousands of assayer ids in here — and this is what stops an unusually long
+   * sweep from holding all of them in memory for the full flush interval.
+   */
+  private static readonly MAX_PENDING_SUBJECTS = 5_000;
 
   constructor(
     @InjectRepository(RuleBypassWindowEntity)
@@ -145,9 +202,42 @@ export class RuleBypassService {
    * Note that a rule was actually skipped, and against what.
    *
    * Deliberately not awaited by callers on hot paths — recording the skip must never be able to
-   * fail the operation it is recording. The count is accumulated in memory and flushed; the
-   * audit event for evidential rules is written immediately, because those are the ones whose
-   * absence changes what a completed audit record means.
+   * fail the operation it is recording. The count is accumulated in memory and flushed; the audit
+   * event for evidential rules is written for the rules whose absence changes what a completed
+   * audit record means.
+   *
+   * ## Two kinds of skip, and why they are recorded differently
+   *
+   * The audit of 2026-08-16 found **1,447 of 2,564 `audit_events` rows were `RULE_BYPASSED`,
+   * written in four days**. They did not come from anything happening 1,447 times; they came from
+   * one screen being used a few times. `isBypassedSync` sits inside the recommendation engine's
+   * per-candidate loop, and every filter that waves a candidate through calls this — so a single
+   * planning request over a pool of 500 assayers wrote up to 500 near-identical rows recording
+   * that a rule was skipped while *considering* people who were then not chosen.
+   *
+   * That is noise, and it is worse than noise: it buries the rows that matter under rows that do
+   * not, in the exact table someone reads to find out whether the controls being off affected any
+   * real record.
+   *
+   * So:
+   *
+   *  - **A skip attributed to a person, against a named record** — `userId` and `entityId` both
+   *    present — is written immediately, one row each, exactly as before. This is the check-in
+   *    path (`CHECK_IN_GEOFENCE`, `CHECK_IN_SCHEDULED_DAY` in `assignment.service.ts`), and it is
+   *    the whole reason the feature is safe to keep: months later, "was this check-in inside the
+   *    geofence, or was the geofence off that afternoon?" must be answerable from the assignment's
+   *    own history. Nothing about those rows changes.
+   *
+   *  - **Everything else** — the planner sifting candidates, the constraint evaluator deciding
+   *    about an (assayer, date) pair with no id to attach anything to — is buffered and written as
+   *    **one row per rule per decision**, carrying the occurrence count and the subjects involved.
+   *    One recommendation touching three suspended rules now writes 3 rows instead of ~1,500, and
+   *    the row says more than any single one of the 1,500 did: how many candidates, and which.
+   *
+   * The discriminator is `userId && entityId` rather than `entityId` alone because the planner
+   * does pass an `entityId` (the candidate assayer) — it just has no actor, because nobody decided
+   * anything about that assayer. A skip with an actor and a subject is a decision about a record;
+   * a skip with neither, or with only a subject, is a step in reaching one.
    */
   noteBypass(rule: BypassableRule, context: { entityType?: string; entityId?: string; userId?: string; detail?: string }): void {
     this.pendingUsage.set(rule, (this.pendingUsage.get(rule) ?? 0) + 1);
@@ -156,44 +246,179 @@ export class RuleBypassService {
     const info = BYPASSABLE_RULE_INFO[rule];
     if (!info?.evidential) return;
 
-    /**
-     * An evidential skip is written against the record itself.
-     *
-     * This is what makes the feature safe to keep: months later, "was this check-in inside the
-     * geofence, or was the geofence off that afternoon?" is answerable from the record rather
-     * than from somebody's memory of a test session.
-     */
-    /**
-     * `audit_events.entity_id` is a NOT NULL uuid, so there is no such thing as an event with
-     * no subject. Most skips have one — the assignment being checked in, the assayer being
-     * offered — but the rule evaluators decide about an (assayer, branch, date) triple and do
-     * not always hold an id to attach it to.
-     *
-     * Those are anchored to the bypass window itself, which is both a real uuid and the honest
-     * answer: the subject of "a rule was skipped and nobody recorded against what" is the window
-     * that permitted it. The first version used the literal string 'SYSTEM' here, which the
-     * column rejected — so every constraint-level skip failed to write, silently, defeating the
-     * audit trail this whole feature rests on.
-     */
-    const anchorId = context.entityId ?? this.cached?.id;
+    if (context.userId && context.entityId) {
+      void this.auditService
+        .recordEventSafe({
+          category: EventCategory.SYSTEM,
+          eventType: 'RULE_BYPASSED',
+          entityType: context.entityType ?? 'SYSTEM',
+          entityId: context.entityId,
+          userId: context.userId,
+          remarks:
+            `Rule "${info.label}" was NOT enforced — an administrator has it suspended. ` +
+            `${info.protects}${context.detail ? ` (${context.detail})` : ''}`,
+          metadata: { rule, evidential: true },
+        })
+        .catch(() => undefined);
+      return;
+    }
+
+    this.bufferEvidence(rule, context);
+  }
+
+  /** Accumulate one unattributed skip into the pending aggregate for its rule. */
+  private bufferEvidence(
+    rule: BypassableRule,
+    context: { entityType?: string; entityId?: string; detail?: string },
+  ): void {
+    let pending = this.pendingEvidence.get(rule);
+    if (!pending) {
+      pending = { occurrences: 0, subjects: new Map(), details: new Set() };
+      this.pendingEvidence.set(rule, pending);
+    }
+    pending.occurrences++;
+
+    if (context.entityId) {
+      const key = `${context.entityType ?? 'SYSTEM'}:${context.entityId}`;
+      const seen = pending.subjects.get(key);
+      pending.subjects.set(key, (seen ?? 0) + 1);
+      // Counted here rather than re-summed on each call: this runs inside the recommendation
+      // engine's per-candidate loop, and a loop over every buffered rule per skip would be work
+      // proportional to the very amplification this method exists to remove.
+      if (seen === undefined) this.pendingSubjectCount++;
+    }
+    // A bounded sample of the human-readable reasons. Distinct rather than counted: "barred by
+    // RBL" said 400 times is one fact, and the count is already carried by `occurrences`.
+    if (context.detail && pending.details.size < RuleBypassService.MAX_SAMPLED_DETAILS) {
+      pending.details.add(context.detail);
+    }
+
+    if (this.pendingSubjectCount >= RuleBypassService.MAX_PENDING_SUBJECTS) {
+      void this.flushEvidence().catch(() => undefined);
+      return;
+    }
+
+    if (!this.evidenceTimer) {
+      this.evidenceTimer = setTimeout(
+        () => void this.flushEvidence().catch(() => undefined),
+        RuleBypassService.EVIDENCE_FLUSH_MS,
+      );
+      // Never hold the process open for a buffered audit row — `revokeCurrent` and
+      // `onModuleDestroy` both flush explicitly, which are the paths that must not lose one.
+      this.evidenceTimer.unref?.();
+    }
+  }
+
+  /**
+   * Write the buffered skips: one `RULE_BYPASSED` row per rule.
+   *
+   * Anchored to the bypass window itself. `audit_events.entity_id` is a NOT NULL uuid, so there is
+   * no such thing as an event with no subject, and the window is both a real uuid and the honest
+   * answer — the subject of "a rule was skipped while sifting candidates" is the window that
+   * permitted it. (An earlier version used the literal string 'SYSTEM' here, which the column
+   * rejected, so every constraint-level skip silently failed to write at all.)
+   *
+   * If there is no window to anchor to, the buffer is dropped rather than retried: a skip that
+   * cannot name the window that allowed it has nothing left to say.
+   */
+  async flushEvidence(): Promise<void> {
+    if (this.evidenceTimer) {
+      clearTimeout(this.evidenceTimer);
+      this.evidenceTimer = null;
+    }
+    if (this.pendingEvidence.size === 0) return;
+
+    const batch = this.pendingEvidence;
+    this.pendingEvidence = new Map();
+    this.pendingSubjectCount = 0;
+
+    const anchorId = this.cached?.id;
     if (!anchorId) return;
 
-    void this.auditService
-      .recordEventSafe({
-        category: EventCategory.SYSTEM,
-        eventType: 'RULE_BYPASSED',
-        entityType: context.entityId ? (context.entityType ?? 'SYSTEM') : 'RULE_BYPASS_WINDOW',
-        entityId: anchorId,
-        userId: context.userId ?? 'system',
-        remarks:
-          `Rule "${info.label}" was NOT enforced — an administrator has it suspended. ` +
-          `${info.protects}${context.detail ? ` (${context.detail})` : ''}`,
-        metadata: { rule, evidential: true },
-      })
-      .catch(() => undefined);
+    for (const [rule, pending] of batch) {
+      const info = BYPASSABLE_RULE_INFO[rule];
+      const subjects = [...pending.subjects.entries()]
+        // Most-skipped first, so the truncated list is the informative end of it.
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, RuleBypassService.MAX_NAMED_SUBJECTS)
+        .map(([key, count]) => ({ subject: key, count }));
+
+      const scope =
+        pending.subjects.size > 0
+          ? `${pending.occurrences} time(s) across ${pending.subjects.size} record(s)`
+          : `${pending.occurrences} time(s)`;
+      const details = [...pending.details].slice(0, 5).join('; ');
+
+      await this.auditService
+        .recordEventSafe({
+          category: EventCategory.SYSTEM,
+          eventType: 'RULE_BYPASSED',
+          entityType: 'RULE_BYPASS_WINDOW',
+          entityId: anchorId,
+          userId: 'system',
+          remarks:
+            `Rule "${info?.label ?? rule}" was NOT enforced ${scope} while evaluating candidates — ` +
+            `an administrator has it suspended. ${info?.protects ?? ''}${details ? ` (e.g. ${details})` : ''}`,
+          /**
+           * `aggregated: true` is what tells a reader this row stands for many skips rather than
+           * one, so "1 row" is never mistaken for "1 occurrence". `subjectCount` and `occurrences`
+           * are the true totals even when `subjects` has been truncated.
+           */
+          metadata: {
+            rule,
+            evidential: true,
+            aggregated: true,
+            occurrences: pending.occurrences,
+            subjectCount: pending.subjects.size,
+            subjects,
+          },
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  /** Flush anything buffered before the process goes away. */
+  async onModuleDestroy(): Promise<void> {
+    await this.flushEvidence().catch(() => undefined);
+    await this.flushUsage().catch(() => undefined);
   }
 
   private flushingUsage = false;
+
+  /**
+   * Add the pending counts to `usage_counts` — in the database, not in this process.
+   *
+   * ## The bug this replaces
+   *
+   * This used to read `window.usageCounts`, merge the batch into it in JavaScript, and write the
+   * whole object back. That is a read-modify-write on a shared row, and the backend runs as more
+   * than one process. Two replicas flushing at the same time both read `{GEOFENCE: 10}`, one
+   * writes `{GEOFENCE: 13}`, the other writes `{GEOFENCE: 12}`, and three skips become two. The
+   * read was even served from a five-second cache, so the two writers did not have to be
+   * simultaneous — merely within the same cache window — and the loser's write clobbered a value
+   * it had never seen.
+   *
+   * These counts are the sentence the closing audit record is built from: "while it was open,
+   * rules were skipped: Geofence ×40". Undercounting there understates a finding.
+   *
+   * ## Why this statement is atomic
+   *
+   * The current value is read by `w.usage_counts` *inside* the UPDATE, so the read and the write
+   * are one statement against one row. Concurrent updaters serialise on the row lock, and under
+   * READ COMMITTED the second one re-evaluates the SET expression against the row the first one
+   * left behind — so increments compose instead of overwriting. `unnest($2::text[], $3::bigint[])`
+   * carries the whole batch as two parallel arrays, keeping it to a single round trip whatever the
+   * batch size, with no SQL built by string concatenation.
+   *
+   * `RETURNING` gives back the settled value, which is written into the cached entity so
+   * `getState()` reports the real total rather than this replica's share of it.
+   *
+   * ## Deliberately unchanged
+   *
+   * When there is no current window the batch is dropped. A count belongs to the window it was
+   * skipped under, and if that window is gone there is nothing to attribute it to. A *failure* to
+   * read or write, by contrast, puts the batch back — that is a transient fault, not an absence.
+   */
   private async flushUsage(): Promise<void> {
     if (this.flushingUsage || this.pendingUsage.size === 0) return;
     this.flushingUsage = true;
@@ -202,10 +427,27 @@ export class RuleBypassService {
     try {
       const window = await this.currentWindow();
       if (!window) return;
-      const counts = { ...(window.usageCounts ?? {}) };
-      for (const [rule, n] of batch) counts[rule] = (counts[rule] ?? 0) + n;
-      await this.repository.update(window.id, { usageCounts: counts });
-      window.usageCounts = counts;
+
+      const rules = [...batch.keys()];
+      const counts = [...batch.values()];
+
+      const rows = await this.repository.query(
+        `UPDATE rule_bypass_windows w
+            SET usage_counts = COALESCE(w.usage_counts, '{}'::jsonb) || (
+                  SELECT COALESCE(
+                           jsonb_object_agg(d.rule, COALESCE((w.usage_counts ->> d.rule)::bigint, 0) + d.n),
+                           '{}'::jsonb
+                         )
+                    FROM unnest($2::text[], $3::bigint[]) AS d(rule, n)
+                ),
+                updated_at = now()
+          WHERE w.id = $1
+         RETURNING usage_counts`,
+        [window.id, rules, counts],
+      );
+
+      const settled = Array.isArray(rows) ? rows[0]?.usage_counts : undefined;
+      if (settled) window.usageCounts = settled as Record<string, number>;
     } catch {
       // Put them back so a transient failure does not lose the count.
       for (const [rule, n] of batch) this.pendingUsage.set(rule, (this.pendingUsage.get(rule) ?? 0) + n);
@@ -330,6 +572,9 @@ export class RuleBypassService {
   }
 
   private async revokeCurrent(userId: string, _why: string): Promise<void> {
+    // Both buffers, before the window they belong to stops being the current one. The evidence
+    // flush first: it anchors to `this.cached.id`, which `invalidate()` is about to clear.
+    await this.flushEvidence().catch(() => undefined);
     await this.flushUsage().catch(() => undefined);
     await this.repository.update(
       { revokedAt: IsNull(), isActive: true },

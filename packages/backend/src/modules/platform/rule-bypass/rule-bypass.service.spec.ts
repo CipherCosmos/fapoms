@@ -24,6 +24,9 @@ describe('RuleBypassService', () => {
     create: jest.fn((dto: any) => dto),
     save: jest.fn(async (row: any) => { saved = { id: 'win-1', ...row }; return saved; }),
     update: jest.fn().mockResolvedValue(undefined),
+    // Usage counts are incremented with one atomic UPDATE rather than a read-modify-write —
+    // see `flushUsage`. The mock returns what `RETURNING usage_counts` would.
+    query: jest.fn().mockResolvedValue([{ usage_counts: {} }]),
     find: jest.fn().mockResolvedValue([]),
     // `disable` re-reads the row so the closing record reports the settled usage counts.
     findOne: jest.fn().mockResolvedValue(null),
@@ -226,17 +229,97 @@ describe('RuleBypassService', () => {
      * The case that was silently broken: a rule evaluator skipping a check has no assignment or
      * assayer id to hand, and the audit column is a NOT NULL uuid. Anchoring to the window means
      * the event still writes — without this, constraint-level skips left no trace at all.
+     *
+     * It is now written on the aggregate flush rather than inline (see below), but it must still
+     * be written, and still against a real uuid.
      */
-    it('still records a skip that has no entity to attach to', () => {
+    it('still records a skip that has no entity to attach to', async () => {
       service.noteBypass(BypassableRule.SKILLS_AND_CERTIFICATIONS, { detail: 'missing certification: Gold L2' });
+      await service.flushEvidence();
       expect(audit.recordEventSafe).toHaveBeenCalledWith(
         expect.objectContaining({
           eventType: 'RULE_BYPASSED',
           entityType: 'RULE_BYPASS_WINDOW',
           // A real uuid, not a placeholder string the column would reject.
           entityId: 'win-1',
+          remarks: expect.stringContaining('missing certification: Gold L2'),
         }),
       );
+    });
+
+    /**
+     * The amplification this aggregation exists to stop.
+     *
+     * The audit of 2026-08-16 found 1,447 of 2,564 audit rows were `RULE_BYPASSED`, written in
+     * four days by a handful of planning requests: `noteBypass` is called from inside the
+     * recommendation engine's per-candidate loop, so one request over a large pool wrote one row
+     * per assayer *considered*. The evidence a reader needs is what was skipped and how often —
+     * not one row per candidate that was then not chosen.
+     */
+    it('collapses a whole candidate sweep into one audit row per rule', async () => {
+      for (let i = 0; i < 500; i++) {
+        service.noteBypass(BypassableRule.SKILLS_AND_CERTIFICATIONS, {
+          entityType: 'ASSAYER', entityId: `assayer-${i % 120}`, detail: 'missing certification: Gold L2',
+        });
+      }
+      await service.flushEvidence();
+
+      expect(audit.recordEventSafe).toHaveBeenCalledTimes(1);
+      expect(audit.recordEventSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'RULE_BYPASSED',
+          entityType: 'RULE_BYPASS_WINDOW',
+          entityId: 'win-1',
+          metadata: expect.objectContaining({
+            aggregated: true,
+            // The totals are the truth even though the id list is capped.
+            occurrences: 500,
+            subjectCount: 120,
+          }),
+        }),
+      );
+      const { metadata } = audit.recordEventSafe.mock.calls[0][0] as any;
+      expect(metadata.subjects.length).toBeLessThanOrEqual(50);
+    });
+
+    /**
+     * The check-in path must be completely unaffected. It is the one place where a skip changes
+     * what a finished audit record *means*, and it is written per record, immediately, with the
+     * actor who caused it — collapsing those would defeat the whole feature.
+     */
+    it('never aggregates a skip that names both an actor and a record', () => {
+      for (let i = 0; i < 3; i++) {
+        service.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
+          entityType: 'ASSIGNMENT', entityId: `asn-${i}`, userId: 'assayer-9', detail: '612 km from the branch',
+        });
+      }
+      expect(audit.recordEventSafe).toHaveBeenCalledTimes(3);
+      for (const [event] of audit.recordEventSafe.mock.calls as any[]) {
+        expect(event.entityType).toBe('ASSIGNMENT');
+        expect(event.metadata.aggregated).toBeUndefined();
+      }
+    });
+
+    /**
+     * Two replicas flushing at once used to lose counts: each read `usage_counts`, merged its own
+     * batch in JavaScript, and wrote the whole object back. The counts are the sentence the
+     * closing record is built from ("Geofence ×40"), so undercounting understates a finding.
+     */
+    it('increments usage counts with one atomic statement, never a read-modify-write', async () => {
+      service.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
+        entityType: 'ASSIGNMENT', entityId: 'asn-7', userId: 'assayer-9',
+      });
+      await new Promise((r) => setImmediate(r));
+
+      expect(repo.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = repo.query.mock.calls[0];
+      expect(sql).toMatch(/UPDATE\s+rule_bypass_windows/i);
+      expect(sql).toMatch(/unnest\(\$2::text\[\], \$3::bigint\[\]\)/);
+      // The current value is read inside the UPDATE, so the read and the write are one statement.
+      expect(sql).toMatch(/w\.usage_counts ->> d\.rule/);
+      expect(params).toEqual(['win-1', [BypassableRule.CHECK_IN_GEOFENCE], [1]]);
+      // Nothing merged in this process and written back.
+      expect(repo.update).not.toHaveBeenCalledWith('win-1', expect.objectContaining({ usageCounts: expect.anything() }));
     });
 
     it('never lets recording a skip fail the operation it is recording', () => {

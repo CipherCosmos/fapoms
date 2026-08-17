@@ -35,6 +35,105 @@ services:
       POSTGRES_DB: ${DB_DATABASE}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # ─────────────────────────────────────────────────────────────────────────────────────────
+    # Tuning. Until 2026-08-17 this ran entirely on image defaults — shared_buffers 128 MB,
+    # work_mem 4 MB, random_page_cost 4 (a spinning disk), JIT on, no pg_stat_statements and
+    # no slow-query log. Verified with `SHOW`, not assumed.
+    #
+    # Every value is sized to `mem_limit` below (3 GB), NOT to the host's 11.5 GB. The host also
+    # runs the API, Redis, MinIO and the auto-deploy image builds; a Postgres tuned for the
+    # machine would be OOM-killed the first time a build ran.
+    #
+    # Passed as `-c` flags rather than a mounted postgresql.conf so the whole configuration is
+    # in this file next to the limit it is sized against, and so there is no second file to keep
+    # in sync. Defaults are in .env.production.example; each knob is documented there.
+    # ─────────────────────────────────────────────────────────────────────────────────────────
+    command:
+      - postgres
+      # 25% of the container limit — the standard starting point, and with a working set this
+      # small (the whole schema is ~15 MB today) it means the hot tables live in memory rather
+      # than being re-read through the OS. 128 MB was the image default, not a decision.
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-768MB}
+      # A planner hint, not an allocation: "how much cache is there in total?". Deliberately
+      # LOWER than the 4 GB default, because the OS page cache backing this container's reads is
+      # charged to the same 3 GB cgroup — claiming 4 GB tells the planner about memory that
+      # cannot exist here.
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-2GB}
+      # Per sort/hash node, per query — so the real ceiling is this × nodes × concurrency, which
+      # is why it is 16 MB and not 64. At 4 MB the dashboard's GROUP BY over 200k assignments and
+      # every ORDER BY in the reports spilled to a temp file on disk.
+      - -c
+      - work_mem=${PG_WORK_MEM:-16MB}
+      # For VACUUM and CREATE INDEX. Raised because as of this release Postgres finally has dead
+      # tuples to collect (see `infrastructure/retention`); at 64 MB a vacuum of the location
+      # trail needs several index passes instead of one.
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-256MB}
+      # Capped separately so three autovacuum workers cannot claim 3 × maintenance_work_mem
+      # between them and push the container into its limit.
+      - -c
+      - autovacuum_work_mem=${PG_AUTOVACUUM_WORK_MEM:-128MB}
+      # SSD. The default of 4 encodes a seek on spinning rust and made the planner prefer
+      # sequential scans over exactly the indexes 1790300000000 and 1790600000000 restored.
+      - -c
+      - random_page_cost=${PG_RANDOM_PAGE_COST:-1.1}
+      - -c
+      - effective_io_concurrency=${PG_EFFECTIVE_IO_CONCURRENCY:-200}
+      # OFF. Measured 2026-08-17 on a 3M-row PostGIS ST_DWithin count: 1,550 ms of JIT
+      # (generation, inlining, optimisation, emission) inside a 1,870 ms query; the same query
+      # with jit=off ran in 1,046 ms. LLVM compiles the expression tree on every query whose
+      # *estimated* cost clears jit_above_cost, and PostGIS function costs clear it constantly.
+      # This is the single biggest wall-clock win in this block.
+      - -c
+      - jit=${PG_JIT:-off}
+      # Autovacuum, retuned because retention changes what it has to do. Deleting ~50k rows an
+      # hour from tables projected into the tens of millions never reaches the default 20%
+      # dead-tuple threshold in any useful time, so the space would be marked reusable and never
+      # actually reclaimed — retention that does not shrink anything. The cost limit is the other
+      # half: at the default 200 a worker sleeps most of its life and cannot keep up with the
+      # purge that is feeding it.
+      - -c
+      - autovacuum_vacuum_scale_factor=${PG_AUTOVACUUM_SCALE_FACTOR:-0.05}
+      - -c
+      - autovacuum_vacuum_cost_limit=${PG_AUTOVACUUM_COST_LIMIT:-1000}
+      # Batched deletes plus full-page writes after a checkpoint make retention the WAL-heaviest
+      # thing this database does. A larger max_wal_size trades pg_wal disk for fewer checkpoints
+      # (each of which re-writes every touched page in full); pglz compression trades a little
+      # CPU for materially less of that WAL reaching the disk.
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-2GB}
+      - -c
+      - min_wal_size=${PG_MIN_WAL_SIZE:-512MB}
+      - -c
+      - wal_compression=${PG_WAL_COMPRESSION:-on}
+      # Observability. The audit of 2026-08-16 could not answer "which query is slow in
+      # production?" from the database at all — there was no statement history and no slow log,
+      # so every measurement had to be reproduced by hand against a scratch copy.
+      # NOTE: preloading the library is necessary but not sufficient. Run this once, against the
+      # application database, after the first start with this config:
+      #     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+      # It is deliberately not in a migration: `CREATE EXTENSION` errors outright when the
+      # library is not preloaded, which would break `migration:run` on every developer machine.
+      - -c
+      - shared_preload_libraries=${PG_PRELOAD_LIBRARIES:-pg_stat_statements}
+      - -c
+      - pg_stat_statements.max=${PG_STAT_STATEMENTS_MAX:-5000}
+      - -c
+      - pg_stat_statements.track=${PG_STAT_STATEMENTS_TRACK:-top}
+      # Anything over a second, with its parameters. Chosen to be quiet on a healthy system —
+      # the point is a log that gets read, not one that gets rotated away. Logs are capped at
+      # 20 MB × 5 by the `logging:` block below.
+      - -c
+      - log_min_duration_statement=${PG_LOG_MIN_DURATION_MS:-1000}
+      - -c
+      - log_autovacuum_min_duration=${PG_LOG_AUTOVACUUM_MIN_DURATION_MS:-10000}
+      # Real I/O timings in EXPLAIN (BUFFERS) and pg_stat_statements, instead of buffer counts
+      # alone. Cheap on any host with a working TSC clocksource; check with `pg_test_timing` if
+      # this box is ever virtualised onto something slower.
+      - -c
+      - track_io_timing=${PG_TRACK_IO_TIMING:-on}
     # Postgres uses shared memory for parallel query and hash joins; the container default
     # (64 MB) makes larger plans fail with "could not resize shared memory segment".
     shm_size: 512m
