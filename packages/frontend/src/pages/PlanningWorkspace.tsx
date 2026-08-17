@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
-import { ProjectBranchStatus, formatDateOnly } from '@fapoms/shared';
+import { ProjectBranchStatus, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
@@ -13,6 +13,7 @@ import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
+import { AssayerRemarks, fmtSignedMean, type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
@@ -48,15 +49,26 @@ interface FeeQuote {
   travelSource?: 'TRANSPORT_RATE_CARD' | 'CLIENT_RATE_CARD' | 'PLATFORM_DEFAULT';
   transport?: {
     distanceKm: number;
-    options: Array<{
-      mode: string; modeLabel: string; baseFare: number; perKmRate: number;
-      oneWayCost: number; roundTripCost: number; preferred: boolean;
-    }>;
-    recommended: {
-      mode: string; modeLabel: string; baseFare: number; perKmRate: number;
-      oneWayCost: number; roundTripCost: number; preferred: boolean;
-    } | null;
+    options: Array<TransportOption>;
+    recommended: TransportOption | null;
   } | null;
+  /** Mode and one-way minutes of the recommended option; null on the legacy per-km path. */
+  travelMode?: string | null;
+  travelDurationMinutes?: number | null;
+}
+
+/** One priced mode from the transport rate card, as `TransportRateService.estimate()` returns it. */
+interface TransportOption {
+  mode: string; modeLabel: string; baseFare: number; perKmRate: number;
+  oneWayCost: number; roundTripCost: number; preferred: boolean;
+  /** One-way minutes; `timeSource` says whether that is a road route or an average-speed estimate. */
+  oneWayMinutes?: number; roundTripMinutes?: number;
+  timeSource?: 'ROAD_ROUTE' | 'RATE_CARD_ESTIMATE';
+  /** False when a business rule ruled it out (e.g. flight under 500 km); `whyNot` says which. */
+  viable?: boolean; whyNot?: string | null;
+  rank?: number;
+  /** Set on the recommended option only: "cheapest viable", "best cost-time balance: …", "preferred for X". */
+  reason?: string | null;
 }
 
 interface ProjectOption {
@@ -80,6 +92,10 @@ interface Candidate {
   district: string;
   city: string;
   distanceKm: number | null;
+  /** One-way minutes, same provenance as distanceKm. */
+  durationMinutes?: number | null;
+  /** 'OSRM' = measured by road; 'ESTIMATE' = straight line at an assumed speed (routing was down). */
+  distanceSource?: 'OSRM' | 'ESTIMATE' | null;
   latitude: number | null;
   longitude: number | null;
   score?: number;
@@ -95,6 +111,12 @@ interface Candidate {
    * clash, or the operator dispatches into a double-booking believing the list was clean.
    */
   dateConflict?: string | null;
+  /**
+   * What staff have said about this person, exactly as the engine's `remarksScore` read it —
+   * count of rated remarks in the last year, their recency-weighted mean (−2…+2), the latest
+   * one. Drives the "N remarks · avg −0.7" chip so a moved score is never a mystery.
+   */
+  remarkSummary?: RemarkSummary;
 }
 
 /** A candidate the engine filtered out, and why. */
@@ -105,6 +127,8 @@ interface ExcludedCandidate {
   detail?: string;
   kind?: 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING';
   distanceKm?: number | null;
+  /** 'OSRM' by road, 'ESTIMATE' straight line — the panel labels the figure accordingly. */
+  distanceSource?: RouteSource | null;
   nextAvailableDate?: string | null;
 }
 
@@ -163,16 +187,6 @@ interface AssayerDetail {
     dailyRate?: number;
     travelReimbursement?: number;
   } | null;
-}
-
-interface Remark {
-  id: string;
-  content: string;
-  category: string;
-  visibility: string;
-  authorName: string;
-  rating: number | null;
-  createdAt: string;
 }
 
 interface DayPlanStop {
@@ -277,14 +291,6 @@ interface ProjectDayPlan {
     averageCostPerPacket: number | null;
   };
 }
-
-const CATEGORY_COLORS: Record<string, string> = {
-  PERFORMANCE: '#d8ae47',
-  QUALITY: '#d8ae47',
-  BEHAVIORAL: '#b8791f',
-  TRAINING: '#3f7d53',
-  GENERAL: '#7c6e59',
-};
 
 // Values derive straight from the shared enum, wording from the shared status
 // vocabulary — so this page can never drift from Field Execution or Scheduling
@@ -436,7 +442,6 @@ export const PlanningWorkspace: React.FC = () => {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
   const [detailAssayer, setDetailAssayer] = useState<AssayerDetail | null>(null);
-  const [detailRemarks, setDetailRemarks] = useState<Remark[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   /**
@@ -1140,12 +1145,10 @@ export const PlanningWorkspace: React.FC = () => {
     setLoadingDetail(true);
     setShowAssayerDetailModal(true);
     try {
-      const [profile, remarks] = await Promise.all([
-        api.request<AssayerDetail>(`/assayers/${assayerId}/profile`, { method: 'GET' }),
-        api.request<Remark[]>(`/assayers/${assayerId}/remark`, { method: 'GET' }),
-      ]);
+      // Remarks are fetched by <AssayerRemarks> inside the modal — one component, one API,
+      // shared with the HR drawer — so only the profile is loaded here.
+      const profile = await api.request<AssayerDetail>(`/assayers/${assayerId}/profile`, { method: 'GET' });
       setDetailAssayer(profile);
-      setDetailRemarks(Array.isArray(remarks) ? remarks : []);
     } catch { console.error('Failed to load assayer details'); }
     finally { setLoadingDetail(false); }
   };
@@ -1678,7 +1681,26 @@ export const PlanningWorkspace: React.FC = () => {
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', flexWrap: 'wrap' }}>
                     <Compass size={11} style={{ flexShrink: 0 }} />
-                    <span>{c.distanceKm !== null ? `${c.distanceKm} km away` : 'Distance unavailable'}</span>
+                    {/*
+                      Distance and time, and — the part that was missing — WHICH KIND of distance.
+                      The engine now routes by road (OSRM) and falls back to straight-line only
+                      when routing is unavailable; a straight-line figure at an assumed 40 km/h is
+                      not the same fact as a road figure and must not wear the same label. Measured
+                      on this branch: 107.7 km crow-flies became 145.4 km by road (+35%).
+                    */}
+                    <span title={c.distanceSource === 'OSRM'
+                      ? 'Measured along the road network (OSRM).'
+                      : c.distanceSource === 'ESTIMATE'
+                      ? 'Straight-line estimate at an assumed speed — road routing was unavailable when this was computed. The road is longer, typically by 11–56 %.'
+                      : c.distanceKm !== null ? 'This server did not say how the distance was measured; treated as an estimate.' : undefined}>
+                      {/* One formatter for every surface (shared/utils.ts): "213 km by road" /
+                          "~164 km (straight line, estimate)"; an unlabelled figure is hedged,
+                          never promoted to a road figure. */}
+                      {formatRouteDistance(c.distanceKm, c.distanceSource ?? null)}
+                      {c.durationMinutes != null && c.distanceKm !== null && (
+                        <> · {formatTravelTime(c.durationMinutes, c.distanceSource ?? null)}</>
+                      )}
+                    </span>
                     {/*
                       This chip is about the *independence floor* — "far enough away not to be
                       auditing their own doorstep" — and nothing else. Labelled "✓ >50km Radius"
@@ -1726,7 +1748,25 @@ export const PlanningWorkspace: React.FC = () => {
                 <span>Base: {c.baseFee != null ? `₹${c.baseFee}` : '—'}</span>
               </div>
 
-              <ScoreBreakdown breakdown={c.scoreBreakdown} />
+              {/* What staff have said — the figure behind the `remarksScore` dimension. Click
+                  opens the details modal, whose remarks section lists them and takes new ones. */}
+              {c.remarkSummary && c.remarkSummary.count > 0 && (() => {
+                const m = c.remarkSummary.weightedMean ?? 0;
+                const tone = m > 0 ? { bg: 'var(--status-active-bg)', fg: 'var(--success)' } : m < 0 ? { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' } : { bg: 'var(--bg-surface-2)', fg: 'var(--text-secondary)' };
+                const latest = c.remarkSummary.latest;
+                return (
+                  <button type="button" onClick={() => loadAssayerDetail(c.id)}
+                    title={latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole?.replace(/_/g, ' ').toLowerCase() ?? 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}" — click for all remarks` : 'Click for remarks'}
+                    style={{ alignSelf: 'flex-start', fontSize: '10.5px', fontWeight: 600, padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: tone.bg, color: tone.fg, border: 'none', cursor: 'pointer' }}>
+                    💬 {c.remarkSummary.count} remark{c.remarkSummary.count === 1 ? '' : 's'} · avg {fmtSignedMean(m)}
+                  </button>
+                );
+              })()}
+
+              <ScoreBreakdown
+                breakdown={c.scoreBreakdown}
+                route={{ distanceKm: c.distanceKm, durationMinutes: c.durationMinutes ?? null, distanceSource: c.distanceSource ?? null }}
+              />
 
               {/* Row 1 Actions: View Map, Route TSP, Profile Details */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
@@ -1772,6 +1812,12 @@ export const PlanningWorkspace: React.FC = () => {
                         assayerId: c.id,
                         projectId: selectedProjectId || undefined,
                         distanceKm: c.distanceKm || 0,
+                        // The routed leg behind that distance, so the rate card times road
+                        // modes by the real drive — the same input assignment creation hands
+                        // the calculator, so the mode (and fee) quoted here is the one stored
+                        // on assign. `roadSource` keeps the quote honest about an estimate.
+                        durationMinutes: c.durationMinutes && c.durationMinutes > 0 ? c.durationMinutes : undefined,
+                        roadSource: c.durationMinutes && c.durationMinutes > 0 ? (c.distanceSource ?? 'ESTIMATE') : undefined,
                         // The branch being covered — lets the transport rate card price the
                         // actual journey for its state instead of the generic per-km formula.
                         branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
@@ -1852,7 +1898,18 @@ export const PlanningWorkspace: React.FC = () => {
                   <div>
                     • Est. Travel Fee: {feeQuote
                       ? feeQuote.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended
-                        ? `₹${feeQuote.travelFee} by ${feeQuote.transport.recommended.modeLabel}, round trip (transport rate card)`
+                        ? (() => {
+                            const rec = feeQuote.transport.recommended;
+                            const mins = rec.oneWayMinutes;
+                            const time = mins == null ? '' : mins >= 60
+                              ? `, ~${Math.floor(mins / 60)}h ${Math.round(mins % 60)}m each way`
+                              : `, ~${Math.round(mins)} min each way`;
+                            // A road-routed time is a measurement; a rail/bus/flight time is an
+                            // average-speed estimate. Same words for both would be a small lie.
+                            const est = rec.timeSource === 'RATE_CARD_ESTIMATE' && mins != null ? ' (est.)' : '';
+                            const why = rec.reason ? ` — ${rec.reason}` : '';
+                            return `₹${feeQuote.travelFee} by ${rec.modeLabel}${time}${est}, round trip${why}`;
+                          })()
                         : `₹${feeQuote.travelFee} (₹${feeQuote.rates.travelFeePerKm}/km beyond ${feeQuote.rates.freeTravelAllowanceKm} km)`
                       : '—'}
                   </div>
@@ -2425,7 +2482,7 @@ export const PlanningWorkspace: React.FC = () => {
                 <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, background: (selectedCandidate.score ?? 0) >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: (selectedCandidate.score ?? 0) >= 90 ? 'var(--status-active)' : 'var(--warning)' }}>
                   {selectedCandidate.score != null ? `${Math.round(selectedCandidate.score)}% Match` : 'Match n/a'}
                 </span>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}><Compass size={10} /> {selectedCandidate.distanceKm ?? 'N/A'} km</span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}><Compass size={10} /> {formatRouteDistance(selectedCandidate.distanceKm, selectedCandidate.distanceSource ?? null, { emptyAs: 'Distance n/a' })}</span>
               </div>
             </div>
 
@@ -2557,7 +2614,7 @@ export const PlanningWorkspace: React.FC = () => {
 
       {/* ── Assayer Detail Modal ── */}
       {showAssayerDetailModal && (
-        <Modal open onClose={() => { setShowAssayerDetailModal(false); setDetailAssayer(null); setDetailRemarks([]); }} title="Assayer Details" width="800px" maxHeight="90vh" bodyStyle={{ padding: '0 4px 0 0' }}>
+        <Modal open onClose={() => { setShowAssayerDetailModal(false); setDetailAssayer(null); }} title="Assayer Details" width="800px" maxHeight="90vh" bodyStyle={{ padding: '0 4px 0 0' }}>
             <div style={{ overflowY: 'auto', paddingRight: '4px' }}>
               {loadingDetail ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading assayer details...</div>
@@ -2742,32 +2799,12 @@ export const PlanningWorkspace: React.FC = () => {
                           )}
                         </div>
 
-                        {/* Remarks */}
+                        {/* Staff remarks — the shared component (also the HR drawer's Remarks tab),
+                            reading and writing the one remarks API the recommendation engine
+                            scores from. The planner can add one right here after a call. */}
                         <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)', marginTop: '14px' }}>
-                          <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Star size={13} /> Reviews & Remarks</h4>
-                          {detailRemarks.length === 0 ? (
-                            <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-muted)', fontSize: '11px' }}>No remarks yet.</div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '300px', overflowY: 'auto' }}>
-                              {detailRemarks.map(r => (
-                                <div key={r.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${CATEGORY_COLORS[r.category] || 'var(--text-muted)'}` }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                                      <span style={{ fontSize: '9px', padding: '1px 4px', borderRadius: '3px', background: `${CATEGORY_COLORS[r.category] || 'var(--text-muted)'}20`, color: CATEGORY_COLORS[r.category] || 'var(--text-muted)', fontWeight: 600 }}>{r.category}</span>
-                                      <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>by {r.authorName}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1px' }}>
-                                      {r.rating != null && [1, 2, 3, 4, 5].map(s => (
-                                        <Star key={s} size={9} fill={s <= r.rating! ? 'var(--warning)' : 'none'} color={s <= r.rating! ? 'var(--warning)' : 'var(--text-muted)'} />
-                                      ))}
-                                    </div>
-                                  </div>
-                                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>{r.content}</div>
-                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>{new Date(r.createdAt).toLocaleString()}</div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                          <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Star size={13} /> Staff remarks</h4>
+                          <AssayerRemarks assayerId={detailAssayer.id} compact />
                         </div>
                       </>
                     );

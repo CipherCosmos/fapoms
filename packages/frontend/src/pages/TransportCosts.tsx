@@ -49,6 +49,13 @@ interface EstimateOption {
   oneWayCost: number;
   roundTripCost: number;
   preferred: boolean;
+  /** One-way minutes and whether they came from a road route or an average-speed estimate. */
+  oneWayMinutes?: number;
+  timeSource?: 'ROAD_ROUTE' | 'RATE_CARD_ESTIMATE';
+  /** False when a business rule ruled the mode out; `whyNot` names the rule. */
+  viable?: boolean;
+  whyNot?: string | null;
+  reason?: string | null;
 }
 
 interface Estimate {
@@ -308,17 +315,38 @@ export const TransportCosts: React.FC = () => {
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {estimate.options.map((o) => {
                   const isRec = estimate.recommended?.mode === o.mode;
+                  // A mode a rule ruled out is still listed — ops may override — but it must not
+                  // look like a live choice. Before this it rendered as an ordinary card, so a
+                  // flight for an 8 km hop sat beside the auto-rickshaw as if either would do.
+                  const ruledOut = o.viable === false;
+                  const mins = o.oneWayMinutes;
+                  const timeText = mins == null ? null : mins >= 60
+                    ? `~${Math.floor(mins / 60)}h ${Math.round(mins % 60)}m one way`
+                    : `~${Math.round(mins)} min one way`;
                   return (
-                    <div key={o.mode} style={{
+                    <div key={o.mode} title={ruledOut ? (o.whyNot ?? 'Ruled out') : (o.reason ?? undefined)} style={{
                       padding: '10px 14px', borderRadius: '8px', minWidth: '150px',
-                      border: isRec ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                      border: isRec ? '1px solid var(--accent-primary)' : ruledOut ? '1px dashed var(--border-color)' : '1px solid var(--border-color)',
                       background: isRec ? 'rgba(216,174,71,0.08)' : 'transparent',
+                      opacity: ruledOut ? 0.55 : 1,
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}>
                         {o.modeLabel}
                         {isRec && <span style={{ fontSize: '9px', fontWeight: 800, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '4px', padding: '1px 5px' }}>RECOMMENDED</span>}
-                        {o.preferred && !isRec && <Star size={11} style={{ color: 'var(--text-muted)' }} />}
+                        {ruledOut && <span style={{ fontSize: '9px', fontWeight: 800, color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '1px 5px' }}>NOT SUITABLE</span>}
+                        {o.preferred && !isRec && !ruledOut && <Star size={11} style={{ color: 'var(--text-muted)' }} />}
                       </div>
+                      {timeText && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                          {timeText}{o.timeSource === 'RATE_CARD_ESTIMATE' ? ' (est.)' : ''}
+                        </div>
+                      )}
+                      {ruledOut && o.whyNot && (
+                        <div style={{ fontSize: '10px', color: 'var(--warning)', marginTop: '2px' }}>{o.whyNot}</div>
+                      )}
+                      {isRec && o.reason && (
+                        <div style={{ fontSize: '10px', color: 'var(--accent)', marginTop: '2px' }}>{o.reason}</div>
+                      )}
                       <div style={{ fontSize: '17px', fontWeight: 800, color: isRec ? 'var(--accent)' : 'var(--text-primary)', marginTop: '2px' }}>
                         {formatRupees(o.roundTripCost)}
                       </div>
