@@ -1,3 +1,5 @@
+import type { RouteSource } from './interfaces';
+
 export const INDIAN_STATES: { value: string; label: string }[] = [
   { value: 'Andhra Pradesh', label: 'Andhra Pradesh' }, { value: 'Arunachal Pradesh', label: 'Arunachal Pradesh' },
   { value: 'Assam', label: 'Assam' }, { value: 'Bihar', label: 'Bihar' },
@@ -76,6 +78,67 @@ export function canonicalState(raw: string | null | undefined): string {
   if (!raw) return 'UNKNOWN';
   const k = String(raw).toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
   return STATE_ALIASES[k] ?? STATE_ALIASES[k.replace(/\s/g, '')] ?? k;
+}
+
+/**
+ * A distance the way a person should read it — never claiming more than its source knows.
+ *
+ * The routing layer labels every figure `OSRM` (road network) or `ESTIMATE` (great-circle at
+ * an assumed speed), and the straight line under-states the road by 11–56 % on real pairs. So
+ * a road figure says so, an estimate says so, and a figure with no label at all is treated as
+ * an estimate — an older server that never labelled its distances was, in fact, estimating.
+ *
+ *   formatRouteDistance(212.6, 'OSRM')      → "213 km by road"
+ *   formatRouteDistance(164.4, 'ESTIMATE')  → "~164 km (straight line, estimate)"
+ *   formatRouteDistance(8.25, 'OSRM')       → "8.3 km by road"
+ *   formatRouteDistance(50, null)           → "~50 km (estimate)"
+ *   formatRouteDistance(null, 'OSRM')       → "Distance unavailable"   (or `emptyAs`)
+ *
+ * Under 10 km one decimal is kept — "8.3 km" vs "8 km" matters when the client's independence
+ * floor is 10 km; above that whole kilometres are all anyone reads.
+ */
+export function formatKilometres(distanceKm: number): string {
+  const km = Number(distanceKm);
+  if (!Number.isFinite(km)) return '';
+  return km < 10 ? km.toFixed(1) : Math.round(km).toLocaleString('en-IN');
+}
+
+export function formatRouteDistance(
+  distanceKm: number | string | null | undefined,
+  source: RouteSource | null | undefined,
+  options: { emptyAs?: string } = {},
+): string {
+  const { emptyAs = 'Distance unavailable' } = options;
+  if (distanceKm === null || distanceKm === undefined || distanceKm === '') return emptyAs;
+  const km = Number(distanceKm);
+  if (!Number.isFinite(km)) return emptyAs;
+  const figure = `${formatKilometres(km)} km`;
+  if (source === 'OSRM') return `${figure} by road`;
+  if (source === 'ESTIMATE') return `~${figure} (straight line, estimate)`;
+  return `~${figure} (estimate)`;
+}
+
+/**
+ * Travel time, same discipline. Whole minutes under an hour, "2 h 47 min" above; a road figure
+ * says "by road", an estimate (or an unlabelled figure) is hedged with "~" and says so.
+ *
+ *   formatTravelTime(167.3, 'OSRM')     → "2 h 47 min by road"
+ *   formatTravelTime(35, 'ESTIMATE')    → "~35 min (estimate)"
+ *   formatTravelTime(120, 'OSRM')       → "2 h by road"
+ */
+export function formatTravelTime(
+  minutes: number | string | null | undefined,
+  source: RouteSource | null | undefined,
+  options: { emptyAs?: string } = {},
+): string {
+  const { emptyAs = '' } = options;
+  if (minutes === null || minutes === undefined || minutes === '') return emptyAs;
+  const total = Math.round(Number(minutes));
+  if (!Number.isFinite(total) || total < 0) return emptyAs;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  const figure = h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
+  return source === 'OSRM' ? `${figure} by road` : `~${figure} (estimate)`;
 }
 
 /**

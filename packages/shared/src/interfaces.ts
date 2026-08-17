@@ -579,6 +579,29 @@ export interface AuditEvent {
 // Candidate Recommendation (Part 5 §6, Part 9 §10-11)
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a distance or travel-time figure came from. Mirrors `RouteSource` in the backend's
+ * `geo/routing.provider.ts`, which is where the values are minted:
+ *   - `OSRM`     — the road network. Say "212 km by road".
+ *   - `ESTIMATE` — great-circle distance and an assumed speed. Say "~164 km (straight line,
+ *                  estimate)". The straight line under-states the road by 11–56 % on real
+ *                  pairs, so this must never be presented as a road figure.
+ * Shared so the web and mobile apps render the label the same way — see `formatRouteDistance`.
+ */
+export type RouteSource = 'OSRM' | 'ESTIMATE';
+
+/**
+ * The branch → candidate journey as the recommendation API reports it. `distanceSource` is
+ * null exactly when `distanceKm` is: no coordinates, no route, no label. A `distanceKm` with a
+ * null source from an older server is treated as an estimate by every renderer — the only
+ * honest default.
+ */
+export interface CandidateRoute {
+  distanceKm: number | null;
+  durationMinutes: number | null;
+  distanceSource: RouteSource | null;
+}
+
 // ---------------------------------------------------------------------------
 // Assayer Commercial Profile (Enterprise)
 // ---------------------------------------------------------------------------
