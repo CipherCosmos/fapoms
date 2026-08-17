@@ -57,6 +57,16 @@ const DEFAULT_MAX_POINTS = 4000;
 /** The contracted ceiling for the joined client, in SQL. Falls back to the platform default. */
 const CLIENT_RADIUS_SQL = `COALESCE(NULLIF(c.planning_preferences->>'maxDistanceKm','')::numeric, ${DEFAULT_SERVICEABLE_RADIUS_KM})`;
 
+/**
+ * Where a branch is, in SQL, for aliased table `b`.
+ *
+ * `COALESCE(location, ST_MakePoint(longitude, latitude))` because the two are written together
+ * by the app but nothing in the schema enforces it, and a branch whose geometry column was
+ * never populated must still appear on the map. Both the nearest-assayer KNN and the in-range
+ * count measure from this exact expression, so they can never disagree about where a branch is.
+ */
+const BRANCH_GEOG_SQL = `COALESCE(b.location, ST_SetSRID(ST_MakePoint(b.longitude, b.latitude), 4326))::geography`;
+
 @Injectable()
 export class CommandCenterService {
   private readonly logger = new Logger(CommandCenterService.name);
@@ -118,6 +128,19 @@ export class CommandCenterService {
     const nearbyAssayerScope = regionParam ? ` AND a.region = ANY(${regionParam})` : '';
     const inRangeAssayerScope = regionParam ? ` AND a2.region = ANY(${regionParam})` : '';
 
+    /**
+     * The scoped book of work, as a FROM/WHERE fragment.
+     *
+     * Shared verbatim by the population query below and by the in-range count that runs
+     * afterwards for the rows actually returned. One definition, so the two can never drift
+     * into measuring different sets of branches.
+     */
+    const SCOPED_FROM = `FROM branches b
+           JOIN project_branches pb ON pb.branch_id = b.id AND pb.is_active = true
+           JOIN projects p ON p.id = pb.project_id AND p.is_active = true
+           JOIN clients c ON c.id = p.client_id
+          WHERE ${where.join(' AND ')}`;
+
     // The assayer layer is scoped too, and only by region: an assayer has a home region but no
     // client or zone of their own. Scoping the *pins* without scoping the *people* would draw
     // one region's branches against the whole country's workforce, and every coverage number
@@ -150,15 +173,32 @@ export class CommandCenterService {
      *  - nearest assayer: KNN (`<->`) on the geography cast, which is what
      *    `idx_assayers_location_geography` indexes, so each branch does one index descent
      *    instead of a full sort of the workforce.
-     *  - assayers in range: `ST_DWithin(…::geography, …, metres, false)` — same spherical
-     *    measure as `ST_DistanceSphere` (use_spheroid=false is load-bearing; the spheroid moves
-     *    the boundary and changes counts), and index-usable, expressed once as a spatial join
-     *    rather than a subquery per row.
+     *  - assayers in range: `ST_DWithin(…::geography, …, metres, false)` as an index-usable
+     *    spatial join rather than a subquery per row — since moved out to `fillAssayersInRange`,
+     *    see below.
      *  - assignment counts and realised revenue: grouped once over the scoped branches.
      *
-     * The branch point is `COALESCE(location, ST_MakePoint(longitude, latitude))` because the
-     * two are written together by the app but nothing in the schema enforces it, and a branch
-     * whose geometry column was never populated must still appear on the map.
+     * ## Why the nearest-assayer lookup is keyed on the branch, not the project_branch
+     *
+     * One branch can sit in several projects — 40,087 project_branches over 20,087 branches on
+     * the scale book — and the KNN answer depends only on where the branch is, so running the
+     * lateral per project_branch did the same index descent twice for half the country. It is
+     * now computed once per distinct branch and fanned back out, which halves the descents.
+     *
+     * ## What is deliberately NOT here: `assayers_in_range`
+     *
+     * The in-range count was the single most expensive thing in this query — a spatial join
+     * that visited 2.8 million (branch, assayer) pairs and spent ~2.8 s of a ~6.5 s query, to
+     * produce a number that no aggregate on this page reads. It is a per-pin detail: the map's
+     * side panel shows it for the one branch an operator clicked, and the Excel export carries
+     * it for the pins in the response. Both only ever see the bounded arrays.
+     *
+     * So it is computed afterwards, for the rows actually returned, by `fillAssayersInRange`.
+     * Everything that IS a full-population aggregate — isolated counts, average nearest-assayer
+     * distance, coverage gaps, revenue — stays computed over every scoped branch, here.
+     *
+     * `isolated` is unaffected by the split because it was already derived from the KNN
+     * distance rather than from this count (see `isolated` below for why that matters).
      */
     const branches = await this.dataSource.query(
       `WITH scoped AS (
@@ -171,12 +211,8 @@ export class CommandCenterService {
                 -- Per-client audit rate lives in the planning_preferences JSON, not a column.
                 COALESCE((c.planning_preferences->>'minutesPerPacket')::numeric, 15) AS minutes_per_packet,
                 ${CLIENT_RADIUS_SQL} AS serviceable_radius_km,
-                COALESCE(b.location, ST_SetSRID(ST_MakePoint(b.longitude, b.latitude), 4326))::geography AS geog
-           FROM branches b
-           JOIN project_branches pb ON pb.branch_id = b.id AND pb.is_active = true
-           JOIN projects p ON p.id = pb.project_id AND p.is_active = true
-           JOIN clients c ON c.id = p.client_id
-          WHERE ${where.join(' AND ')}
+                ${BRANCH_GEOG_SQL} AS geog
+           ${SCOPED_FROM}
        ),
        asg AS (
          SELECT a.project_branch_id, COUNT(*) AS assignment_count
@@ -193,48 +229,37 @@ export class CommandCenterService {
           WHERE e.is_active = true AND e.project_id = s.project_id
           GROUP BY a.project_branch_id
        ),
-       -- One branch can sit in several projects, so the same catchment would otherwise be
-       -- counted once per project_branch. The count depends only on where the branch is and
-       -- which radius applies, so compute it per distinct (branch, radius) and fan back out.
-       catchment AS (
-         SELECT DISTINCT s.id AS branch_id, s.geog, s.serviceable_radius_km FROM scoped s
+       -- The distinct places, so the KNN below runs once per branch rather than once per
+       -- project_branch. The geog column is a pure function of the branch row, so this is
+       -- exactly one row per branch id.
+       sites AS (
+         SELECT DISTINCT s.id AS branch_id, s.geog FROM scoped s
        ),
-       catchment_counts AS (
-         SELECT c2.branch_id, c2.serviceable_radius_km, COUNT(*) AS assayers_in_range
-           FROM catchment c2
-           JOIN assayers a2
-             ON a2.is_active = true AND a2.status = 'ACTIVE' AND a2.location IS NOT NULL${inRangeAssayerScope}
-            AND ST_DWithin(a2.location::geography, c2.geog, c2.serviceable_radius_km * 1000, false)
-          GROUP BY c2.branch_id, c2.serviceable_radius_km
-       ),
-       in_range AS (
-         SELECT s.project_branch_id, cc.assayers_in_range
-           FROM scoped s
-           JOIN catchment_counts cc
-             ON cc.branch_id = s.id AND cc.serviceable_radius_km = s.serviceable_radius_km
+       nearest AS (
+         SELECT sites.branch_id, near.assayer_id, near.display_name, near.km
+           FROM sites
+           LEFT JOIN LATERAL (
+             SELECT a.id AS assayer_id, a.display_name,
+                    ST_Distance(a.location::geography, sites.geog, false) / 1000 AS km
+               FROM assayers a
+              WHERE a.is_active = true AND a.status = 'ACTIVE' AND a.location IS NOT NULL${nearbyAssayerScope}
+              ORDER BY a.location::geography <-> sites.geog
+              LIMIT 1
+           ) near ON sites.geog IS NOT NULL
        )
        SELECT s.id, s.name, s.branch_code, s.district, s.state, s.latitude, s.longitude,
               s.project_branch_id, s.branch_status, s.packet_count, s.scheduled_date,
               s.project_id, s.project_name, s.client_id, s.client_name,
               s.minutes_per_packet, s.serviceable_radius_km,
-              near.assayer_id   AS nearest_assayer_id,
-              near.display_name AS nearest_assayer_name,
-              near.km           AS nearest_assayer_km,
-              COALESCE(in_range.assayers_in_range, 0) AS assayers_in_range,
+              nearest.assayer_id   AS nearest_assayer_id,
+              nearest.display_name AS nearest_assayer_name,
+              nearest.km           AS nearest_assayer_km,
               COALESCE(asg.assignment_count, 0)       AS assignment_count,
               COALESCE(rev.realised_revenue, 0)       AS realised_revenue
          FROM scoped s
-         LEFT JOIN asg      ON asg.project_branch_id = s.project_branch_id
-         LEFT JOIN rev      ON rev.project_branch_id = s.project_branch_id
-         LEFT JOIN in_range ON in_range.project_branch_id = s.project_branch_id
-         LEFT JOIN LATERAL (
-           SELECT a.id AS assayer_id, a.display_name,
-                  ST_Distance(a.location::geography, s.geog, false) / 1000 AS km
-             FROM assayers a
-            WHERE a.is_active = true AND a.status = 'ACTIVE' AND a.location IS NOT NULL${nearbyAssayerScope}
-            ORDER BY a.location::geography <-> s.geog
-            LIMIT 1
-         ) near ON s.geog IS NOT NULL`,
+         LEFT JOIN asg     ON asg.project_branch_id = s.project_branch_id
+         LEFT JOIN rev     ON rev.project_branch_id = s.project_branch_id
+         LEFT JOIN nearest ON nearest.branch_id = s.id`,
       params,
     );
 
@@ -302,7 +327,9 @@ export class CommandCenterService {
         assigned: n(b.assignment_count) > 0,
         nearestAssayerKm: km,
         nearestAssayerName: b.nearest_assayer_name,
-        assayersInRange: n(b.assayers_in_range),
+        // Filled in below, for the pins this response actually carries — see
+        // `fillAssayersInRange`. Declared here so the key keeps its place in the response.
+        assayersInRange: 0,
         // This branch's client-contracted ceiling, so downstream filters use the same number the
         // count above was measured against rather than a platform-wide guess.
         serviceableRadiusKm: radiusKm,
@@ -445,6 +472,27 @@ export class CommandCenterService {
       );
     }
 
+    // Where to actually put the next assayer: the branches nobody can reach. Computed over the
+    // full population, so a gap outside the bounded pin set still shows up here — 13 of the 25
+    // on the scale book are — which is why the in-range lookup below covers both arrays.
+    const coverageGaps = branchPoints
+      // Against the branch's own client ceiling, carried through on the row.
+      .filter((b: any) => b.isolated || (b.nearestAssayerKm ?? 0) > Number(b.serviceableRadiusKm ?? DEFAULT_SERVICEABLE_RADIUS_KM))
+      .sort((a: any, b: any) => (b.nearestAssayerKm ?? 0) - (a.nearestAssayerKm ?? 0))
+      .slice(0, 25);
+
+    /**
+     * The per-pin in-range count, for the pins that leave this method — the bounded map array
+     * and the coverage-gap list. Both hold the same object references as `branchPoints`, so
+     * writing the count onto the row here lands in both.
+     */
+    await this.fillAssayersInRange(
+      [...new Set([...visibleBranchPoints, ...coverageGaps])],
+      SCOPED_FROM,
+      inRangeAssayerScope,
+      params,
+    );
+
     return {
       generatedAt: new Date().toISOString(),
       // Reported as the default; each branch was measured against its own client's ceiling.
@@ -463,12 +511,7 @@ export class CommandCenterService {
         statesCovered: territoryList.length,
       },
       territories: territoryList,
-      // Where to actually put the next assayer: the branches nobody can reach.
-      coverageGaps: branchPoints
-        // Against the branch's own client ceiling, carried through on the row.
-        .filter((b: any) => b.isolated || (b.nearestAssayerKm ?? 0) > Number(b.serviceableRadiusKm ?? DEFAULT_SERVICEABLE_RADIUS_KM))
-        .sort((a: any, b: any) => (b.nearestAssayerKm ?? 0) - (a.nearestAssayerKm ?? 0))
-        .slice(0, 25),
+      coverageGaps,
       // Idle capacity that could absorb work from a neighbouring territory.
       idleAssayers: assayerPoints
         .filter((a: any) => a.openAssignments === 0)
@@ -490,5 +533,69 @@ export class CommandCenterService {
         pointLimit: maxPoints,
       },
     };
+  }
+
+  /**
+   * How many active assayers can serve each of these branches, written onto the rows in place.
+   *
+   * This is the expensive half of the coverage picture and the only part that does not feed an
+   * aggregate, so it runs over the pins the response actually carries rather than the whole
+   * book: on the scale fixture that is ~4,000 rows instead of 40,087, and ~185 ms instead of
+   * the ~2.8 s the same spatial join cost when it ran nationally.
+   *
+   * The measure is `ST_DWithin(…::geography, …, metres, false)`. `use_spheroid=false` is
+   * load-bearing: it is the same spherical measure `ST_DistanceSphere` used before this was
+   * ever indexed, and switching to the spheroid moves the boundary and changes counts.
+   *
+   * Counted per distinct (branch, radius) rather than per project_branch, because one branch can
+   * sit in several projects and the catchment depends only on where it is and which client
+   * ceiling applies; the result is then fanned back out to every project_branch on that pair.
+   */
+  private async fillAssayersInRange(
+    rows: any[],
+    scopedFrom: string,
+    inRangeAssayerScope: string,
+    scopeParams: any[],
+  ): Promise<void> {
+    const ids = [...new Set(rows.map((r) => r.projectBranchId).filter(Boolean))];
+    if (!ids.length) return;
+
+    const params = [...scopeParams, ids];
+    const counts: Array<{ project_branch_id: string; assayers_in_range: string }> =
+      await this.dataSource.query(
+        `WITH scoped AS (
+           SELECT b.id, pb.id AS project_branch_id,
+                  ${CLIENT_RADIUS_SQL} AS serviceable_radius_km,
+                  ${BRANCH_GEOG_SQL} AS geog
+             ${scopedFrom}
+              AND pb.id = ANY($${params.length}::uuid[])
+         ),
+         catchment AS (
+           SELECT DISTINCT s.id AS branch_id, s.geog, s.serviceable_radius_km FROM scoped s
+         ),
+         -- MATERIALIZED is load-bearing, not decoration. The id list makes scoped unestimable
+         -- (the planner guesses 1 row for a 200-element ANY(...) against a filtered project), and
+         -- on that guess it happily puts this spatial join on the inner side of a nested loop and
+         -- runs it once per scoped row: measured 2.1 s for a 200-branch project, versus 83 ms when
+         -- the count is computed once. Materialising removes the planner's opportunity to make
+         -- that choice at all, rather than hoping better statistics steer it away.
+         catchment_counts AS MATERIALIZED (
+           SELECT c2.branch_id, c2.serviceable_radius_km, COUNT(*) AS assayers_in_range
+             FROM catchment c2
+             JOIN assayers a2
+               ON a2.is_active = true AND a2.status = 'ACTIVE' AND a2.location IS NOT NULL${inRangeAssayerScope}
+              AND ST_DWithin(a2.location::geography, c2.geog, c2.serviceable_radius_km * 1000, false)
+            GROUP BY c2.branch_id, c2.serviceable_radius_km
+         )
+         SELECT s.project_branch_id, cc.assayers_in_range
+           FROM scoped s
+           JOIN catchment_counts cc
+             ON cc.branch_id = s.id AND cc.serviceable_radius_km = s.serviceable_radius_km`,
+        params,
+      );
+
+    const byProjectBranch = new Map(counts.map((c) => [c.project_branch_id, Number(c.assayers_in_range ?? 0)]));
+    // Absent means nobody in range — the same thing the old LEFT JOIN … COALESCE(…, 0) said.
+    for (const row of rows) row.assayersInRange = byProjectBranch.get(row.projectBranchId) ?? 0;
   }
 }
