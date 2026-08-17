@@ -315,8 +315,21 @@ const AttributeSection: React.FC<{
             placeholder={`Add a ${meta.label.toLowerCase().replace(/s$/, '')}…`}
             style={{ flex: '1 1 180px', padding: '7px 10px', fontSize: '12.5px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)' }}
           />
+          {/*
+            The count is the TOTAL number of assayers holding this attribute — `COUNT(DISTINCT
+            assayer_id)` over the whole roster — not "others besides the one being edited". It
+            read "N others", which overstated by one whenever the current assayer already held
+            it, and rendered "1 others" for a name this session had just invented. Labelled for
+            what it is, which is also the more useful figure when picking a skill: how many
+            people the register already recognises under that name. The Capability inventory on
+            the compliance page shows the same number for the same reason.
+          */}
           <datalist id={`vocab-${type}`}>
-            {suggestions.map((s) => <option key={s.name} value={s.name}>{`${s.assayerCount} others`}</option>)}
+            {suggestions.map((s) => (
+              <option key={s.name} value={s.name}>
+                {`${s.assayerCount} assayer${s.assayerCount === 1 ? '' : 's'}`}
+              </option>
+            ))}
           </datalist>
           {meta.hasExpiry && (
             <input
