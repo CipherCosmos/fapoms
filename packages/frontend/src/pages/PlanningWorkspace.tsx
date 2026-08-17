@@ -751,6 +751,12 @@ export const PlanningWorkspace: React.FC = () => {
       return true;
     });
   }, [candidates, slaEnabled, slaRadius, maxRadiusEnabled, maxRadius, showAllCandidates]);
+  /** Listed candidates the map will not draw, because they fall outside its search radius. */
+  const offMapCount = useMemo(
+    () => displayCandidates.filter(c => c.distanceKm != null && c.distanceKm > searchRadiusKm).length,
+    [displayCandidates, searchRadiusKm],
+  );
+
   const drawerRef = useRef<HTMLDivElement>(null);
   const [dayPlanData, setDayPlanData] = useState<ProjectDayPlan | null>(null);
   /**
@@ -1551,6 +1557,25 @@ export const PlanningWorkspace: React.FC = () => {
     const hiddenCount = candidates.length - displayCandidates.length;
     return (
       <>
+        {/*
+          How many of the listed candidates the map is not drawing.
+          The engine keeps distant assayers on the list deliberately; the map keeps its pins
+          inside `searchRadiusKm`. Stated once here so the gap between the two views is a fact
+          the operator is told, rather than one they infer from a pin that is not there.
+        */}
+        {offMapCount > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', padding: '5px 9px', fontSize: '10.5px', fontWeight: 600, color: 'var(--warning)', background: 'var(--status-pending-bg)', borderRadius: '6px' }}>
+            <span>{offMapCount} of these {offMapCount === 1 ? 'is' : 'are'} beyond {searchRadiusKm} km — listed, but not shown on the map</span>
+            <button
+              onClick={() => setMaxRadiusEnabled(true)}
+              className="btn btn-secondary"
+              style={{ padding: '2px 8px', fontSize: '10px' }}
+              title={`Hide candidates further than the ${maxRadius} km service radius`}
+            >
+              Hide distant
+            </button>
+          </div>
+        )}
         {hiddenCount > 0 && (
           // Always tell the operator when candidates are being suppressed by the filters, so a
           // short list is never mistaken for "few assayers exist". One click reveals them.
@@ -1615,9 +1640,29 @@ export const PlanningWorkspace: React.FC = () => {
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', flexWrap: 'wrap' }}>
                     <Compass size={11} style={{ flexShrink: 0 }} />
                     <span>{c.distanceKm !== null ? `${c.distanceKm} km away` : 'Distance unavailable'}</span>
+                    {/*
+                      This chip is about the *independence floor* — "far enough away not to be
+                      auditing their own doorstep" — and nothing else. Labelled "✓ >50km Radius"
+                      it read as general approval, so an assayer 1,749 km away wore a green tick
+                      and no other distance signal at all. It now says which rule it is answering.
+                    */}
                     {slaEnabled && c.distanceKm !== null && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
-                        {c.distanceKm >= slaRadius ? `✓ >${slaRadius}km Radius` : `✗ Inside Radius`}
+                      <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit.`} style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
+                        {c.distanceKm >= slaRadius ? `✓ independent (>${slaRadius}km)` : `✗ too close (<${slaRadius}km)`}
+                      </span>
+                    )}
+                    {/*
+                      And the ceiling, which nothing on this card used to mention.
+                      The engine deliberately does not exclude on the service radius — see
+                      `DistancePolicyFilter`, which relaxes it because enforcing it cut a
+                      26-candidate list to 2 — so distant assayers stay listed and merely rank
+                      last. The map, meanwhile, hard-filters its pins to `searchRadiusKm`. Both
+                      behaviours are defensible; the pair of them silently disagreeing is not,
+                      and it is why someone can be recommended here and absent from the map.
+                    */}
+                    {c.distanceKm !== null && c.distanceKm > searchRadiusKm && (
+                      <span title={`Beyond the ${searchRadiusKm} km search radius, so this assayer is not drawn on the map. Still listed because no one closer may be available — ranked accordingly.`} style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                        ⚠ outside {searchRadiusKm}km · not on map
                       </span>
                     )}
                   </div>
