@@ -2,6 +2,7 @@
  * FAPOMS — Application Entry Point
  */
 
+import * as net from 'net';
 import { NestFactory } from '@nestjs/core';
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
 import { getQueueToken } from '@nestjs/bull';
@@ -413,9 +414,40 @@ function installProcessGuards(): void {
   });
 }
 
+/**
+ * Give an outbound TCP connect a full second before Node gives up on an address.
+ *
+ * Node's "happy eyeballs" (`net.autoSelectFamily`, on by default since v20) tries a host's
+ * addresses one after another and abandons each attempt after 250 ms. That is tuned for a
+ * laptop next to its router; from the backend container it is too tight for a real Internet
+ * round trip. router.project-osrm.org resolves to an A and an AAAA record, and the container has
+ * no IPv6 route: when the server's SYN-ACK takes longer than 250 ms to arrive — which it does in
+ * bursts on this network — Node drops the IPv4 attempt, the IPv6 attempt fails instantly, and
+ * fetch() reports ETIMEDOUT after ~265 ms with a healthy server on the other end. Measured from
+ * inside the container on 2026-08-17, 15 fetches per run, runs alternated: default 250 ms →
+ * 23 of 90 failed, including one run of 15/15; 1000 ms → 0 of 90. `--dns-result-order=ipv4first`
+ * did not help (the A record was already first; the attempt still timed out), and turning
+ * autoselect off cured the connect failures but forfeits the fallback where IPv6 does work.
+ *
+ * Process-wide: S3/MinIO, the geocoders and FCM connect through the same code path, and none
+ * of them is hurt by waiting up to a second for a first address that is not answering. Only
+ * ever raised — an operator who set `--network-family-autoselection-attempt-timeout` higher in
+ * NODE_OPTIONS keeps their value. The OSRM provider additionally retries one fast connect
+ * failure (see routing.provider.ts `fetchJson`), which covers what a single late SYN-ACK still
+ * costs under load.
+ */
+function tuneOutboundConnectTimeout(): void {
+  const target = 1000;
+  if (typeof net.getDefaultAutoSelectFamilyAttemptTimeout === 'function' &&
+      net.getDefaultAutoSelectFamilyAttemptTimeout() < target) {
+    net.setDefaultAutoSelectFamilyAttemptTimeout(target);
+  }
+}
+
 // Only start the server when this file is the entry point. Importing it (for example to unit
 // test the production-config guard above) must not boot the whole application.
 if (require.main === module) {
+  tuneOutboundConnectTimeout();
   installProcessGuards();
   bootstrap().catch((err) => {
     // A boot failure must crash loudly, not become a swallowed unhandled rejection.

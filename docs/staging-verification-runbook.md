@@ -14,7 +14,9 @@ Provision the full dependency set (the features below need every one):
 - **Redis** (socket adapter + throttler + cache + queues).
 - **MinIO/S3** bucket.
 - **ClamAV** (`clamd`) reachable on `CLAMAV_HOST:CLAMAV_PORT`.
-- Optionally an **OSRM** server (else routing falls back to PostGIS — which you'll test anyway).
+- Optionally a self-hosted **OSRM** server (`OSRM_URL`). Without one, routing uses the OSRM project's
+  public demo server (no SLA), and whenever that cannot answer, a great-circle estimate labelled
+  `source: ESTIMATE` — which you'll test anyway.
 
 Set the new env keys from `.env.production.example` — at minimum `PII_ENCRYPTION_KEY`, `STORAGE_SSE`,
 `CLAMAV_HOST`, and the `HTTP_*`/`S3_*`/`OSRM_*` timeouts. Then:
@@ -44,7 +46,7 @@ CORS + default-encryption applied and **no** "PII_ENCRYPTION_KEY is not set" war
 |---|---|---|
 | **Socket connection recovery** | Open the web app, watch a live-updating list. Kill the network for ~10s (devtools offline), restore it. Meanwhile trigger an event from another session. | On reconnect the missed update appears **without a manual refresh** (connectionStateRecovery). |
 | **Field-tolerant ping** | On a throttled ("Slow 3G") connection, leave the app idle. | The socket does **not** churn disconnect/reconnect every ~20s. |
-| **OSRM circuit breaker** | Point `OSRM_URL` at a dead host (or stop OSRM). Run planning that needs distances repeatedly. | First few calls fall back to PostGIS after the timeout; then the breaker **opens** and subsequent calls fall back **instantly**. `curl /metrics \| grep circuit_breaker_state` shows `{name="osrm"} 2`. Restore OSRM → after cooldown it probes and returns to `0`. |
+| **OSRM circuit breaker** | Point `OSRM_URL` at a dead host (or stop OSRM). Run planning that needs distances repeatedly. | First few calls fall back to the great-circle estimate after the timeout (each candidate's `distanceSource` is `ESTIMATE` in the recommendation response; the planning workspace shows "(est.)" after the km figure); then the breaker **opens** and subsequent calls fall back **instantly**. `curl /metrics \| grep circuit_breaker_state` shows `{name="osrm"} 2`. Restore OSRM → after cooldown it probes and returns to `0`, and `distanceSource` returns to `OSRM`. |
 | **S3 fail-fast** | Point storage at an unreachable endpoint briefly. | Requests fail within ~5s (connection timeout), not minutes. |
 | **HTTP server timeouts** | (Optional) run a slow-loris probe. | Header-dribbling connections are dropped at `headersTimeout`. |
 
