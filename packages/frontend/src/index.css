@@ -1325,17 +1325,39 @@ table, .data-table, .financial, .tabular-nums, td, th {
 .app-container {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
-  grid-template-rows: 1fr;
+  /*
+   * `minmax(0, 1fr)`, not `1fr`.
+   *
+   * `1fr` is shorthand for `minmax(auto, 1fr)`, and that `auto` floor means the row can never be
+   * shorter than its tallest child's content. The sidebar has 22 nav items for an admin: measured
+   * at a 700px viewport it wants 959px, so the row became 959px inside a `height: 100vh` box and
+   * the whole application scrolled — the header and sidebar sliding away with it — instead of the
+   * content pane scrolling on its own.
+   *
+   * `minmax(0, 1fr)` lets the row shrink to the container, which is what makes the `overflow-y`
+   * on the two children below actually take effect. Without it they are told to scroll and then
+   * given infinite room, so they never do.
+   */
+  grid-template-rows: minmax(0, 1fr);
   transition: grid-template-columns var(--transition-normal);
   grid-template-areas:
     "sidebar main";
   height: 100vh;
   width: 100vw;
   background-color: var(--bg-page);
+  /* The shell is the viewport. Nothing inside it may push the page itself into scrolling. */
+  overflow: hidden;
 }
 
 .sidebar-area {
   grid-area: sidebar;
+  /* Same reason as the row above: a grid item's default `min-height: auto` refuses to shrink
+     below its content, so this has to be released before the overflow rule can bite. */
+  min-height: 0;
+  /* The nav scrolls itself when the roster of items is taller than the screen. Before this it
+     simply overflowed, which on a short laptop screen left the bottom entries unreachable. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background-color: var(--bg-secondary);
   /* Subtle frosted sheen + a glass edge on the right seam */
   background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 38%);
@@ -1345,7 +1367,10 @@ table, .data-table, .financial, .tabular-nums, td, th {
 
 .main-area {
   grid-area: main;
+  min-height: 0;
   overflow-y: auto;
+  /* Keeps a fast scroll at the end of the content pane from chaining out to the document. */
+  overscroll-behavior: contain;
   background-color: transparent;
   padding: 32px;
 }
