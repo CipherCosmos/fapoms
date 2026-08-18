@@ -94,6 +94,11 @@ export function useAssayerProfile(user: {
       if (!res.success || !res.data) return;
       const p = res.data;
 
+      // The server returns skills/languages/preferredRegions as arrays; every text field on
+      // this screen is a plain comma-separated string (see `save`'s own `toArray` going the
+      // other way).
+      const joinArr = (v: any, fallback: string) => (Array.isArray(v) ? v.join(', ') : v || fallback);
+
       // Personal fields fall back to what is already on screen so a partial server record does
       // not wipe something the assayer has typed but not yet saved. Totals do not: they are the
       // server's to state, and keeping a stale number would misreport what they are owed.
@@ -106,8 +111,8 @@ export function useAssayerProfile(user: {
         state: p.state || prev.state,
         district: p.district || prev.district,
         pincode: p.pincode || prev.pincode,
-        skills: p.skills || prev.skills,
-        languages: p.languages || prev.languages,
+        skills: joinArr(p.skills, prev.skills),
+        languages: joinArr(p.languages, prev.languages),
         experienceYears: p.experienceYears ?? prev.experienceYears,
         licenseNo: p.licenseNo || prev.licenseNo,
         panNumber: p.panNumber || prev.panNumber,
@@ -120,7 +125,29 @@ export function useAssayerProfile(user: {
         earningsAwaitingApproval: p.earningsAwaitingApproval ?? 0,
         completedAssignments: p.completedAssignments ?? 0,
         totalAssignments: p.totalAssignments ?? 0,
+        onTimeCompletions: p.onTimeCompletions ?? prev.onTimeCompletions,
         averageRating: p.averageRating ?? prev.averageRating,
+        performanceRating: p.performanceRating ?? prev.performanceRating,
+        employmentType: p.employmentType || prev.employmentType,
+        maxDailyWorkload: p.maxDailyWorkload ?? prev.maxDailyWorkload,
+        maxWeeklyWorkload: p.maxWeeklyWorkload ?? prev.maxWeeklyWorkload,
+        /**
+         * The three fields the user reported: saved fine (see `save`'s own history — the save
+         * path used to 404 and was fixed), but never read back. This merge previously listed
+         * only phone/address/etc — nothing here restored `emergencyName` from the server's
+         * `emergencyContactName` (names differ between the two sides, same class of mismatch
+         * `save` already had to fix once), or latitude/longitude/preferredRegions at all. So a
+         * save would show "Profile saved" and update the fields on screen for the rest of that
+         * session — then the NEXT load (app reopen, tab revisit, pull-to-refresh) reset every
+         * one of these back to `emptyProfile()`'s blank defaults, because nothing here told it
+         * what the server actually had. The save was never lost; the read of it was.
+         */
+        emergencyName: p.emergencyContactName || prev.emergencyName,
+        emergencyPhone: p.emergencyContactPhone || prev.emergencyPhone,
+        emergencyRelation: p.emergencyContactRelation || prev.emergencyRelation,
+        latitude: p.latitude ?? prev.latitude,
+        longitude: p.longitude ?? prev.longitude,
+        preferredRegions: joinArr(p.preferredRegions, prev.preferredRegions),
       }));
 
       // Normalise the leave calendar to plain YYYY-MM-DD ranges for the availability picker.
