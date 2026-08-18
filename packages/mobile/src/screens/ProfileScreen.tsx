@@ -12,34 +12,10 @@ import { MobileApiService, NotificationPreference, getApiBaseUrl } from '../serv
 import { probeServerUrl } from '../services/server-config';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
-import Constants from 'expo-constants';
-import * as Updates from 'expo-updates';
 import * as LocalAuthentication from 'expo-local-authentication';
-
-const appVersion = Constants.expoConfig?.version ?? '1.0.0';
-
-/**
- * Which JavaScript this handset is actually running, in words a person can compare.
- *
- * The version string alone cannot say: over-the-air updates change the JS without changing the
- * version, so two assayers both report "v1.0.0" while running different code — and the one
- * reporting a bug may already have the fix, or may be on a handset whose updates never arrived.
- *
- * Shows the update's publish TIME rather than its id. An id is a hex string nobody can compare
- * down a phone line; "14 Aug 15:45" answers the only question support actually asks — is this
- * handset current, or stuck. `isEmbeddedLaunch` distinguishes the bundle that shipped inside the
- * APK from one that arrived later.
- */
-const bundleLabel = (): string => {
-  if (!Updates.isEnabled) return 'bundled';
-  if (Updates.isEmbeddedLaunch || !Updates.createdAt) return 'as installed';
-  return `updated ${Updates.createdAt.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })}`;
-};
+// The version/build/bundle line is one shared helper (utils/appVersion.ts) so this screen and
+// the login screen can never disagree about what is installed.
+import { versionLine } from '../utils/appVersion';
 
 /**
  * The assayer's record as the app holds it.
@@ -932,7 +908,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           session token. A false security claim in a bank audit tool is worse than no claim.
         */}
         <AppText variant="caption" tone="faint">
-          Orbit Field Assayer • v{appVersion} • {bundleLabel()}
+          Orbit Field Assayer • {versionLine()}
         </AppText>
       </View>
 

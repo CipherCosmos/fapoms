@@ -8,6 +8,7 @@ import { AmbientGlow, AppText, Button, Card, Icon, Tappable } from '../component
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
 import { probeServerUrl, normaliseServerUrl, isBlockedCleartext, CLEARTEXT_REFUSED } from '../services/server-config';
 import { getPreference } from '../services/preferences';
+import { versionLine } from '../utils/appVersion';
 
 interface LoginScreenProps {
   loginUsername?: string;
@@ -471,6 +472,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
           <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
             Authorised field personnel only
+          </AppText>
+          {/*
+            Shown BEFORE sign-in on purpose. The most common support question — "which version
+            are you on?" — is asked most often by someone who cannot get past this screen, and
+            a version that only lives on the Profile tab is unreachable to exactly them.
+          */}
+          <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+            {versionLine()}
           </AppText>
         </Animated.View>
       </ScrollView>

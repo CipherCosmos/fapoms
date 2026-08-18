@@ -116,10 +116,13 @@ module.exports = {
     },
     android: {
       package: 'com.fapoms.assayer',
-      // Bumped for the first build carrying OTA updates. Android refuses an install whose
-      // versionCode is lower than the installed one, so every build handed to a user must
-      // increase this or it cannot be installed over its predecessor.
-      versionCode: 4,
+      // No `versionCode` here, on purpose. eas.json sets `appVersionSource: "remote"`, so EAS
+      // owns that counter and increments it on every build — a value typed here is IGNORED by
+      // EAS (it says so at every build) yet still lands in the manifest expo-constants exposes,
+      // so it sat at 4 while real builds moved on: a number that looked authoritative and was
+      // wrong. Android refuses to install a lower versionCode over a higher one, which is why
+      // the counter must be owned by exactly one place. The number a screen shows comes from
+      // the running binary (`expo-application`, see utils/appVersion.ts), never from here.
       // The file itself is gitignored (it's a real credential, not a placeholder) and only
       // ever existed on whichever machine ran the local `./gradlew assembleRelease` build.
       // EAS Build's cloud workers only see what git tracks, so a cloud build had no way to
